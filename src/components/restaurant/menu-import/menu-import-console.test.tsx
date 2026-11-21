@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -560,12 +561,26 @@ describe('Restaurant menu-import console', () => {
       const mergeButton = screen.getByRole('button', { name: 'Merge into selected product' });
       expect(mergeButton).toBeDisabled();
 
-      fireEvent.change(screen.getByLabelText('Merge into existing product'), {
-        target: { value: 'product_1' },
-      });
-      fireEvent.change(screen.getByLabelText('Merge into variant'), {
-        target: { value: 'variant_1' },
-      });
+      fireEvent.change(
+        selectFieldControl(
+          screen.getByLabelText('Merge into existing product', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        {
+          target: { value: 'product_1' },
+        }
+      );
+      fireEvent.change(
+        selectFieldControl(
+          screen.getByLabelText('Merge into variant', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        {
+          target: { value: 'variant_1' },
+        }
+      );
       fireEvent.click(screen.getByRole('button', { name: 'Merge into selected product' }));
 
       expect(mocks.reviewLine).toHaveBeenCalledWith(

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
@@ -460,7 +462,7 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
               ) : null}
               <div className="space-y-1.5">
                 <Label htmlFor="kds-operator-id">Acting operator</Label>
-                <select
+                <StudioSelect
                   id="kds-operator-id"
                   required
                   value={operatorStaffProfileId}
@@ -484,7 +486,7 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
                       {operator.displayName} — {operator.role}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="kds-operator-pin">Operator PIN</Label>

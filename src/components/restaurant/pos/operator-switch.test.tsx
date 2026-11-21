@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -20,9 +21,16 @@ describe('OperatorSwitch', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
     expect(screen.getByText('Currently acting: Amina Khan — Supervisor')).toBeVisible();
     expect(screen.queryByText('staff-1')).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Operator'), {
-      target: { value: 'staff-2' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Operator', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'staff-2' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '12ab34' } });
     fireEvent.click(screen.getByRole('button', { name: 'Confirm switch' }));
     await waitFor(() =>

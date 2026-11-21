@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
@@ -154,7 +156,7 @@ export function RestaurantStaffInviteDialog({
                 <label htmlFor="staff-invite-role" className={labelClass}>
                   Role
                 </label>
-                <select
+                <StudioSelect
                   id="staff-invite-role"
                   name="organizationRoleId"
                   required
@@ -178,7 +180,7 @@ export function RestaurantStaffInviteDialog({
                       {role.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
                 <span id="staff-invite-role-help" className="block text-xs text-text-muted">
                   Only roles within your own access are listed.
                 </span>

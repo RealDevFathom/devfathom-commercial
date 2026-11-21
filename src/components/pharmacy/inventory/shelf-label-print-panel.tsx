@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -178,7 +180,7 @@ export function ShelfLabelPrintPanel({
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         <label className="min-w-64 text-sm font-medium text-text-strong">
           Label size
-          <select
+          <StudioSelect
             className={selectClass}
             value={format}
             onChange={(event) => setFormat(event.target.value as ShelfLabelFormat)}
@@ -188,7 +190,7 @@ export function ShelfLabelPrintPanel({
                 {entry.label}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <Button
           type="button"

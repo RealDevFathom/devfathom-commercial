@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useRef, useState, useSyncExternalStore, type FormEvent } from 'react';
 import { CalendarClock, Plus, Upload } from 'lucide-react';
 import { trpc } from '@/lib/trpc';
@@ -323,7 +325,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                   ) : null}
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Patient">
-                      <select
+                      <StudioSelect
                         required
                         name="patientId"
                         className={fieldClass}
@@ -342,10 +344,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             {p.phone ? ` · ${p.phone}` : ''}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Prescriber">
-                      <select
+                      <StudioSelect
                         required
                         name="prescriberId"
                         className={fieldClass}
@@ -364,15 +366,15 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             {p.name} · {p.registrationNumber}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Prescription source">
-                      <select name="sourceKind" className={fieldClass}>
+                      <StudioSelect name="sourceKind" className={fieldClass}>
                         <option value="PAPER_IMAGE">Paper prescription</option>
                         <option value="WHATSAPP_PHOTO">Photo received digitally</option>
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field
                       label="Prescription image"
@@ -436,10 +438,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                     </Field>
                   </div>
                   <Field label="Where is the original prescription?">
-                    <select name="custodyState" className={fieldClass}>
+                    <StudioSelect name="custodyState" className={fieldClass}>
                       <option value="NOT_HELD">Returned / not held</option>
                       <option value="HELD_AT_PHARMACY">Held at pharmacy</option>
-                    </select>
+                    </StudioSelect>
                   </Field>
                   {lines.map((line, index) => {
                     const medicine = medicines.find((item) => item.id === line.medicineId);
@@ -451,7 +453,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       medicineSearch !== '' && matchingMedicines.length === 0;
                     const searchEmptyId = `capture-medicine-search-empty-${line.id}`;
                     return (
-                      <fieldset key={line.id} className="min-w-0 border-t border-border-subtle pt-4">
+                      <fieldset
+                        key={line.id}
+                        className="min-w-0 border-t border-border-subtle pt-4"
+                      >
                         <legend className="font-mono text-xs tracking-wide text-text-muted uppercase">
                           Line {index + 1}
                         </legend>
@@ -462,38 +467,36 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                               value={line.medicineQuery}
                               onChange={(event) => {
                                 const medicineQuery = event.target.value;
-                                setLines((current) => current.map((item) =>
-                                  item.id === line.id ? { ...item, medicineQuery } : item
-                                ));
+                                setLines((current) =>
+                                  current.map((item) =>
+                                    item.id === line.id ? { ...item, medicineQuery } : item
+                                  )
+                                );
                               }}
                               className={fieldClass}
-                              aria-describedby={
-                                noMedicineMatches ? searchEmptyId : undefined
-                              }
+                              aria-describedby={noMedicineMatches ? searchEmptyId : undefined}
                             />
                           </Field>
                           {noMedicineMatches ? (
-                            <p
-                              id={searchEmptyId}
-                              role="status"
-                              className="text-sm text-text-muted"
-                            >
+                            <p id={searchEmptyId} role="status" className="text-sm text-text-muted">
                               No medicines match this search. Clear or change the name.
                             </p>
                           ) : null}
                         </div>
                         <div className="grid gap-4 sm:grid-cols-2">
                           <Field label="Medicine">
-                            <select
+                            <StudioSelect
                               required
                               value={line.medicineId}
                               onChange={(event) => {
                                 const medicineId = event.target.value;
-                                setLines((current) => current.map((item) =>
-                                  item.id === line.id
-                                    ? { ...item, medicineId, presentationId: '' }
-                                    : item
-                                ));
+                                setLines((current) =>
+                                  current.map((item) =>
+                                    item.id === line.id
+                                      ? { ...item, medicineId, presentationId: '' }
+                                      : item
+                                  )
+                                );
                               }}
                               className={fieldClass}
                             >
@@ -508,10 +511,10 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                                   {m.productName}
                                 </option>
                               ))}
-                            </select>
+                            </StudioSelect>
                           </Field>
                           <Field label="Medicine form">
-                            <select
+                            <StudioSelect
                               required
                               name={`presentationId-${line.id}`}
                               disabled={!medicine}
@@ -519,9 +522,11 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                               value={line.presentationId}
                               onChange={(event) => {
                                 const presentationId = event.target.value;
-                                setLines((current) => current.map((item) =>
-                                  item.id === line.id ? { ...item, presentationId } : item
-                                ));
+                                setLines((current) =>
+                                  current.map((item) =>
+                                    item.id === line.id ? { ...item, presentationId } : item
+                                  )
+                                );
                               }}
                             >
                               <option value="" disabled>
@@ -532,7 +537,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                                   {p.presentation}
                                 </option>
                               ))}
-                            </select>
+                            </StudioSelect>
                           </Field>
                         </div>
                         {medicine && medicine.presentations.length === 0 ? (
@@ -568,9 +573,9 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             size="touch"
                             className="mt-3"
                             aria-label={`Remove line ${index + 1}`}
-                            onClick={() => setLines((current) =>
-                              current.filter((item) => item.id !== line.id)
-                            )}
+                            onClick={() =>
+                              setLines((current) => current.filter((item) => item.id !== line.id))
+                            }
                           >
                             Remove line
                           </Button>
@@ -616,8 +621,8 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       </>
                     ) : null}
                     <p>
-                      Complete the patient, prescriber, dates, and each medicine’s form,
-                      prescribed quantity and directions, then select Capture prescription.
+                      Complete the patient, prescriber, dates, and each medicine’s form, prescribed
+                      quantity and directions, then select Capture prescription.
                     </p>
                   </div>
                   {submitError ? (
@@ -769,7 +774,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                 </p>
               </div>
               <Field label="Dispensing branch">
-                <select
+                <StudioSelect
                   aria-label="Dispensing branch"
                   className={`${fieldClass} min-w-56`}
                   value={effectiveBranchId}
@@ -784,7 +789,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                       {branch.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
             </div>
 
@@ -865,12 +870,16 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                             label="Reminder channel"
                             hint="Consent is checked for this channel."
                           >
-                            <select name="channel" className={fieldClass} defaultValue="WHATSAPP">
+                            <StudioSelect
+                              name="channel"
+                              className={fieldClass}
+                              defaultValue="WHATSAPP"
+                            >
                               <option value="WHATSAPP">WhatsApp</option>
                               <option value="SMS">SMS</option>
                               <option value="PHONE">Phone</option>
                               <option value="EMAIL">Email</option>
-                            </select>
+                            </StudioSelect>
                           </Field>
                           <Field
                             label="Urdu directions"

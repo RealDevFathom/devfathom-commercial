@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -117,11 +118,20 @@ async function uploadOnRealPage() {
     value: async () => new TextEncoder().encode(CSV).buffer,
   });
   fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
-  await screen.findByLabelText('Quantity column counts');
+  await screen.findByLabelText('Quantity column counts', {
+    selector: ':not([data-select-field-native][aria-hidden="true"])',
+  });
 }
 async function stageAndReopen(unit: 'PACKS' | 'UNITS') {
   await uploadOnRealPage();
-  fireEvent.change(screen.getByLabelText('Quantity column counts'), { target: { value: unit } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Quantity column counts', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: unit } }
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
   await waitFor(() => expect(mocks.push).toHaveBeenCalled());
   const url = new URL(mocks.push.mock.calls[0]![0] as string, 'http://x');
@@ -136,7 +146,13 @@ async function stageAndReopen(unit: 'PACKS' | 'UNITS') {
 describe('staged page → server action → router → review (connected)', () => {
   it('mounts the staging form on the real page and blocks staging without a choice', async () => {
     await uploadOnRealPage();
-    expect(screen.getByLabelText('Quantity column counts')).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Stage for review' })).toBeDisabled();
     expect(db.state.batches).toHaveLength(0);
   });
@@ -177,11 +193,27 @@ describe('staged page → server action → router → review (connected)', () =
       value: async () => new TextEncoder().encode(csv).buffer,
     });
     fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
-    await screen.findByLabelText('Quantity column counts');
-    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '2' } });
-    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-      target: { value: 'PACKS' },
+    await screen.findByLabelText('Quantity column counts', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
     });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: '2' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PACKS' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
     await waitFor(() => expect(mocks.push).toHaveBeenCalled());
     expect(db.state.batches[0]).toMatchObject({ quantityColumn: 'Exported count' });

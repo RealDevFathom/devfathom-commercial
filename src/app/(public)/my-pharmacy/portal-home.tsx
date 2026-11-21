@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -367,7 +369,7 @@ export function PortalHome() {
                     >
                       Account
                     </label>
-                    <select
+                    <StudioSelect
                       id="khata-account"
                       value={paymentAccount || home.khataAccounts[0]?.id}
                       onChange={(event) => setPaymentAccount(event.target.value)}
@@ -378,7 +380,7 @@ export function PortalHome() {
                           {account.displayName}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </div>
                 ) : null}
                 <div className="grid gap-4 sm:grid-cols-2">

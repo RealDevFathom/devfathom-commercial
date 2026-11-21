@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
@@ -126,7 +127,11 @@ describe('DEV-746 earning rate card', () => {
 describe('ordinary loyalty history page', () => {
   it('opens on the customer list with balances instead of an empty selection box', async () => {
     await show();
-    expect(screen.getByLabelText('Branch')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
     expect(screen.getByLabelText('Name, phone or loyalty number')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Search' })).toHaveAttribute('type', 'submit');
     expect(screen.getByRole('link', { name: /Retail customer/ })).toHaveAttribute(
@@ -178,7 +183,13 @@ describe('ordinary loyalty history page', () => {
     );
     expect(screen.getByText('Previous')).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByRole('link', { name: /Selected/ })).toHaveAttribute('aria-current', 'true');
-    expect(screen.getByLabelText('Reminder language')).toHaveValue('ur');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Reminder language', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('ur');
     expect(screen.getByRole('button', { name: 'Save reminder language' })).toBeInTheDocument();
   });
   it('shows empty branch history without inventing points', async () => {
