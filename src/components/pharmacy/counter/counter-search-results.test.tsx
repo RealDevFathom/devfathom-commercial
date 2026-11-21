@@ -732,7 +732,10 @@ it('separates strength, form and stock into labeled lines below the medicine ide
   expect(within(result).getByText('Stock:').parentElement).toHaveTextContent('240 tabs');
 });
 
-it('DEV-852: shows a missing strength in plain words, not as an error', () => {
+// DEV-977 phase 3 (owner, 21 Nov 2026: "Why is the strength showing unavailable? If we are not
+// using it why is it showing at all?"): imported medicines carry the strength in their name, so
+// a missing strength shows nothing at all on the counter, not "Strength not recorded".
+it('DEV-852, DEV-977: shows nothing for a missing strength, and never an error', () => {
   render(
     <CounterSearchResults
       rows={[{ ...row, brandName: 'Panadol', strength: null }]}
@@ -745,8 +748,12 @@ it('DEV-852: shows a missing strength in plain words, not as an error', () => {
     />
   );
   const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
-  expect(within(result).getByText('Strength not recorded')).toBeInTheDocument();
+  expect(within(result).queryByText(/Strength not recorded/)).not.toBeInTheDocument();
   expect(within(result).queryByText('Strength:')).not.toBeInTheDocument();
+  // No empty placeholder is left in its place: Form leads the details, as laid out before.
+  const form = within(result).getByText('Form:').parentElement!;
+  expect(form).toHaveTextContent('Tablet');
+  expect(form.previousElementSibling).toBeNull();
   expect(within(result).queryByText(/Unavailable/)).not.toBeInTheDocument();
   expect(within(result).queryByRole('alert')).not.toBeInTheDocument();
 });
