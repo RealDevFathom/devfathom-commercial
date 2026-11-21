@@ -442,7 +442,7 @@ function deriveSubtotal(items: readonly PricedItem[]): Prisma.Decimal {
 
 /** Order statuses that are still "open on the floor" — everything but the two
  * terminal states. The terminal's open-orders list shows exactly these. */
-const OPEN_ORDER_STATUSES = [
+export const OPEN_ORDER_STATUSES = [
   'DRAFT',
   'OPEN',
   'SENT',

@@ -195,6 +195,28 @@ beforeAll(async () => {
         },
       });
     }
+    await tx.restaurantStaffCapabilityGrant.createMany({
+      data: [
+        { staffProfileId: STAFF.A.id, branchId, capability: 'orders:take' },
+        { staffProfileId: STAFF.B.id, branchId, capability: 'orders:take' },
+        { staffProfileId: STAFF.M.id, branchId, capability: 'coauth:approve' },
+      ],
+    });
+    const { device } = await deps.enrollDevice(tx, { branchId, name: 'Approval order fixture' });
+    await tx.restaurantOrder.createMany({
+      data: [`ord_${suffix}`, `ord_audit_${suffix}`, `sole_owner_order_${suffix}`].map(
+        (id, index) => ({
+          id,
+          branchId,
+          orderNumber: index + 1,
+          businessDate: new Date(),
+          channel: 'TAKEAWAY' as const,
+          status: 'OPEN' as const,
+          staffProfileId: STAFF.A.id,
+          deviceId: device.id,
+        })
+      ),
+    });
     const otherBranchId = `branch_other_${suffix}`;
     await tx.restaurantBranch.create({ data: { id: otherBranchId, name: 'Other branch' } });
     await tx.restaurantStaffProfile.createMany({
@@ -480,10 +502,84 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
         type: 'PIN',
         secret: STAFF.A.pin,
         capability: 'orders:void',
+        targetType: 'Order',
+        targetId: `ord_${suffix}`,
         reason: 'self',
       },
     });
     expect(selfApprove.status).toBe(400);
+  });
+
+  it('refuses unapproved operations, unavailable orders and staff without approval rights before recording evidence', async () => {
+    const { secret } = await enroll('approval-scope');
+    const { token, sessionId } = await establish(secret);
+    expect(
+      (
+        await call(deps.routes.unlock, {
+          secret,
+          session: token,
+          body: { staffProfileId: STAFF.A.id, type: 'PIN', secret: STAFF.A.pin },
+        })
+      ).status
+    ).toBe(200);
+    const body = {
+      approvingStaffProfileId: STAFF.M.id,
+      type: 'PIN',
+      secret: STAFF.M.pin,
+      capability: 'orders:void',
+      targetType: 'Order',
+      targetId: `ord_${suffix}`,
+      reason: 'Duplicate order',
+    };
+    const foreignBranch = `branch_other_${suffix}`;
+    const other = await deps.withTenantDb(orgId, async (tx) => {
+      const { device } = await deps.enrollDevice(tx, {
+        branchId: foreignBranch,
+        name: 'Other branch order',
+      });
+      return tx.restaurantOrder.create({
+        data: {
+          branchId: foreignBranch,
+          deviceId: device.id,
+          staffProfileId: OTHER_BRANCH_STAFF.id,
+          orderNumber: 1,
+          businessDate: new Date(),
+          channel: 'TAKEAWAY',
+          status: 'OPEN',
+        },
+      });
+    });
+    for (const [patch, status] of [
+      [{ approvingStaffProfileId: STAFF.L.id, secret: STAFF.L.pin }, 403],
+      [{ targetId: 'absent' }, 404],
+      [{ targetId: other.id }, 404],
+      [{ capability: 'unrecognized' }, 400],
+      [{ targetType: 'Other' }, 400],
+    ] as const) {
+      expect(
+        (
+          await call(deps.routes.coAuthorize, {
+            secret,
+            session: token,
+            body: { ...body, ...patch },
+          })
+        ).status
+      ).toBe(status);
+    }
+    await deps.flushAuditWrites();
+    await deps.withTenantDb(orgId, async (tx) => {
+      expect(
+        await tx.restaurantCoAuthorization.count({ where: { terminalSessionId: sessionId } })
+      ).toBe(0);
+      expect(
+        await tx.auditLog.count({
+          where: {
+            action: 'restaurant.terminal.co-authorize',
+            metadata: { path: ['terminalSessionId'], equals: sessionId },
+          },
+        })
+      ).toBe(0);
+    });
   });
 
   it('rejects a revoked device mid-session and refuses replay of its session token (C5)', async () => {
