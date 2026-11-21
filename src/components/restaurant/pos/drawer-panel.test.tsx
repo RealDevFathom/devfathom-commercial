@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -66,9 +67,16 @@ describe('DrawerPanel', () => {
     fireEvent.click(within(dialog).getByRole('button', { name: 'Open drawer' }));
     await within(dialog).findByText('drawer-1');
 
-    fireEvent.change(within(dialog).getByLabelText('Movement'), {
-      target: { value: 'PAID_OUT' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PAID_OUT' },
+      }
+    );
     fireEvent.change(within(dialog).getByLabelText('Amount'), { target: { value: '10.00' } });
     fireEvent.change(within(dialog).getByLabelText('Reason'), {
       target: { value: 'Petty cash' },
@@ -216,7 +224,14 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     let panel = openPanel();
     await panel.findByText('Active drawer');
-    fireEvent.change(panel.getByLabelText('Movement'), { target: { value: 'PAID_OUT' } });
+    fireEvent.change(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'PAID_OUT' } }
+    );
     fireEvent.change(panel.getByLabelText('Amount'), { target: { value: '10.50' } });
     fireEvent.change(panel.getByLabelText('Reason'), { target: { value: 'Petty cash' } });
     fireEvent.change(panel.getByLabelText('Counted cash'), { target: { value: '89.50' } });
@@ -235,7 +250,13 @@ describe('DrawerPanel', () => {
 
     fireEvent.click(panel.getByRole('button', { name: 'Retry drawer state' }));
     await panel.findByText('Active drawer');
-    expect(panel.getByLabelText('Movement')).toHaveValue('PAID_OUT');
+    expect(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('PAID_OUT');
     expect(panel.getByLabelText('Amount')).toHaveValue('10.50');
     expect(panel.getByLabelText('Reason')).toHaveValue('Petty cash');
     expect(panel.getByLabelText('Counted cash')).toHaveValue('89.50');
@@ -323,13 +344,26 @@ describe('DrawerPanel', () => {
     render(<DrawerPanel request={request} />);
     const panel = openPanel();
     await panel.findByText('Active drawer');
-    fireEvent.change(panel.getByLabelText('Movement'), { target: { value: 'PAID_OUT' } });
+    fireEvent.change(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'PAID_OUT' } }
+    );
     fireEvent.change(panel.getByLabelText('Amount'), { target: { value: '10.50' } });
     fireEvent.change(panel.getByLabelText('Reason'), { target: { value: ' Petty cash ' } });
     fireEvent.change(panel.getByLabelText('Counted cash'), { target: { value: '89.50' } });
     fireEvent.click(panel.getByRole('button', { name: 'Record movement' }));
     expect(await panel.findByRole('alert')).toHaveTextContent('Movement response lost');
-    expect(panel.getByLabelText('Movement')).toHaveValue('PAID_OUT');
+    expect(
+      selectFieldControl(
+        panel.getByLabelText('Movement', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('PAID_OUT');
     expect(panel.getByLabelText('Amount')).toHaveValue('10.50');
     expect(panel.getByLabelText('Reason')).toHaveValue(' Petty cash ');
     expect(panel.getByLabelText('Counted cash')).toHaveValue('89.50');

@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import {
   QueryClient,
@@ -286,7 +287,14 @@ function form(name: string) {
   return screen.getByRole('form', { name: new RegExp(name) });
 }
 function change(label: string, value: string) {
-  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText(label, {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value } }
+  );
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -370,8 +378,16 @@ describe('CateringConsole', () => {
 
   it('uses named native event buttons, selected state and 44px primary controls', () => {
     mount();
-    expect(screen.getByLabelText('Filter by branch')).toBeInTheDocument();
-    expect(screen.getByLabelText('Filter by status')).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Filter by branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
+    expect(
+      screen.getByLabelText('Filter by status', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
     const button = screen.getByRole('button', {
       name: /Select event Founders dinner/,
     });
@@ -382,7 +398,9 @@ describe('CateringConsole', () => {
     select();
     expect(button).toHaveAttribute('aria-pressed', 'true');
     expect(button.closest('tr')).toHaveAttribute('data-state', 'selected');
-    for (const control of document.querySelectorAll('input, select, button')) {
+    for (const control of document.querySelectorAll(
+      'input:not([aria-hidden="true"]), select:not([data-select-field-native]), button'
+    )) {
       expect(control.className).toMatch(/(?:min-)?h-11/);
       expect(control).toHaveAccessibleName();
     }
@@ -459,7 +477,13 @@ describe('CateringConsole', () => {
       });
     });
     expect(screen.getByLabelText('Vehicle')).toHaveValue('Draft vehicle');
-    expect(screen.getByLabelText('Driver')).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Driver', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
     mocks.detail.mockRejectedValueOnce(new Error('Detail offline'));
     await act(async () => {
       await client.refetchQueries({ queryKey: ['detail', orderA.id] });
@@ -511,7 +535,9 @@ describe('CateringConsole', () => {
     mount();
     select();
     change('Vehicle', 'Keep delivery');
-    expect(screen.queryByRole('option', { name: 'Lunch box' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('option', { hidden: true, name: 'Lunch box' })
+    ).not.toBeInTheDocument();
     change('Recipe', 'recipe_1');
     change('Description', 'Buffet');
     change('Portions', '3.125');
@@ -583,9 +609,16 @@ describe('CateringConsole', () => {
       for (const amount of ['9007199254740993.1234', '170.1234', '999.8766'])
         expect(screen.getByText(`${label} ${amount}`)).toBeInTheDocument();
       expect(screen.getByText(`Transport · ${label} 30.1234`)).toBeInTheDocument();
-      expect(screen.getByLabelText('Recipe')).toHaveTextContent(`${label} 4.1234/portion`);
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Recipe', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveTextContent(`${label} 4.1234/portion`);
       expect(
         screen.getByRole('option', {
+          hidden: true,
           name: 'Invalid legacy recipe · Cost unavailable: Recipe cycle detected.',
         })
       ).toBeDisabled();
@@ -601,12 +634,12 @@ describe('CateringConsole', () => {
   it('disables missing-price and null-portion recipes while keeping a complete recipe enabled', () => {
     mount();
     select();
-    expect(screen.getByRole('option', { name: /Harvest lunch/ })).toBeEnabled();
+    expect(screen.getByRole('option', { hidden: true, name: /Harvest lunch/ })).toBeEnabled();
     for (const name of [
       'Unpriced recipe · Cost unavailable: Ingredient prices are missing.',
       'No portion cost · Cost unavailable: Portion cost is unavailable.',
     ]) {
-      const option = screen.getByRole('option', { name });
+      const option = screen.getByRole('option', { hidden: true, name });
       expect(option).toBeDisabled();
       expect(option).not.toHaveTextContent('/portion');
     }
@@ -734,7 +767,9 @@ describe('CateringConsole', () => {
   it('uses catering-scoped locations and renders requirement unit metadata', async () => {
     mount();
     select();
-    expect(await screen.findByRole('option', { name: 'Main kitchen' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('option', { hidden: true, name: 'Main kitchen' })
+    ).toBeInTheDocument();
     expect(mocks.locations).toHaveBeenCalledWith({ branchId: 'branch_1' }, { enabled: true });
     expect(await screen.findByText('Kilogram (kg)')).toBeInTheDocument();
   });

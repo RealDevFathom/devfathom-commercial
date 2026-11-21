@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type ReactNode, createContext, useLayoutEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import type { Session } from 'next-auth';
@@ -167,7 +169,7 @@ export function CateringTerminalBoundary({
                 >
                   <label>
                     Terminal operator
-                    <select
+                    <StudioSelect
                       className="min-h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3"
                       required
                       value={terminal.operatorId}
@@ -179,7 +181,7 @@ export function CateringTerminalBoundary({
                           {op.displayName} · {op.role}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label>
                     Operator PIN

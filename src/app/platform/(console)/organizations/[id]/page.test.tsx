@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -685,8 +686,12 @@ describe('vertical readiness parity', () => {
     });
     const department = container.querySelector('select[name="department"]') as HTMLSelectElement;
     expect(department.value).toBe('KITCHEN');
-    expect(within(department).getByRole('option', { name: 'Kitchen team' })).toHaveValue('KITCHEN');
-    expect(within(department).queryByRole('option', { name: 'ENGINEERING' })).toBeNull();
+    expect(
+      within(department).getByRole('option', { hidden: true, name: 'Kitchen team' })
+    ).toHaveValue('KITCHEN');
+    expect(
+      within(department).queryByRole('option', { hidden: true, name: 'ENGINEERING' })
+    ).toBeNull();
   });
 
   it('shows agency requirements without querying pharmacy evidence', async () => {
@@ -838,7 +843,10 @@ describe('OrganizationDetailPage pharmacy approval', () => {
           platformApprovedById: 'op_1',
           platformApprovalNote: 'Owner instruction',
           platformApprovalUnmetChecks: [
-            { key: 'PREMISES_AND_LICENCES', label: 'Premises and licences (PREMISES_AND_LICENCES)' },
+            {
+              key: 'PREMISES_AND_LICENCES',
+              label: 'Premises and licences (PREMISES_AND_LICENCES)',
+            },
           ],
         }),
       });
@@ -923,29 +931,32 @@ describe('pharmacy domain validation', () => {
     }
   );
 
-  it.each(['Hub_Customer.com', '-Hub.Customer.com', 'Hub..com', 'Hub.123', `${'a'.repeat(64)}.com`])(
-    'rejects malformed pharmacy hostname %s before submitting',
-    async (value) => {
-      const fetchMock = vi.fn();
-      vi.stubGlobal('fetch', fetchMock);
-      mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
-      try {
-        await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
-        const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
-        const host = within(form).getByLabelText('Hostname');
-        fireEvent.change(host, { target: { value } });
+  it.each([
+    'Hub_Customer.com',
+    '-Hub.Customer.com',
+    'Hub..com',
+    'Hub.123',
+    `${'a'.repeat(64)}.com`,
+  ])('rejects malformed pharmacy hostname %s before submitting', async (value) => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    mocks.pharmacyReadiness.mockResolvedValue({ ready: false, gates: [] });
+    try {
+      await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+      const form = screen.getByRole('button', { name: 'Add domain' }).closest('form')!;
+      const host = within(form).getByLabelText('Hostname');
+      fireEvent.change(host, { target: { value } });
 
-        expect(host).toBeInvalid();
-        fireEvent.submit(form);
+      expect(host).toBeInvalid();
+      fireEvent.submit(form);
 
-        expect(fetchMock).not.toHaveBeenCalled();
-        expect(host).toHaveFocus();
-        expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
-      } finally {
-        vi.unstubAllGlobals();
-      }
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(host).toHaveFocus();
+      expect(host).toHaveAccessibleDescription('Hostname has an invalid format.');
+    } finally {
+      vi.unstubAllGlobals();
     }
-  );
+  });
 });
 
 describe('permission override validation', () => {
@@ -1055,8 +1066,10 @@ describe('destructive lifecycle reason', () => {
 
 describe('OrganizationDetailPage deployment mode edit', () => {
   function deploymentModeOptions() {
-    const select = screen.getByLabelText('Deployment mode') as HTMLSelectElement;
-    return Array.from(select.options).map((option) => option.value);
+    const select = screen.getByLabelText('Deployment mode', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    }) as HTMLSelectElement;
+    return Array.from(selectFieldControl(select).options).map((option) => option.value);
   }
 
   it('does not offer Dedicated when Vercel provisioning is not configured', async () => {

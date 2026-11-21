@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -479,7 +480,14 @@ describe('Customers & Loyalty console', () => {
 
   it('routes tag assignment through the named customer contract and announces success', () => {
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Assign tag'), { target: { value: 'tag_vip' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Assign tag', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'tag_vip' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Assign' }));
 
     expect(mocks.mutations.assignTag).toEqual([{ customerId: 'customer_1', tagId: 'tag_vip' }]);

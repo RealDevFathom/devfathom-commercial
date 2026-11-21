@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -351,10 +352,24 @@ describe('RestaurantManagementOverview', () => {
     fireEvent.click(moveButton);
     fireEvent.click(screen.getByRole('button', { name: 'Hide Exceptions' }));
     fireEvent.click(screen.getByRole('button', { name: 'Use wide span for Exceptions' }));
-    fireEvent.change(screen.getByLabelText('Saved default branch'), {
-      target: { value: 'branch_2' },
-    });
-    fireEvent.change(screen.getByLabelText('Saved date range'), { target: { value: '30' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Saved default branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'branch_2' },
+      }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Saved date range', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: '30' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Save dashboard' }));
 
     await waitFor(() => expect(mocks.mutate).toHaveBeenCalledTimes(1));

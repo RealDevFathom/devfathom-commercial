@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -31,7 +32,7 @@ function mockRequest(
 async function open(request: TerminalRequest = mockRequest(async () => ({ tenders: [tender] }))) {
   render(<RefundPanel request={request} operators={managers} actingOperatorId="actor" />);
   fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
-  await screen.findByRole('option', { name: /R-0042/ });
+  await screen.findByRole('option', { hidden: true, name: /R-0042/ });
   return request;
 }
 
@@ -39,15 +40,29 @@ describe('RefundPanel', () => {
   it('defaults both balances, uses human labels, excludes self-approval, validates over-refunds, and previews explicitly', async () => {
     await open();
     expect(screen.queryByText('tender-hidden')).not.toBeInTheDocument();
-    expect(screen.queryByRole('option', { name: /Amina/ })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Settled receipt'), {
-      target: { value: tender.tenderId },
-    });
+    expect(screen.queryByRole('option', { hidden: true, name: /Amina/ })).not.toBeInTheDocument();
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: tender.tenderId },
+      }
+    );
     expect(screen.getByLabelText('Refund amount')).toHaveValue('20.00');
     expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
     fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '20.01' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest complaint' } });
-    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'manager' } }
+    );
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     expect(screen.getByRole('alert')).toHaveTextContent('remaining refundable balance');
@@ -73,15 +88,29 @@ describe('RefundPanel', () => {
         : { tenders: [tipOnly] }
     );
     await open(request);
-    fireEvent.change(screen.getByLabelText('Settled receipt'), {
-      target: { value: tipOnly.tenderId },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: tipOnly.tenderId },
+      }
+    );
     expect(screen.getByLabelText('Refund amount')).toHaveValue('0.00');
     expect(screen.getByLabelText('Tip refund')).toHaveValue('2.00');
     fireEvent.change(screen.getByLabelText('Reason'), {
       target: { value: 'Return remaining tip' },
     });
-    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'manager' } }
+    );
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     expect(screen.getByRole('heading', { name: 'Confirm destructive refund' })).toBeVisible();
@@ -101,13 +130,27 @@ describe('RefundPanel', () => {
 
   it('rejects a refund when both principal and tip are zero', async () => {
     const request = await open();
-    fireEvent.change(screen.getByLabelText('Settled receipt'), {
-      target: { value: tender.tenderId },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: tender.tenderId },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '0.00' } });
     fireEvent.change(screen.getByLabelText('Tip refund'), { target: { value: '0.00' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'No value selected' } });
-    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'manager' } }
+    );
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
@@ -138,12 +181,26 @@ describe('RefundPanel', () => {
         : { tenders: [tender] }
     );
     await open(request);
-    fireEvent.change(screen.getByLabelText('Settled receipt'), {
-      target: { value: tender.tenderId },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: tender.tenderId },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Refund amount'), { target: { value: '10.00' } });
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest complaint' } });
-    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'manager' } }
+    );
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
@@ -191,14 +248,29 @@ describe('RefundPanel', () => {
       />
     );
     fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
-    await screen.findByRole('option', { name: /R-0042/ });
+    await screen.findByRole('option', { hidden: true, name: /R-0042/ });
     expect(screen.queryByLabelText('Manager PIN')).not.toBeInTheDocument();
     expect(screen.getByText(/approval is ready with the designated manager/i)).toBeVisible();
-    expect(screen.getByLabelText('Demo approving manager')).toHaveValue('manager');
-    expect(screen.queryByRole('option', { name: /Aaron Manager/ })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Settled receipt'), {
-      target: { value: tender.tenderId },
-    });
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Demo approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('manager');
+    expect(
+      screen.queryByRole('option', { hidden: true, name: /Aaron Manager/ })
+    ).not.toBeInTheDocument();
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: tender.tenderId },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Demo walkthrough' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
@@ -232,10 +304,16 @@ describe('RefundPanel', () => {
       }));
       render(<RefundPanel request={request} operators={managers} actingOperatorId="actor" demo />);
       fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
-      await screen.findByRole('option', { name: /R-0042/ });
+      await screen.findByRole('option', { hidden: true, name: /R-0042/ });
 
       expect(screen.getByRole('alert')).toHaveTextContent('Demo access expired');
-      expect(screen.getByLabelText('Demo approving manager')).toHaveValue('');
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Demo approving manager', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('');
       expect(screen.getByRole('button', { name: 'Review refund' })).toBeDisabled();
       expect(vi.mocked(request).mock.calls.some(([, options]) => options?.method === 'POST')).toBe(
         false
@@ -268,11 +346,25 @@ describe('RefundPanel', () => {
         : { tenders: [tender] }
     );
     await open(request);
-    fireEvent.change(screen.getByLabelText('Settled receipt'), {
-      target: { value: tender.tenderId },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Settled receipt', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: tender.tenderId },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Duplicate charge' } });
-    fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Approving manager', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'manager' } }
+    );
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
     fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
     fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
@@ -295,14 +387,28 @@ it('submits the optional MANUAL machine reference with the refund and its retry 
       : { tenders: [{ ...tender, paymentProvider: 'MANUAL' }] }
   );
   await open(request);
-  fireEvent.change(screen.getByLabelText('Settled receipt'), {
-    target: { value: tender.tenderId },
-  });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Settled receipt', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: tender.tenderId },
+    }
+  );
   const reference = screen.getByLabelText('Card machine refund reference (optional)');
   expect(reference).toHaveAttribute('maxlength', '40');
   fireEvent.change(reference, { target: { value: '  BANK-REFUND-123  ' } });
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Returned meal' } });
-  fireEvent.change(screen.getByLabelText('Approving manager'), { target: { value: 'manager' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Approving manager', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'manager' } }
+  );
   fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
   fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -151,7 +153,7 @@ export function PrintBridgeEnrollment({
                 <label htmlFor="bridge-branch" className="block text-sm font-medium">
                   Branch
                 </label>
-                <select
+                <StudioSelect
                   id="bridge-branch"
                   className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                   value={branchId}
@@ -167,7 +169,7 @@ export function PrintBridgeEnrollment({
                         {b.name}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </div>
               <PrinterRegistrationFields
                 rows={printers}

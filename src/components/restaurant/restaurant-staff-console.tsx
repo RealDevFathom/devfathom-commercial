@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -316,7 +318,7 @@ export function RestaurantStaffConsole() {
             </label>
             <label className="space-y-1.5">
               <span className={labelClass}>Status</span>
-              <select
+              <StudioSelect
                 className={selectClass}
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as 'ALL' | StaffStatus)}
@@ -327,7 +329,7 @@ export function RestaurantStaffConsole() {
                     {status}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <div className="space-y-1.5">
               <label htmlFor="staff-branch-filter" className={labelClass}>
@@ -395,7 +397,7 @@ export function RestaurantStaffConsole() {
                       </span>
                     </TableCell>
                     <TableCell>
-                      <select
+                      <StudioSelect
                         aria-label={`Status for ${staff.displayName}`}
                         className="h-8 rounded-md border border-input bg-surface-raised px-2 text-xs text-text-strong outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
                         value={staff.status}
@@ -412,7 +414,7 @@ export function RestaurantStaffConsole() {
                             {status}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </TableCell>
                     <TableCell className="text-text-muted">
                       {dateFormat.format(new Date(staff.createdAt))}
@@ -532,7 +534,7 @@ export function RestaurantStaffConsole() {
                 <label htmlFor="staff-organization-user" className={labelClass}>
                   Organization user
                 </label>
-                <select
+                <StudioSelect
                   id="staff-organization-user"
                   name="userId"
                   defaultValue={editingStaff?.userId ?? ''}
@@ -570,7 +572,7 @@ export function RestaurantStaffConsole() {
                       </option>
                     );
                   })}
-                </select>
+                </StudioSelect>
                 <span id="staff-user-help" className="block text-xs text-text-muted">
                   {eligibleUsersQuery.data?.every(
                     (user) =>
@@ -618,7 +620,7 @@ export function RestaurantStaffConsole() {
               </div>
               <label className="space-y-1.5">
                 <span className={labelClass}>Status</span>
-                <select
+                <StudioSelect
                   name="status"
                   defaultValue={editingStaff?.status ?? 'ACTIVE'}
                   className={selectClass}
@@ -628,7 +630,7 @@ export function RestaurantStaffConsole() {
                       {status}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
             </div>
             <DialogFooter>
@@ -679,10 +681,10 @@ export function RestaurantStaffConsole() {
           >
             <label className="space-y-1.5">
               <span className={labelClass}>Credential type</span>
-              <select name="type" className={selectClass} defaultValue="PIN">
+              <StudioSelect name="type" className={selectClass} defaultValue="PIN">
                 <option value="PIN">PIN</option>
                 <option value="BADGE">Badge</option>
-              </select>
+              </StudioSelect>
             </label>
             <label className="space-y-1.5">
               <span className={labelClass}>Device restriction (optional)</span>

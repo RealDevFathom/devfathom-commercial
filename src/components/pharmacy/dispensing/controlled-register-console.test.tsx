@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -133,13 +134,13 @@ describe('DEV-672 controlled register branch list', () => {
 
     const picker = screen.getByRole('combobox', { name: /Branch/ });
     expect(
-      within(picker)
-        .getAllByRole('option')
+      within(selectFieldControl(picker))
+        .getAllByRole('option', { hidden: true })
         .map((option) => option.textContent)
     ).toEqual(['Gulberg', 'Johar Town']);
     expect(h.registerInputs.at(-1)?.input).toEqual({ branchId: 'br-1' });
 
-    fireEvent.change(picker, { target: { value: 'br-2' } });
+    fireEvent.change(selectFieldControl(picker), { target: { value: 'br-2' } });
 
     expect(h.registerInputs.at(-1)).toEqual({ input: { branchId: 'br-2' }, enabled: true });
   });

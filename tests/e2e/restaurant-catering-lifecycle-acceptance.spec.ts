@@ -1,3 +1,4 @@
+import { chooseSelectField } from './fixtures/select-field';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import pg from 'pg';
 
@@ -384,7 +385,10 @@ async function createOrder(
 ) {
   await page.getByRole('button', { name: 'New order' }).click();
   const dialog = page.getByRole('dialog', { name: 'Create catering order' });
-  await dialog.getByLabel('Order branch').selectOption(fixture.branchId);
+  await chooseSelectField(
+    dialog.getByRole('combobox', { name: 'Order branch', exact: true }),
+    fixture.branchId
+  );
   await dialog.getByLabel('Customer').selectOption(fixture.customer.id);
   await dialog.getByLabel('Event name').fill(input.eventName);
   await dialog.getByLabel('Event date').fill(input.eventDate);

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 export type RestaurantDeviceOption = {
   id: string;
   name: string;
@@ -45,7 +47,7 @@ export function RestaurantDeviceSelect({
           : 'Select a device';
 
   return (
-    <select
+    <StudioSelect
       name={name}
       aria-label={label}
       required={required}
@@ -62,6 +64,6 @@ export function RestaurantDeviceSelect({
           {device.name} — {device.branch.name}
         </option>
       ))}
-    </select>
+    </StudioSelect>
   );
 }

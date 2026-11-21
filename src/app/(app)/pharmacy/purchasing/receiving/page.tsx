@@ -1,4 +1,5 @@
 import { WHOLE_RECEIPT_REVERSAL_ONLY } from '@/lib/pharmacy/receiving';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { ProgressiveLines } from '../_components/progressive-lines';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import type { Metadata } from 'next';
@@ -928,7 +929,7 @@ export default async function PharmacyReceivingPage({
               {scanTerm ? <input name="scan" type="hidden" value={scanTerm} /> : null}
               <label className="min-w-56 text-sm font-medium text-text-body" htmlFor="order-pick">
                 Purchase order
-                <select
+                <StudioSelect
                   className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
                   defaultValue={selectedOrder?.id ?? ''}
                   id="order-pick"
@@ -940,7 +941,7 @@ export default async function PharmacyReceivingPage({
                       {order.reference} — {order.supplier.name} ({order.lines.length} lines)
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               <SubmitButton variant="secondary">Open order</SubmitButton>
             </form>

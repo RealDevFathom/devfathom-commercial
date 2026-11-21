@@ -1,35 +1,113 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  options: { data: { branches: [{ id: 'branch', name: 'Main branch' }], locations: [{ id: 'location', branchId: 'branch', name: 'Main store' }] }, isPending: false, error: null as unknown, refetch: vi.fn() },
+  options: {
+    data: {
+      branches: [{ id: 'branch', name: 'Main branch' }],
+      locations: [{ id: 'location', branchId: 'branch', name: 'Main store' }],
+    },
+    isPending: false,
+    error: null as unknown,
+    refetch: vi.fn(),
+  },
   upload: { mutateAsync: vi.fn(), isPending: false },
   preview: { mutateAsync: vi.fn(), isPending: false },
   commit: { mutateAsync: vi.fn(), isPending: false },
 }));
-vi.mock('@/lib/trpc', () => ({ trpc: { pharmacyOwnerImport: {
-  options: { useQuery: () => mocks.options }, upload: { useMutation: () => mocks.upload },
-  preview: { useMutation: () => mocks.preview }, commit: { useMutation: () => mocks.commit },
-} } }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    pharmacyOwnerImport: {
+      options: { useQuery: () => mocks.options },
+      upload: { useMutation: () => mocks.upload },
+      preview: { useMutation: () => mocks.preview },
+      commit: { useMutation: () => mocks.commit },
+    },
+  },
+}));
 import { OwnerImportWizard } from './owner-import-wizard';
 
-const mapping = { sourceRef: 0, pack: 1, batch: 2, expiry: 3, mrp: 4, cost: 5, expected: 6, counted: 7, varianceNote: 8 };
+const mapping = {
+  sourceRef: 0,
+  pack: 1,
+  batch: 2,
+  expiry: 3,
+  mrp: 4,
+  cost: 5,
+  expected: 6,
+  counted: 7,
+  varianceNote: 8,
+};
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.options.error = null;
   mocks.options.isPending = false;
   mocks.upload.isPending = mocks.preview.isPending = mocks.commit.isPending = false;
-  mocks.upload.mutateAsync.mockResolvedValue({ headers: ['Source', 'Barcode', 'Batch', 'Expiry', 'MRP', 'Cost', 'Exported', 'Counted', 'Note'], sample: [['SRC', '00123', 'B1', '2099-06', '25', '1.25', '12', '10', 'Excluded damage']], rowCount: 1, mapping });
-  mocks.preview.mutateAsync.mockResolvedValue({ previewHash: 'a'.repeat(64), canCommit: true, blockers: [], totalUnits: 10, totalValueMinor: '1250', lines: [{ rowNumber: 2, sourceRef: 'SRC', packReference: '00123', medicineName: 'Test medicine', batchNumber: 'B1', expiryDate: '2099-06-30', expiryPrecision: 'MONTH', expectedUnits: 12, countedUnits: 10, currentUnits: 0, proposedUnits: 10, varianceUnits: -2, unitsPerPack: 10, printedMrpMinor: 2500, unitCostMinor: 125, varianceNote: 'Excluded damage', errors: [] }] });
-  mocks.commit.mutateAsync.mockResolvedValue({ sessionId: 'opening_session', totalUnits: 10, totalValueMinor: '1250', replayed: false });
+  mocks.upload.mutateAsync.mockResolvedValue({
+    headers: ['Source', 'Barcode', 'Batch', 'Expiry', 'MRP', 'Cost', 'Exported', 'Counted', 'Note'],
+    sample: [['SRC', '00123', 'B1', '2099-06', '25', '1.25', '12', '10', 'Excluded damage']],
+    rowCount: 1,
+    mapping,
+  });
+  mocks.preview.mutateAsync.mockResolvedValue({
+    previewHash: 'a'.repeat(64),
+    canCommit: true,
+    blockers: [],
+    totalUnits: 10,
+    totalValueMinor: '1250',
+    lines: [
+      {
+        rowNumber: 2,
+        sourceRef: 'SRC',
+        packReference: '00123',
+        medicineName: 'Test medicine',
+        batchNumber: 'B1',
+        expiryDate: '2099-06-30',
+        expiryPrecision: 'MONTH',
+        expectedUnits: 12,
+        countedUnits: 10,
+        currentUnits: 0,
+        proposedUnits: 10,
+        varianceUnits: -2,
+        unitsPerPack: 10,
+        printedMrpMinor: 2500,
+        unitCostMinor: 125,
+        varianceNote: 'Excluded damage',
+        errors: [],
+      },
+    ],
+  });
+  mocks.commit.mutateAsync.mockResolvedValue({
+    sessionId: 'opening_session',
+    totalUnits: 10,
+    totalValueMinor: '1250',
+    replayed: false,
+  });
 });
 afterEach(cleanup);
 
 async function uploadAndPreview() {
-  fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
-  fireEvent.change(screen.getByLabelText('Stock location'), { target: { value: 'location' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'branch' } }
+  );
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Stock location', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'location' } }
+  );
   const file = new File(['A\n1'], 'stock.csv', { type: 'text/csv' });
-  Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: async () => new TextEncoder().encode('A\n1').buffer,
+  });
   fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
   await screen.findByRole('button', { name: 'Run dry-run diff' });
   fireEvent.click(screen.getByRole('button', { name: 'Run dry-run diff' }));
@@ -46,35 +124,81 @@ describe('owner importer wizard', () => {
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
     await screen.findByText('Opening stock committed');
-    expect(mocks.commit.mutateAsync).toHaveBeenCalledWith(expect.objectContaining({ branchId: 'branch', stockLocationId: 'location', confirmed: true, previewHash: 'a'.repeat(64), mapping }));
+    expect(mocks.commit.mutateAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        branchId: 'branch',
+        stockLocationId: 'location',
+        confirmed: true,
+        previewHash: 'a'.repeat(64),
+        mapping,
+      })
+    );
     expect(screen.getByText(/10 single units posted/)).toBeVisible();
   });
   it('invalidates the dry run and confirmation after a mapping edit', async () => {
     render(<OwnerImportWizard />);
     await uploadAndPreview();
     fireEvent.click(screen.getByRole('checkbox'));
-    fireEvent.change(screen.getByLabelText('Cost per base unit (PKR) *'), { target: { value: '4' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Cost per base unit (PKR) *', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: '4' } }
+    );
     expect(screen.queryByRole('button', { name: 'Commit opening stock' })).toBeNull();
     expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
   });
   it('keeps the file and mapping after a dry-run error', async () => {
-    mocks.preview.mutateAsync.mockRejectedValueOnce(new Error('Map each required field to a different column.'));
+    mocks.preview.mutateAsync.mockRejectedValueOnce(
+      new Error('Map each required field to a different column.')
+    );
     render(<OwnerImportWizard />);
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch' } });
-    fireEvent.change(screen.getByLabelText('Stock location'), { target: { value: 'location' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Stock location', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'location' } }
+    );
     const file = new File(['A\n1'], 'stock.csv');
-    Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
+    Object.defineProperty(file, 'arrayBuffer', {
+      value: async () => new TextEncoder().encode('A\n1').buffer,
+    });
     fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
     fireEvent.click(await screen.findByRole('button', { name: 'Run dry-run diff' }));
     await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('different column'));
-    expect(screen.getByLabelText('Cost per base unit (PKR) *')).toHaveValue('5');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Cost per base unit (PKR) *', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('5');
     expect(screen.getByText(/stock.csv · 1 stock rows/)).toBeVisible();
-    expect(screen.getByRole('alert')).toHaveTextContent('Review the column mapping or choose a corrected file, then run the dry-run diff again.');
-    expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute('href', '#import-mapping');
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Review the column mapping or choose a corrected file, then run the dry-run diff again.'
+    );
+    expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute(
+      'href',
+      '#import-mapping'
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Run dry-run diff' }));
     await screen.findByRole('button', { name: 'Commit opening stock' });
     expect(mocks.preview.mutateAsync).toHaveBeenCalledTimes(2);
-    expect(mocks.preview.mutateAsync.mock.calls[1][0]).toEqual(mocks.preview.mutateAsync.mock.calls[0][0]);
+    expect(mocks.preview.mutateAsync.mock.calls[1][0]).toEqual(
+      mocks.preview.mutateAsync.mock.calls[0][0]
+    );
   });
   it('shows permission denial without upload controls', () => {
     mocks.options.error = { data: { code: 'FORBIDDEN' } };
@@ -90,35 +214,59 @@ describe('owner importer wizard', () => {
   });
 });
 
-it('shows a cost-basis warning and still requires explicit review before a valid import',async()=>{
-  const preview=await mocks.preview.mutateAsync();
-  preview.lines[0].warnings=['Cost per tablet/unit is greater than or equal to MRP per tablet/unit. Check the unit basis.'];
+it('shows a cost-basis warning and still requires explicit review before a valid import', async () => {
+  const preview = await mocks.preview.mutateAsync();
+  preview.lines[0].warnings = [
+    'Cost per tablet/unit is greater than or equal to MRP per tablet/unit. Check the unit basis.',
+  ];
   mocks.preview.mutateAsync.mockResolvedValue(preview);
-  render(<OwnerImportWizard/>);await uploadAndPreview();
-  expect(screen.getByText('Review cost warnings')).toBeVisible();expect(screen.getByText('Review cost basis')).toBeVisible();
+  render(<OwnerImportWizard />);
+  await uploadAndPreview();
+  expect(screen.getByText('Review cost warnings')).toBeVisible();
+  expect(screen.getByText('Review cost basis')).toBeVisible();
   expect(screen.getByText(/Cost per tablet\/unit is greater/)).toBeVisible();
-  const commit=screen.getByRole('button',{name:'Commit opening stock'});expect(commit).toBeDisabled();
-  fireEvent.click(screen.getByRole('checkbox'));expect(commit).toBeEnabled();
+  const commit = screen.getByRole('button', { name: 'Commit opening stock' });
+  expect(commit).toBeDisabled();
+  fireEvent.click(screen.getByRole('checkbox'));
+  expect(commit).toBeEnabled();
   expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
 });
-it('shows rejected rows outside the valid-unit valuation and leaves commit disabled',async()=>{
-  const preview=await mocks.preview.mutateAsync();preview.canCommit=false;
-  preview.lines.push({...preview.lines[0],rowNumber:3,sourceRef:'INVALID',errors:['Invalid pack'],countedUnits:20});
+it('shows rejected rows outside the valid-unit valuation and leaves commit disabled', async () => {
+  const preview = await mocks.preview.mutateAsync();
+  preview.canCommit = false;
+  preview.lines.push({
+    ...preview.lines[0],
+    rowNumber: 3,
+    sourceRef: 'INVALID',
+    errors: ['Invalid pack'],
+    countedUnits: 20,
+  });
   mocks.preview.mutateAsync.mockResolvedValue(preview);
-  render(<OwnerImportWizard/>);await uploadAndPreview();
-  expect(screen.getByText(/1 of 2 valid rows · 10 counted single units · PKR 12.50 opening valuation/)).toBeVisible();
-  expect(screen.getByText(/Rejected rows are excluded/)).toBeVisible();expect(screen.getByRole('button',{name:'Commit opening stock'})).toBeDisabled();
+  render(<OwnerImportWizard />);
+  await uploadAndPreview();
+  expect(
+    screen.getByText(/1 of 2 valid rows · 10 counted single units · PKR 12.50 opening valuation/)
+  ).toBeVisible();
+  expect(screen.getByText(/Rejected rows are excluded/)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Commit opening stock' })).toBeDisabled();
 });
 
 it('offers a corrected upload after an upload failure', async () => {
   mocks.upload.mutateAsync.mockRejectedValueOnce(new Error('The worksheet could not be read.'));
   render(<OwnerImportWizard />);
   const file = new File(['A\n1'], 'stock.csv');
-  Object.defineProperty(file, 'arrayBuffer', { value: async () => new TextEncoder().encode('A\n1').buffer });
+  Object.defineProperty(file, 'arrayBuffer', {
+    value: async () => new TextEncoder().encode('A\n1').buffer,
+  });
   fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
   await screen.findByRole('alert');
-  expect(screen.getByRole('alert')).toHaveTextContent('No inventory has changed. Check the file format against the CSV template, then choose the corrected file.');
-  expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute('href', '#import-upload');
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'No inventory has changed. Check the file format against the CSV template, then choose the corrected file.'
+  );
+  expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute(
+    'href',
+    '#import-upload'
+  );
   expect(screen.getByRole('link', { name: 'Download CSV template' })).toHaveAttribute('download');
   fireEvent.change(screen.getByLabelText('CSV or XLSX file'), { target: { files: [file] } });
   await screen.findByRole('button', { name: 'Run dry-run diff' });
@@ -132,25 +280,42 @@ it('explains how to correct a blocked preview while keeping commit disabled', as
   mocks.preview.mutateAsync.mockResolvedValue(preview);
   render(<OwnerImportWizard />);
   await uploadAndPreview();
-  expect(screen.getByText(/Fix the listed errors in your source file or column mapping/)).toBeVisible();
-  expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute('href', '#import-mapping');
-  expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute('href', '#import-upload');
+  expect(
+    screen.getByText(/Fix the listed errors in your source file or column mapping/)
+  ).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Review column mapping' })).toHaveAttribute(
+    'href',
+    '#import-mapping'
+  );
+  expect(screen.getByRole('link', { name: 'Choose a corrected file' })).toHaveAttribute(
+    'href',
+    '#import-upload'
+  );
   expect(screen.getByRole('button', { name: 'Commit opening stock' })).toBeDisabled();
   expect(mocks.commit.mutateAsync).not.toHaveBeenCalled();
 });
 
 it('keeps the reviewed input for a safe retry after a lost commit response', async () => {
   mocks.commit.mutateAsync.mockRejectedValueOnce(new Error('Connection lost.'));
-  mocks.commit.mutateAsync.mockResolvedValueOnce({ sessionId: 'opening_session', totalUnits: 10, totalValueMinor: '1250', replayed: true });
+  mocks.commit.mutateAsync.mockResolvedValueOnce({
+    sessionId: 'opening_session',
+    totalUnits: 10,
+    totalValueMinor: '1250',
+    replayed: true,
+  });
   render(<OwnerImportWizard />);
   await uploadAndPreview();
   fireEvent.click(screen.getByRole('checkbox'));
   fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
   await screen.findByRole('alert');
-  expect(screen.getByRole('alert')).toHaveTextContent('If the connection failed, retry Commit opening stock with the same reviewed file to recover its receipt safely.');
+  expect(screen.getByRole('alert')).toHaveTextContent(
+    'If the connection failed, retry Commit opening stock with the same reviewed file to recover its receipt safely.'
+  );
   expect(screen.getByRole('alert')).not.toHaveTextContent('No inventory has changed');
   fireEvent.click(screen.getByRole('button', { name: 'Commit opening stock' }));
   await screen.findByText('Already committed · receipt recovered');
   expect(mocks.commit.mutateAsync).toHaveBeenCalledTimes(2);
-  expect(mocks.commit.mutateAsync.mock.calls[1][0]).toEqual(mocks.commit.mutateAsync.mock.calls[0][0]);
+  expect(mocks.commit.mutateAsync.mock.calls[1][0]).toEqual(
+    mocks.commit.mutateAsync.mock.calls[0][0]
+  );
 });

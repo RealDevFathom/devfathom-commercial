@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useState, type FormEvent, type ReactNode } from 'react';
@@ -272,7 +274,7 @@ export function OrdersConsole() {
                 />
               </Field>
               <Field label="Status">
-                <select
+                <StudioSelect
                   aria-label="Status"
                   value={status}
                   className={selectClass}
@@ -286,10 +288,10 @@ export function OrdersConsole() {
                       {value.replaceAll('_', ' ')}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Channel">
-                <select
+                <StudioSelect
                   aria-label="Channel"
                   value={channel}
                   className={selectClass}
@@ -301,10 +303,10 @@ export function OrdersConsole() {
                       {value.replaceAll('_', ' ')}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Page size">
-                <select
+                <StudioSelect
                   aria-label="Page size"
                   value={limit}
                   className={selectClass}
@@ -318,7 +320,7 @@ export function OrdersConsole() {
                       {value}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </Field>
             </div>
           </SectionCard>
@@ -508,12 +510,12 @@ export function OrdersConsole() {
             </Field>
             <div className="grid gap-4 sm:grid-cols-2">
               <Field label="Wastage disposition">
-                <select name="wastageDisposition" className={selectClass} defaultValue="">
+                <StudioSelect name="wastageDisposition" className={selectClass} defaultValue="">
                   <option value="">Not specified</option>
                   <option value="WASTE">Waste</option>
                   <option value="RESTOCK">Restock</option>
                   <option value="NONE">None</option>
-                </select>
+                </StudioSelect>
               </Field>
               <Field label="Approving staff member (optional)">
                 <RestaurantStaffSelect
@@ -532,10 +534,10 @@ export function OrdersConsole() {
             {cancelApproverId ? (
               <div className="grid gap-4 sm:grid-cols-2">
                 <Field label="Approving credential type">
-                  <select name="approvingType" defaultValue="PIN" className={selectClass}>
+                  <StudioSelect name="approvingType" defaultValue="PIN" className={selectClass}>
                     <option value="PIN">PIN</option>
                     <option value="BADGE">Badge</option>
-                  </select>
+                  </StudioSelect>
                 </Field>
                 <Field label="Approving PIN or badge secret">
                   <Input

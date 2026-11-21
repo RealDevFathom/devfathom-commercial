@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type FormEvent, useEffect, useState } from 'react';
 
 import {
@@ -348,7 +350,7 @@ export function RefundPanel({
           <form onSubmit={preview} className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="refund-tender">Settled receipt</Label>
-              <select
+              <StudioSelect
                 id="refund-tender"
                 value={tenderId}
                 onChange={(event) => selectTender(event.target.value)}
@@ -361,7 +363,7 @@ export function RefundPanel({
                     · {tender.remainingAmount} remaining
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
             {selected ? (
               <dl className="grid grid-cols-3 gap-3 rounded-md bg-surface-sunken p-3 text-sm">

@@ -1248,7 +1248,7 @@
     background: var(--surface-card);
   }
 
-  .platform-workspace :is(input, select, textarea) {
+  .platform-workspace :is(input, select, textarea, [data-select-field-trigger]) {
     min-height: 44px;
     border-color: var(--border-default);
     border-radius: var(--radius-sm);
@@ -1260,11 +1260,11 @@
       background 180ms var(--ease-out);
   }
 
-  .platform-workspace :is(input, select, textarea):hover {
+  .platform-workspace :is(input, select, textarea, [data-select-field-trigger]):hover {
     border-color: var(--border-strong);
   }
 
-  .platform-workspace :is(input, select, textarea):focus {
+  .platform-workspace :is(input, select, textarea, [data-select-field-trigger]):focus {
     border-color: var(--accent-brand);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-brand) 14%, transparent);
   }
@@ -1367,7 +1367,8 @@
   outline-offset: 4px;
 }
 .studio-auth input:not([type='checkbox']),
-.studio-auth select {
+.studio-auth select,
+.studio-auth [data-select-field-trigger] {
   min-block-size: 48px;
   inline-size: 100%;
   min-inline-size: 0;
