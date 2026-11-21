@@ -43,11 +43,13 @@ export async function unusablePasswordHash(): Promise<string> {
   return hash(randomBytes(32).toString('base64url'), 12);
 }
 
-const ROLE_RANK: Record<string, number> = { EMPLOYEE: 1, HR: 2, ADMIN: 3 };
+/** Base-role order shared by every administrative identity change (DEV-974). */
+export const ROLE_RANK: Record<string, number> = { EMPLOYEE: 1, HR: 2, ADMIN: 3 };
 
-type ResetParty = Parameters<typeof hasAllCapabilityAccess>[0] & { role: string };
+export type ResetParty = Parameters<typeof hasAllCapabilityAccess>[0] & { role: string };
 
-const RESET_PARTY_SELECT = {
+/** The live member fields every administrative identity-change guard reads. */
+export const RESET_PARTY_SELECT = {
   role: true,
   status: true,
   organizationRole: { select: { key: true, isSystem: true, permissions: true } },

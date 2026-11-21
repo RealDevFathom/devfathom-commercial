@@ -233,6 +233,18 @@ describe('DEV-766 durable catalogue approvals', () => {
       decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
     ).rejects.toMatchObject({ message: 'Fresh owner PIN verification failed.' });
   });
+  it('tells a solo owner whose PIN is locked that it is locked, not wrong (DEV-976)', async () => {
+    guards.solo.mockResolvedValue(true);
+    guards.pin.mockResolvedValue('LOCKED');
+    const f = fixture('reviewer');
+    await expect(
+      decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+    });
+    expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
+  });
   it('rejects stale edits instead of overwriting a later catalogue change', async () => {
     const f = fixture();
     f.raw.medicine.updateMany.mockResolvedValue({ count: 0 });

@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   deviceFindUnique: vi.fn(),
   userFindMany: vi.fn(),
   userFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
   credFindMany: vi.fn(),
   credFindFirst: vi.fn(),
   credFindUnique: vi.fn(),
@@ -73,7 +74,11 @@ const db = {
   },
   restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
   restaurantRegisteredDevice: { findUnique: mocks.deviceFindUnique },
-  user: { findMany: mocks.userFindMany, findFirst: mocks.userFindFirst },
+  user: {
+    findMany: mocks.userFindMany,
+    findFirst: mocks.userFindFirst,
+    findUnique: mocks.userFindUnique,
+  },
   restaurantOperatorCredential: {
     findMany: mocks.credFindMany,
     findFirst: mocks.credFindFirst,
@@ -82,6 +87,14 @@ const db = {
     update: mocks.credUpdate,
   },
 };
+
+function staffParty(
+  id: string,
+  role: 'ADMIN' | 'HR' | 'EMPLOYEE',
+  organizationRole: { key: string; isSystem: boolean; permissions: unknown[] } | null = null
+) {
+  return { id, role, status: 'ACTIVE', organizationRole, permissionOverrides: [] };
+}
 
 function caller() {
   return restaurantStaffRouter.createCaller({
@@ -121,6 +134,10 @@ beforeEach(() => {
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
   mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });
+  // DEV-974: live hierarchy parties. The manager and linked staff are ordinary members.
+  mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+    staffParty(where.id, 'EMPLOYEE')
+  );
   mocks.userFindMany.mockResolvedValue([]);
   mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
@@ -460,6 +477,65 @@ describe('branch-authorized account enrollment by exact email', () => {
       expect(mocks.userFindFirst).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('DEV-974: a manager never sets the PIN of an administrator or the owner', () => {
+  const owner = staffParty('user_owner', 'ADMIN', {
+    key: 'owner',
+    isSystem: true,
+    permissions: [{ capability: '*', effect: 'ALLOW' }],
+  });
+  beforeEach(() => {
+    mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
+      where.id === 'user_owner'
+        ? owner
+        : where.id === 'user_admin'
+          ? staffParty('user_admin', 'ADMIN')
+          : staffParty(where.id, 'EMPLOYEE')
+    );
+  });
+
+  it.each(['user_owner', 'user_admin'])(
+    'refuses issuing and rotating on a profile linked to %s',
+    async (userId) => {
+      mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE', userId });
+      mocks.credFindUnique.mockResolvedValue({
+        id: 'cred_1',
+        type: 'PIN',
+        revokedAt: null,
+        staffProfileId: 'staff_1',
+        deviceId: null,
+        device: null,
+      });
+      await expect(
+        caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        caller().rotateCredential({ credentialId: 'cred_1', secret: '99887' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.credCreate).not.toHaveBeenCalled();
+      expect(mocks.credUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses linking a profile to the owner account', async () => {
+    mocks.userFindFirst.mockResolvedValue({ id: 'user_owner' });
+    await expect(
+      caller().update({ id: 'staff_1', userEmail: 'owner@r.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().create({ displayName: 'Owner', primaryBranchId: 'branch_1', userId: 'user_owner' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.staffUpdate).not.toHaveBeenCalled();
+    expect(mocks.staffCreate).not.toHaveBeenCalled();
+  });
+
+  it('still sets the PIN of a staff member below the manager', async () => {
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE', userId: 'user_1' });
+    await expect(
+      caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+    ).resolves.toMatchObject({ type: 'PIN' });
+  });
 });
 
 describe('credential mutations suppress the plaintext secret (C4)', () => {
