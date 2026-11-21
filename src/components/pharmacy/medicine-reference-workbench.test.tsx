@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   runNow: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  approvalMode: { data: { required: true } as undefined | { required: boolean } },
   queueAccess: { data: undefined as undefined | { canDecide: boolean; ownerPinApproval: boolean } },
   selfApproval: {
     data: undefined as undefined | { canSelfApprove: boolean; reviewers: string[] },
@@ -32,6 +33,7 @@ vi.mock('@/lib/browser-uuid', () => ({ browserUuid: () => 'file-batch' }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => mocks.approvalMode } },
     useUtils: () => ({
       pharmacyMedicine: {
         referenceConnectorProposals: { invalidate: mocks.invalidateProposals },
@@ -71,6 +73,9 @@ import { MedicineReferenceWorkbench } from './medicine-reference-workbench';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // DEV-961: these cases word the owner's own approval as a PIN, which applies while the owner has
+  // the authenticator for approvals turned off; the code wording is covered on its own below.
+  mocks.approvalMode.data = { required: false };
   mocks.proposals.data = [];
   mocks.proposals.isPending = false;
   mocks.proposals.error = null;
@@ -538,4 +543,26 @@ it('shows the PIN box, with its reason, only when the owner may approve alone (D
   expect(screen.getByLabelText(SOLO_PIN)).toHaveAccessibleDescription(
     'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.'
   );
+});
+
+it('asks the solo owner for what their own approval takes in this organization (DEV-961)', () => {
+  mocks.queueAccess.data = { canDecide: true, ownerPinApproval: false };
+  mocks.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+  // On (the default for organizations): the current code from the owner's authenticator app.
+  mocks.approvalMode.data = { required: true };
+  const { unmount } = render(<MedicineReferenceWorkbench health={[]} />);
+  const code = screen.getByLabelText('Your approval code for reference self-approval');
+  expect(code).toHaveAttribute('type', 'password');
+  expect(code).toHaveAccessibleDescription(
+    'Nobody else can review, so you approve the rows you imported or edited yourself with the current 6-digit code from your authenticator app.'
+  );
+  expect(screen.queryByLabelText(SOLO_PIN)).toBeNull();
+  unmount();
+  // Off: the owner's permanent PIN.
+  mocks.approvalMode.data = { required: false };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByLabelText(SOLO_PIN)).toHaveAccessibleDescription(
+    'Nobody else can review, so you approve the rows you imported or edited yourself with your own PIN.'
+  );
+  expect(screen.queryByLabelText('Your approval code for reference self-approval')).toBeNull();
 });

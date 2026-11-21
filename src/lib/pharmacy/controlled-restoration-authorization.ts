@@ -162,6 +162,7 @@ async function verifyRestorationPin(
       credentialHash: credential.credentialHash,
       secret: input.pin,
       action: 'pharmacy.controlledRestorationWitness',
+      approverRight: 'pharmacy:dispense',
       requestedById: scope.actorId,
       now,
     }))

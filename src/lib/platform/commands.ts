@@ -317,6 +317,8 @@ function sensitiveCommand(action: string): boolean {
   return (
     [
       'organization.user.password',
+      // DEV-961: removing a member's approval authenticator (the owner's lost phone).
+      'organization.user.approvalauthenticator.reset',
       'organization.scim.token',
       'organization.scim.revoke',
       'organization.transition',
@@ -1064,7 +1066,12 @@ async function bootstrapOrganization(
       : packageRecord.defaultSeats;
   const password = demo ? null : await hash(input.adminPassword, 12);
   const organization = await createOrganizationRecord(db, {
-    ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
+    // DEV-961: demo personas sign in without a password, so they cannot set up an approval
+    // authenticator; a demo seat keeps approvals on PINs. Every real organization takes the
+    // default (on).
+    ...(demo
+      ? { id: demo.identity.organizationId, isDemo: true, requireApprovalAuthenticator: false }
+      : {}),
     slug: input.slug,
     legalName: input.legalName,
     displayName: input.displayName,
@@ -3306,6 +3313,62 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: { id: saved.id, passwordReset: true, mustChangePassword: true },
+        audit,
+      };
+    }
+    // DEV-961 — recovery of last resort for an approval authenticator. A sole owner who
+    // lost both their phone and their recovery codes has nobody inside the organization who can
+    // reset it, and while the organization requires an authenticator their account does not
+    // work. The operator removes the enrolment (never sees or sets the secret) with a
+    // mandatory reason; the member sets up a new authenticator at the next request, and the
+    // member and the organization's administrators are told who did it and why.
+    case 'organization.user.approvalauthenticator.reset': {
+      const input = z.object({ id, reason: sensitiveReason }).strict().parse(payload);
+      const target = await db.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, organizationId: true, email: true, role: true },
+      });
+      if (!target) throw new PlatformSecurityError('Organization user not found.', 400);
+      const removed = await db.approvalAuthenticator.deleteMany({
+        where: { organizationId: target.organizationId, userId: target.id },
+      });
+      const recoveryCodes = await db.approvalAuthenticatorRecoveryCode.deleteMany({
+        where: { organizationId: target.organizationId, userId: target.id },
+      });
+      const administrators = await db.user.findMany({
+        where: {
+          organizationId: target.organizationId,
+          role: 'ADMIN',
+          status: { in: ['ACTIVE', 'ON_LEAVE'] },
+        },
+        select: { id: true },
+      });
+      const recipients = [...new Set([target.id, ...administrators.map((admin) => admin.id)])];
+      await db.notification.createMany({
+        data: recipients.map((userId) => ({
+          organizationId: target.organizationId,
+          userId,
+          type: 'platform_approval_authenticator_reset',
+          title: 'Approval authenticator reset by DevFathom',
+          message: `${actor.name} (DevFathom platform) reset the approval authenticator for ${target.email}. A new authenticator must be set up before approving. Reason: ${input.reason}`,
+          entityType: 'User',
+          entityId: target.id,
+        })),
+      });
+      const audit = {
+        id: target.id,
+        email: target.email,
+        role: target.role,
+        approvalAuthenticatorReset: removed.count > 0,
+        recoveryCodesRemoved: recoveryCodes.count,
+        notifiedUserIds: recipients,
+        reason: input.reason,
+      };
+      return {
+        targetType: 'User',
+        targetId: target.id,
+        organizationId: target.organizationId,
+        data: { id: target.id, approvalAuthenticatorReset: removed.count > 0 },
         audit,
       };
     }

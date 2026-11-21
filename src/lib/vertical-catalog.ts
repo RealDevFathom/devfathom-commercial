@@ -1,4 +1,9 @@
 import type { OrganizationVertical } from '@/generated/prisma/enums';
+import {
+  PHARMACY_APPROVER_RIGHTS,
+  RESTAURANT_APPROVER_RIGHTS,
+  type ApprovalApproverRight,
+} from '@/lib/approval-approver-rights';
 
 /**
  * §2.3 — THE single server-owned vertical catalog.
@@ -1982,3 +1987,15 @@ export function assertPackageCompatibleWithVertical(
     );
   }
 }
+
+/**
+ * DEV-961: the approver rights of the shared approval path that can be exercised in an
+ * organization of each vertical (see src/lib/approval-approver-rights.ts). A vertical with no
+ * entry has no PIN approvals, so nobody there is asked to set up an approval authenticator.
+ */
+export const APPROVAL_APPROVER_RIGHTS_BY_VERTICAL: Readonly<
+  Partial<Record<OrganizationVertical, readonly ApprovalApproverRight[]>>
+> = {
+  [PHARMACY]: PHARMACY_APPROVER_RIGHTS,
+  [RESTAURANT]: RESTAURANT_APPROVER_RIGHTS,
+};

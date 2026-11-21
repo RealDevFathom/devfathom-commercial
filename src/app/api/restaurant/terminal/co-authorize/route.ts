@@ -74,6 +74,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     now,
     approval: {
       action: 'restaurant.terminal.coAuthorize',
+      approverRight: 'coauth:approve',
       requestedByStaffProfileId: actingStaffProfileId,
     },
   });

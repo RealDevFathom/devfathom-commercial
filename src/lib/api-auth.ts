@@ -11,6 +11,8 @@ import {
   withTenantDb,
 } from '@/lib/tenancy/scoped-db';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { approvalAuthenticatorGate } from '@/lib/approval-authenticator-gate';
+import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { moduleForApiScope } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 
@@ -107,6 +109,22 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
     if (!hasModule(entitlements, 'api')) {
       return NextResponse.json(
         { error: 'API access is not enabled for this organization.' },
+        { status: 403 }
+      );
+    }
+
+    // DEV-961: an API token acts as its member, so a member who can approve and has not set
+    // up their approval authenticator is refused here exactly as their session is refused in
+    // `resolveTenantActor`.
+    const gate = await withTenantDb(candidate.organizationId, (tenantDb) =>
+      approvalAuthenticatorGate(tenantDb, {
+        organizationId: candidate.organizationId,
+        userId: candidate.userId,
+      })
+    );
+    if (gate.setupRequired) {
+      return NextResponse.json(
+        { error: APPROVAL_AUTHENTICATOR_SETUP_MESSAGE, code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED' },
         { status: 403 }
       );
     }
