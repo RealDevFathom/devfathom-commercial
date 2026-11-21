@@ -502,6 +502,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySales.removeLine': ['signed-in'],
   'pharmacySales.returnAndRefund': ['signed-in'],
   'pharmacySales.returnHistory': ['signed-in'],
+  'pharmacySales.returnLines': ['signed-in'],
   'pharmacySales.returnLine': ['signed-in'],
   'pharmacySales.returnQuote': ['signed-in'],
   'pharmacySales.saleReadiness': ['signed-in'],

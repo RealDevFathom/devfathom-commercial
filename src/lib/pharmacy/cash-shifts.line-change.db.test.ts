@@ -724,3 +724,55 @@ describeDatabase('DEV-977 existing line discount', () => {
     });
   }, 60000);
 });
+
+describeDatabase('DEV-977 multi-line returns', () => {
+  it('returns the selected sale lines together, refuses excess units atomically and replays the group once', async () => {
+    const s = await shop('returngroup');
+    const device = 'returns-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 2],
+      [500, 1],
+    ]);
+    await cash(s, s.cashier, device, sale.id, 2500);
+    const lots = await tenant(s.owner, (db) =>
+      db.pharmacySaleLineAllocation.findMany({
+        where: { saleLineId: { in: lines.map((l) => l.id) } },
+      })
+    );
+    const selected = lines.map((l) => ({
+      saleLineId: l.id,
+      canonicalUnits: 1,
+      lotId: lots.find((a) => a.saleLineId === l.id)!.inventoryLotId,
+      disposition: 'RESTOCK' as const,
+      integrityDecision: 'Inspected: intact',
+    }));
+    const input = {
+      saleId: sale.id,
+      requestId: randomUUID(),
+      reason: 'Wrong items',
+      lines: selected,
+    };
+    const run = (items: typeof selected) =>
+      tenant(s.owner, (db) => sales.returnSaleLines(db, s.owner, { ...input, lines: items }));
+    await expect(run([selected[0]!, { ...selected[1]!, canonicalUnits: 2 }])).rejects.toThrow(
+      /RETURN_EXCEEDS_SOLD/
+    );
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySaleReturn.count({ where: { originalSaleId: sale.id } })
+      )
+    ).toBe(0);
+    const result = await run(selected);
+    expect(await run(selected)).toMatchObject({ returnId: result.returnId, returnedMinor: 1500 });
+    const rows = await tenant(s.owner, (db) =>
+      db.pharmacySaleReturnLine.findMany({ where: { returnId: result.returnId } })
+    );
+    expect(rows.map((r) => r.saleLineId).sort()).toEqual(lines.map((l) => l.id).sort());
+    await expect(
+      tenant(s.owner, (db) =>
+        sales.returnSaleLines(db, s.owner, { ...input, requestId: randomUUID() })
+      )
+    ).rejects.toThrow(/RETURN_EXCEEDS_SOLD/);
+  }, 60000);
+});

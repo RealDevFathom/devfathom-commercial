@@ -237,6 +237,7 @@ import {
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
+  returnSaleLines,
   readReturnHistory,
   quoteSaleLineReturn,
   saleReturnValueMinor,
@@ -4051,6 +4052,112 @@ export const pharmacySalesRouter = router({
           : { ...history, pharmacistCheckOff: true as const };
       } catch (error) {
         fail(error);
+      }
+    }),
+  returnLines: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          requestId: z.uuid(),
+          reason: z.string().trim().min(1).max(500),
+          managerPin: z.string().regex(/^\d{4,8}$/),
+          controlledWitness: counterApprovalPin.optional(),
+          lines: z
+            .array(
+              z
+                .object({
+                  saleLineId: z.string().min(1),
+                  canonicalUnits: z.number().int().positive(),
+                  lotId: z.string().min(1).optional(),
+                  disposition: z.enum(['RESTOCK', 'QUARANTINE']),
+                  quarantineLocationId: z.string().min(1).optional(),
+                  integrityDecision: z.string().trim().min(1).max(500),
+                })
+                .strict()
+            )
+            .min(2)
+            .max(100),
+          refund: z
+            .object({
+              originalTenderId: z.string().min(1),
+              deviceId: z.string().min(1),
+              businessDate: z.date(),
+              amountMinor: z.number().int().positive().optional(),
+              manualCashFallback: z.boolean(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true, targetType: 'PharmacySale', targetId: input.saleId });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: RETURN_FORBIDDEN });
+        const { managerPin, ...request } = input;
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacySales.returnLines',
+        });
+        annotateAudit(ctx, {
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
+            approverId: scope.actorId,
+            pin,
+          }),
+        });
+        if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const refund = request.refund;
+          if (
+            refund &&
+            !(await db.pharmacyTender.findFirst({
+              where: {
+                id: refund.originalTenderId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                saleId: request.saleId,
+              },
+              select: { id: true },
+            }))
+          )
+            throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+          let result;
+          try {
+            result = await returnSaleLines(db, scope, request);
+          } catch (e) {
+            // The group verifies its witness before its first stock or return write.
+            if (e instanceof ControlledRestorationDenied && !e.forbidden)
+              return { blocked: e.message };
+            throw e;
+          }
+          if (!refund) return result;
+          const amountMinor = refund.amountMinor ?? result.returnedMinor;
+          if (amountMinor <= 0 || amountMinor > result.returnedMinor)
+            throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+          const paid = await refundTenderInTransaction(
+            ctx,
+            db,
+            scope,
+            {
+              ...refund,
+              amountMinor,
+              reason: request.reason,
+              idempotencyKey: result.returnId + ':refund',
+            },
+            true
+          );
+          return { ...result, refund: paid };
+        });
+      } catch (e) {
+        fail(e);
       }
     }),
   returnLine: protectedProcedure

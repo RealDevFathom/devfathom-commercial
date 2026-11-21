@@ -2053,6 +2053,13 @@ export async function quoteSaleLineReturn(
   };
 }
 
+const returnGroup = Symbol('verified return group');
+type ReturnGroup = {
+  [returnGroup]: true;
+  header: Prisma.PharmacySaleReturnGetPayload<object>;
+  witness?: ControlledRestorationWitness;
+};
+
 export async function returnSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
@@ -2066,7 +2073,8 @@ export async function returnSaleLine(
     reason: string;
     integrityDecision: string;
     idempotencyKey: string;
-  }
+  },
+  group?: ReturnGroup
 ) {
   // Serialize the operation key across lines, then quantity checks for this sold line.
   await db.$queryRaw(
@@ -2086,7 +2094,8 @@ export async function returnSaleLine(
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
   const witness = line.medicine.controlled
-    ? await controlledSaleRestorationWitness(db, scope, input.controlledWitness)
+    ? (group?.witness ??
+      (await controlledSaleRestorationWitness(db, scope, input.controlledWitness)))
     : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
@@ -2182,15 +2191,17 @@ export async function returnSaleLine(
     if (!location) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
     quarantineLocationId = location.id;
   }
-  const saleReturn = await db.pharmacySaleReturn.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      originalSaleId: line.saleId,
-      actorId: scope.actorId,
-      reason: input.reason,
-    },
-  });
+  const saleReturn =
+    group?.header ??
+    (await db.pharmacySaleReturn.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        originalSaleId: line.saleId,
+        actorId: scope.actorId,
+        reason: input.reason,
+      },
+    }));
   if (!input.lotId) {
     const money = priceReturn(line, input.canonicalUnits);
     const holding = await db.pharmacyUnidentifiedReturnHold.create({
@@ -2394,6 +2405,112 @@ export async function returnSaleLine(
  * refund exactly what that return is worth in the same transaction. A replayed return
  * reads the same snapshot, so its refund amount (and refund idempotency hash) is stable.
  */
+/** The selected receipt lines share one return header, manager authorization and witnessed inspection. */
+export async function returnSaleLines(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    saleId: string;
+    requestId: string;
+    reason: string;
+    controlledWitness?: ControlledRestorationPin;
+    lines: {
+      saleLineId: string;
+      canonicalUnits: number;
+      lotId?: string;
+      disposition: 'RESTOCK' | 'QUARANTINE';
+      quarantineLocationId?: string;
+      integrityDecision: string;
+    }[];
+    refund?: {
+      originalTenderId: string;
+      deviceId: string;
+      businessDate: Date;
+      amountMinor?: number;
+      manualCashFallback: boolean;
+    };
+  }
+) {
+  const ids = input.lines.map((l) => l.saleLineId);
+  if (ids.length < 2 || ids.length > 100 || new Set(ids).size !== ids.length)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  const [receipt] = await db.$queryRaw<
+    { id: string }[]
+  >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND status='COMPLETED' FOR UPDATE`;
+  if (!receipt) throw new PharmacySaleError('NOT_FOUND');
+  const where = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    saleId: input.saleId,
+  };
+  const sold = await db.pharmacySaleLine.findMany({
+    where: { ...where, id: { in: ids } },
+    select: { id: true, medicine: { select: { controlled: true } } },
+  });
+  if (sold.length !== ids.length) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  const witness = sold.some((l) => l.medicine.controlled)
+    ? await controlledSaleRestorationWitness(db, scope, input.controlledWitness)
+    : undefined;
+  const id =
+    'multi_' +
+    createHash('sha256')
+      .update(canonicalJson([scope.organizationId, scope.branchId, input.requestId]))
+      .digest('hex');
+  const lines = [...input.lines].sort((a, b) => a.saleLineId.localeCompare(b.saleLineId));
+  const fingerprint = createHash('sha256')
+    .update(
+      canonicalJson({
+        saleId: input.saleId,
+        actorId: scope.actorId,
+        reason: input.reason,
+        lines,
+        refund: input.refund
+          ? { ...input.refund, businessDate: input.refund.businessDate.toISOString() }
+          : null,
+      })
+    )
+    .digest('hex');
+  const prior = await db.pharmacySaleEvent.findFirst({
+    where: { id, ...where, kind: 'RETURNED' },
+    select: { payload: true },
+  });
+  if (prior) {
+    if ((prior.payload as { fingerprint?: string })?.fingerprint !== fingerprint)
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { returnId: id, returnedMinor: await saleReturnValueMinor(db, scope, id) };
+  }
+  const header = await db.pharmacySaleReturn.create({
+    data: {
+      id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      originalSaleId: input.saleId,
+      actorId: scope.actorId,
+      reason: input.reason,
+    },
+  });
+  for (const line of lines) {
+    const returned = await returnSaleLine(
+      db,
+      scope,
+      { ...line, reason: input.reason, idempotencyKey: id + ':' + line.saleLineId },
+      { [returnGroup]: true, header, witness }
+    );
+    if (returned.replayed) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  }
+  await db.pharmacySaleEvent.create({
+    data: {
+      ...where,
+      id,
+      kind: 'RETURNED',
+      actorId: scope.actorId,
+      reason: input.reason,
+      payload: { returnId: id, fingerprint, saleLineIds: ids },
+    },
+  });
+  return { returnId: id, returnedMinor: await saleReturnValueMinor(db, scope, id) };
+}
+
 export async function saleReturnValueMinor(db: ScopedDb, scope: LedgerScope, returnId: string) {
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, returnId };
   const select = { grossMinor: true, discountMinor: true } as const;

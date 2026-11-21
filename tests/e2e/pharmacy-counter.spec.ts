@@ -2127,9 +2127,65 @@ test('Counter v2 — the discount sheet: whole bill or next item, and who can ap
   }
 });
 
+const SERVER_FEATURE_QA = 'playwright-artifacts/pharmacy-counter-server-features';
+async function featureShots(page: Page, name: string, focus: Locator) {
+  await qaShots(page, name, { focus, widths: [375, 768, 1024, 1440], dir: SERVER_FEATURE_QA });
+}
+test('B3 returns and refunds two receipt lines in one confirmation', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openCounter(page);
+  await openDrawer(page);
+  const { otc, syrup } = PHARMACY_E2E.medicines;
+  for (const med of [otc, syrup]) {
+    await search(page, med.name);
+    await addFirstResult(page, med.name);
+    await expect(billLine(page, med.name)).toBeVisible();
+  }
+  await tenderCash(page, '5.50');
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
+  await expect(receipt).toBeVisible();
+  const number = (await receipt.getAttribute('aria-label'))!.match(/\d+/)![0];
+  await page.keyboard.press('Escape');
+  await pressControl(page.getByRole('button', { name: 'Returns & refunds' }));
+  const sheet = page.getByRole('dialog', { name: 'Returns & refunds' });
+  await sheet.getByLabel('Receipt number', { exact: true }).fill(number);
+  await pressControl(sheet.getByRole('button', { name: 'Find receipt', exact: true }));
+  const device = await page.evaluate(() =>
+    localStorage.getItem('devfathom.pharmacy.counter.device')
+  );
+  await pressControl(
+    sheet
+      .getByRole('button', { name: new RegExp('Receipt ' + number + ' ·') })
+      .filter({ hasText: counterLabel(device)! })
+  );
+  await pressControl(sheet.getByRole('button', { name: 'Return several lines' }));
+  for (const med of [otc, syrup]) {
+    const check = sheet.getByRole('checkbox', { name: new RegExp(med.name) });
+    await check.focus();
+    await page.keyboard.press('Space');
+    await pressControl(sheet.getByRole('combobox', { name: 'Batch of ' + med.name }));
+    await pressControl(page.getByRole('option', { name: new RegExp(med.batchNumber) }));
+    await pressControl(sheet.getByRole('combobox', { name: 'Stock outcome for ' + med.name }));
+    await pressControl(page.getByRole('option', { name: 'Restock inspected pack' }));
+  }
+  await sheet.getByLabel('Reason for return').fill('Wrong items, packaging intact');
+  await pressControl(sheet.getByRole('combobox', { name: 'Refund to' }));
+  await pressControl(page.getByRole('option', { name: /CASH/ }));
+  await pressControl(sheet.getByRole('button', { name: 'Review selected lines' }));
+  const pin = sheet.getByLabel(/Your manager or owner PIN|Your approval code/);
+  await featureShots(page, 'multi-line-return', pin);
+  await pin.fill(PHARMACY_E2E.adminPin);
+  await pressControl(sheet.getByRole('button', { name: 'Confirm selected returns' }));
+  await expect(sheet.getByRole('status')).toContainText(
+    'Selected returns recorded and refunded: PKR 5.50'
+  );
+});
+
 test('A4 approves a discount on the selected existing line inside the discount sheet', async ({
   page,
 }) => {
+  test.setTimeout(120_000);
   await openCounter(page, PHARMACY_E2E.cashierEmail);
   await openDrawer(page);
   const otc = PHARMACY_E2E.medicines.otc;
@@ -2142,6 +2198,11 @@ test('A4 approves a discount on the selected existing line inside the discount s
   await sheet.getByLabel('Discount (%)', { exact: true }).fill('10');
   await pressControl(sheet.getByRole('combobox', { name: 'Approving manager or owner' }));
   await pressControl(page.getByRole('option', { name: 'Pharmacy Administrator' }));
+  await featureShots(
+    page,
+    'bill-line-discount',
+    sheet.getByLabel(/^(Approver PIN|Approval code)$/)
+  );
   await sheet.getByLabel(/^(Approver PIN|Approval code)$/).fill(PHARMACY_E2E.adminPin);
   await pressControl(sheet.getByRole('button', { name: 'Apply to selected line' }));
   await expect(sheet).toBeHidden();
@@ -2152,6 +2213,7 @@ test('DEV-988 an unmatched pack holds its line even after reopening the counter'
   page,
 }) => {
   await page.setViewportSize({ width: 1024, height: 768 });
+  test.setTimeout(120_000);
   await openCounter(page);
   await openDrawer(page);
   const otc = PHARMACY_E2E.medicines.otc;
@@ -2164,6 +2226,7 @@ test('DEV-988 an unmatched pack holds its line even after reopening the counter'
   await sheet.getByLabel('Pack code').fill('unmatched-test-pack');
   await pressControl(sheet.getByRole('button', { name: 'Check pack', exact: true }));
   await expect(sheet.getByRole('alert')).toContainText('doesn’t match');
+  await featureShots(page, 'pack-mismatch', sheet.getByLabel('Pack code'));
   await page.reload();
   await expect(billLine(page, otc.name)).toBeVisible();
   await expect(page.getByRole('button', { name: /Take payment/i }).first()).toBeDisabled();
@@ -2171,12 +2234,14 @@ test('DEV-988 an unmatched pack holds its line even after reopening the counter'
 
 test('DEV-991 records an unlisted medicine request without opening a bill', async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
+  test.setTimeout(120_000);
   await openCounter(page, PHARMACY_E2E.cashierEmail);
   await openDrawer(page);
   await pressControl(page.getByRole('button', { name: 'Customer asked for it' }));
   const sheet = page.getByRole('dialog', { name: 'Customer asked for it' });
   await sheet.getByLabel('Requested medicine').fill('Synthetic unlisted medicine');
   await sheet.getByLabel('How many units they wanted').fill('3');
+  await featureShots(page, 'customer-demand', sheet.getByLabel('Requested medicine'));
   await pressControl(sheet.getByRole('button', { name: 'Save request' }));
   await expect(
     page.getByRole('status').filter({ hasText: 'Recorded 3 units of Synthetic unlisted medicine' })

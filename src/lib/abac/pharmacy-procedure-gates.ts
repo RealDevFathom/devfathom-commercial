@@ -2468,6 +2468,16 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'dispense-prescriptions/see-returns-refund-value',
     ],
   },
+  'pharmacySales.returnLines': {
+    gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN AND pharmacy:manage AND own approval code; controlled line needs pharmacy:dispense + witness approval code',
+    lines: [
+      'run-branches/refund-sales-take-returns',
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/use-counter-without-counter',
+      'dispense-prescriptions/void-return-controlledmedicine-sale',
+      'dispense-prescriptions/witness-controlled-stock-going',
+    ],
+  },
   'pharmacySales.returnLine': {
     gate: 'requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) AND pharmacy:manage AND own approval code; controlled line needs pharmacy:dispense + witness approval code',
     lines: [

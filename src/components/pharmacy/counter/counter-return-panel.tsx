@@ -1,5 +1,6 @@
 'use client';
 
+import { CounterMultiReturn } from './counter-multi-return';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { z } from '@/lib/zod-csp';
@@ -46,6 +47,28 @@ const returnInputSchema = z.object({
 });
 const attemptSchema = z.discriminatedUnion('kind', [
   z.object({
+    kind: z.literal('group'),
+    saleId: z.string(),
+    input: z.object({
+      branchId: z.string(),
+      requestId: z.string(),
+      reason: z.string(),
+      lines: z
+        .array(returnInputSchema.omit({ branchId: true, idempotencyKey: true, reason: true }))
+        .min(2)
+        .max(100),
+      refund: z
+        .object({
+          originalTenderId: z.string(),
+          deviceId: z.string(),
+          businessDate: z.string(),
+          amountMinor: z.number().int().positive(),
+          manualCashFallback: z.boolean(),
+        })
+        .optional(),
+    }),
+  }),
+  z.object({
     kind: z.literal('return'),
     saleId: z.string(),
     input: returnInputSchema,
@@ -88,6 +111,7 @@ const PREPAID_REFUND_NOTE =
 const attemptLabel: Record<Attempt['kind'], string> = {
   return: 'return',
   returnRefund: 'return and refund',
+  group: 'multi-line return',
   refund: 'refund',
 };
 /** Transient witness credential. Never persisted with the saved attempt. */
@@ -301,6 +325,8 @@ export function ReturnForm({
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
+  const [groupMode, setGroupMode] = useState(false);
+  const [groupControlled, setGroupControlled] = useState(false);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
   const [managerPin, setManagerPin] = useState('');
@@ -331,6 +357,7 @@ export function ReturnForm({
     { branchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
+  const returnLines = trpc.pharmacySales.returnLines.useMutation();
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
   const returnAndRefund = trpc.pharmacySales.returnAndRefund.useMutation();
   const refund = trpc.pharmacySales.refundTender.useMutation();
@@ -397,12 +424,22 @@ export function ReturnForm({
     !returnTender?.prepaid && (returnTender?.type === 'CARD' || returnTender?.type === 'WALLET');
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
-  const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
+  const witnessLineId =
+    attempt?.kind === 'return' || attempt?.kind === 'returnRefund'
+      ? attempt.input.saleLineId
+      : lineId;
   // DEV-911: no pharmacist witness is asked for while the owner has the check switched off.
   const pharmacistCheckOff =
     (data as { pharmacistCheckOff?: boolean } | undefined)?.pharmacistCheckOff === true;
   const witnessRequired =
-    !pharmacistCheckOff && !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
+    !pharmacistCheckOff &&
+    (attempt?.kind === 'group'
+      ? data?.lines.some(
+          (l) => l.controlled && attempt.input.lines.some((row) => row.saleLineId === l.id)
+        )
+      : groupMode
+        ? groupControlled
+        : !!data?.lines.find((row) => row.id === witnessLineId)?.controlled);
   const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: ready && online && witnessRequired,
     retry: false,
@@ -450,6 +487,10 @@ export function ReturnForm({
   }
 
   function resetReturn() {
+    setGroupMode(false);
+    setGroupControlled(false);
+    setManagerPin('');
+    setWitnessPin('');
     setLineId('');
     setLotId('');
     setQuantity(null);
@@ -481,21 +522,31 @@ export function ReturnForm({
       if (next.kind !== 'refund') {
         // DEV-621: the manager PIN is sent with the request only, never saved with the attempt.
         const result =
-          next.kind === 'return'
-            ? await returnLine.mutateAsync({
+          next.kind === 'group'
+            ? await returnLines.mutateAsync({
                 ...next.input,
-                ...(controlledWitness ? { controlledWitness } : {}),
+                saleId: next.saleId,
                 managerPin: pin ?? '',
+                controlledWitness,
+                refund: next.input.refund
+                  ? { ...next.input.refund, businessDate: new Date(next.input.refund.businessDate) }
+                  : undefined,
               })
-            : await returnAndRefund.mutateAsync({
-                ...next.input,
-                refund: {
-                  ...next.input.refund,
-                  businessDate: new Date(next.input.refund.businessDate),
-                },
-                ...(controlledWitness ? { controlledWitness } : {}),
-                managerPin: pin ?? '',
-              });
+            : next.kind === 'return'
+              ? await returnLine.mutateAsync({
+                  ...next.input,
+                  ...(controlledWitness ? { controlledWitness } : {}),
+                  managerPin: pin ?? '',
+                })
+              : await returnAndRefund.mutateAsync({
+                  ...next.input,
+                  refund: {
+                    ...next.input.refund,
+                    businessDate: new Date(next.input.refund.businessDate),
+                  },
+                  ...(controlledWitness ? { controlledWitness } : {}),
+                  managerPin: pin ?? '',
+                });
         if (isBlockedResult(result)) {
           // The server refused before any stock change. A fresh attempt is definitely not
           // recorded; a retried attempt keeps its saved reference so an earlier ambiguous
@@ -543,11 +594,15 @@ export function ReturnForm({
       resetReturn();
       setAmount('');
       setMessage(
-        next.kind === 'return'
-          ? 'Return recorded. Enter your PIN again and choose an original tender to refund.'
-          : next.kind === 'returnRefund'
-            ? `Return recorded and refunded${refundedMinor === undefined ? '' : `: PKR ${formatMinor(refundedMinor)}`}. Loyalty tender refunds restore redeemed points. Reprint the receipt below.`
-            : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
+        next.kind === 'group'
+          ? refundedMinor === undefined
+            ? 'Selected returns recorded. No refund issued.'
+            : `Selected returns recorded and refunded: PKR ${formatMinor(refundedMinor)}.`
+          : next.kind === 'return'
+            ? 'Return recorded. Enter your PIN again and choose an original tender to refund.'
+            : next.kind === 'returnRefund'
+              ? `Return recorded and refunded${refundedMinor === undefined ? '' : `: PKR ${formatMinor(refundedMinor)}`}. Loyalty tender refunds restore redeemed points. Reprint the receipt below.`
+              : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
@@ -883,7 +938,66 @@ export function ReturnForm({
       )}
       {data && (
         <>
-          {refundAuthorized && (
+          {refundAuthorized && !attempt && (returnable.length >= 2 || groupMode) && (
+            <Button
+              type="button"
+              size="touch"
+              variant="outline"
+              disabled={locked || stale}
+              onClick={() => {
+                setGroupMode(!groupMode);
+                setGroupControlled(false);
+                setManagerPin('');
+                setWitnessPin('');
+              }}
+            >
+              {groupMode ? 'Return one line' : 'Return several lines'}
+            </Button>
+          )}
+          {refundAuthorized && groupMode && !attempt && (
+            <CounterMultiReturn
+              key={saleId}
+              branchId={branchId}
+              data={data}
+              disabled={locked || stale}
+              approvalReady={managerPinReady && witnessReady}
+              approval={
+                <>
+                  {witnessRequired && witnessFields}
+                  {managerPinField}
+                </>
+              }
+              onWitnessChange={(controlled) => {
+                setGroupControlled(controlled);
+                setWitnessPin('');
+                setManagerPin('');
+              }}
+              confirm={(lines, reason, refund) =>
+                void execute(
+                  {
+                    kind: 'group',
+                    saleId,
+                    input: {
+                      branchId,
+                      requestId: browserUuid(),
+                      reason,
+                      lines,
+                      refund: refund
+                        ? {
+                            ...refund,
+                            deviceId: deviceId(),
+                            businessDate: businessDate().toISOString(),
+                          }
+                        : undefined,
+                    },
+                  },
+                  witness,
+                  managerPin
+                )
+              }
+            />
+          )}
+          {refundAuthorized && !groupMode && (
             <form
               aria-label="Return and refund"
               noValidate
