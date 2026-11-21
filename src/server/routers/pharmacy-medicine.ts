@@ -80,7 +80,6 @@ import {
   StagedCreationSystemicRefusal,
   stagedCreationProgress,
 } from '@/lib/pharmacy/migration/staged-creation';
-import { CATALOGUE_EDIT_ACTIONS } from '@/lib/pharmacy/catalogue-editor';
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
 import { admittedInventoryBranchIds } from './pharmacy-inventory';
 import { annotateAudit } from '../audit';
@@ -378,11 +377,15 @@ const catalogueProposer = Symbol('catalogueProposer');
 const replayAuthority = (ctx: TRPCContext) =>
   (ctx as TRPCContext & { [catalogueReplay]?: readonly Action[] })[catalogueReplay];
 const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ctx));
-const REVIEWER_AUTHORITY = ['pharmacy:catalogue-review'] as const;
+// Shared by catalogue submissions and the upload that prepares them.
+const CATALOGUE_EDIT_ACTIONS = ['admin:access', 'pharmacy:catalogue-edit'] as const;
+// The navigation probe and proposed-file read ask for the same authority as a queue decision.
+export const CATALOGUE_REVIEW_ACTION = 'pharmacy:catalogue-review' as const;
+const REVIEWER_AUTHORITY = [CATALOGUE_REVIEW_ACTION] as const;
 // An owner approving without the review grant (no other reviewer) is held to the editor's own
 // capabilities; their fresh PIN was verified before the replay.
 const SOLO_OWNER_AUTHORITY = CATALOGUE_EDIT_ACTIONS;
-const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
+export const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
 // A catalogue command is submitted by a catalogue editor. When an approved edit
 // replays it, the approver's own authority authorizes the write, so a pharmacist
 // reviewer who is not a tenant administrator can apply what they approve.
@@ -1459,7 +1462,7 @@ export const pharmacyMedicineRouter = router({
     ),
 
   /** The proposal exposes staged rows only while pending. Its signer can resume an approved file. */
-  proposedImport: capabilityProcedure('pharmacy:catalogue-review')
+  proposedImport: capabilityProcedure(CATALOGUE_REVIEW_ACTION)
     .input(
       z
         .object({

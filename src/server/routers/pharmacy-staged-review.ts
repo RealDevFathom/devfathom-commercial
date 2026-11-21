@@ -1,4 +1,4 @@
-import { CATALOGUE_EDIT_ACTIONS } from '@/lib/pharmacy/catalogue-editor';
+import { catalogueEditProcedure } from './pharmacy-medicine';
 import { annotateAudit } from '../audit';
 import {
   stagingInput,
@@ -18,7 +18,7 @@ import {
 import { applyLegacyControlledClass } from '@/lib/pharmacy/migration/legacy-controlled';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { adminProcedure, contextualCapabilityProcedure, router, type TRPCContext } from '../trpc';
+import { adminProcedure, router, type TRPCContext } from '../trpc';
 import {
   assertReviewBranch,
   listStagedMedicines,
@@ -85,24 +85,24 @@ async function readUpload(input: {
   }
 }
 
-const catalogueEditor = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
-
 /** Server-page/action caller only. Nesting preserves the existing pharmacy-core entitlement path. */
 export const pharmacyStagedReviewRouter = router({
   pharmacyMedicine: router({
-    stagingUpload: catalogueEditor.input(stagingUploadInput).mutation(async ({ ctx, input }) => {
-      annotateAudit(ctx, { skipInput: true });
-      await assertReviewBranch(ctx.db, organizationId(ctx), input.branchId);
-      const { table } = await readUpload(input);
-      const suggested = excelCsvProfiler.resolveColumns(table) ?? {};
-      const mapping = Object.fromEntries(
-        STAGING_FIELDS.flatMap(([field]) =>
-          suggested[field] === undefined ? [] : [[field, suggested[field]]]
-        )
-      );
-      return { headers: [...table.headers], rowCount: table.rows.length, mapping };
-    }),
-    stageBatch: catalogueEditor.input(stagingInput).mutation(async ({ ctx, input }) => {
+    stagingUpload: catalogueEditProcedure
+      .input(stagingUploadInput)
+      .mutation(async ({ ctx, input }) => {
+        annotateAudit(ctx, { skipInput: true });
+        await assertReviewBranch(ctx.db, organizationId(ctx), input.branchId);
+        const { table } = await readUpload(input);
+        const suggested = excelCsvProfiler.resolveColumns(table) ?? {};
+        const mapping = Object.fromEntries(
+          STAGING_FIELDS.flatMap(([field]) =>
+            suggested[field] === undefined ? [] : [[field, suggested[field]]]
+          )
+        );
+        return { headers: [...table.headers], rowCount: table.rows.length, mapping };
+      }),
+    stageBatch: catalogueEditProcedure.input(stagingInput).mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       const org = organizationId(ctx);
       await assertReviewBranch(ctx.db, org, input.branchId);
