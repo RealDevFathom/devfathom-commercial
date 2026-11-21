@@ -8226,6 +8226,25 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     ).toBeDisabled();
   });
 
+  it('keeps every line read-only while the counter is offline: a change needs the server', () => {
+    mocks.queries.counterCart = { ...query(editableCart()), refetch: mocks.refetch };
+    const onLine = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const cartRegion = screen.getByRole('region', { name: 'Cart' });
+      for (const name of ['+ Synthetic item', '− Synthetic item', 'Remove Synthetic item']) {
+        const button = within(cartRegion).getByRole('button', { name });
+        expect(button).toBeDisabled();
+        fireEvent.click(button);
+      }
+      expect(within(cartRegion).getByLabelText('Quantity: Synthetic item')).toBeDisabled();
+      expect(mocks.mutations.changeLine).not.toHaveBeenCalled();
+      expect(mocks.mutations.removeLine).not.toHaveBeenCalled();
+    } finally {
+      onLine.mockRestore();
+    }
+  });
+
   it('closes the results with Escape and keeps what was typed', async () => {
     mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

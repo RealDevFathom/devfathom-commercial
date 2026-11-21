@@ -129,6 +129,10 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'This line carries dispensing records (controlled register, prescription, pharmacist review, substitution or a scanned pack), so it cannot be changed here. Void the bill to take it off.',
   LINE_CHANGE_NEEDS_READD:
     'This line has a discount, voucher or batch override approved for its quantity. Remove the line and add it again with the new quantity.',
+  LINE_ON_ORDER_BILL:
+    "This bill is a customer order or refill. Its lines are the order's, so they are changed through the order, not here.",
+  LINE_ON_OFFLINE_SALE:
+    'This sale was made offline and sealed on the counter computer, so its lines cannot be changed.',
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',

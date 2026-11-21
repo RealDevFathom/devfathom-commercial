@@ -382,7 +382,13 @@ beforeAll(async () => {
     });
   }
   const users: Array<{ id: string; org: string; branch: string; grants: string[] }> = [
-    { id: ids.cashier, org: ids.org, branch: ids.branch, grants: ['pharmacy:counter'] },
+    {
+      id: ids.cashier,
+      org: ids.org,
+      branch: ids.branch,
+      // The shipped Cashier template's grants: counter and customer orders.
+      grants: ['pharmacy:counter', 'pharmacy:orders'],
+    },
     { id: ids.cashierB, org: ids.org, branch: ids.branch, grants: ['pharmacy:counter'] },
     {
       id: ids.pharmacist,
@@ -860,6 +866,120 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     });
   });
 
+  it("never changes a customer order's or refill's bill, nor an offline counter's sealed sale", async () => {
+    const otc = await oneLot('Antacid order');
+    const before = await onHand(otc.medicineId);
+    const ordered = await bill(ids.cashier, [(id) => strip(otc, id, 2)]);
+    const offline = await bill(ids.cashier, [(id) => strip(otc, id, 1)]);
+    // A refill cycle's bill carries the server's line key; a manager may see no order rows at all.
+    const orderKeyed = await bill(ids.cashier, [
+      (id) => ({ ...strip(otc, id, 1), idempotencyKey: `customer-order:order-${suffix}:line-1` }),
+    ]);
+    const refill = await bill(ids.manager, [
+      (id) => ({ ...strip(otc, id, 1), idempotencyKey: `refill-cycle:${suffix}` }),
+    ]);
+    await withTenantDb(
+      ids.org,
+      async (db) => {
+        // The bill a customer order's checkout opened (customer-ordering.ts) is linked to it.
+        const patient = await db.pharmacyPatient.create({ data: { displayName: 'Order patient' } });
+        const customer = await db.pharmacyCustomer.create({
+          data: { patientId: patient.id, displayName: 'Order customer' },
+        });
+        await db.pharmacyCustomerOrder.create({
+          data: {
+            branchId: ids.branch,
+            customerId: customer.id,
+            placedByUserId: ids.cashier,
+            fulfillment: 'COLLECT',
+            status: 'READY_FOR_COLLECTION',
+            intendedPaymentMethod: 'CASH',
+            reservationExpiresAt: new Date(Date.now() + 86_400_000),
+            counterSaleId: ordered.saleId,
+          },
+        });
+        // A sale an enrolled counter sealed offline and the server booked names it in the
+        // command log (pharmacy-offline.ts settles the command with the sale as serverRef).
+        const device = await db.pharmacyRegisteredDevice.create({
+          data: {
+            branchId: ids.branch,
+            name: 'Front counter',
+            deviceSecretHash: randomBytes(32).toString('hex'),
+            enrolledByActorId: ids.manager,
+          },
+        });
+        await db.pharmacyOfflineCommand.create({
+          data: {
+            branchId: ids.branch,
+            deviceId: device.id,
+            sequence: 1,
+            idempotencyKey: `offline-${suffix}`,
+            action: 'CASH_OTC_SALE',
+            payload: {},
+            payloadHash: randomBytes(32).toString('hex'),
+            clientOriginAt: new Date(),
+            status: 'ACCEPTED',
+            settledAt: new Date(),
+            serverRef: offline.saleId,
+          },
+        });
+      },
+      { userId: ids.cashier }
+    );
+    for (const [target, userId, message] of [
+      // The order row names this bill (seen by a user with the orders grant).
+      [ordered, ids.cashier, 'LINE_ON_ORDER_BILL'],
+      // A bill a checkout filled carries the server's line keys, which refuse the change even
+      // for a manager without the orders grant, from whom the order rows are hidden.
+      [orderKeyed, ids.manager, 'LINE_ON_ORDER_BILL'],
+      [refill, ids.manager, 'LINE_ON_ORDER_BILL'],
+      [offline, ids.cashier, 'LINE_ON_OFFLINE_SALE'],
+    ] as const) {
+      const line = { saleId: target.saleId, saleLineId: target.lineIds[0]! };
+      await expect(
+        act(userId, (api) => api.changeLine(change(line, otc, 1)))
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST', message });
+      await expect(act(userId, (api) => api.removeLine(remove(line)))).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message,
+      });
+    }
+    expect((await cartOf(ordered.saleId)).lines).toEqual([
+      expect.objectContaining({ quantity: 2 }),
+    ]);
+    expect(await onHand(otc.medicineId)).toBe(before - 50);
+  });
+
+  it('records the value that came off the bill on the void, not the whole old line', async () => {
+    const otc = await oneLot('Antacid void value');
+    const { saleId, lineIds } = await bill(ids.cashier, [(id) => strip(otc, id, 3)]);
+    const down = await act(ids.cashier, (api) =>
+      api.changeLine(change({ saleId, saleLineId: lineIds[0]! }, otc, 1))
+    );
+    await act(ids.cashier, (api) => api.removeLine(remove({ saleId, saleLineId: down.line.id })));
+    const voided = await withTenantDb(ids.org, (db) =>
+      db.pharmacySaleEvent.findMany({
+        where: { kind: 'VOIDED', payload: { path: ['fromSaleId'], equals: saleId } },
+        orderBy: { occurredAt: 'asc' },
+        select: { payload: true },
+      })
+    );
+    expect(voided.map((event) => event.payload)).toEqual([
+      // Three strips at 20.00 became one: 40.00 came off.
+      expect.objectContaining({
+        cause: 'LINE_CHANGED',
+        saleLineId: lineIds[0],
+        replacementSaleLineId: down.line.id,
+        voidedMinor: 4000,
+      }),
+      expect.objectContaining({
+        cause: 'LINE_REMOVED',
+        saleLineId: down.line.id,
+        voidedMinor: 2000,
+      }),
+    ]);
+  });
+
   it('totals after any sequence of changes and removals equal a fresh bill of the same lines', async () => {
     // One lot, at an MRP that does not divide evenly into tablets, so every loose price is
     // rounded: a fresh bill of the same lines then allocates and rounds exactly the same way.
@@ -1025,6 +1145,32 @@ describeIfDatabase('DEV-977B concurrent line changes', () => {
     },
     120_000
   );
+
+  it('a change and sales of the same medicine on other bills never deadlock', async () => {
+    // Several lots, so the change gives back one balance and allocates from others while
+    // concurrent sales lock the same balances.
+    const otc = await stockedItem('Antacid lock order', [
+      { expiresAt: '2027-03-01', units: 20, mrp: 2000 },
+      { expiresAt: '2027-09-01', units: 20, mrp: 2000 },
+      { expiresAt: '2028-03-01', units: 400, mrp: 2000 },
+    ]);
+    for (let round = 0; round < 4; round += 1) {
+      const target = await bill(ids.cashier, [(id) => strip(otc, id, 3)]);
+      const other = await act(ids.cashierB, (api) =>
+        api.create({ branchId: ids.branch, deviceId: deviceFor(ids.cashierB) })
+      );
+      const results = await Promise.allSettled([
+        act(ids.cashier, (api) =>
+          api.changeLine(change({ saleId: target.saleId, saleLineId: target.lineIds[0]! }, otc, 5))
+        ),
+        act(ids.cashierB, (api) => api.addLine(strip(otc, other.id, 4))),
+        act(ids.cashierB, (api) => api.addLine(strip(otc, other.id, 1))),
+      ]);
+      for (const result of results)
+        expect(result.status === 'rejected' ? String(result.reason) : 'ok').toBe('ok');
+    }
+    await expectStockMatchesBills(otc.medicineId, await received(otc.medicineId));
+  }, 120_000);
 
   // Last: it closes the branch's business day for the rest of this file.
   it('refuses a change or removal once the business day is closed for trading', async () => {

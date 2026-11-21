@@ -388,6 +388,9 @@ function tenderRejected(error: unknown): boolean {
 
 /** DEV-575: typed search fires this long after the last keystroke. */
 export const COUNTER_SEARCH_DEBOUNCE_MS = 150;
+/** DEV-977B: changing or removing a bill line is a server action, never done offline. */
+const LINE_CHANGE_NEEDS_CONNECTION =
+  'Changing or removing a line needs the connection. Reconnect, then change it on the bill.';
 /** DEV-977B (Counter v2, B6): a search running this long shows its slow state. */
 export const COUNTER_SLOW_SEARCH_MS = 1500;
 
@@ -2555,6 +2558,10 @@ function ScopedPharmacyCounterConsole({
   const changeBillLine = useCallback(
     async (line: CounterCartLine, next: CounterLineChange) => {
       if (!saleId || busy) return;
+      if (!navigator.onLine) {
+        setNotice({ tone: 'warning', message: LINE_CHANGE_NEEDS_CONNECTION });
+        return;
+      }
       const selection = JSON.stringify([
         saleId,
         line.saleLineId,
@@ -2614,6 +2621,10 @@ function ScopedPharmacyCounterConsole({
   const removeBillLine = useCallback(
     async (line: CounterCartLine) => {
       if (!saleId || busy) return;
+      if (!navigator.onLine) {
+        setNotice({ tone: 'warning', message: LINE_CHANGE_NEEDS_CONNECTION });
+        return;
+      }
       const selection = JSON.stringify([saleId, line.saleLineId, 'remove']);
       let idempotencyKey = lineChangeKeys.current.get(selection);
       if (!idempotencyKey) {
@@ -4926,9 +4937,11 @@ function ScopedPharmacyCounterConsole({
                 error={cartQuery.error ? messageFrom(cartQuery.error) : null}
                 onRetry={() => void refreshTenderBill()}
                 lineControls={{
+                  // DEV-977B: a line change needs the server; offline (or when the server cannot
+                  // be reached) the bill's lines are read-only.
                   disabled:
                     busy ||
-                    !online ||
+                    !connectionOnline ||
                     dayClosed ||
                     drawerRequired ||
                     !cart ||

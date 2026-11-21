@@ -162,11 +162,32 @@ export async function readPharmacyCashCloseCheck(
     voids: voids.map((event) => ({
       saleId: event.saleId,
       actorId: event.actorId,
-      valueMinor: saleTotalMinor(event.sale.lines),
+      valueMinor: voidValueMinor(event),
     })),
     actorNames,
   });
   return { ...check, branchName: branch.name, timezone };
+}
+
+/**
+ * DEV-977B: a bill line changed to fewer units at the counter is voided as its own one-line
+ * record that still holds the whole old line; the event records the value that came off the bill
+ * (`voidedMinor`), which is what the day's void total counts. Every other void counts its lines.
+ */
+function voidValueMinor(event: {
+  payload: unknown;
+  sale: { lines: Parameters<typeof saleTotalMinor>[0] };
+}) {
+  const payload = event.payload as { cause?: unknown; voidedMinor?: unknown } | null;
+  if (
+    payload &&
+    (payload.cause === 'LINE_CHANGED' || payload.cause === 'LINE_REMOVED') &&
+    typeof payload.voidedMinor === 'number' &&
+    Number.isSafeInteger(payload.voidedMinor) &&
+    payload.voidedMinor >= 0
+  )
+    return payload.voidedMinor;
+  return saleTotalMinor(event.sale.lines);
 }
 
 async function readAllVoidEvents(
@@ -188,6 +209,7 @@ async function readAllVoidEvents(
         saleId: true,
         actorId: true,
         occurredAt: true,
+        payload: true,
         sale: {
           select: {
             lines: {
