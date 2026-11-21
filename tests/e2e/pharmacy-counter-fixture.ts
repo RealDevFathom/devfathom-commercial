@@ -25,6 +25,15 @@ export const PHARMACY_E2E = {
   pharmacistEmail: 'pharmacist.counter@pharmacy-counter-e2e.devfathom.invalid',
   pharmacistAssignmentId: 'pba_pharmacy_counter_e2e_pharmacist',
   /**
+   * DEV-1005: the pharmacist's own staff PIN. A controlled line is countersigned by a second
+   * pharmacist with an active PIN, so the counter lane's controlled-medicine steps need one.
+   * Seeded for the disposable counter lane only, never by the staging demo seed.
+   */
+  pharmacistStaffProfileId: 'staff_pharmacy_counter_e2e_pharmacist',
+  pharmacistPinCredentialId: 'credential_pharmacy_counter_e2e_pharmacist_pin',
+  pharmacistPin: '1357',
+  pharmacistName: 'Demo Pharmacist',
+  /**
    * DEV-751: the procedures (SOP) team the browser lane drives on desktop and phone.
    * The manager sets procedures up and checks them; the pharmacist does the work.
    * Two people, so the manager's role grant to the pharmacist is never a self-grant.
@@ -118,6 +127,27 @@ export const PHARMACY_E2E = {
       unitsPerPack: 80,
       printedMrpMinor: 40_000,
       onHandUnits: 240,
+    },
+    /**
+     * DEV-1005: a controlled capsule for the controlled-medicine authorisation steps
+     * (patient, prescription or emergency supply, approving pharmacist). Disposable lane only.
+     */
+    controlled: {
+      id: 'medicine_pharmacy_counter_e2e_controlled',
+      name: 'Fathomadol E2E',
+      strength: '50 mg',
+      presentationId: 'presentation_pharmacy_counter_e2e_controlled',
+      presentation: 'Capsule',
+      packLevelIds: {
+        box: 'pack_level_pharmacy_counter_e2e_controlled_box',
+        strip: 'pack_level_pharmacy_counter_e2e_controlled_strip',
+        unit: 'pack_level_pharmacy_counter_e2e_controlled_unit',
+      },
+      batchId: 'batch_pharmacy_counter_e2e_controlled',
+      batchNumber: 'FMD-5501',
+      unitsPerPack: 20,
+      printedMrpMinor: 30_000,
+      onHandUnits: 100,
     },
   },
 } as const;

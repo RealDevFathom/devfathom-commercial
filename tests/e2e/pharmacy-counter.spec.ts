@@ -140,9 +140,10 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
     timeout: 30_000,
   });
   await pressControl(navigation.getByRole('button', { name: 'Sell', exact: true }));
-  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
+  // Exact: the Settings menu also holds "Counters" (the counter computers page).
+  await expect(navigation.getByRole('link', { name: 'Counter', exact: true })).toBeVisible();
   await pressControl(navigation.getByRole('button', { name: 'Settings', exact: true }));
-  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeHidden();
+  await expect(navigation.getByRole('link', { name: 'Counter', exact: true })).toBeHidden();
   await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
   await page.keyboard.press('Escape');
@@ -345,7 +346,8 @@ test('a11y — counter targets, names, skip destinations and full-page axe acros
   await pressControl(page.getByRole('link', { name: 'Skip to bill total' }));
   await expect(page.getByRole('complementary', { name: 'Bill total' })).toBeFocused();
   await page.setViewportSize({ width: 375, height: 900 });
-  await pressControl(page.getByRole('button', { name: 'Actions', exact: true }));
+  // DEV-977 (Counter v2): every action below 1280px sits in the action row's More menu.
+  await pressControl(page.getByRole('button', { name: 'More', exact: true }));
   await pressControl(page.getByRole('button', { name: 'Shortcuts', exact: true }));
   await expectCounterTargets(page);
   await page.keyboard.press('Escape');
@@ -361,6 +363,20 @@ async function search(page: Page, term: string) {
   const field = page.getByLabel('Scan or search');
   await expect(field).toBeFocused();
   await field.fill(term);
+  // DEV-977B (Counter v2, A6): results drop over the bill as the term is typed, and Enter
+  // ADDS the highlighted result at once. A search therefore waits for its results and does
+  // not press Enter; `addFirstResult` and `scan` are the two ways Enter is used.
+  await expect(
+    page.getByRole('list', { name: 'Search results' }).getByRole('listitem').first()
+  ).toBeVisible({ timeout: 15_000 });
+}
+
+/** A barcode typed or scanned into the field: Enter adds the one medicine it resolves to. */
+async function scan(page: Page, code: string) {
+  await page.keyboard.press('F2');
+  const field = page.getByLabel('Scan or search');
+  await expect(field).toBeFocused();
+  await field.fill(code);
   await field.press('Enter');
 }
 
@@ -373,11 +389,38 @@ async function stageFirstResult(page: Page, medicineName: string) {
   await expect(row).toBeVisible({ timeout: 15_000 });
   // DEV-977B (Counter v2): a press on a result adds it in one step; the line form (quantity,
   // unit or batch before adding) opens from the result's own "Quantity or batch first" button.
+  // The chosen result carries the mark: it is the highlighted one Enter would add.
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
   const options = row.locator('xpath=following-sibling::button[1]');
   await expect(options).toHaveAccessibleName(/^Quantity or batch first: /);
   await pressControl(options);
-  await expect(row).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByRole('region', { name: 'Next line' })).toBeVisible();
+  // The results close once the line form opens over the bill; the form names the medicine.
+  const nextLine = page.getByRole('region', { name: 'Next line' });
+  await expect(nextLine).toBeVisible();
+  await expect(nextLine).toContainText(medicineName);
+  await expect(page.getByRole('list', { name: 'Search results' })).toHaveCount(0);
+}
+
+/** The line form (DEV-977B: opened by Shift+Enter or "Quantity or batch first"). */
+function nextLine(page: Page) {
+  return page.getByRole('region', { name: 'Next line' });
+}
+
+/**
+ * The line form's unit choice. DEV-977B: the counter's "Adds as" toggle (the unit Enter adds)
+ * also offers Pack, Strip and Unit, so unit lookups are scoped to the line form.
+ */
+function saleUnits(page: Page) {
+  return nextLine(page).getByRole('radiogroup', { name: 'Sale unit' });
+}
+
+/** The first result row for a medicine, read before anything is added or staged. */
+function resultRow(page: Page, medicineName: string) {
+  return page
+    .getByRole('list', { name: 'Search results' })
+    .getByRole('button')
+    .filter({ hasText: medicineName })
+    .first();
 }
 
 async function setQuantity(page: Page, quantity: number) {
@@ -405,6 +448,134 @@ async function tenderCash(page: Page, amount: string) {
   await expect(page.getByText('Change', { exact: true }).locator('..')).toContainText('0.00');
   await expect(page.getByRole('button', { name: 'Take payment', exact: true })).toBeEnabled();
   await page.keyboard.press('Enter');
+}
+
+/**
+ * DEV-977B (Counter v2, A6): Enter in the search field adds the highlighted result, the first
+ * one until the arrows move, as one unit of the "Adds as" unit, in one step.
+ */
+async function addFirstResult(page: Page, medicineName: string) {
+  const row = resultRow(page, medicineName);
+  await expect(row).toBeVisible({ timeout: 15_000 });
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  const field = page.getByLabel('Scan or search');
+  await expect(field).toBeFocused();
+  await field.press('Enter');
+}
+
+/** A bill line on the cart table (DEV-977B: quantity, unit and remove live on it). */
+function billLine(page: Page, medicineName: string) {
+  return page
+    .getByRole('table', { name: 'Cart lines' })
+    .getByRole('row')
+    .filter({ has: page.getByRole('rowheader', { name: new RegExp(`^${medicineName}`) }) });
+}
+
+/** The payment sheet (Counter v2 A2): F9 opens it with the panel focused. */
+async function openPayment(page: Page) {
+  await page.keyboard.press('F9');
+  const sheet = page.getByRole('dialog', { name: /^Take payment/ });
+  await expect(sheet).toBeVisible();
+  await expect(sheet.getByRole('group', { name: 'Payment method', exact: true })).toBeVisible();
+  return sheet;
+}
+
+/** A method card in the payment sheet, chosen from the keyboard. */
+async function choosePaymentMethod(page: Page, name: string) {
+  const method = page
+    .getByRole('dialog', { name: /^Take payment/ })
+    .getByRole('button', { name, exact: true });
+  await pressControl(method);
+  await expect(method).toHaveAttribute('aria-pressed', 'true');
+}
+
+/** Ticks an unticked checkbox from the keyboard: Space on the focused control. */
+async function tickWithSpace(control: Locator) {
+  await expect(control).not.toBeChecked();
+  await control.focus();
+  await expect(control).toBeFocused();
+  await control.press('Space');
+  await expect(control).toBeChecked();
+}
+
+/** A tRPC query as the signed-in operator (HTTP, through the same auth and tenancy). */
+async function trpcQuery<T>(page: Page, path: string, json: Record<string, unknown>): Promise<T> {
+  const response = await page.request.get(
+    `/api/trpc/${path}?input=${encodeURIComponent(JSON.stringify({ json }))}`
+  );
+  expect(response.ok(), `${path}: ${await response.text()}`).toBe(true);
+  return ((await response.json()) as { result: { data: { json: T } } }).result.data.json;
+}
+
+/** DEV-713: the branch's manual wallet merchants, saved the way Finance saves them. */
+async function saveWalletMerchants(
+  page: Page,
+  settings: Record<string, { destination: string; allowReferenceSkip?: boolean }>
+) {
+  const current = await trpcQuery<{ revision: number }>(
+    page,
+    'pharmacySales.manualPaymentSettings',
+    { branchId: PHARMACY_E2E.branchId }
+  );
+  await trpcMutation(page, 'pharmacySales.saveManualPaymentSettings', {
+    branchId: PHARMACY_E2E.branchId,
+    revision: current.revision,
+    settings,
+  });
+}
+
+/**
+ * DEV-1005: the phase 2B visual QA evidence, taken from the running app. Each panel is shot at
+ * 1366 and 375, light and dark, with reduced motion, while a control inside it holds a visible
+ * keyboard focus; the five missing design states add 1440, 1024 and 768. No shot may scroll
+ * the document sideways. Files go to playwright-artifacts/pharmacy-counter-qa-phase-2b/ (outside
+ * the run's output folder, which Playwright empties at the start of every run) and are composed
+ * into docs/design-system/reference/counter-v2/qa-phase-2b/.
+ */
+const QA_DIR = 'playwright-artifacts/pharmacy-counter-qa-phase-2b';
+const QA_KEYBOARD_WIDTHS = [1366, 375] as const;
+const QA_STATE_WIDTHS = [1440, 1366, 1024, 768, 375] as const;
+
+async function qaShots(
+  page: Page,
+  name: string,
+  {
+    focus,
+    widths = QA_KEYBOARD_WIDTHS,
+  }: {
+    /** A control inside the panel: it takes the keyboard focus for the shot. */
+    focus: Locator;
+    widths?: readonly number[];
+  }
+) {
+  const original = page.viewportSize();
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
+    for (const theme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await page.evaluate(
+        (value) => document.documentElement.setAttribute('data-theme', value),
+        theme
+      );
+      // Focus arrives from the keyboard (Shift+Tab, Tab), so :focus-visible draws its ring.
+      await focus.focus();
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+      await expect(focus).toBeFocused();
+      expect(
+        await focus.evaluate((element) => element.matches(':focus-visible')),
+        `${name}: the focused control shows its focus ring`
+      ).toBe(true);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+        `${name} ${width} ${theme}: no sideways scroll`
+      ).toBe(true);
+      await page.screenshot({ path: `${QA_DIR}/${name}-${width}-${theme}.png` });
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'light'));
+  if (original) await page.setViewportSize(original);
 }
 
 test('DEV-498 keeps cart and payment visible while searching across the Studio viewport matrix', async ({
@@ -463,23 +634,33 @@ test('DEV-498 keeps cart and payment visible while searching across the Studio v
           /(?:POS|CRM)-\d|Phase 0|D01/
         );
         if (width >= 1280) {
+          // DEV-977 (Counter v2, owner-approved): the bill sits under the search in its own
+          // scrolling column (search results drop over it), and the totals rail with Take
+          // payment sits beside the search, never covered. So the cart is measured as the
+          // bill column it scrolls in, and payment as the rail beside the search.
           const geometry = await page.evaluate(() => {
-            const cart = document.querySelector('section[aria-label="Cart"]')!;
+            const bill = document.querySelector('[data-counter-bill-column]')!;
+            const cart = bill.querySelector('section[aria-label="Cart"]')!;
             const rail = document.querySelector('aside[aria-label="Bill total"]')!;
             const pay = Array.from(rail.querySelectorAll('button')).find((button) =>
-              button.textContent?.startsWith('Pay')
+              button.textContent?.startsWith('Take payment')
             )!;
             const search = document.querySelector('#counter-search')!;
             return {
+              bill: bill.getBoundingClientRect().toJSON(),
               cart: cart.getBoundingClientRect().toJSON(),
+              rail: rail.getBoundingClientRect().toJSON(),
               pay: pay.getBoundingClientRect().toJSON(),
               search: search.getBoundingClientRect().toJSON(),
-              scrollable: cart.scrollHeight > cart.clientHeight,
+              scrollable: bill.scrollHeight > bill.clientHeight,
               height: window.innerHeight,
             };
           });
-          expect(geometry.cart.height).toBeGreaterThan(140);
-          expect(geometry.cart.left).toBeGreaterThan(geometry.search.right);
+          expect(geometry.bill.height).toBeGreaterThan(140);
+          expect(geometry.bill.top).toBeGreaterThanOrEqual(geometry.search.bottom);
+          expect(geometry.cart.top).toBeLessThan(geometry.height);
+          expect(geometry.rail.left).toBeGreaterThanOrEqual(geometry.search.right);
+          expect(geometry.pay.top).toBeGreaterThanOrEqual(0);
           expect(geometry.pay.bottom).toBeLessThanOrEqual(geometry.height);
           expect(geometry.scrollable).toBe(true);
         }
@@ -512,13 +693,9 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   // than staging it (scan-to-add, below), and the add draws the pack from the stock this row
   // reports.
   await search(page, otc.brandName);
-  await stageFirstResult(page, otc.name);
 
-  const row = page
-    .getByRole('list', { name: 'Search results' })
-    .getByRole('button')
-    .filter({ hasText: otc.name })
-    .first();
+  // Read before staging: the results close once the line form opens.
+  const row = resultRow(page, otc.name);
   // Every field POS-02 requires on the row.
   await expect(row).toContainText(otc.strength);
   await expect(row).toContainText(otc.presentation);
@@ -528,13 +705,21 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(row).toContainText('250.00');
   await expect(row).toContainText('Over the counter');
   await expect(row).toContainText('Store');
+  await stageFirstResult(page, otc.name);
 
   // POS-03: F4 selects the strip; the preview quotes the derived strip price.
   await page.keyboard.press('F4');
-  await expect(page.getByRole('radio', { name: /Strip/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(saleUnits(page).getByRole('radio', { name: /Strip/ })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
   await setQuantity(page, 2);
-  await expect(page.getByText(PHARMACY_E2E_EXPECTED.otcStripPrice).first()).toBeVisible();
-  await expect(page.getByText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal).first()).toBeVisible();
+  await expect(
+    nextLine(page).getByText(PHARMACY_E2E_EXPECTED.otcStripPrice, { exact: true }).first()
+  ).toBeVisible();
+  await expect(
+    nextLine(page).getByText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal, { exact: true }).first()
+  ).toBeVisible();
 
   await page.keyboard.press('F6');
   const cart = page.getByRole('table', { name: 'Cart lines' });
@@ -554,7 +739,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   // with a single match adds one of its first sale unit (scan-to-add, 699d5c1d; pinned by
   // counter-console.test.tsx "adds a barcode on Enter only when the search returns that
   // single medicine"). Nothing is added unless the scan matched exactly this medicine.
-  await search(page, otc.barcode);
+  await scan(page, otc.barcode);
   await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
   await expect(cart.getByRole('row').filter({ hasText: otc.name }).last()).toContainText(
@@ -606,14 +791,21 @@ test('bill 2 — name search and a loose unit on a medicine with no strip level'
 
   // POS-03: this presentation genuinely has no strip, so the toggle offers two
   // units rather than inventing a third.
-  await expect(page.getByRole('radio')).toHaveCount(2);
-  await expect(page.getByRole('radio', { name: /Strip/ })).toHaveCount(0);
+  await expect(saleUnits(page).getByRole('radio')).toHaveCount(2);
+  await expect(saleUnits(page).getByRole('radio', { name: /Strip/ })).toHaveCount(0);
 
   await page.keyboard.press('F5');
-  await expect(page.getByRole('radio', { name: /Unit/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(saleUnits(page).getByRole('radio', { name: /Unit/ })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
   await setQuantity(page, 10);
-  await expect(page.getByText(PHARMACY_E2E_EXPECTED.syrupUnitPrice).first()).toBeVisible();
-  await expect(page.getByText(PHARMACY_E2E_EXPECTED.syrupTenUnitTotal).first()).toBeVisible();
+  await expect(
+    nextLine(page).getByText(PHARMACY_E2E_EXPECTED.syrupUnitPrice, { exact: true }).first()
+  ).toBeVisible();
+  await expect(
+    nextLine(page).getByText(PHARMACY_E2E_EXPECTED.syrupTenUnitTotal, { exact: true }).first()
+  ).toBeVisible();
 
   await page.keyboard.press('F6');
   const cart = page.getByRole('table', { name: 'Cart lines' });
@@ -650,10 +842,10 @@ test('bill 3 — Urdu transliteration alias resolves the same medicine and sells
 
   await page.keyboard.press('F3');
   await expect(
-    page.getByRole('radio', { name: new RegExp(`^Box of ${otc.unitsPerPack} `) })
+    saleUnits(page).getByRole('radio', { name: new RegExp(`^Box of ${otc.unitsPerPack} `) })
   ).toHaveAttribute('aria-checked', 'true');
   await setQuantity(page, 1);
-  await expect(page.getByText('250.00').first()).toBeVisible();
+  await expect(nextLine(page).getByText('250.00', { exact: true }).first()).toBeVisible();
 
   await page.keyboard.press('F6');
   const cart = page.getByRole('table', { name: 'Cart lines' });
@@ -676,14 +868,8 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
   await openDrawer(page);
 
   await search(page, 'Fathomcillin');
+  await expect(resultRow(page, rx.name)).toContainText('Prescription only');
   await stageFirstResult(page, rx.name);
-
-  const row = page
-    .getByRole('list', { name: 'Search results' })
-    .getByRole('button')
-    .filter({ hasText: rx.name })
-    .first();
-  await expect(row).toContainText('Prescription only');
 
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
@@ -734,6 +920,8 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await openCounter(page);
   await openDrawer(page);
 
+  // DEV-977 (Counter v2): Shortcuts is in the action row's More menu at every width.
+  await pressControl(page.getByRole('button', { name: 'More', exact: true }));
   await pressControl(page.getByRole('button', { name: 'Shortcuts', exact: true }));
   const legend = page.getByRole('dialog', { name: 'Shortcuts', exact: true });
   await expect(legend).toBeVisible();
@@ -763,6 +951,18 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await preset.selectOption('devfathom');
   await expect(placeholderNotice).toHaveCount(0);
 });
+
+/**
+ * DEV-973: the print window prints itself and closes when its print dialog closes. Headless
+ * Chromium's dialog closes at once, so the window would be gone before it is read. With
+ * `print()` held (the dialog "still open"), the window stays, as it does at a real till while
+ * the cashier picks a printer, and the test can read it and prove the counter keeps working.
+ */
+async function holdPrintDialogsOpen(page: Page) {
+  await page.context().addInitScript(() => {
+    window.print = () => {};
+  });
+}
 
 /**
  * Call a tRPC mutation as the signed-in operator. `page.request` carries the
@@ -837,18 +1037,13 @@ test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring a
 
   // Before the line is added, the search row already names the FEFO batch.
   await search(page, 'Fathomcof');
+  await expect(resultRow(page, syrup.name)).toContainText(batchNumber);
   await stageFirstResult(page, syrup.name);
-  const row = page
-    .getByRole('list', { name: 'Search results' })
-    .getByRole('button')
-    .filter({ hasText: syrup.name })
-    .first();
-  await expect(row).toContainText(batchNumber);
 
   // One whole bottle: exactly the new lot's contents.
   await page.keyboard.press('F3');
   await expect(
-    page.getByRole('radio', { name: new RegExp(`^Box of ${syrup.unitsPerPack} `) })
+    saleUnits(page).getByRole('radio', { name: new RegExp(`^Box of ${syrup.unitsPerPack} `) })
   ).toHaveAttribute('aria-checked', 'true');
   await setQuantity(page, 1);
   await page.keyboard.press('F6');
@@ -873,6 +1068,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
   page,
 }, testInfo) => {
   test.setTimeout(180_000);
+  await holdPrintDialogsOpen(page);
   const { Client } = await import('pg');
   const db = new Client({ connectionString: process.env.PHARMACY_E2E_DATABASE_URL! });
   await db.connect();
@@ -950,9 +1146,8 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       const scan = page.getByLabel('Scan or search');
       await scan.focus();
       await scan.fill(PHARMACY_E2E.medicines.otc.brandName);
-      await scan.press('Enter');
       await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
-      const strip = page.getByRole('radio', { name: /Strip/ });
+      const strip = saleUnits(page).getByRole('radio', { name: /Strip/ });
       await strip.focus();
       await strip.press('Space');
       await setQuantity(page, 1);
@@ -989,6 +1184,21 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
       '25.00'
     );
     await expect(page.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    // Counter v2 B1: the limit meter draws the same ledger figures and marks the overrun.
+    const meter = page.locator('[data-counter-khata-limit]');
+    await expect(
+      meter.getByRole('img', { name: '25.00 of 10.00 limit used, over the limit' })
+    ).toBeVisible();
+    await expect(meter.getByRole('img')).toHaveAttribute('data-over', 'true');
+    await expect(meter).toContainText(/Limit\s*10\.00/);
+    await expect(meter).toContainText(/Used\s*1\.00/);
+    await expect(meter).toContainText(/Available\s*9\.00/);
+    const overrideBox = page.getByLabel('Owner or manager: authorize limit increase');
+    await qaShots(page, 'payment-khata-over-limit', {
+      focus: overrideBox,
+      widths: QA_STATE_WIDTHS,
+    });
+    await qaShots(page, 'payment-khata', { focus: overrideBox });
     for (const width of [375, 768, 1024, 1440]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const theme of ['light', 'dark']) {
@@ -1116,6 +1326,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
 });
 
 test('sell → return → refund → reprint from the counter', async ({ page }) => {
+  await holdPrintDialogsOpen(page);
   const browserErrors: string[] = [];
   page.on('pageerror', (error) => browserErrors.push(error.message));
   page.on('console', (message) => {
@@ -1175,6 +1386,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
     .fill('Intact strip, correct storage verified');
   await expect(dialog.getByLabel('Refund to')).not.toHaveValue('');
   await expect(dialog.getByLabel('Refund for this return (PKR)')).toHaveValue(half);
+  await qaShots(page, 'returns', { focus: dialog.getByLabel('Your manager or owner PIN') });
   await dialog.getByLabel('Your manager or owner PIN').fill(PHARMACY_E2E.adminPin);
   await pressControl(dialog.getByRole('button', { name: /^Restock.*Confirm return & refund$/ }));
   await expect(dialog.getByRole('status')).toContainText(
@@ -1254,6 +1466,519 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await expect(page.getByRole('button', { name: 'Returns & refunds' })).toBeFocused();
 });
 
+/**
+ * DEV-1005 — Counter v2 end to end. Every panel the phase 2B review found untested in a real
+ * browser: the one-step add and the bill line (quantity, unit, remove and its refusals), cash
+ * with change, the paid bill and receipt (and a print window that leaves the counter usable),
+ * a split cash and wallet payment with payer and reference, a payment not confirmed, a wallet
+ * not set up, a discount approved by a manager's PIN, controlled-medicine authorisation, the
+ * cashier's no-permission card and the offline price check.
+ */
+test('Counter v2 — Enter adds one unit; quantity, unit and remove on the bill line; a part-paid bill refuses changes', async ({
+  page,
+}) => {
+  const otc = PHARMACY_E2E.medicines.otc;
+  await openCounter(page);
+  await openDrawer(page);
+  await qaShots(page, 'drawer-open', { focus: page.getByLabel('Scan or search') });
+
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  await expect(page.getByText(`1 × ${otc.name} (unit) added.`)).toBeVisible({ timeout: 15_000 });
+  // The next item is typed straight away: focus never leaves the search field.
+  await expect(page.getByLabel('Scan or search')).toBeFocused();
+  await expect(page.getByRole('list', { name: 'Search results' })).toHaveCount(0);
+  const line = billLine(page, otc.name);
+  const quantity = line.getByRole('textbox', { name: `Quantity: ${otc.name}` });
+  await expect(quantity).toHaveValue('1');
+  await expect(line).toContainText('1 × tablet');
+  await expect(line).toContainText('2.50');
+
+  // Quantity on the bill line: the stepper, then a typed quantity committed with Enter.
+  await pressControl(line.getByRole('button', { name: `+ ${otc.name}`, exact: true }));
+  await expect(page.getByText(`${otc.name}: 2 × tablet.`)).toBeVisible();
+  await expect(quantity).toHaveValue('2');
+  await expect(line).toContainText('5.00');
+  await quantity.focus();
+  await quantity.fill('4');
+  await quantity.press('Enter');
+  await expect(page.getByText(`${otc.name}: 4 × tablet.`)).toBeVisible();
+  await expect(quantity).toHaveValue('4');
+  await expect(line).toContainText('10.00');
+  await pressControl(line.getByRole('button', { name: `− ${otc.name}`, exact: true }));
+  await expect(page.getByText(`${otc.name}: 3 × tablet.`)).toBeVisible();
+  await expect(line).toContainText('7.50');
+
+  // The unit on the bill line: 3 strips of 10 tablets at 25.00 each.
+  const soldAs = line.getByRole('radiogroup', { name: `Sold as: ${otc.name}` });
+  await pressControl(soldAs.getByRole('radio', { name: 'Strip', exact: true }));
+  await expect(page.getByText(`${otc.name}: 3 × strip.`)).toBeVisible();
+  await expect(soldAs.getByRole('radio', { name: 'Strip', exact: true })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await expect(line).toContainText('75.00');
+  const totals = page.getByRole('complementary', { name: 'Bill total' });
+  await expect(totals).toContainText('75.00');
+  await qaShots(page, 'bill', { focus: quantity });
+
+  // Remove takes the line off the bill on the server and gives its stock back.
+  await pressControl(line.getByRole('button', { name: `Remove ${otc.name}`, exact: true }));
+  await expect(page.getByText(`${otc.name} removed from the bill.`)).toBeVisible();
+  await expect(billLine(page, otc.name)).toHaveCount(0);
+  await expect(page.getByLabel('Scan or search')).toBeFocused();
+
+  // A part-paid bill: its lines are read-only on the counter, and the server refuses a change.
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  const paidLine = billLine(page, otc.name);
+  await expect(paidLine).toContainText('2.50');
+  await pressControl(paidLine.getByRole('button', { name: `+ ${otc.name}`, exact: true }));
+  await expect(paidLine.getByRole('textbox', { name: `Quantity: ${otc.name}` })).toHaveValue('2');
+  const sheet = await openPayment(page);
+  const amount = sheet.getByLabel('Amount', { exact: true });
+  await amount.focus();
+  await amount.fill('2.00');
+  const received = sheet.getByLabel('Cash received');
+  await received.focus();
+  await received.fill('2.00');
+  await pressControl(sheet.getByRole('button', { name: 'Take payment', exact: true }));
+  await expect(sheet.getByRole('status').filter({ hasText: 'Payment recorded.' })).toBeVisible({
+    timeout: 15_000,
+  });
+  await expect(sheet.getByRole('region', { name: 'Payment summary' })).toContainText('3.00');
+  await page.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  for (const control of [
+    paidLine.getByRole('button', { name: `+ ${otc.name}`, exact: true }),
+    paidLine.getByRole('button', { name: `− ${otc.name}`, exact: true }),
+    paidLine.getByRole('textbox', { name: `Quantity: ${otc.name}` }),
+    paidLine.getByRole('button', { name: `Remove ${otc.name}`, exact: true }),
+  ])
+    await expect(control).toBeDisabled();
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  await db.connect();
+  let saleLine: { id: string; saleId: string };
+  try {
+    await db.query('BEGIN');
+    await db.query("SELECT set_config('app.current_organization_id', $1, true)", [
+      PHARMACY_E2E.organizationId,
+    ]);
+    const lines = await db.query<{ id: string; saleId: string }>(
+      `SELECT l.id, l."saleId" FROM pharmacy_sale_lines l JOIN pharmacy_sales s ON s.id = l."saleId"
+       WHERE s."branchId" = $1 AND s.status = 'OPEN' AND l."medicineId" = $2
+       ORDER BY l."createdAt" DESC LIMIT 1`,
+      [PHARMACY_E2E.branchId, otc.id]
+    );
+    await db.query('COMMIT');
+    expect(lines.rows).toHaveLength(1);
+    saleLine = lines.rows[0]!;
+  } finally {
+    await db.end();
+  }
+  const deviceId = await page.evaluate(() =>
+    localStorage.getItem('devfathom.pharmacy.counter.device')
+  );
+  const refused = await page.request.post('/api/trpc/pharmacySales.removeLine', {
+    data: {
+      json: {
+        branchId: PHARMACY_E2E.branchId,
+        saleId: saleLine.saleId,
+        saleLineId: saleLine.id,
+        idempotencyKey: `pharmacy-counter-e2e-part-paid-${saleLine.id}`,
+        ...(deviceId ? { deviceId } : {}),
+      },
+    },
+  });
+  expect(refused.ok()).toBe(false);
+  expect(await refused.text()).toContain('LINE_LOCKED_BY_PAYMENT');
+  await expect(paidLine).toContainText('2 × tablet');
+
+  // The rest in cash settles the bill.
+  await tenderCash(page, '3.00');
+  await expect(
+    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+  ).toBeVisible({ timeout: 15_000 });
+});
+
+test('Counter v2 — cash with change, the paid bill and its receipt, and a print window that leaves the counter working', async ({
+  page,
+}) => {
+  const otc = PHARMACY_E2E.medicines.otc;
+  await holdPrintDialogsOpen(page);
+  await openCounter(page);
+  await openDrawer(page);
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  await expect(billLine(page, otc.name)).toContainText('2.50', { timeout: 15_000 });
+
+  const sheet = await openPayment(page);
+  await expect(sheet).toHaveAccessibleName('Take payment · 2.50');
+  const received = sheet.getByLabel('Cash received');
+  await expect(received).toHaveValue('2.50');
+  // Quick cash: the customer hands over 500.
+  const quick = sheet.getByRole('group', { name: 'Quick cash' });
+  await pressControl(quick.getByRole('button', { name: '500', exact: true }));
+  await expect(received).toHaveValue('500.00');
+  const change = sheet.getByText('Change', { exact: true }).locator('..');
+  await expect(change).toContainText('497.50');
+  await qaShots(page, 'payment-cash', { focus: received });
+  await pressControl(sheet.getByRole('button', { name: 'Take payment', exact: true }));
+
+  // Counter v2 A3: the receipt sheet opens on the paid bill; change is shown on both.
+  const receiptSheet = page.getByRole('dialog', { name: /Receipt preview/ });
+  await expect(receiptSheet).toBeVisible({ timeout: 15_000 });
+  const receipt = receiptSheet.getByRole('region', {
+    name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/,
+  });
+  await expect(receipt).toBeVisible();
+  const receiptNumber = (await receipt.getAttribute('aria-label'))!.match(/\d+/)![0];
+  await expect(receipt).toContainText(otc.name);
+  await expect(receipt).toContainText(otc.batchNumber);
+  await expect(receiptSheet).toContainText('497.50');
+  const print = receiptSheet.getByRole('button', { name: 'Print receipt', exact: true });
+  await qaShots(page, 'receipt', { focus: print });
+
+  // DEV-973: the print window is its own browsing context. While its print dialog is open
+  // (held open here), the counter keeps working: the next search runs at once.
+  const popupPromise = page.waitForEvent('popup');
+  await pressControl(print);
+  const popup = await popupPromise;
+  await expect(popup.locator('body')).toContainText(otc.name);
+  await expect(popup.locator('body')).toContainText(receiptNumber);
+  await page.keyboard.press('Escape');
+  await expect(receiptSheet).toBeHidden();
+  const totals = page.getByRole('complementary', { name: 'Bill total' });
+  await expect(totals).toContainText(`Paid · receipt ${receiptNumber}`);
+  await expect(totals).toContainText('497.50');
+  await qaShots(page, 'paid', {
+    focus: totals.getByRole('button', { name: 'Start next bill', exact: true }),
+  });
+  await page.keyboard.press('F2');
+  await expect(page.getByLabel('Scan or search')).toBeFocused();
+  await page.getByLabel('Scan or search').fill(PHARMACY_E2E.medicines.syrup.name.slice(0, 8));
+  await expect(resultRow(page, PHARMACY_E2E.medicines.syrup.name)).toBeVisible({
+    timeout: 5_000,
+  });
+  expect(popup.isClosed()).toBe(false);
+  await popup.close();
+});
+
+test('Counter v2 — a wallet not set up, a payment not confirmed, then cash plus JazzCash with payer and reference', async ({
+  page,
+}) => {
+  const otc = PHARMACY_E2E.medicines.otc;
+  await openCounter(page);
+  await openDrawer(page);
+  // DEV-713: the owner sets JazzCash up for this branch in Finance.
+  await saveWalletMerchants(page, { JAZZCASH: { destination: 'JazzCash 0300 0000000 E2E' } });
+  await page.reload();
+  await expect(page.getByLabel('Scan or search')).toBeVisible();
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  const line = billLine(page, otc.name);
+  const quantity = line.getByRole('textbox', { name: `Quantity: ${otc.name}` });
+  await quantity.focus();
+  await quantity.fill('4');
+  await quantity.press('Enter');
+  await expect(line).toContainText('10.00');
+
+  // Part in cash.
+  let sheet = await openPayment(page);
+  const amount = sheet.getByLabel('Amount', { exact: true });
+  await amount.focus();
+  await amount.fill('4.00');
+  const received = sheet.getByLabel('Cash received');
+  await received.focus();
+  await received.fill('4.00');
+  await pressControl(sheet.getByRole('button', { name: 'Take payment', exact: true }));
+  await expect(sheet.getByRole('status').filter({ hasText: 'Payment recorded.' })).toBeVisible({
+    timeout: 15_000,
+  });
+  const summary = sheet.getByRole('region', { name: 'Payment summary' });
+  await expect(summary).toContainText('6.00');
+
+  // The rest by JazzCash: the payer's name and the transaction ID, then Enter.
+  const wallets = sheet.getByRole('group', { name: 'Wallet' });
+  await expect(wallets.getByRole('button', { name: 'Easypaisa' })).toHaveCount(0);
+  await choosePaymentMethod(page, 'JazzCash');
+  await expect(sheet).toContainText('JazzCash 0300 0000000 E2E');
+  const payer = sheet.getByLabel('Payer’s name');
+  await expect(payer).toBeFocused();
+  await payer.fill('Ali Raza E2E');
+  const reference = sheet.getByLabel('Transaction ID (last 4–6 digits)');
+  await reference.focus();
+  await reference.fill('4501');
+  await qaShots(page, 'payment-wallet-split', { focus: reference, widths: QA_STATE_WIDTHS });
+
+  // B8: the owner switches JazzCash off while the sheet is open. Reloading the merchant
+  // details says so in plain words and payment by it is refused.
+  await saveWalletMerchants(page, {});
+  await pressControl(sheet.getByRole('button', { name: 'Reload merchant details' }));
+  await expect(
+    sheet.getByRole('alert').filter({ hasText: 'not enabled at this branch' })
+  ).toContainText(
+    'JAZZCASH is not enabled at this branch. Ask an administrator to enable it in Finance.'
+  );
+  await expect(sheet.getByRole('button', { name: 'Take payment', exact: true })).toBeDisabled();
+  await qaShots(page, 'payment-method-not-set-up', {
+    focus: sheet.getByRole('button', { name: 'Reload merchant details' }),
+    widths: QA_STATE_WIDTHS,
+  });
+  await saveWalletMerchants(page, { JAZZCASH: { destination: 'JazzCash 0300 0000000 E2E' } });
+  await pressControl(sheet.getByRole('button', { name: 'Reload merchant details' }));
+  await expect(
+    sheet.getByRole('alert').filter({ hasText: 'not enabled at this branch' })
+  ).toHaveCount(0);
+  await expect(sheet.getByRole('button', { name: 'Take payment', exact: true })).toBeEnabled();
+
+  // A7: the payment reaches the server but its answer is lost. The sheet locks as "Payment
+  // not confirmed" until the outcome is checked; checking it sends no second payment.
+  let tenders = 0;
+  await page.route('**/api/trpc/**', async (route) => {
+    const names = new URL(route.request().url()).pathname.split('/api/trpc/')[1]?.split(',') ?? [];
+    if (route.request().method() !== 'POST' || !names.includes('pharmacySales.tender'))
+      return route.continue();
+    tenders += 1;
+    await route.fetch();
+    await route.abort('connectionreset');
+  });
+  await page.getByLabel('Transaction ID (last 4–6 digits)').focus();
+  await page.keyboard.press('Enter');
+  sheet = page.getByRole('dialog', { name: /^Take payment/ });
+  await expect(sheet.getByRole('heading', { name: 'Payment not confirmed' })).toBeVisible({
+    timeout: 15_000,
+  });
+  const check = sheet.getByRole('button', { name: 'Check payment outcome' });
+  await expect(check).toBeEnabled();
+  await expect(sheet.getByRole('button', { name: 'Take payment', exact: true })).toBeDisabled();
+  await qaShots(page, 'payment-not-confirmed', { focus: check, widths: QA_STATE_WIDTHS });
+  await page.unroute('**/api/trpc/**');
+  expect(tenders).toBe(1);
+  await pressControl(check);
+
+  // The check finds the JazzCash payment recorded once: the bill is paid in two tenders.
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  await expect(receipt).toContainText('10.00');
+  await expect(receipt).toContainText(/JAZZCASH|JazzCash/);
+  await expect(receipt).toContainText(/CASH|Cash/);
+});
+
+test('Counter v2 — a discount on the next item, approved by a manager PIN for the cashier', async ({
+  page,
+}) => {
+  const otc = PHARMACY_E2E.medicines.otc;
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  await openDrawer(page);
+  const totals = page.getByRole('complementary', { name: 'Bill total' });
+  await pressControl(totals.getByRole('button', { name: 'Discount', exact: true }));
+  const discount = page.getByRole('dialog', { name: /Discount on the next item/ });
+  await expect(discount).toBeVisible();
+  const value = discount.getByLabel('Discount (%)');
+  await expect(value).toBeFocused();
+  await value.fill('10');
+  await qaShots(page, 'discount', { focus: value });
+  await pressControl(discount.getByRole('button', { name: 'Apply to next item' }));
+  await expect(discount).toBeHidden();
+  await expect(page.getByRole('status').filter({ hasText: '10% off the next item' })).toBeVisible();
+
+  // The cashier cannot discount alone: adding the item asks for a manager's or owner's PIN.
+  await search(page, otc.brandName);
+  await addFirstResult(page, otc.name);
+  const approval = page.getByRole('dialog', { name: 'Approve this discount?' });
+  await expect(approval).toBeVisible({ timeout: 15_000 });
+  await expect(approval).toContainText(`a discount of Rs 0.25`);
+  const approver = approval.getByRole('combobox', { name: 'Approving manager or owner' });
+  await approver.focus();
+  await approver.selectOption({ label: 'Pharmacy Administrator' });
+  // Either label: a PIN today, or the approval code when approvals use an authenticator.
+  const pin = approval.getByLabel(/^(Approver PIN|Approval code)$/);
+  await pin.focus();
+  await pin.fill(PHARMACY_E2E.adminPin);
+  await qaShots(page, 'discount-approval', { focus: pin });
+  await pressControl(approval.getByRole('button', { name: 'Approve discount' }));
+  await expect(approval).toBeHidden();
+  const line = billLine(page, otc.name);
+  await expect(line).toContainText('2.25', { timeout: 15_000 });
+  await expect(totals).toContainText('0.25');
+  // A discounted line keeps its approved quantity: it can be removed, not stepped.
+  await expect(line.getByRole('button', { name: `+ ${otc.name}`, exact: true })).toHaveCount(0);
+  await expect(line.getByRole('button', { name: `Remove ${otc.name}`, exact: true })).toBeEnabled();
+  await tenderCash(page, '2.25');
+  await expect(
+    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+  ).toBeVisible({ timeout: 15_000 });
+});
+
+test('Counter v2 — Enter on a controlled medicine opens the authorisation it asks for', async ({
+  page,
+}) => {
+  const controlled = PHARMACY_E2E.medicines.controlled;
+  await openCounter(page);
+  await openDrawer(page);
+  await search(page, 'Fathomadol');
+  await expect(resultRow(page, controlled.name)).toContainText('Controlled');
+  await addFirstResult(page, controlled.name);
+  await expect(page.getByText(/complete the authorization panel/).first()).toBeVisible({
+    timeout: 15_000,
+  });
+  const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
+  await expect(checks).toBeVisible();
+  // The notice sends the cashier to the authorisation panel, so the panel must be there.
+  await expect(
+    checks.getByRole('region', { name: 'Controlled medicine authorization' })
+  ).toBeVisible();
+});
+
+test('Counter v2 — controlled medicine: patient, prescription or emergency supply, approving pharmacist; then the line is locked', async ({
+  page,
+}) => {
+  const controlled = PHARMACY_E2E.medicines.controlled;
+  await openCounter(page);
+  await openDrawer(page);
+  await search(page, 'Fathomadol');
+  await stageFirstResult(page, controlled.name);
+  await page.keyboard.press('Shift+F2');
+  const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
+  await expect(checks).toBeVisible();
+  const auth = checks.getByRole('region', { name: 'Controlled medicine authorization' });
+  await expect(auth).toBeVisible();
+  const steps = auth.getByRole('list', { name: 'Authorization steps' });
+  await expect(steps.getByRole('listitem')).toHaveText([
+    /Patient\s*, to do/,
+    /Prescription\s*, to do/,
+    /Pharmacist\s*, to do/,
+  ]);
+
+  // 1 · Patient
+  const find = checks.getByLabel('Find patient');
+  await find.focus();
+  await find.fill(PHARMACY_E2E.patientName);
+  await find.press('Enter');
+  await pressControl(checks.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+  const address = auth.getByLabel('Patient address');
+  await address.focus();
+  await address.fill('House 12, Street 4, Gulberg, Lahore');
+  await expect(steps.getByRole('listitem').first()).toHaveText(/Patient\s*, done/);
+  await qaShots(page, 'controlled-step-1-patient', { focus: address, widths: QA_STATE_WIDTHS });
+
+  // 2 · Prescription: an emergency supply names its prescriber.
+  await tickWithSpace(auth.getByLabel('Emergency supply, no prescription'));
+  const prescriber = auth.getByLabel('Prescriber name');
+  await prescriber.focus();
+  await prescriber.fill('Dr Imran Shah E2E');
+  await expect(steps.getByRole('listitem').nth(1)).toHaveText(/Prescription\s*, done/);
+  await qaShots(page, 'controlled-step-2-prescription', {
+    focus: prescriber,
+    widths: QA_STATE_WIDTHS,
+  });
+
+  // 3 · Approving pharmacist: a second pharmacist with their own PIN.
+  const pharmacist = auth.getByRole('combobox', { name: 'Approving pharmacist' });
+  await pharmacist.focus();
+  await pharmacist.selectOption({ label: PHARMACY_E2E.pharmacistName });
+  const pin = auth.getByLabel(/^(Pharmacist PIN|Approval code)$/);
+  await pin.focus();
+  await pin.fill(PHARMACY_E2E.pharmacistPin);
+  await expect(steps.getByRole('listitem').nth(2)).toHaveText(/Pharmacist\s*, done/);
+  await qaShots(page, 'controlled-step-3-pharmacist', { focus: pin, widths: QA_STATE_WIDTHS });
+  await qaShots(page, 'checks', { focus: pin });
+
+  await page.keyboard.press('Escape');
+  await expect(checks).toBeHidden();
+  await page.keyboard.press('F6');
+  await expect(page.getByText(`1 × ${controlled.name} added.`)).toBeVisible({ timeout: 15_000 });
+  const line = billLine(page, controlled.name);
+  await expect(line).toContainText('Controlled');
+  await expect(line).toContainText(controlled.batchNumber);
+  // A controlled line is never changed on the bill: no quantity, unit or remove control.
+  await expect(line.getByRole('textbox', { name: `Quantity: ${controlled.name}` })).toHaveCount(0);
+  await expect(line.getByRole('radiogroup', { name: `Sold as: ${controlled.name}` })).toHaveCount(
+    0
+  );
+  await expect(line.getByRole('button', { name: `Remove ${controlled.name}` })).toHaveCount(0);
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(
+    'supplied as an emergency without a prescription'
+  );
+  await page.keyboard.press('Shift+F4');
+  const voidDialog = page.getByRole('dialog', { name: 'Void this bill?' });
+  const reason = voidDialog.getByRole('radio', { name: 'Duplicate bill' });
+  await reason.focus();
+  await reason.press('Space');
+  await pressControl(voidDialog.getByRole('button', { name: 'Void bill' }));
+  await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
+    timeout: 15_000,
+  });
+});
+
+test('Counter v2 — offline: a price check only, no offline bill, and "Sign-in not checked"', async ({
+  page,
+  context,
+}) => {
+  test.setTimeout(120_000);
+  const otc = PHARMACY_E2E.medicines.otc;
+  const rx = PHARMACY_E2E.medicines.rx;
+  await signIn(page);
+  // DEV-957: the owner enrols this computer and prepares it for offline (keyboard only).
+  await page.goto('/pharmacy/settings/counters');
+  await expect(page.getByRole('heading', { name: 'Counter computers', level: 1 })).toBeVisible();
+  const counterName = page.getByLabel('Counter name');
+  await counterName.focus();
+  await counterName.fill('Counter lane E2E');
+  await pressControl(page.getByRole('button', { name: 'Enrol this computer' }));
+  await expect(page.getByText(/This computer is now the counter Counter lane E2E/)).toBeVisible({
+    timeout: 30_000,
+  });
+  await pressControl(page.getByRole('button', { name: 'Prepare this counter for offline' }));
+  await expect(page.getByText(/This counter now holds \d+ receipt numbers/)).toBeVisible({
+    timeout: 60_000,
+  });
+  await page.goto(`/pharmacy/counter?branchId=${PHARMACY_E2E.branchId}`);
+  await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const shell = await caches.open('devfathom-pharmacy-counter-shell-v1');
+          return Boolean(await shell.match('/pharmacy/counter'));
+        }),
+      { timeout: 60_000 }
+    )
+    .toBe(true);
+
+  await context.setOffline(true);
+  const banner = page.locator('[data-counter-offline]').first();
+  await expect(banner).toBeVisible({ timeout: 30_000 });
+  await expect(banner.getByText('Offline — this counter cannot reach the server.')).toBeVisible();
+  // Offline cash selling is off: the counter is a price check, and nothing offers a bill.
+  await expect(banner.locator('[data-counter-offline-selling="off"]')).toContainText(
+    'Offline cash selling is off'
+  );
+  await expect(page.getByRole('button', { name: /Take cash/i })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /offline bill/i })).toHaveCount(0);
+  // The till cannot check who is signed in, so it never names the last person.
+  const topBar = page.locator('[data-counter-top-bar]');
+  await expect(topBar.getByText('Offline', { exact: true })).toBeVisible();
+  await expect(topBar.getByText('Sign-in not checked', { exact: true })).toBeVisible();
+  await expect(topBar).not.toContainText('Counter Gate Admin');
+
+  const priceCheck = page.getByRole('searchbox', { name: 'Offline price check' });
+  await priceCheck.focus();
+  await priceCheck.fill(otc.name.slice(0, 6));
+  const results = page.getByRole('list', { name: 'Offline price check results' });
+  await expect(results.getByText(otc.name)).toBeVisible();
+  await expect(results.getByText(/Rs 250\.00 a pack/)).toBeVisible();
+  await expect(results.getByRole('button')).toHaveCount(0);
+  await qaShots(page, 'offline', { focus: priceCheck });
+  await priceCheck.fill(rx.name.slice(0, 9));
+  await expect(page.getByText(/No medicine this counter holds offline matches/)).toBeVisible();
+  await priceCheck.press('Escape');
+  await expect(priceCheck).toHaveValue('');
+  await context.setOffline(false);
+});
+
 test('[DEF-13] cashier float guidance and refusal preserve empty-drawer access', async ({
   page,
 }) => {
@@ -1316,6 +2041,46 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await expect(receipt).toBeVisible({ timeout: 15_000 });
   await expect(receipt).toContainText(otc.name);
   await expect(receipt).toContainText(otc.batchNumber);
+
+  // Counter v2 C6: a cashier finds their own receipt under Returns & refunds and is told,
+  // plainly, who can refund it. No return form and no confirm is offered; the server refuses
+  // a cashier's refund whatever the screen shows ([DEF-13] above).
+  const receiptNumber = (await receipt.getAttribute('aria-label'))!.match(/\d+/)![0];
+  await page.keyboard.press('Escape');
+  // Without refund access the action is "Returns", not "Returns & refunds".
+  await expect(page.getByRole('button', { name: 'Returns & refunds' })).toHaveCount(0);
+  await pressControl(page.getByRole('button', { name: 'Returns', exact: true }));
+  const dialog = page.getByRole('dialog', { name: 'Returns', exact: true });
+  const receiptField = dialog.getByLabel('Receipt number', { exact: true });
+  await receiptField.focus();
+  await receiptField.fill(receiptNumber);
+  await pressControl(dialog.getByRole('button', { name: 'Find receipt', exact: true }));
+  const device = await page.evaluate(() =>
+    localStorage.getItem('devfathom.pharmacy.counter.device')
+  );
+  expect(device).toMatch(/^counter-/);
+  const label = counterLabel(device!);
+  expect(label).not.toBeNull();
+  await pressControl(
+    dialog
+      .getByRole('button', { name: new RegExp('Receipt ' + receiptNumber + ' ·') })
+      .filter({ hasText: label! })
+  );
+  const card = dialog.locator('[data-counter-no-permission]');
+  await expect(
+    card.getByRole('heading', { name: 'Ask a manager or owner to record this return' })
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(card.getByRole('note')).toContainText(
+    'Returns and refunds need a manager or owner.'
+  );
+  await expect(card).toContainText(/Who can\s*Managers and the owner/);
+  await expect(dialog.getByRole('form', { name: 'Return and refund' })).toHaveCount(0);
+  await expect(dialog.getByRole('button', { name: /Confirm return & refund/ })).toHaveCount(0);
+  await qaShots(page, 'no-permission', {
+    focus: dialog.getByRole('button', { name: 'Find receipt', exact: true }),
+  });
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
 });
 
 test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
