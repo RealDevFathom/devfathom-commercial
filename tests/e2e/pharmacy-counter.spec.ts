@@ -1717,9 +1717,21 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
   await expect(reprint.locator('html')).toHaveAttribute('data-print-requests', '1');
   await expect(reprint.locator('body')).toContainText(receiptNumber);
   await expect(reprint.locator('body')).toContainText('Reprint — not a new sale');
-  const finished = reprint.waitForEvent('close');
-  await pressControl(reprint.getByRole('button', { name: 'Close', exact: true }));
-  await finished;
+  const close = reprint.getByRole('button', { name: 'Close', exact: true });
+  await expect(close).toBeEnabled();
+  await close.focus();
+  await expect(close).toBeFocused();
+  await Promise.all([
+    reprint.waitForEvent('close'),
+    reprint.keyboard.press('Enter').catch((error: unknown) => {
+      // The Close button can dismiss the window before Playwright receives the key command's reply.
+      if (
+        !reprint.isClosed() ||
+        !String(error).includes('Target page, context or browser has been closed')
+      )
+        throw error;
+    }),
+  ]);
   await expect(notice).toHaveCount(0);
   expect(page.context().pages()).toEqual([page]);
 });
