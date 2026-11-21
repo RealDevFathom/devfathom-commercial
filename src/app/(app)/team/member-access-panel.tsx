@@ -207,9 +207,9 @@ function SubRoleRow({
         onCheckedChange={(checked) => toggle(checked)}
         aria-labelledby={`${id}-label`}
         aria-describedby={[
-          `${id}-description`,
           roleNote && `${id}-role-note`,
           editor && locked && `${id}-locked`,
+          `${id}-description`,
         ]
           .filter(Boolean)
           .join(' ')}
@@ -230,14 +230,6 @@ function SubRoleRow({
             </span>
           ) : null}
         </p>
-        <ul
-          id={`${id}-description`}
-          className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed text-text-muted"
-        >
-          {subRole.allows.map((line) => (
-            <li key={line}>{line}</li>
-          ))}
-        </ul>
         {roleNote && (
           <p id={`${id}-role-note`} className="text-xs text-text-muted">
             {roleNote}
@@ -248,6 +240,14 @@ function SubRoleRow({
             {locked}
           </p>
         ) : null}
+        <ul
+          id={`${id}-description`}
+          className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed text-text-muted"
+        >
+          {subRole.allows.map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
         {confirming && editor && weightyLine ? (
           <PinConfirm
             subRole={subRole}

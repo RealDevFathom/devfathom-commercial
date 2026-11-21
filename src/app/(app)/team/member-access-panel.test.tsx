@@ -105,6 +105,10 @@ describe('what this person can do', () => {
     expect(screen.getByRole('checkbox', { name: /Manage stock/ })).toHaveAccessibleDescription(
       expect.stringContaining(note)
     );
+    expect(screen.getByText(reason).previousElementSibling).toHaveTextContent(
+      'Record prescriptions'
+    );
+    expect(screen.getByText(note).previousElementSibling).toHaveTextContent('Manage stock');
     fireEvent.click(inherited);
     expect(state.setSubRole).not.toHaveBeenCalled();
   });
