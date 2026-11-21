@@ -1312,6 +1312,97 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     expect(report.sumCashShifts).toBeTypeOf('function');
   });
 
+  it("keeps a receipt lease the database's: issued now in UTC, never backdated, used only later", async () => {
+    const s = await shop('lease_floor', { shifts: true, toleranceMinor: 1_000_000 });
+    const { device } = await tenant(s.owner, (db) =>
+      devices.enrollPharmacyCounter(db, s.owner, { name: 'Counter 1' })
+    );
+    const issuedAtOf = (id: string) =>
+      tenant(s.owner, (db) =>
+        db.pharmacyReceiptNumberLease.findFirstOrThrow({
+          where: { id },
+          select: { issuedAt: true },
+        })
+      ).then((row) => row.issuedAt);
+    // Issued from a session whose time zone is not UTC, it is still stamped in UTC, now.
+    const before = Date.now();
+    const lease = await tenant(s.owner, async (db) => {
+      await db.$executeRawUnsafe(`SET LOCAL TIME ZONE 'Asia/Karachi'`);
+      return leases.reserveReceiptNumberBlock(db, s.owner, { deviceId: device.id, size: 5 });
+    });
+    const issuedAt = await issuedAtOf(lease.id);
+    expect(issuedAt.getTime()).toBeGreaterThanOrEqual(before - 60_000);
+    expect(issuedAt.getTime()).toBeLessThanOrEqual(Date.now() + 60_000);
+
+    // A genuine lease is never backdated, with its cursor in one statement or in two.
+    const cashier = s.as(s.cashier);
+    const longAgo = new Date('2000-01-01T00:00:00.000Z');
+    await expect(
+      tenant(
+        cashier,
+        (db) => db.$executeRaw`UPDATE pharmacy_receipt_number_leases
+          SET "nextNumber" = "nextNumber" + 1, "issuedAt" = ${longAgo} WHERE id = ${lease.id}`
+      )
+    ).rejects.toThrow(/RECEIPT_LEASE_IMMUTABLE/);
+    await expect(
+      tenant(cashier, async (db) => {
+        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases
+          SET "nextNumber" = "nextNumber" + 1 WHERE id = ${lease.id}`;
+        await db.$executeRaw`UPDATE pharmacy_receipt_number_leases
+          SET "issuedAt" = ${longAgo} WHERE id = ${lease.id}`;
+      })
+    ).rejects.toThrow(/RECEIPT_LEASE_IMMUTABLE/);
+    expect(await issuedAtOf(lease.id)).toEqual(issuedAt);
+
+    // A number is used only from a lease an earlier transaction issued: issuing a lease and using
+    // it in one transaction (say one opened before a shift closed) books nothing.
+    const drawer = await openDrawer(s, device.id, 0);
+    const [shift] = await shiftsOf(s, drawer.id);
+    const replay = (db: ScopedDb, leaseId: string, saleId: string) =>
+      db.$queryRaw<Array<{ receipt_number: number }>>`
+        UPDATE pharmacy_receipt_number_leases SET "nextNumber" = "nextNumber" + 1
+         WHERE id = ${leaseId} RETURNING "nextNumber" - 1 AS receipt_number`.then(async (rows) => {
+        const soldAt = new Date(Date.now() + 60_000);
+        await settlement.recordLeasedReceiptConsumption(db, s.owner, {
+          leaseId,
+          deviceId: device.id,
+          receiptNumber: rows[0]!.receipt_number,
+          saleId,
+          soldAt,
+        });
+        return db.pharmacyTender.create({
+          data: {
+            organizationId: s.owner.organizationId,
+            branchId: s.owner.branchId,
+            saleId,
+            type: 'CASH',
+            amountMinor: 10,
+            cashReceivedMinor: 10,
+            changeGivenMinor: 0,
+            drawerSessionId: drawer.id,
+            businessDate: s.today,
+            actorId: s.cashier,
+            deviceId: device.id,
+            soldAt,
+          },
+        });
+      });
+    const sameTransaction = await bill(s, 10);
+    await expect(
+      tenant(s.owner, async (db) => {
+        const fresh = await leases.reserveReceiptNumberBlock(db, s.owner, {
+          deviceId: device.id,
+          size: 1,
+        });
+        return replay(db, fresh.id, sameTransaction.sale.id);
+      })
+    ).rejects.toThrow(/PHARMACY_RECEIPT_CONSUMPTION_INVALID/);
+    // The lease issued earlier serves a later replay as before.
+    const later = await bill(s, 10);
+    const tender = await tenant(cashier, (db) => replay(db, lease.id, later.sale.id));
+    expect(tender).toMatchObject({ shiftId: shift!.id, lateArrivalShiftId: null });
+  });
+
   it('asks no card provider or terminal to charge between shifts', async () => {
     const s = await shop('provider', { shifts: true, toleranceMinor: 1_000_000 });
     const device = `device-${randomUUID()}`;

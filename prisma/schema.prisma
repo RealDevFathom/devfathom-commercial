@@ -15365,6 +15365,8 @@ model PharmacyReceiptNumberLease {
   issuedAt        DateTime @default(now())
   /// DEV-958B: the transaction that last moved the cursor forward, set only by the database.
   lastAdvancedXact BigInt?
+  /// DEV-958B: the transaction that issued the lease, set only by the database.
+  issuedXact       BigInt?
 
   device       PharmacyRegisteredDevice           @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict)
   consumptions PharmacyReceiptNumberConsumption[]

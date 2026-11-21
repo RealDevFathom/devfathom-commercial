@@ -425,16 +425,29 @@ END $$;
 --   * the replayed tender claims its sale's row, and that tender's cash movement claims it once.
 -- The rows never change otherwise and are never deleted.
 ALTER TABLE "pharmacy_receipt_number_leases" ADD COLUMN IF NOT EXISTS "lastAdvancedXact" BIGINT;
+-- The transaction that issued the lease (set only by the database). A number is consumed only from
+-- a lease an earlier transaction issued, so one transaction cannot issue a lease and use it at once.
+ALTER TABLE "pharmacy_receipt_number_leases" ADD COLUMN IF NOT EXISTS "issuedXact" BIGINT;
 
 CREATE OR REPLACE FUNCTION pharmacy_receipt_lease_advanced_xact() RETURNS trigger
 LANGUAGE plpgsql SET search_path = public, pg_temp AS $$
 BEGIN
   IF TG_OP = 'INSERT' THEN
     NEW."lastAdvancedXact" := NULL;
-    -- A lease is issued now, by the database's clock: a supplied time is ignored, so no lease
-    -- can claim to predate a sale it never covered.
-    NEW."issuedAt" := CURRENT_TIMESTAMP;
-  ELSIF NEW."nextNumber" > OLD."nextNumber" THEN
+    NEW."issuedXact" := pg_current_xact_id()::text::bigint;
+    -- A lease is issued now, by the database's clock and in UTC whatever the session's time zone
+    -- (the column holds UTC, as every timestamp the application writes): a supplied time is
+    -- ignored, so no lease can claim to predate a sale it never covered.
+    NEW."issuedAt" := CURRENT_TIMESTAMP AT TIME ZONE 'UTC';
+    RETURN NEW;
+  END IF;
+  -- And it never changes afterwards: its issue time and issuing transaction are fixed.
+  IF NEW."issuedAt" IS DISTINCT FROM OLD."issuedAt"
+     OR NEW."issuedXact" IS DISTINCT FROM OLD."issuedXact" THEN
+    RAISE EXCEPTION 'RECEIPT_LEASE_IMMUTABLE: a lease''s issue time never changes'
+      USING ERRCODE = '55000';
+  END IF;
+  IF NEW."nextNumber" > OLD."nextNumber" THEN
     NEW."lastAdvancedXact" := pg_current_xact_id()::text::bigint;
   ELSE
     NEW."lastAdvancedXact" := OLD."lastAdvancedXact";
@@ -482,6 +495,11 @@ CREATE TRIGGER pharmacy_branch_receipt_allocation_stamp
   BEFORE INSERT OR UPDATE ON "pharmacy_branch_receipt_sequences"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_branch_receipt_allocation_stamp();
 
+-- The printed number of a renumbered offline receipt, for the used-number check below.
+CREATE INDEX IF NOT EXISTS "pharmacy_sales_offline_receipt_reference_idx"
+  ON "pharmacy_sales"("organizationId", "branchId", "offlineReceiptReference")
+  WHERE "offlineReceiptReference" IS NOT NULL;
+
 CREATE OR REPLACE FUNCTION pharmacy_receipt_lease_allocation_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -497,11 +515,15 @@ BEGIN
     RAISE EXCEPTION 'RECEIPT_LEASE_NOT_ALLOCATED: a lease covers only numbers this transaction drew from the branch sequence'
       USING ERRCODE = '55000';
   END IF;
+  -- Two checks, each on its own index, rather than one scan of every sale of the branch.
   IF EXISTS (
     SELECT 1 FROM "pharmacy_sales" sale
      WHERE sale."organizationId" = NEW."organizationId" AND sale."branchId" = NEW."branchId"
-       AND (sale."receiptNumber" BETWEEN NEW."blockStart" AND NEW."blockEnd"
-            OR sale."offlineReceiptReference" BETWEEN NEW."blockStart" AND NEW."blockEnd")
+       AND sale."receiptNumber" BETWEEN NEW."blockStart" AND NEW."blockEnd"
+  ) OR EXISTS (
+    SELECT 1 FROM "pharmacy_sales" sale
+     WHERE sale."organizationId" = NEW."organizationId" AND sale."branchId" = NEW."branchId"
+       AND sale."offlineReceiptReference" BETWEEN NEW."blockStart" AND NEW."blockEnd"
   ) THEN
     RAISE EXCEPTION 'RECEIPT_LEASE_NUMBER_USED: a sale of the branch already carries a number of this block'
       USING ERRCODE = '55000';
@@ -579,7 +601,8 @@ BEGIN
   RETURN NEW;
 END $$;
 
--- A consumption is accepted only for the number this transaction moved its lease's cursor past.
+-- A consumption is accepted only for the number this transaction moved its lease's cursor past, on a
+-- lease an earlier transaction issued.
 CREATE OR REPLACE FUNCTION pharmacy_receipt_number_consumption_guard() RETURNS trigger
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
 DECLARE
@@ -599,6 +622,7 @@ BEGIN
      OR NEW."receiptNumber" NOT BETWEEN lease."blockStart" AND lease."blockEnd"
      OR lease."nextNumber" IS DISTINCT FROM NEW."receiptNumber" + 1
      OR lease."lastAdvancedXact" IS DISTINCT FROM xact
+     OR lease."issuedXact" IS NOT DISTINCT FROM xact
      OR lease."issuedAt" > NEW."soldAt" THEN
     RAISE EXCEPTION 'PHARMACY_RECEIPT_CONSUMPTION_INVALID: this transaction did not use that receipt number'
       USING ERRCODE = '23514';
