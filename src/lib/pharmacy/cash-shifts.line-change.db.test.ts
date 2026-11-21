@@ -726,6 +726,63 @@ describeDatabase('DEV-977 existing line discount', () => {
 });
 
 describeDatabase('DEV-977 multi-line returns', () => {
+  it('requires the same fresh witness as a single return when a sold medicine becomes controlled', async () => {
+    const s = await shop('returnwitness');
+    const device = 'return-witness-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 1],
+      [500, 1],
+    ]);
+    await cash(s, s.cashier, device, sale.id, 1500);
+    const selected = await tenant(s.owner, async (db) => {
+      await db.medicine.update({ where: { id: lines[1]!.medicineId }, data: { controlled: true } });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: s.manager,
+          capability: 'pharmacy:dispense',
+          effect: 'ALLOW',
+          reason: 'Test on-duty pharmacist',
+        },
+      });
+      const allocations = await db.pharmacySaleLineAllocation.findMany({
+        where: { saleLineId: { in: lines.map((l) => l.id) } },
+      });
+      return lines.map((l) => ({
+        saleLineId: l.id,
+        canonicalUnits: 1,
+        lotId: allocations.find((a) => a.saleLineId === l.id)!.inventoryLotId,
+        disposition: 'RESTOCK' as const,
+        integrityDecision: 'Unopened pack',
+      }));
+    });
+    const reason = 'Wrong items';
+    await expect(
+      tenant(s.owner, (db) =>
+        sales.returnSaleLine(db, s.owner, {
+          ...selected[1]!,
+          reason,
+          idempotencyKey: randomUUID(),
+        })
+      )
+    ).rejects.toThrow(/fresh witness PIN/);
+    await expect(
+      tenant(s.owner, (db) =>
+        sales.returnSaleLines(db, s.owner, {
+          saleId: sale.id,
+          requestId: randomUUID(),
+          reason,
+          lines: selected,
+        })
+      )
+    ).rejects.toThrow(/fresh witness PIN/);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySaleReturn.count({ where: { originalSaleId: sale.id } })
+      )
+    ).toBe(0);
+  }, 60000);
+
   it('returns the selected sale lines together, refuses excess units atomically and replays the group once', async () => {
     const s = await shop('returngroup');
     const device = 'returns-till';
