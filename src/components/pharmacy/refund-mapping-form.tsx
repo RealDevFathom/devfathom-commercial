@@ -21,7 +21,9 @@ export function RefundMappingForm({
 }: {
   accounts: { value: FinanceAccountCode; label: string }[];
 }) {
-  const query = trpc.pharmacyCardTerminal.refundMapping.useQuery(undefined, { retry: false });
+  const query = trpc.organizationAdmin.pharmacySettings.refundMapping.useQuery(undefined, {
+    retry: false,
+  });
   if (query.isPending) return <p role="status">Loading account settings…</p>;
   if (!query.data)
     return (
@@ -44,7 +46,7 @@ function MappingFields({
   const [custom, setCustom] = useState(mapping.usesCustomFinanceChart);
   const [account, setAccount] = useState<FinanceAccountCode | null>(mapping.terminalRefundAccount);
   const [saved, setSaved] = useState(mapping);
-  const mutation = trpc.pharmacyCardTerminal.setRefundMapping.useMutation({
+  const mutation = trpc.organizationAdmin.pharmacySettings.setRefundMapping.useMutation({
     onSuccess: () => setSaved({ terminalRefundAccount: account, usesCustomFinanceChart: custom }),
   });
   const choices = [

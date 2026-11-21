@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { buttonVariants } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { requireProviderRefundMappingAccess } from '@/server/routers/pharmacy-card-terminal';
+import { requireProviderRefundMappingAccess } from '@/server/routers/organization-pharmacy-settings';
 import { createTRPCContext } from '@/server/trpc';
 import { SettingsContent } from './settings-content';
 

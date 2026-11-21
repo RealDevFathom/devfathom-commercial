@@ -34,10 +34,14 @@ const STANDALONE_ROUTERS = [
   ],
 ] as const;
 
+function isPharmacyProcedure(path: string): boolean {
+  return path.startsWith('pharmacy') || path.startsWith('organizationAdmin.pharmacySettings.');
+}
+
 async function pharmacyProcedures(): Promise<string[]> {
   const { appRouter } = await import('@/server/routers/_app');
-  const paths = Object.keys((appRouter as unknown as RouterLike)._def.procedures).filter((path) =>
-    path.startsWith('pharmacy')
+  const paths = Object.keys((appRouter as unknown as RouterLike)._def.procedures).filter(
+    isPharmacyProcedure
   );
   for (const [prefix, load, name] of STANDALONE_ROUTERS) {
     const mod = (await load()) as unknown as Record<string, RouterLike>;
@@ -93,7 +97,7 @@ async function pharmacyProcedureObjects(): Promise<Map<string, ProcedureLike>> {
   const all = (appRouter as unknown as RouterLike)._def.procedures;
   const found = new Map<string, ProcedureLike>();
   for (const [path, procedure] of Object.entries(all))
-    if (path.startsWith('pharmacy')) found.set(path, procedure as ProcedureLike);
+    if (isPharmacyProcedure(path)) found.set(path, procedure as ProcedureLike);
   for (const [prefix, load, name] of STANDALONE_ROUTERS) {
     const mod = (await load()) as unknown as Record<string, RouterLike>;
     for (const [key, procedure] of Object.entries(mod[name]._def.procedures))
