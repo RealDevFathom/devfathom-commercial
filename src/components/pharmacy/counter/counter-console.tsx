@@ -1555,6 +1555,9 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'success', message });
       void cartQuery.refetch();
     },
+    // DEV-977 phase 3: the sheet closes on success, so each item left out is named in the
+    // notice, with its reason, as the bill's own form names them.
+    nameLeftOut: true,
   });
   const sheetWholeBill =
     currentBill && cart && cart.status === 'OPEN' && lineCount > 0 && sheetBillDiscount.enabled

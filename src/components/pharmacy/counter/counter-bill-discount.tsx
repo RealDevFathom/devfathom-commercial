@@ -45,6 +45,12 @@ export type CounterBillDiscountInput = {
   lines: readonly CartLine[];
   requestApproval: (discount: string) => Promise<CounterApprovalPin | null>;
   onChanged: (message: string) => void;
+  /**
+   * DEV-977 phase 3: name each item left out, and why, in the message itself. The discount
+   * sheet closes once it is applied, so the counter's notice is where they are read; the bill's
+   * own form lists them under itself instead.
+   */
+  nameLeftOut?: boolean;
 };
 
 /**
@@ -60,6 +66,7 @@ export function useCounterBillDiscount({
   lines,
   requestApproval,
   onChanged,
+  nameLeftOut = false,
 }: CounterBillDiscountInput) {
   const setting = trpc.pharmacySales.billDiscountSetting.useQuery({ branchId });
   const maximum = trpc.pharmacySales.discountMaximum.useQuery(
@@ -109,11 +116,11 @@ export function useCounterBillDiscount({
           leftOut: [],
         };
       }
-      onChanged(
+      const message =
         outcome.totalMinor > 0
           ? `A whole-bill discount of Rs ${formatMinor(outcome.totalMinor)} is on the bill, shared over ${outcome.lines.length} ${outcome.lines.length === 1 ? 'item' : 'items'}.${reasons.length ? ` ${reasons.length} ${reasons.length === 1 ? 'item was' : 'items were'} left out.` : ''}`
-          : 'The whole-bill discount was removed.'
-      );
+          : 'The whole-bill discount was removed.';
+      onChanged(nameLeftOut && reasons.length ? `${message} ${reasons.join(' ')}` : message);
       return { error: null, leftOut: reasons };
     } catch (failure) {
       return {

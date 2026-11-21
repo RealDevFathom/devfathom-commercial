@@ -3564,6 +3564,32 @@ describe('PharmacyCounterConsole barcode safety', () => {
       expect(screen.queryByRole('button', { name: 'Remove discount' })).toBeNull();
     });
 
+    // DEV-977 phase 3 review: the sheet closes on success, so the items the server left out
+    // are named in the notice, as the bill's own form names them.
+    it('names each item the whole-bill discount left out, and why, when given from the sheet', async () => {
+      mocks.queries.billDiscountSetting = query({ enabled: true, canChange: false });
+      mocks.mutations.applyBillDiscount!.mockResolvedValueOnce({
+        status: 'APPLIED',
+        totalMinor: 2_500,
+        previousTotalMinor: 0,
+        lines: [{ saleLineId: 'line-b', discountMinor: 2_500 }],
+        excluded: [{ saleLineId: 'line-a', reason: 'REGULATED' }],
+      });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+      const sheet = screen.getByRole('dialog', { name: 'Discount on the next item' });
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Whole bill' }));
+      fireEvent.change(within(sheet).getByLabelText('Discount (%)'), { target: { value: '10' } });
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Apply to bill' }));
+      const notice = await screen.findByText(
+        /A whole-bill discount of Rs 25\.00 is on the bill, shared over 1 item\. 1 item was left out\./
+      );
+      expect(notice).toHaveTextContent(
+        'Synthetic item: not discounted, because prescription, restricted and controlled medicines are never discounted.'
+      );
+      expect(screen.queryByRole('dialog', { name: /Discount on the/ })).toBeNull();
+    });
+
     it('offers only the next item in the sheet once the bill has taken a payment', () => {
       mocks.queries.billDiscountSetting = query({ enabled: true, canChange: false });
       mocks.queries.counterCart = {
