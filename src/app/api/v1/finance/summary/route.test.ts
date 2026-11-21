@@ -42,9 +42,7 @@ it.each([
       ? [{ currency: 'PKR', _sum: { amount: 5 }, _count: 1 }]
       : []
   );
-  const res = await GET(new Request('http://localhost/api/v1/finance/summary' + query), {
-    params: Promise.resolve({}),
-  });
+  const res = await GET(new Request('http://localhost/api/v1/finance/summary' + query));
   expect((await res.json()).data).toMatchObject({
     period: { startDate, endDate },
     income: { count: 1 },
