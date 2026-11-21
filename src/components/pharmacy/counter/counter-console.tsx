@@ -4269,7 +4269,7 @@ function ScopedPharmacyCounterConsole({
           setActiveSale(null);
           setHeldSaleId(null);
         }}
-        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56"
+        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56 xl:max-w-40"
       >
         {branches.map((branch) => (
           <option key={branch.id} value={branch.id}>
