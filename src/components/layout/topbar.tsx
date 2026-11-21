@@ -107,15 +107,21 @@ export function WorkspaceBrandLink({
   brand,
   subtitle = 'Company workspace',
   textClassName = 'hidden leading-tight sm:block',
+  className,
 }: {
   brand?: TenantBrand;
   subtitle?: string;
   textClassName?: string;
+  /** Extra classes for the link, e.g. the counter's 44px touch target (DEV-1005). */
+  className?: string;
 }) {
   return (
     <Link
       href="/dashboard"
-      className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      className={cn(
+        'flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        className
+      )}
     >
       <span className="sr-only">Open dashboard</span>
       {brand?.markUrl || brand?.logoUrl ? (
@@ -584,10 +590,18 @@ type BellNotification = {
   isRead: boolean;
 };
 
-export function NotificationBell() {
+/**
+ * `touchTarget` draws the bell at the 44px touch size, for a touch-heavy screen such as the
+ * pharmacy counter (DEV-1005). Elsewhere it keeps its compact 36px size.
+ */
+export function NotificationBell({ touchTarget = false }: { touchTarget?: boolean } = {}) {
   const { vertical } = useEntitlements();
 
-  return vertical === 'RESTAURANT' ? <RestaurantNotificationBell /> : <AgencyNotificationBell />;
+  return vertical === 'RESTAURANT' ? (
+    <RestaurantNotificationBell touchTarget={touchTarget} />
+  ) : (
+    <AgencyNotificationBell touchTarget={touchTarget} />
+  );
 }
 
 /**
@@ -598,7 +612,7 @@ export function NotificationBell() {
  */
 const TEAM_NOTIFICATIONS_MODULE = moduleForProcedure('team.getNotifications');
 
-function AgencyNotificationBell() {
+function AgencyNotificationBell({ touchTarget }: { touchTarget: boolean }) {
   const utils = trpc.useUtils();
   const { enabledModules } = useEntitlements();
   // The 403 is definitive (UX rule 17): don't turn it into a poll. Gate the
@@ -634,6 +648,7 @@ function AgencyNotificationBell() {
 
   return (
     <NotificationBellView
+      touchTarget={touchTarget}
       notifications={denied ? [] : (notifications ?? [])}
       emptyMessage={denied ? 'Notifications are not part of this workspace’s plan' : undefined}
       emptyDetail={denied ? 'Ask your platform administrator to enable the HR module.' : undefined}
@@ -645,7 +660,7 @@ function AgencyNotificationBell() {
 
 const restaurantNotificationInput = { limit: 50, unreadOnly: false } as const;
 
-function RestaurantNotificationBell() {
+function RestaurantNotificationBell({ touchTarget }: { touchTarget: boolean }) {
   const utils = trpc.useUtils();
   const { data, error } = trpc.restaurantNotifications.list.useQuery(restaurantNotificationInput);
   // WHA-1181: the poll is denied outright until the signed-in user is linked to
@@ -669,6 +684,7 @@ function RestaurantNotificationBell() {
 
   return (
     <NotificationBellView
+      touchTarget={touchTarget}
       notifications={denied ? [] : notifications}
       emptyMessage={denied ? 'Notifications need a restaurant staff profile' : undefined}
       emptyDetail={denied ? 'Ask an administrator to link your account to staff.' : undefined}
@@ -684,7 +700,9 @@ function NotificationBellView({
   emptyDetail,
   onMarkRead,
   onMarkAllRead,
+  touchTarget = false,
 }: {
+  touchTarget?: boolean;
   notifications: BellNotification[];
   emptyMessage?: string;
   /** The next step to offer when the empty state is a denial, not an empty inbox. */
@@ -699,7 +717,7 @@ function NotificationBellView({
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="relative flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className={`relative flex ${touchTarget ? 'size-11' : 'h-9 w-9'} items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring`}
         aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
         aria-expanded={open}
       >

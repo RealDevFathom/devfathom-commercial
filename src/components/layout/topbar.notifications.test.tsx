@@ -57,6 +57,24 @@ beforeEach(() => {
 });
 
 describe('NotificationBell vertical routing', () => {
+  // DEV-1005: the pharmacy counter (a touch screen) asks for the 44px target; every other
+  // bar keeps the compact 36px bell.
+  it.each(['AGENCY', 'RESTAURANT'] as const)(
+    'keeps the %s bell compact unless a touch target is asked for',
+    (vertical) => {
+      mocks.vertical = vertical;
+      mocks.teamQuery.mockReturnValue({ data: [] });
+      mocks.restaurantQuery.mockReturnValue({ data: { items: [] } });
+      const view = render(<NotificationBell />);
+      expect(screen.getByRole('button', { name: 'Notifications' })).toHaveClass('h-9', 'w-9');
+      expect(screen.getByRole('button', { name: 'Notifications' })).not.toHaveClass('size-11');
+      view.unmount();
+      render(<NotificationBell touchTarget />);
+      expect(screen.getByRole('button', { name: 'Notifications' })).toHaveClass('size-11');
+      expect(screen.getByRole('button', { name: 'Notifications' })).not.toHaveClass('h-9');
+    }
+  );
+
   it('uses only Agency team notification procedures for an Agency tenant', () => {
     mocks.vertical = 'AGENCY';
     const markRead = vi.fn();
