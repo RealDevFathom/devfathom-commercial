@@ -97,7 +97,7 @@ describe('RestaurantBranchSelect', () => {
     const trigger = screen.getByRole('combobox', { name: 'Branch' });
     trigger.focus();
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    const empty = await screen.findByRole('option', { name: 'No branch', exact: true });
+    const empty = await screen.findByRole('option', { name: 'No branch' });
     empty.focus();
     fireEvent.keyDown(empty, { key: 'Enter' });
     // jsdom does not generate the Enter activation click.

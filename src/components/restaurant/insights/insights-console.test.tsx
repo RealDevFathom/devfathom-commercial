@@ -216,10 +216,9 @@ function renderConsole(enabled = true) {
 }
 
 function setBranch(value = 'branch_1') {
-  fireEvent.change(
-    selectFieldControl(screen.getByRole('combobox', { name: 'Branch', exact: true })),
-    { target: { value } }
-  );
+  fireEvent.change(selectFieldControl(screen.getByRole('combobox', { name: 'Branch' })), {
+    target: { value },
+  });
 }
 
 describe('InsightsConsole', () => {

@@ -259,7 +259,7 @@ describe('Restaurant staff credential UI', () => {
     fireEvent.click(within(row).getByRole('button', { name: 'Edit' }));
     const dialog = screen.getByRole('dialog', { name: 'Edit staff member' });
     expect(
-      selectFieldControl(within(dialog).getByRole('combobox', { name: 'Branch', exact: true }))
+      selectFieldControl(within(dialog).getByRole('combobox', { name: 'Branch' }))
     ).toHaveValue('branch_1');
   });
 
@@ -356,7 +356,7 @@ describe('Restaurant staff credential UI', () => {
           target: { value: 'New colleague' },
         });
         fireEvent.change(
-          selectFieldControl(within(dialog).getByRole('combobox', { name: 'Branch', exact: true })),
+          selectFieldControl(within(dialog).getByRole('combobox', { name: 'Branch' })),
           {
             target: { value: 'branch_1' },
           }

@@ -422,7 +422,7 @@ describe('DEV-959B: ticking for one person', () => {
     act(() => role.focus());
     fireEvent.keyDown(role, { key: 'ArrowDown' });
     const listbox = await screen.findByRole('listbox');
-    const option = within(listbox).getByRole('option', { name: 'Pharmacist', exact: true });
+    const option = within(listbox).getByRole('option', { name: 'Pharmacist' });
     await waitFor(() => expect(listbox).toContainElement(document.activeElement as HTMLElement));
     fireEvent.keyDown(document.activeElement!, { key: 'Home' });
     const position = within(listbox).getAllByRole('option').indexOf(option);

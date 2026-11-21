@@ -105,7 +105,7 @@ async function chooseLastWithKeyboard(trigger: HTMLElement, name: string) {
   act(() => trigger.focus());
   fireEvent.keyDown(trigger, { key: 'ArrowDown' });
   const listbox = await screen.findByRole('listbox');
-  const option = within(listbox).getByRole('option', { name, exact: true });
+  const option = within(listbox).getByRole('option', { name });
   await waitFor(() => expect(listbox).toContainElement(document.activeElement as HTMLElement));
   fireEvent.keyDown(document.activeElement!, { key: 'End' });
   await waitFor(() => expect(option).toHaveFocus());
