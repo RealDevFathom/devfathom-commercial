@@ -4429,6 +4429,9 @@ async function runCommand(
         where: { id: input.id },
         data: {
           status: 'QUEUED',
+          // Record who retried it. A job queued before DEV-155 names no
+          // requesting administrator, and a purge refuses to run without one.
+          requestedById: actor.id,
           attempts: 0,
           error: null,
           result: Prisma.DbNull,
