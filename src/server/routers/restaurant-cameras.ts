@@ -166,6 +166,7 @@ export const restaurantCamerasRouter = router({
         now: new Date(),
         approval: {
           action: 'restaurantCameras.revokeGateway',
+          approverRight: 'coauth:approve',
           requestedByStaffProfileId: input.actingStaffProfileId,
         },
       });
