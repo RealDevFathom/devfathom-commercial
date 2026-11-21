@@ -371,8 +371,13 @@ async function stageFirstResult(page: Page, medicineName: string) {
     .filter({ hasText: medicineName })
     .first();
   await expect(row).toBeVisible({ timeout: 15_000 });
-  await pressControl(row);
+  // DEV-977B (Counter v2): a press on a result adds it in one step; the line form (quantity,
+  // unit or batch before adding) opens from the result's own "Quantity or batch first" button.
+  const options = row.locator('xpath=following-sibling::button[1]');
+  await expect(options).toHaveAccessibleName(/^Quantity or batch first: /);
+  await pressControl(options);
   await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByRole('region', { name: 'Next line' })).toBeVisible();
 }
 
 async function setQuantity(page: Page, quantity: number) {

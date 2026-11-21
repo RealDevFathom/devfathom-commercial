@@ -149,6 +149,17 @@ export function CashShiftReportView({
           empty="No refunds in this shift."
         />
       </div>
+      {/* DEV-977B: lines changed to fewer units or removed on open bills; no cash moved. */}
+      {report.lineVoids ? (
+        <dl className="text-sm" aria-label={`Shift ${report.sequence} lines taken off bills`}>
+          <div className="flex justify-between gap-3 border-t border-border-subtle py-1.5">
+            <dt className="text-text-body">Lines taken off bills ({report.lineVoids.count})</dt>
+            <dd className="font-mono tabular-nums text-text-strong">
+              {currency} {formatMinor(report.lineVoids.valueMinor)}
+            </dd>
+          </div>
+        </dl>
+      ) : null}
       <dl className="text-sm" aria-label={`Shift ${report.sequence} cash`}>
         {cashLines.map(([term, value, strong]) => (
           <div

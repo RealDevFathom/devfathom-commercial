@@ -128,7 +128,11 @@ import {
   shiftVarianceApprovers,
 } from '@/lib/pharmacy/cash-shifts';
 import { workspaceTimezone } from '@/lib/timezone';
-import { pharmacyBusinessDay, withClientPharmacyDayEnd } from '@/lib/pharmacy/business-day';
+import {
+  pharmacyBusinessDate,
+  pharmacyBusinessDay,
+  withClientPharmacyDayEnd,
+} from '@/lib/pharmacy/business-day';
 import { readPharmacyDayClock } from '@/lib/pharmacy/business-day-clock';
 import {
   PharmacyDayEndHourError,
@@ -214,6 +218,8 @@ import {
 } from '@/lib/pharmacy/duplicate-salt-acknowledgement';
 import {
   addSaleLine,
+  changeSaleLine,
+  removeSaleLine,
   replaySaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
@@ -248,6 +254,7 @@ import {
   readOpenPharmacyDrawer,
   requireTodaysPharmacyDrawer,
   requirePharmacyTodayOpenForTrading,
+  requireCashShiftForLineChange,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   discardPharmacyTenderAttempt,
@@ -710,6 +717,19 @@ async function khataScope(ctx: TRPCContext, branch: string, access: 'read' | 'wr
  * lock. The sale row is a document lock, which stock-lock-order.ts puts ahead of
  * the register; `addSaleLine` would otherwise first touch it after the register.
  */
+/**
+ * DEV-977B: a line is changed or removed only by someone who may sell its medicine, the same
+ * #518 grant `addLine` checks for an Rx/restricted line (DENY wins). A controlled line is
+ * refused by the domain whatever the grant.
+ */
+async function assertLineMedicineSellable(db: ScopedDb, scope: LedgerScope, saleLineId: string) {
+  const line = await db.pharmacySaleLine.findFirst({
+    where: { id: saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { medicine: true },
+  });
+  if (line && !line.medicine.controlled) await assertRxSaleAllowed(db, scope, [line.medicine]);
+}
+
 async function lockSaleForControlledLine(db: ScopedDb, scope: LedgerScope, saleId: string) {
   await db.$queryRaw`SELECT id FROM pharmacy_sales WHERE id=${saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR NO KEY UPDATE`;
 }
@@ -853,6 +873,25 @@ async function cashShiftScope(
       actorIsManager: false,
     };
   }
+}
+
+/**
+ * DEV-977B: the cash-shift gate of a line change, on the branch's current business day: the same
+ * rule a payment meets (settlement.ts), plus a bill whose shift has closed.
+ */
+async function lineChangeCashShift(
+  db: ScopedDb,
+  scope: LedgerScope,
+  deviceId: string | undefined,
+  bill: { createdAt: Date; createdByUserId: string }
+) {
+  const businessDate = pharmacyBusinessDate(await readPharmacyDayClock(db, scope));
+  return requireCashShiftForLineChange(
+    db,
+    scope,
+    { deviceId: deviceId ?? null, businessDate },
+    bill
+  );
 }
 
 /** DEV-958B: shift refusals that are a state the counter must refresh, not a bad request. */
@@ -3679,6 +3718,94 @@ export const pharmacySalesRouter = router({
           error.kind === 'SCANNED_PACK_FEFO'
         )
           labelScannedPackFefo(ctx, input, 'pin_refused');
+        fail(error);
+      }
+    }),
+  // DEV-977B (Counter v2): the quantity and sale unit of a bill line are changed on the line
+  // itself. The same builder and branch gate as `addLine`; the Rx/restricted grant and the
+  // trading-day gate are checked as an add checks them, and the domain refuses a line with
+  // dispensing records, an approval tied to its quantity, a held/closed or paid bill, and
+  // another cashier's bill unless the actor is a manager or owner (as a void does).
+  changeLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().trim().min(1).max(128),
+          packLevelId: z.string().min(1),
+          saleUnit,
+          quantity: z.number().int().positive(),
+          canonicalUnitsPerSaleUnit: z.number().int().positive(),
+          idempotencyKey: z.string().trim().min(1).max(160),
+          // DEV-958B: the counter device whose drawer's shift must be open on a shift branch.
+          deviceId: z.string().min(1).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId, saleLineId: input.saleLineId },
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const outcome = await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await requirePharmacyTodayOpenForTrading(db, scope);
+          await assertLineMedicineSellable(db, scope, input.saleLineId);
+          return changeSaleLine(db, scope, {
+            ...input,
+            actorIsManager: await actorMayRefund(db, ctx.session!.user),
+            cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
+          });
+        });
+        if (outcome.replacedSaleLineId)
+          annotateAudit(ctx, {
+            metadata: {
+              replacedSaleLineId: outcome.replacedSaleLineId,
+              saleLineId: outcome.line.id,
+            },
+          });
+        return outcome;
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // DEV-977B (Counter v2): takes one line off an open, unpaid bill, with the gates of `changeLine`.
+  removeLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().trim().min(1).max(128),
+          idempotencyKey: z.string().trim().min(1).max(160),
+          // DEV-958B: the counter device whose drawer's shift must be open on a shift branch.
+          deviceId: z.string().min(1).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        targetType: 'PharmacySale',
+        targetId: input.saleId,
+        metadata: { branchId: input.branchId, saleLineId: input.saleLineId },
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await requirePharmacyTodayOpenForTrading(db, scope);
+          await assertLineMedicineSellable(db, scope, input.saleLineId);
+          return removeSaleLine(db, scope, {
+            ...input,
+            actorIsManager: await actorMayRefund(db, ctx.session!.user),
+            cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
+          });
+        });
+      } catch (error) {
         fail(error);
       }
     }),

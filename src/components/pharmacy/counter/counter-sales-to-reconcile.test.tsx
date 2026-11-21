@@ -71,6 +71,14 @@ describe('DEV-957 phase 2: Sales to reconcile', () => {
     expect(screen.queryByRole('button', { name: /take cash|send|edit|delete/i })).toBeNull();
   });
 
+  it('DEV-977B: offers no quantity, unit or remove control on a kept sale line', () => {
+    render(<CounterSalesToReconcileList view={view([sale()])} branchId="branch" online />);
+    expect(screen.queryByRole('button', { name: /^[+−-] |Remove|^Quantity/ })).toBeNull();
+    expect(screen.queryByRole('radiogroup')).toBeNull();
+    expect(screen.queryByLabelText(/^Quantity: /)).toBeNull();
+    expect(screen.getByText('1 × Brufen 400 (strip)')).toBeVisible();
+  });
+
   it('removes a sale from this computer only after a manager recorded it on the server', async () => {
     const settle = vi.fn(async () => undefined);
     h.record.mockResolvedValue({ recorded: true, serverStatus: null });

@@ -38,7 +38,12 @@ import {
   type TenderDraft,
 } from './tender-attempt-storage';
 
-import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } from './counter-cart';
+import {
+  CounterCartPanel,
+  CounterLotOverride,
+  type CounterLineChange,
+  type CounterLotOverrideValue,
+} from './counter-cart';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterActionBar, CounterFrame, CounterFrameContent } from './counter-frame';
@@ -112,7 +117,7 @@ import {
   DialogDescription,
   DialogClose,
 } from '@/components/ui/dialog';
-import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import type { CounterCart, CounterCartLine, CounterSearchRow } from '@/lib/pharmacy/counter';
 import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
   counterMedicineDisplayName,
@@ -166,6 +171,7 @@ import {
   preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
+  type SaleUnitOption,
 } from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
@@ -385,6 +391,11 @@ function tenderRejected(error: unknown): boolean {
 
 /** DEV-575: typed search fires this long after the last keystroke. */
 export const COUNTER_SEARCH_DEBOUNCE_MS = 150;
+/** DEV-977B: changing or removing a bill line is a server action, never done offline. */
+const LINE_CHANGE_NEEDS_CONNECTION =
+  'Changing or removing a line needs the connection. Reconnect, then change it on the bill.';
+/** DEV-977B (Counter v2, B6): a search running this long shows its slow state. */
+export const COUNTER_SLOW_SEARCH_MS = 1500;
 
 /**
  * A barcode (six or more digits) or a GS1 payload: input a scanner sends as one
@@ -802,6 +813,16 @@ function ScopedPharmacyCounterConsole({
   // DEV-977: choosing a result (click or Enter) closes the results over the bill so the line
   // being added is in view; typing or arrowing through results opens them again.
   const [resultsDismissed, setResultsDismissed] = useState(false);
+  // DEV-977B (Counter v2, A6): the result the arrows are on. Moving through results no longer
+  // stages a line; Enter adds the highlighted one in one step.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  // DEV-977B: "Adds as" (F3 pack, F4 strip, F5 unit), chosen before or while searching. Null
+  // adds each medicine in its usual unit.
+  const [addUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
+  // DEV-977B: the sale units of medicines added from search, so their bill line can switch unit.
+  const knownSaleUnits = useRef(new Map<string, readonly SaleUnitOption[]>());
+  // DEV-977B: retry keys for a line change or removal whose answer was lost.
+  const lineChangeKeys = useRef(new Map<string, string>());
   const actionsButtonRef = useRef<HTMLButtonElement>(null);
   const actionsPanelRef = useRef<HTMLDivElement>(null);
   const [checksOpen, setChecksOpen] = useState(false);
@@ -1046,6 +1067,14 @@ function ScopedPharmacyCounterConsole({
         : searchQuery.isError
           ? 'error'
           : 'ready';
+  // DEV-977B (Counter v2): a search still running after a moment says so.
+  const [slowQuery, setSlowQuery] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchState !== 'loading') return;
+    const timer = window.setTimeout(() => setSlowQuery(trimmedQuery), COUNTER_SLOW_SEARCH_MS);
+    return () => window.clearTimeout(timer);
+  }, [searchState, trimmedQuery]);
+  const slowSearch = searchState === 'loading' && slowQuery === trimmedQuery;
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1066,6 +1095,11 @@ function ScopedPharmacyCounterConsole({
     () => counterDeviceId({ organizationId, branchId }),
     [organizationId, branchId]
   );
+  /** DEV-977B: the counter device a line change names, so the server checks its drawer's shift. */
+  const counterDevice = useCallback(() => {
+    const id = currentCounterDeviceId();
+    return id ? { deviceId: id } : {};
+  }, [currentCounterDeviceId]);
   const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId && !settlementDenied);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
@@ -1186,6 +1220,8 @@ function ScopedPharmacyCounterConsole({
 
   const createSale = trpc.pharmacySales.create.useMutation();
   const addLine = trpc.pharmacySales.addLine.useMutation();
+  const changeLine = trpc.pharmacySales.changeLine.useMutation();
+  const removeLine = trpc.pharmacySales.removeLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   // DEV-641: only a request React Query is holding for the connection is queued.
@@ -1898,6 +1934,7 @@ function ScopedPharmacyCounterConsole({
     }
     focusQuantityOnStage.current = focusQuantity;
     quantityReviewed.current = false;
+    setHighlightId(null);
     if (focusQuantity) setResultsDismissed(true);
     setActiveRow(row);
     setQuantityText('1');
@@ -1917,7 +1954,9 @@ function ScopedPharmacyCounterConsole({
     focusQuantityOnStage.current = false;
   }, [activeRow]);
 
-  const searchAndStage = useCallback(
+  // DEV-705, DEV-977B: Enter that beats the search debounce runs the search now and highlights
+  // its first result; nothing is added until the cashier presses Enter on what they see.
+  const searchAndHighlight = useCallback(
     async (text: string) => {
       const search = await runSearch(text);
       if (!search || search.blocked) return;
@@ -1928,13 +1967,16 @@ function ScopedPharmacyCounterConsole({
         );
         // A changed query, branch or scanner invalidates the in-flight selection.
         if (search.revision !== scannerRevision.current) return;
-        if (result.rows[0]) stageRow(result.rows[0]);
+        if (result.rows[0]) {
+          setResultsDismissed(false);
+          setHighlightId(result.rows[0].medicineId);
+        }
       } catch (error) {
         if (search.revision === scannerRevision.current)
           setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       }
     },
-    [branchId, runSearch, stageRow, utils]
+    [branchId, runSearch, utils]
   );
 
   const openSale = useCallback(async () => {
@@ -1961,7 +2003,9 @@ function ScopedPharmacyCounterConsole({
     async (
       scannedRow?: CounterSearchRow,
       scanRevision?: number,
-      scannedPack?: { payload: string; serial: string } | null
+      scannedPack?: { payload: string; serial: string } | null,
+      /** DEV-977B: a result added in one step, in the unit chosen under "Adds as". */
+      unitOption?: SaleUnitOption
     ) => {
       const scanIsCurrent = () =>
         scanRevision === undefined || scanRevision === scannerRevision.current;
@@ -1970,9 +2014,11 @@ function ScopedPharmacyCounterConsole({
       // One serialized pack is one sealed pack, whatever unit the counter last staged.
       const option = scannedPack
         ? (scannedRow?.saleUnits.find((unit) => unit.kind === 'PACK') ?? null)
-        : scannedRow
-          ? (scannedRow.saleUnits[0] ?? null)
-          : selectedOption;
+        : unitOption && scannedRow
+          ? unitOption
+          : scannedRow
+            ? (scannedRow.saleUnits[0] ?? null)
+            : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
         setNotice({
@@ -2279,12 +2325,16 @@ function ScopedPharmacyCounterConsole({
         for (const selection of attemptKeys) lineAttempts.current.delete(selection);
         completedAdds.current += 1;
         lastAddOutcome.current = 'added';
+        for (const unit of row.saleUnits)
+          knownSaleUnits.current.set(unit.packLevelId, row.saleUnits);
         catalogueCache.sold(row.medicineId, units * option.canonicalUnitsPerSaleUnit);
         await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
         await utils.pharmacySales.counterSearch.invalidate();
         setLotOverride(null);
+        // DEV-977B: a one-step add (a scan or a result) leaves no line form behind.
+        if (scannedRow) setActiveRow(null);
         // DEV-66: a promotion the owner's maximum skipped is said, never silent.
         const discountNotice =
           'promotionNotice' in added && added.promotionNotice
@@ -2297,7 +2347,7 @@ function ScopedPharmacyCounterConsole({
             : null;
         setNotice({
           tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName}${unitOption ? ` (${unitOption.levelLabel.toLowerCase()})` : ''} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -2420,16 +2470,20 @@ function ScopedPharmacyCounterConsole({
         }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
-        stageRow(row, false);
-        setSaleUnit(row.saleUnits[0]?.kind ?? null);
-        // Barcode entry keeps its one-item default; manual selection starts empty.
-        setQuantityText('1');
+        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
+        // DEV-977B (Counter v2): a scan adds in one step. Only an exception (a non-FEFO shelf
+        // sticker, or not enough stock) opens the line form, so the cashier can act on it.
+        if (label.kind === 'OVERRIDE' || (!serialized && !scanPreview?.sufficient)) {
+          stageRow(row, false);
+          setSaleUnit(row.saleUnits[0]?.kind ?? null);
+          // Barcode entry keeps its one-item default; manual selection starts empty.
+          setQuantityText('1');
+        }
         if (label.kind === 'OVERRIDE') {
           // A non-FEFO sticker waits for the existing reason and pharmacist approval.
           setNotice({ tone: 'warning', message: label.message });
           return;
         }
-        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
         if (serialized) {
           // The server pins the scanned pack's own lot and refuses a pack already sold.
           await addToCart(row, revision, serialized);
@@ -2449,6 +2503,218 @@ function ScopedPharmacyCounterConsole({
       }
     },
     [addToCart, branchId, busy, catalogueCache, query, runSearch, setupNotice, stageRow, utils]
+  );
+
+  /** DEV-977B: the unit a result is added in: "Adds as" when it sells that way, else its usual. */
+  const addUnitFor = useCallback(
+    (row: CounterSearchRow): SaleUnitOption | null => {
+      const preferred =
+        addUnit === 'UNIT'
+          ? looseSaleUnitOption(row.saleUnits)
+          : addUnit
+            ? (row.saleUnits.find((option) => option.kind === addUnit) ?? null)
+            : null;
+      return preferred ?? preferredSaleUnitOption(row.saleUnits, row.dosageForm) ?? null;
+    },
+    [addUnit]
+  );
+
+  /**
+   * DEV-977B (Counter v2, A6): Enter on the highlighted result, or a press on it, adds one of it
+   * to the bill in one step. Quantity and unit are then changed on the bill line. A result that
+   * needs the line form (a blocked or non-FEFO shelf label, no sellable unit, not enough stock)
+   * opens it instead, with the reason.
+   */
+  const addRowNow = useCallback(
+    (row: CounterSearchRow) => {
+      if (busy) return;
+      const label = counterLabelScanDecision(row);
+      const option = addUnitFor(row);
+      const rowPreview = option ? counterSelectionPreview(row, option, 1) : null;
+      setHighlightId(null);
+      if (
+        label.kind === 'BLOCKED' ||
+        label.kind === 'OVERRIDE' ||
+        !option ||
+        !rowPreview?.sufficient
+      ) {
+        stageRow(row);
+        if (option) setSaleUnit(option.kind);
+        if (label.kind === 'OVERRIDE') setNotice({ tone: 'warning', message: label.message });
+        return;
+      }
+      setResultsDismissed(true);
+      void addToCart(row, undefined, null, option);
+    },
+    [addToCart, addUnitFor, busy, stageRow]
+  );
+
+  /** DEV-977B: the line form, for a result the cashier wants to add with more than one step. */
+  const stageWithOptions = useCallback(
+    (row: CounterSearchRow) => {
+      setHighlightId(null);
+      stageRow(row);
+      const option = addUnitFor(row);
+      if (option) setSaleUnit(option.kind);
+    },
+    [addUnitFor, stageRow]
+  );
+
+  const lineUnitOptions = useCallback(
+    (line: CounterCartLine): readonly SaleUnitOption[] => {
+      if (!line.packLevelId) return [];
+      // Only the units of the line's own presentation (the one its pack level belongs to).
+      return (
+        knownSaleUnits.current.get(line.packLevelId) ??
+        searchQuery.data?.rows.find(
+          (row) =>
+            row.medicineId === line.medicineId &&
+            row.saleUnits.some((unit) => unit.packLevelId === line.packLevelId)
+        )?.saleUnits ??
+        []
+      );
+    },
+    [searchQuery.data]
+  );
+
+  const lineChangeMessage = useCallback((error: unknown) => {
+    // A line change stays with the bill's cashier, as a void does.
+    if (error instanceof Error && error.message === 'NOT_BILL_OWNER')
+      return 'Another cashier opened this bill. Only that cashier or a manager or owner can change its lines.';
+    return counterSaleErrorMessage(error);
+  }, []);
+
+  /** DEV-977B: changes the quantity or unit of a bill line, on the server, with its rules. */
+  const changeBillLine = useCallback(
+    async (line: CounterCartLine, next: CounterLineChange) => {
+      if (!saleId || busy) return;
+      if (!navigator.onLine) {
+        setNotice({ tone: 'warning', message: LINE_CHANGE_NEEDS_CONNECTION });
+        return;
+      }
+      const selection = JSON.stringify([
+        saleId,
+        line.saleLineId,
+        next.kind,
+        next.packLevelId,
+        next.canonicalUnitsPerSaleUnit,
+        next.quantity,
+      ]);
+      let idempotencyKey = lineChangeKeys.current.get(selection);
+      if (!idempotencyKey) {
+        idempotencyKey = `counter-change:${browserUuid()}`;
+        lineChangeKeys.current.set(selection, idempotencyKey);
+      }
+      setPending('changeLine');
+      setNotice(null);
+      try {
+        const changed = await changeLine.mutateAsync({
+          branchId,
+          saleId,
+          saleLineId: line.saleLineId,
+          packLevelId: next.packLevelId,
+          saleUnit: next.kind,
+          quantity: next.quantity,
+          canonicalUnitsPerSaleUnit: next.canonicalUnitsPerSaleUnit,
+          idempotencyKey,
+          ...counterDevice(),
+        });
+        lineChangeKeys.current.delete(selection);
+        catalogueCache.clear();
+        await refreshCart();
+        await utils.pharmacySales.counterSearch.invalidate();
+        const discountNotice =
+          'promotionNotice' in changed && changed.promotionNotice
+            ? COUNTER_DISCOUNT_NOTICES[changed.promotionNotice]
+            : null;
+        const billDiscountNotice =
+          'billDiscountClearedMinor' in changed && changed.billDiscountClearedMinor
+            ? `The whole-bill discount of Rs ${formatMinor(changed.billDiscountClearedMinor)} was removed because the bill changed. Give it again to include this change.`
+            : null;
+        setNotice({
+          tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
+          message: `${line.medicineName}: ${next.quantity} × ${
+            next.kind === 'UNIT' ? counterUnitNoun(line.dosageForm) : next.kind.toLowerCase()
+          }.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
+        });
+      } catch (error) {
+        catalogueCache.clear();
+        void refreshCart();
+        setNotice({ tone: counterErrorTone(error), message: lineChangeMessage(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [
+      branchId,
+      busy,
+      catalogueCache,
+      changeLine,
+      counterDevice,
+      lineChangeMessage,
+      refreshCart,
+      saleId,
+      utils,
+    ]
+  );
+
+  /** DEV-977B: takes a line off the bill, on the server, which gives its stock back. */
+  const removeBillLine = useCallback(
+    async (line: CounterCartLine) => {
+      if (!saleId || busy) return;
+      if (!navigator.onLine) {
+        setNotice({ tone: 'warning', message: LINE_CHANGE_NEEDS_CONNECTION });
+        return;
+      }
+      const selection = JSON.stringify([saleId, line.saleLineId, 'remove']);
+      let idempotencyKey = lineChangeKeys.current.get(selection);
+      if (!idempotencyKey) {
+        idempotencyKey = `counter-remove:${browserUuid()}`;
+        lineChangeKeys.current.set(selection, idempotencyKey);
+      }
+      setPending('removeLine');
+      setNotice(null);
+      try {
+        const removed = await removeLine.mutateAsync({
+          branchId,
+          saleId,
+          saleLineId: line.saleLineId,
+          idempotencyKey,
+          ...counterDevice(),
+        });
+        lineChangeKeys.current.delete(selection);
+        catalogueCache.clear();
+        await refreshCart();
+        await utils.pharmacySales.counterSearch.invalidate();
+        const billDiscountNotice =
+          'billDiscountClearedMinor' in removed && removed.billDiscountClearedMinor
+            ? ` The whole-bill discount of Rs ${formatMinor(removed.billDiscountClearedMinor)} was removed because the bill changed. Give it again if it still applies.`
+            : '';
+        setNotice({
+          tone: billDiscountNotice ? 'warning' : 'success',
+          message: `${line.medicineName} removed from the bill.${billDiscountNotice}`,
+        });
+        focusSearch();
+      } catch (error) {
+        catalogueCache.clear();
+        void refreshCart();
+        setNotice({ tone: counterErrorTone(error), message: lineChangeMessage(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [
+      branchId,
+      busy,
+      catalogueCache,
+      counterDevice,
+      focusSearch,
+      lineChangeMessage,
+      refreshCart,
+      removeLine,
+      saleId,
+      utils,
+    ]
   );
 
   const queueScan = useCallback(
@@ -3426,7 +3692,13 @@ function ScopedPharmacyCounterConsole({
         case 'selectLooseUnit': {
           const kind: SaleUnitKind =
             action === 'selectPackUnit' ? 'PACK' : action === 'selectStripUnit' ? 'STRIP' : 'UNIT';
-          const options = activeRow?.saleUnits ?? [];
+          // DEV-977B (Counter v2): with no line form open the key sets "Adds as", the unit the
+          // next result is added in.
+          if (!activeRow) {
+            setAddUnit(kind);
+            return;
+          }
+          const options = activeRow.saleUnits;
           const option =
             kind === 'UNIT'
               ? looseSaleUnitOption(options)
@@ -3754,7 +4026,6 @@ function ScopedPharmacyCounterConsole({
   ]
     .filter(Boolean)
     .join(' · ');
-  const composing = Boolean(activeRow && !drawerRequired && !dayClosed);
   const searchRows =
     searchCurrent && !searchQuery.isPlaceholderData ? (searchQuery.data?.rows ?? []) : [];
   const actionBar = (
@@ -3794,11 +4065,18 @@ function ScopedPharmacyCounterConsole({
             tone={cart?.receiptNumber ? 'success' : 'neutral'}
             className="font-mono text-xs uppercase"
             label={
-              cart?.receiptNumber
-                ? `Receipt ${cart.receiptNumber}`
-                : saleId
-                  ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
-                  : 'No open bill'
+              cart?.receiptNumber ? (
+                `Receipt ${cart.receiptNumber}`
+              ) : saleId ? (
+                // DEV-977B: on a phone the pill reads "4 lines", so it is never cut off; the
+                // whole label is still announced.
+                <>
+                  <span className="max-sm:sr-only">Bill open · </span>
+                  {`${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`}
+                </>
+              ) : (
+                'No open bill'
+              )
             }
           />
           {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
@@ -4270,10 +4548,49 @@ function ScopedPharmacyCounterConsole({
                             current.text ? { text: '', query: '', branchId: '' } : current
                           );
                           setActiveRow(null);
+                          setHighlightId(null);
                           setSaleUnit(null);
                           setQuantityText('1');
                         }}
                         onKeyDown={(event) => {
+                          const readyRows =
+                            !busy &&
+                            searchCurrent &&
+                            !searchQuery.isFetching &&
+                            !searchQuery.isError &&
+                            !searchQuery.isPlaceholderData
+                              ? (searchQuery.data?.rows ?? [])
+                              : [];
+                          const resultsShown = searchState !== 'idle' && !resultsDismissed;
+                          // DEV-977B (Counter v2): Escape closes the results over the bill.
+                          if (
+                            event.key === 'Escape' &&
+                            resultsShown &&
+                            !event.nativeEvent.isComposing
+                          ) {
+                            event.preventDefault();
+                            setResultsDismissed(true);
+                            setHighlightId(null);
+                            return;
+                          }
+                          // DEV-977B: Shift+Enter opens the line form for the highlighted result
+                          // (quantity before adding, another batch).
+                          if (
+                            event.key === 'Enter' &&
+                            event.shiftKey &&
+                            !event.ctrlKey &&
+                            !event.altKey &&
+                            !event.metaKey &&
+                            !event.nativeEvent.isComposing
+                          ) {
+                            const target =
+                              readyRows.find((row) => row.medicineId === highlightId) ??
+                              readyRows[0];
+                            if (!target) return;
+                            event.preventDefault();
+                            stageWithOptions(target);
+                            return;
+                          }
                           if (
                             event.nativeEvent.isComposing ||
                             event.shiftKey ||
@@ -4295,7 +4612,7 @@ function ScopedPharmacyCounterConsole({
                               return;
                             event.preventDefault();
                             const index = rows.findIndex(
-                              (row) => row.medicineId === activeRow?.medicineId
+                              (row) => row.medicineId === (highlightId ?? activeRow?.medicineId)
                             );
                             const next =
                               event.key === 'ArrowDown'
@@ -4303,9 +4620,10 @@ function ScopedPharmacyCounterConsole({
                                 : index < 0
                                   ? rows.length - 1
                                   : (index - 1 + rows.length) % rows.length;
-                            // Arrowing through results keeps focus in search (DEV-633).
+                            // Arrowing through results keeps focus in search (DEV-633). DEV-977B:
+                            // it highlights a result; nothing is staged until it is added.
                             setResultsDismissed(false);
-                            stageRow(rows[next]!, false);
+                            setHighlightId(rows[next]!.medicineId);
                             return;
                           }
                           if (event.key !== 'Enter') return;
@@ -4324,6 +4642,17 @@ function ScopedPharmacyCounterConsole({
                             void addBarcode(trimmed);
                             return;
                           }
+                          // DEV-977B (Counter v2, A6): Enter adds the highlighted result (the
+                          // first one until the arrows move) in one step.
+                          const highlighted = highlightId
+                            ? readyRows.find((row) => row.medicineId === highlightId)
+                            : undefined;
+                          if (highlighted) {
+                            addRowNow(highlighted);
+                            return;
+                          }
+                          // The line form, opened on purpose (Shift+Enter) or for an exception,
+                          // keeps its two steps: the quantity is reviewed, then added (DEV-633).
                           if (activeRow) {
                             if (quantity === null || !quantityReviewed.current) {
                               quantityReviewed.current = true;
@@ -4331,15 +4660,9 @@ function ScopedPharmacyCounterConsole({
                             } else void addToCart();
                             return;
                           }
-                          const first =
-                            searchCurrent &&
-                            !searchQuery.isPlaceholderData &&
-                            !searchQuery.isFetching &&
-                            !searchQuery.isError
-                              ? searchQuery.data?.rows[0]
-                              : undefined;
-                          if (first) stageRow(first);
-                          else void searchAndStage(trimmed);
+                          const first = resultsShown ? readyRows[0] : undefined;
+                          if (first) addRowNow(first);
+                          else void searchAndHighlight(trimmed);
                         }}
                         // DEV-44: the field is focused on load, and the coral focus ring read as
                         // an error before anything was typed. It stays neutral until a search
@@ -4398,6 +4721,40 @@ function ScopedPharmacyCounterConsole({
                       <span className="hidden md:inline">{loyaltyLabel}</span>
                       <span className="md:hidden">Loyalty</span>
                     </Button>
+                    {/* DEV-977B (Counter v2, A1 and A6): the unit the next result is added in. */}
+                    <div
+                      role="radiogroup"
+                      aria-label="Adds as"
+                      className="hidden shrink-0 items-center gap-2 text-xs text-text-muted lg:ms-auto lg:flex"
+                    >
+                      <span aria-hidden="true">Adds as</span>
+                      <span className="inline-flex overflow-hidden rounded-[var(--radius-sm)] border border-border-default bg-surface-card">
+                        {(['PACK', 'STRIP', 'UNIT'] as const).map((kind) => {
+                          const checked = addUnit === kind;
+                          return (
+                            <button
+                              key={kind}
+                              type="button"
+                              role="radio"
+                              aria-checked={checked}
+                              aria-keyshortcuts={chordFor(kind)}
+                              title={chordFor(kind)}
+                              onClick={() => setAddUnit(checked ? null : kind)}
+                              className={`min-h-11 px-3 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 ${
+                                checked
+                                  ? 'bg-text-strong text-surface-card'
+                                  : 'text-text-body hover:bg-surface-sunken'
+                              }`}
+                            >
+                              {kind === 'PACK' ? 'Pack' : kind === 'STRIP' ? 'Strip' : 'Unit'}
+                              <span className="ms-1.5 hidden font-mono text-xs font-normal opacity-70 xl:inline">
+                                {chordFor(kind)}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </span>
+                    </div>
                   </div>
                 </div>
               )}
@@ -4420,7 +4777,7 @@ function ScopedPharmacyCounterConsole({
                     {searchRows.length} {searchRows.length === 1 ? 'result' : 'results'}
                     {searchQuery.data?.truncated ? ' (more match: keep typing)' : ''}
                   </span>
-                  <span aria-hidden="true">↑ ↓ choose · Enter selects</span>
+                  <span aria-hidden="true">↑ ↓ move · Enter adds · Esc closes</span>
                 </div>
               ) : null}
               <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
@@ -4434,9 +4791,15 @@ function ScopedPharmacyCounterConsole({
                   query={trimmedQuery}
                   disabled={busy || !branchAuthorized}
                   disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
-                  activeMedicineId={activeRow?.medicineId ?? null}
+                  activeMedicineId={
+                    highlightId ??
+                    activeRow?.medicineId ??
+                    (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
+                  }
                   error={searchQuery.error ? messageFrom(searchQuery.error) : null}
                   onSelect={stageRow}
+                  onAdd={addRowNow}
+                  slow={slowSearch}
                   onCaptureDemand={() => void captureShortfall()}
                   onRetry={() => {
                     if (searchCurrent) void searchQuery.refetch();
@@ -4454,208 +4817,239 @@ function ScopedPharmacyCounterConsole({
                       .map((kind) => `${chordFor(kind)} ${kind.toLowerCase()}`)
                       .join(' · ')}
                   </span>
+                  <span>Shift+Enter quantity or batch first</span>
                 </p>
               ) : null}
             </div>
           </section>
-          {/* DEV-977: the line being added sits under the search on a phone or tablet, and at the
-              top of the payment column from 1024px, so the results keep the full height. */}
-          {activeRow && !drawerRequired && !dayClosed ? (
-            <div className="border-b border-border-subtle px-4 py-3 lg:col-start-2 lg:row-start-2 lg:max-h-[min(34rem,calc(100dvh-18rem))] lg:overflow-y-auto lg:bg-surface-card lg:px-5 lg:pt-5 lg:pb-4">
-              <section
-                aria-label="Next line"
-                className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-card px-3 py-2.5"
-              >
-                <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
-                  <div className="min-w-0 basis-full">
-                    <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
-                      Next line
-                    </h2>
-                    <p className="text-[15px] font-semibold text-text-strong">
-                      {counterMedicineDisplayName(activeRow)}
-                      {activeRow.strength ? ` ${activeRow.strength}` : ''}
-                      {counterMedicineGenericName(activeRow) ? (
-                        <span dir="auto" className="block text-xs font-normal text-text-muted">
-                          {counterMedicineGenericName(activeRow)}
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="text-xs leading-relaxed text-text-muted">
-                      {[
-                        activeRow.presentation,
-                        activeRow.dosageForm,
-                        activeRow.batchNumber
-                          ? `Batch ${activeRow.batchNumber}`
-                          : activeRow.recommendedLotId
-                            ? 'Batch not recorded'
-                            : null,
-                        activeRow.nearestSafeExpiry || activeRow.recommendedLotId
-                          ? formatShortExpiry(activeRow.nearestSafeExpiry)
-                          : null,
-                        locationLabel,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                  <div className="counter-next-controls min-w-0 flex-1 space-y-2">
-                    <CounterUnitToggle
-                      inline
-                      options={activeRow.saleUnits}
-                      dosageForm={activeRow.dosageForm}
-                      priceFor={(option) =>
-                        counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
-                      }
-                      onHandUnits={activeRow.onHandUnits}
-                      selected={saleUnit}
-                      quantity={quantityText}
-                      preview={preview}
-                      disabled={busy}
-                      onSelect={setSaleUnit}
-                      onQuantityChange={changeQuantity}
-                      quantityRef={quantityRef}
-                      onSubmit={() => void addToCart()}
-                      chordFor={chordFor}
-                      emptyMessage={<CounterUnsellableMessage row={activeRow} />}
-                    />
-                    {activeRow.saleUnits.length === 0 ? (
-                      <div className="space-y-1.5">
-                        <Label htmlFor="counter-demand-units">
-                          Requested {plural(counterUnitNoun(activeRow.dosageForm), 2)}
-                        </Label>
-                        <Input
-                          id="counter-demand-units"
-                          type="number"
-                          min={1}
-                          step={1}
-                          className="h-11 w-32"
-                          value={quantityText}
-                          disabled={busy}
-                          onChange={(event) => changeQuantity(event.target.value)}
-                        />
-                      </div>
-                    ) : null}
-                    {shortfallUnits > 0 ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-auto min-h-11 whitespace-normal"
-                        disabled={busy || !branchAuthorized}
-                        aria-describedby={branchControlReason ? 'counter-branch-reason' : undefined}
-                        onClick={() => void captureShortfall()}
-                      >
-                        {pending === 'captureDemand'
-                          ? 'Recording…'
-                          : `Record shortage: ${shortfallUnits} ${plural(counterUnitNoun(activeRow.dosageForm), shortfallUnits)}`}
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  <Button
-                    type="button"
-                    className="min-h-12 w-full rounded-[var(--radius-sm)] md:w-auto lg:w-full"
-                    disabled={busy || !preview?.sufficient}
-                    aria-describedby={
-                      !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
-                    }
-                    onClick={() => void addToCart()}
-                  >
-                    {pending === 'addToCart'
-                      ? 'Adding…'
-                      : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
-                  </Button>
-                  {!busy && !preview?.sufficient ? (
-                    <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
-                      {preview
-                        ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
-                        : counterAddToCartBlockReason(activeRow, selectedOption, quantity)}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-subtle pt-2 text-xs text-text-muted">
-                  <span>
-                    {lotOverride?.inventoryLotId
-                      ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
-                      : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `Earliest-expiry batch${activeRow.batchNumber ? ` ${activeRow.batchNumber}` : ''} is used; more batches are added if needed.`
-                        : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
-                          ? 'No batch of this medicine is in stock here.'
-                          : 'No batch can be sold here right now.'}
-                  </span>
-                  <CounterLotOverride
-                    value={lotOverride}
-                    lots={lotOptionsQuery.data ?? []}
-                    state={
-                      lotOptionsQuery.isError
-                        ? 'error'
-                        : lotOptionsQuery.isSuccess
-                          ? 'ready'
-                          : 'loading'
-                    }
-                    error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
-                    disabled={busy}
-                    onChange={(next) => {
-                      // An explicit batch choice replaces the scanned sticker's lot pin;
-                      // otherwise the server refuses the chosen batch as a mismatch.
-                      // Merely opening the picker (lotOverride still null) keeps the pin.
-                      setActiveRow((current) =>
-                        lotOverride !== null &&
-                        current?.labelLot &&
-                        next?.inventoryLotId !== current.labelLot.inventoryLotId
-                          ? { ...current, labelLot: null }
-                          : current
-                      );
-                      setLotOverride(next);
-                    }}
-                    onRetry={() => void lotOptionsQuery.refetch()}
-                  />
-                </div>
-              </section>
-            </div>
-          ) : null}
-          <section
-            aria-label="Cart"
-            tabIndex={0}
-            className="min-w-0 px-4 pb-4 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto lg:border-e lg:border-border-subtle lg:px-6 lg:pb-6"
+          {/* DEV-977B (Counter v2): the bill column. A result is added in one step and changed on
+              its bill line; the line form below opens only when asked for (Shift+Enter) or for an
+              exception, above the bill, so the totals and Take payment are never covered. */}
+          <div
+            data-counter-bill-column=""
+            className="min-w-0 lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto lg:border-e lg:border-border-subtle"
           >
-            <h2 className="sr-only">Cart</h2>
-            <CounterCartPanel
-              cart={cart}
-              alerts={alerts}
-              state={
-                !saleId
-                  ? 'idle'
-                  : cartQuery.isLoading
-                    ? 'loading'
-                    : cartQuery.isError
-                      ? 'error'
-                      : 'ready'
-              }
-              error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-              onRetry={() => void refreshTenderBill()}
-              emptyHints={
-                <>
-                  <span>
-                    <kbd className={KEYCAP_CLASS}>{formatBinding(keymap.bindings.focusSearch)}</kbd>{' '}
-                    search
-                  </span>
-                  <span>
-                    <kbd className={KEYCAP_CLASS}>Enter</kbd> add
-                  </span>
-                  <span>
-                    <kbd className={KEYCAP_CLASS}>{formatBinding(keymap.bindings.openTender)}</kbd>{' '}
-                    take payment
-                  </span>
-                </>
-              }
-            />
-          </section>
+            {activeRow && !drawerRequired && !dayClosed ? (
+              <div className="border-b border-border-subtle px-4 py-3 lg:px-6">
+                <section
+                  aria-label="Next line"
+                  className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-card px-3 py-2.5"
+                >
+                  <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                    <div className="min-w-0 basis-full">
+                      <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
+                        Next line
+                      </h2>
+                      <p className="text-[15px] font-semibold text-text-strong">
+                        {counterMedicineDisplayName(activeRow)}
+                        {activeRow.strength ? ` ${activeRow.strength}` : ''}
+                        {counterMedicineGenericName(activeRow) ? (
+                          <span dir="auto" className="block text-xs font-normal text-text-muted">
+                            {counterMedicineGenericName(activeRow)}
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="text-xs leading-relaxed text-text-muted">
+                        {[
+                          activeRow.presentation,
+                          activeRow.dosageForm,
+                          activeRow.batchNumber
+                            ? `Batch ${activeRow.batchNumber}`
+                            : activeRow.recommendedLotId
+                              ? 'Batch not recorded'
+                              : null,
+                          activeRow.nearestSafeExpiry || activeRow.recommendedLotId
+                            ? formatShortExpiry(activeRow.nearestSafeExpiry)
+                            : null,
+                          locationLabel,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
+                    <div className="counter-next-controls min-w-0 flex-1 space-y-2">
+                      <CounterUnitToggle
+                        inline
+                        options={activeRow.saleUnits}
+                        dosageForm={activeRow.dosageForm}
+                        priceFor={(option) =>
+                          counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
+                        }
+                        onHandUnits={activeRow.onHandUnits}
+                        selected={saleUnit}
+                        quantity={quantityText}
+                        preview={preview}
+                        disabled={busy}
+                        onSelect={setSaleUnit}
+                        onQuantityChange={changeQuantity}
+                        quantityRef={quantityRef}
+                        onSubmit={() => void addToCart()}
+                        chordFor={chordFor}
+                        emptyMessage={<CounterUnsellableMessage row={activeRow} />}
+                      />
+                      {activeRow.saleUnits.length === 0 ? (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="counter-demand-units">
+                            Requested {plural(counterUnitNoun(activeRow.dosageForm), 2)}
+                          </Label>
+                          <Input
+                            id="counter-demand-units"
+                            type="number"
+                            min={1}
+                            step={1}
+                            className="h-11 w-32"
+                            value={quantityText}
+                            disabled={busy}
+                            onChange={(event) => changeQuantity(event.target.value)}
+                          />
+                        </div>
+                      ) : null}
+                      {shortfallUnits > 0 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-auto min-h-11 whitespace-normal"
+                          disabled={busy || !branchAuthorized}
+                          aria-describedby={
+                            branchControlReason ? 'counter-branch-reason' : undefined
+                          }
+                          onClick={() => void captureShortfall()}
+                        >
+                          {pending === 'captureDemand'
+                            ? 'Recording…'
+                            : `Record shortage: ${shortfallUnits} ${plural(counterUnitNoun(activeRow.dosageForm), shortfallUnits)}`}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    <Button
+                      type="button"
+                      className="min-h-12 w-full rounded-[var(--radius-sm)] md:w-auto lg:w-full"
+                      disabled={busy || !preview?.sufficient}
+                      aria-describedby={
+                        !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
+                      }
+                      onClick={() => void addToCart()}
+                    >
+                      {pending === 'addToCart'
+                        ? 'Adding…'
+                        : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
+                    </Button>
+                    {!busy && !preview?.sufficient ? (
+                      <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
+                        {preview
+                          ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
+                          : counterAddToCartBlockReason(activeRow, selectedOption, quantity)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-subtle pt-2 text-xs text-text-muted">
+                    <span>
+                      {lotOverride?.inventoryLotId
+                        ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
+                        : activeRow.recommendedLotId && activeRow.batchNumber
+                          ? `Earliest-expiry batch${activeRow.batchNumber ? ` ${activeRow.batchNumber}` : ''} is used; more batches are added if needed.`
+                          : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
+                            ? 'No batch of this medicine is in stock here.'
+                            : 'No batch can be sold here right now.'}
+                    </span>
+                    <CounterLotOverride
+                      value={lotOverride}
+                      lots={lotOptionsQuery.data ?? []}
+                      state={
+                        lotOptionsQuery.isError
+                          ? 'error'
+                          : lotOptionsQuery.isSuccess
+                            ? 'ready'
+                            : 'loading'
+                      }
+                      error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                      disabled={busy}
+                      onChange={(next) => {
+                        // An explicit batch choice replaces the scanned sticker's lot pin;
+                        // otherwise the server refuses the chosen batch as a mismatch.
+                        // Merely opening the picker (lotOverride still null) keeps the pin.
+                        setActiveRow((current) =>
+                          lotOverride !== null &&
+                          current?.labelLot &&
+                          next?.inventoryLotId !== current.labelLot.inventoryLotId
+                            ? { ...current, labelLot: null }
+                            : current
+                        );
+                        setLotOverride(next);
+                      }}
+                      onRetry={() => void lotOptionsQuery.refetch()}
+                    />
+                  </div>
+                </section>
+              </div>
+            ) : null}
+            <section
+              aria-label="Cart"
+              tabIndex={0}
+              className="min-w-0 px-4 pb-4 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset lg:px-6 lg:pb-6"
+            >
+              <h2 className="sr-only">Cart</h2>
+              <CounterCartPanel
+                cart={cart}
+                alerts={alerts}
+                state={
+                  !saleId
+                    ? 'idle'
+                    : cartQuery.isLoading
+                      ? 'loading'
+                      : cartQuery.isError
+                        ? 'error'
+                        : 'ready'
+                }
+                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+                onRetry={() => void refreshTenderBill()}
+                lineControls={{
+                  // DEV-977B: a line change needs the server; offline (or when the server cannot
+                  // be reached) the bill's lines are read-only. Between cash shifts they are
+                  // read-only too, as adding a line and taking payment are (the server refuses).
+                  disabled:
+                    busy ||
+                    !connectionOnline ||
+                    dayClosed ||
+                    drawerRequired ||
+                    shiftRequired ||
+                    !cart ||
+                    cart.status !== 'OPEN' ||
+                    cart.totals.tenderedMinor > 0 ||
+                    Boolean(attempt),
+                  unitOptions: lineUnitOptions,
+                  onChange: (line, next) => void changeBillLine(line, next),
+                  onRemove: (line) => void removeBillLine(line),
+                }}
+                emptyHints={
+                  <>
+                    <span>
+                      <kbd className={KEYCAP_CLASS}>
+                        {formatBinding(keymap.bindings.focusSearch)}
+                      </kbd>{' '}
+                      search
+                    </span>
+                    <span>
+                      <kbd className={KEYCAP_CLASS}>Enter</kbd> add
+                    </span>
+                    <span>
+                      <kbd className={KEYCAP_CLASS}>
+                        {formatBinding(keymap.bindings.openTender)}
+                      </kbd>{' '}
+                      take payment
+                    </span>
+                  </>
+                }
+              />
+            </section>
+          </div>
         </div>
         <aside
           id="counter-bill-total"
           tabIndex={-1}
           aria-label="Bill total"
-          className={`flex min-w-0 flex-col gap-3.5 p-4 outline-none lg:col-start-2 lg:min-h-0 lg:overflow-y-auto lg:bg-surface-card lg:p-5 [&_button]:rounded-[var(--radius-sm)] ${composing ? 'lg:row-start-3' : 'lg:row-span-3 lg:row-start-1'}`}
+          className="flex min-w-0 flex-col gap-3.5 p-4 outline-none lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:min-h-0 lg:overflow-y-auto lg:bg-surface-card lg:p-5 [&_button]:rounded-[var(--radius-sm)]"
         >
           <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-card px-4 py-3.5">
             <span

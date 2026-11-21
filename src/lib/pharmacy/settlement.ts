@@ -14,7 +14,7 @@ import { assertPostingPeriodsOpen } from '@/lib/finance/journal';
 
 import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
-import { returnedLineValue } from './sales';
+import { PharmacySaleError, returnedLineValue } from './sales';
 import { postDailyCloseEntry, postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
 import { assertSaleBatchesSellable } from './sale-batch-safety';
@@ -127,6 +127,40 @@ export async function requireCashShiftForProvider(
       Prisma.sql`SELECT pharmacy_require_cash_shift(${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, ${input.businessDate}::date) AS "shiftId"`
     )
   );
+}
+
+/**
+ * DEV-977B: a bill line is changed or removed only where money could be taken for the bill now.
+ * On a branch that runs cash shifts the counter's drawer must have its shift open on this business
+ * day (the payment rule, asked of the same database function, which share-locks the shift row
+ * until the transaction ends so the shift cannot close in between), and the bill must not belong
+ * to a shift that has closed: the shift its creator had open when the bill was started. Returns
+ * the open shift the change happens in, or null where the counter runs no shifts.
+ */
+export async function requireCashShiftForLineChange(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string },
+  input: { deviceId: string | null; businessDate: Date },
+  bill: { createdAt: Date; createdByUserId: string }
+): Promise<string | null> {
+  const [row] = await withCashShiftRefusal(
+    db.$queryRaw<{ shiftId: string | null }[]>(
+      Prisma.sql`SELECT pharmacy_require_cash_shift(${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, ${input.businessDate}::date) AS "shiftId"`
+    )
+  );
+  const billShift = await db.pharmacyCashShift.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      cashierId: bill.createdByUserId,
+      openedAt: { lte: bill.createdAt },
+      OR: [{ closedAt: null }, { closedAt: { gt: bill.createdAt } }],
+    },
+    orderBy: [{ openedAt: 'desc' }, { id: 'desc' }],
+    select: { status: true },
+  });
+  if (billShift?.status === 'CLOSED') throw new PharmacySaleError('LINE_ON_CLOSED_SHIFT');
+  return row?.shiftId ?? null;
 }
 
 /** Runs a money write; a cash-shift refusal from the database guard becomes its typed reason. */

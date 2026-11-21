@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   cashShiftNeedsApproval,
   computeCashShiftFigures,
+  lineChangeVoidMinor,
   sumCashShifts,
 } from './cash-shift-report';
 
@@ -115,5 +116,45 @@ describe('DEV-958B cash shift figures', () => {
       { tenders: [], refunds: [], cashNetMinor: 0 }
     );
     expect(total).toMatchObject({ openShifts: 1, cashVarianceMinor: 0 });
+  });
+
+  it('DEV-977B: counts the lines changed or removed in the shift by their recorded value, and moves no cash', () => {
+    const base = { openingFloatMinor: 1_000, tenders: [], refunds: [], movements: [] };
+    const figures = computeCashShiftFigures({
+      ...base,
+      lineVoids: [
+        { cause: 'LINE_CHANGED', voidedMinor: 1_500, shiftId: 's1' },
+        { cause: 'LINE_REMOVED', voidedMinor: 600, shiftId: 's1' },
+        // Not a line change: a whole-bill void, a forged amount, a negative one.
+        { cause: 'BILL_VOIDED', voidedMinor: 99 },
+        { cause: 'LINE_CHANGED', voidedMinor: 1.5 },
+        { cause: 'LINE_REMOVED', voidedMinor: -5 },
+        null,
+      ],
+    });
+    expect(figures.lineVoids).toEqual({ count: 2, valueMinor: 2_100 });
+    expect(figures.cash).toEqual(computeCashShiftFigures(base).cash);
+    expect(computeCashShiftFigures(base).lineVoids).toEqual({ count: 0, valueMinor: 0 });
+    expect(lineChangeVoidMinor({ cause: 'LINE_REMOVED', voidedMinor: 0 })).toBe(0);
+    expect(lineChangeVoidMinor(['LINE_REMOVED'])).toBeNull();
+  });
+
+  it('DEV-977B: adds the day’s line-change voids up from its shifts, a report frozen before them as none', () => {
+    const shift = {
+      tenders: [],
+      refunds: [],
+      varianceMinor: 0,
+      openingDifferenceMinor: 0,
+      status: 'CLOSED' as const,
+    };
+    const total = sumCashShifts(
+      [
+        { ...shift, lineVoids: { count: 2, valueMinor: 2_100 } },
+        { ...shift, lineVoids: { count: 1, valueMinor: 1_200 } },
+        shift,
+      ],
+      { tenders: [], refunds: [], cashNetMinor: 0 }
+    );
+    expect(total.lineVoids).toEqual({ count: 3, valueMinor: 3_300 });
   });
 });
