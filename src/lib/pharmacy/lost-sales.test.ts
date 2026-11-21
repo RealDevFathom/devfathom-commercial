@@ -149,6 +149,12 @@ function captureDb(options: {
   }));
   const updateMany = vi.fn(async () => ({ count: 1 }));
   const db = {
+    $queryRaw: vi.fn(
+      async (_sql: TemplateStringsArray, id: string, organizationId: string, branchId: string) =>
+        id === 'sale-1' && organizationId === scope.organizationId && branchId === scope.branchId
+          ? [{ id }]
+          : []
+    ),
     unfulfilledDemandEvent: {
       findFirst: vi.fn(async () => options.previous ?? null),
       count: vi.fn(async () => counts.shift() ?? 0),
@@ -201,6 +207,19 @@ describe('DEV-81 captureDemand', () => {
       notifyPhone: null,
     });
     expect(typeof data.visitId).toBe('string');
+  });
+
+  it('refuses to record demand against a bill outside the current branch', async () => {
+    const { db, create } = captureDb({});
+    await expect(
+      captureDemand(
+        db as never,
+        { ...scope, branchId: 'branch-b' },
+        { ...demandInput, saleId: 'sale-1' },
+        t0
+      )
+    ).rejects.toThrow('NOT_FOUND');
+    expect(create).not.toHaveBeenCalled();
   });
 
   it('treats a line with no sold lines as a walk-out (p = 1)', async () => {
