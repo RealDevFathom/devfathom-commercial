@@ -175,14 +175,18 @@ describe('DEV-672 controlled register branch list', () => {
         entryKind: 'RETURN_TO_SUPPLIER',
         sourcePurchase: { serial: 1 },
         lateDispatchAt: new Date('2026-09-03T11:47:00Z'),
+        sentByName: 'Sending pharmacist',
+        recordedByName: 'Recording owner',
+        supplierReturnReason: 'Checked old dispatch',
       },
     ];
     render(<ControlledRegisterConsole />);
+    expect(screen.getByRole('table')).not.toHaveTextContent('PIN witnessed');
     expect(screen.getByRole('article')).toHaveTextContent(
-      'dispatched 2026-09-03 16:47 PKT · recorded late 2026-11-01 11:00 PKT'
+      'Recorded late, no witness · Sent by Sending pharmacist on 2026-09-03 16:47 PKT · Recorded by Recording owner on 2026-11-01 11:00 PKT · Reason: Checked old dispatch'
     );
     expect(screen.getByRole('table')).toHaveTextContent(
-      'dispatched 2026-09-03 16:47 PKT · recorded late 2026-11-01 11:00 PKT'
+      'Recorded late, no witness · Sent by Sending pharmacist on 2026-09-03 16:47 PKT · Recorded by Recording owner on 2026-11-01 11:00 PKT · Reason: Checked old dispatch'
     );
   });
 

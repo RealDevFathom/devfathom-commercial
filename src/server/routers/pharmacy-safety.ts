@@ -142,7 +142,27 @@ export const pharmacySafetyRouter = router({
           incidents: { include: { approvals: true } },
         },
       });
-      const witnessIds = [...new Set(entries.map((entry) => entry.witnessedByUserId))];
+      const lateEntries = entries.filter((entry) => entry.lateDispatchAt && entry.stockMovementId);
+      const movements = lateEntries.length
+        ? await ctx.db.pharmacyStockMovement.findMany({
+            where: {
+              organizationId,
+              branchId: input.branchId,
+              id: { in: lateEntries.map((entry) => entry.stockMovementId!) },
+            },
+            select: { id: true, actorId: true },
+          })
+        : [];
+      const senderByMovement = new Map(movements.map((m) => [m.id, m.actorId]));
+      const witnessIds = [
+        ...new Set(
+          [
+            ...entries.map((entry) => entry.witnessedByUserId),
+            ...lateEntries.map((entry) => entry.recordedByUserId),
+            ...senderByMovement.values(),
+          ].filter((id): id is string => typeof id === 'string')
+        ),
+      ];
       const [witnesses, staff] = witnessIds.length
         ? await Promise.all([
             ctx.db.user.findMany({
@@ -163,6 +183,10 @@ export const pharmacySafetyRouter = router({
         names.push(profile.displayName);
         staffNames.set(profile.userId, names);
       }
+      const personName = (id: string | null | undefined) =>
+        id
+          ? chooseRegisterPersonName([...(staffNames.get(id) ?? []), userNames.get(id)], id)
+          : null;
       return {
         provinceName: provinceName(profile?.provinceCode ?? branch.provinceCode),
         pendingLegalReview: ruleSet ? rulesPendingLegalReview(ruleSet) : false,
@@ -171,13 +195,13 @@ export const pharmacySafetyRouter = router({
           patient: entry.patient
             ? { displayName: entry.patient.displayName, cnic: maskCnic(entry.patient.cnic) }
             : null,
-          witnessName: chooseRegisterPersonName(
-            [
-              ...(staffNames.get(entry.witnessedByUserId) ?? []),
-              userNames.get(entry.witnessedByUserId),
-            ],
-            entry.witnessedByUserId
-          ),
+          witnessName: personName(entry.witnessedByUserId),
+          ...(entry.lateDispatchAt
+            ? {
+                sentByName: personName(senderByMovement.get(entry.stockMovementId ?? '')),
+                recordedByName: personName(entry.recordedByUserId),
+              }
+            : {}),
         })),
       };
     }),

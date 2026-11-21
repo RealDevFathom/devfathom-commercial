@@ -1,3 +1,4 @@
+import { PharmacySupplierReturnError } from './supplier-returns';
 import { Prisma } from '@/generated/prisma/client';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -404,6 +405,7 @@ export async function appendControlledSupplierReturn(
     inventoryLotId: string;
     movementId: string;
     lateDispatchAt?: Date;
+    approvalReason?: string;
     quantity: number;
     witness: import('./controlled-restoration-authorization').ControlledRestorationWitness;
   }
@@ -429,9 +431,7 @@ export async function appendControlledSupplierReturn(
         AND sent."sourcePurchaseEntryId" = p.id), 0) >= ${input.quantity}
     LIMIT 2`;
   if (sources.length !== 1) {
-    throw new Error(
-      'The return must identify one controlled purchase from this supplier for the quantity being sent.'
-    );
+    throw new PharmacySupplierReturnError('PURCHASE_UNCLEAR');
   }
   const purchase = sources[0]!;
   const lot = {
@@ -443,28 +443,38 @@ export async function appendControlledSupplierReturn(
   const balanceDelta = -input.quantity;
   const runningBalance = await runningFromLot(db, lot, balanceDelta);
   if (runningBalance !== (await sellableOnHand(db, lot)) - input.quantity) {
-    throw new Error(
-      'The controlled register and stock balance disagree. Reconcile this batch before dispatch.'
-    );
+    throw new PharmacySupplierReturnError('REGISTER_DISAGREES');
   }
-  await createRegisterRow(db, {
-    ...lot,
-    serial: await nextSerial(db, organizationId, branchId),
-    entryKind: 'RETURN_TO_SUPPLIER',
-    sourcePurchaseEntryId: purchase.id,
-    supplierReturnLineId: input.lineId,
-    lateDispatchAt: input.lateDispatchAt,
-    stockMovementId: input.movementId,
-    manufacturer: purchase.manufacturer,
-    batchNumber: purchase.batchNumber,
-    counterpartyName: input.supplierName,
-    quantityCanonicalUnits: input.quantity,
-    balanceDelta,
-    runningBalance,
-    recordedByUserId: scope.actorId,
-    witnessedByUserId: input.witness.witnessedByUserId,
-    signatureRef: input.witness.signatureRef,
-  });
+  try {
+    await createRegisterRow(db, {
+      ...lot,
+      serial: await nextSerial(db, organizationId, branchId),
+      entryKind: 'RETURN_TO_SUPPLIER',
+      sourcePurchaseEntryId: purchase.id,
+      supplierReturnLineId: input.lineId,
+      lateDispatchAt: input.lateDispatchAt,
+      stockMovementId: input.movementId,
+      manufacturer: purchase.manufacturer,
+      batchNumber: purchase.batchNumber,
+      counterpartyName: input.supplierName,
+      quantityCanonicalUnits: input.quantity,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: scope.actorId,
+      witnessedByUserId: input.lateDispatchAt ? null : input.witness.witnessedByUserId,
+      supplierReturnReason: input.approvalReason?.trim(),
+      signatureRef: input.witness.signatureRef,
+    });
+  } catch (error) {
+    if (
+      error instanceof Prisma.PrismaClientKnownRequestError &&
+      ['P2003', 'P2004', 'P2010'].includes(error.code)
+    )
+      throw new PharmacySupplierReturnError('REGISTER_REFUSED');
+    if (error instanceof Error && error.message === 'CONFLICT')
+      throw new PharmacySupplierReturnError('REGISTER_REFUSED');
+    throw error;
+  }
 }
 
 export async function earlierRegisterEntry(

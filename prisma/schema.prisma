@@ -14119,7 +14119,8 @@ model PharmacyControlledRegisterEntry {
   balanceDelta           Int                               @default(0)
   runningBalance         Int
   recordedByUserId       String
-  witnessedByUserId      String
+  /// Null only for an owner-confirmed historical supplier dispatch.
+  witnessedByUserId      String?
   signatureRef           String?
   rxSerialWritten        Boolean                           @default(false)
   emergency              Boolean                           @default(false)
@@ -14130,7 +14131,9 @@ model PharmacyControlledRegisterEntry {
   restorationMovementId  String?
   refEntryId             String?
   createdAt              DateTime                          @default(now())
-  /// Original movement time for a witnessed entry recorded after the dispatch.
+  /// Reason for an owner-confirmed late entry or a sole pharmacist dispatch.
+  supplierReturnReason    String?
+  /// Original movement time for an entry recorded after the dispatch.
   lateDispatchAt           DateTime?
   sourcePurchaseEntryId    String?
   supplierReturnLineId     String?

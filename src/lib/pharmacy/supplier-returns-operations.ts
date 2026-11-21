@@ -358,6 +358,7 @@ export async function dispatchPurchaseReturn(
     idempotencyKeyPrefix: string;
     controlledWitness?: ControlledRestorationPin;
     recordLateLineId?: string;
+    approvalReason?: string;
   }
 ) {
   await db.$queryRaw`SELECT id FROM pharmacy_purchase_returns WHERE "organizationId"=${scope.organizationId}
@@ -416,7 +417,12 @@ export async function dispatchPurchaseReturn(
         scope,
         input.controlledWitness,
         'pharmacy:dispense',
-        { supplierDispatch: true }
+        {
+          supplierDispatch: true,
+          allowSoloSelfWitness: true,
+          lateOwnerApproval: Boolean(lateLine),
+          approvalReason: input.approvalReason,
+        }
       )
     : undefined;
   if (controlled) await lockRegister(db, scope.organizationId, scope.branchId);
@@ -435,6 +441,7 @@ export async function dispatchPurchaseReturn(
       movementId: movement.id,
       quantity: lateLine.quantityUnits,
       lateDispatchAt: found.dispatchedAt,
+      approvalReason: input.approvalReason,
       witness,
     });
     return loadReturn(db, scope, found.id);
@@ -506,6 +513,7 @@ export async function dispatchPurchaseReturn(
         lineId: line.id,
         inventoryLotId: line.inventoryLotId,
         movementId: outgoing.id,
+        approvalReason: witness.soloSelfWitness ? input.approvalReason : undefined,
         quantity: line.quantityUnits,
         witness,
       });

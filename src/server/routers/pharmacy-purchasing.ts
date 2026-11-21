@@ -2503,6 +2503,7 @@ const purchasingRouter = router({
         .object({
           branchId,
           purchaseReturnId: z.string().min(1).max(200),
+          approvalReason: z.string().trim().max(500).optional(),
           recordLateLineId: z.string().min(1).max(200).optional(),
           controlledWitness: z
             .object({
@@ -2525,9 +2526,20 @@ const purchasingRouter = router({
             idempotencyKeyPrefix: input.idempotencyKey,
             controlledWitness: input.controlledWitness,
             recordLateLineId: input.recordLateLineId,
+            approvalReason: input.approvalReason,
           })
         );
       } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError ||
+          error instanceof Prisma.PrismaClientUnknownRequestError
+        ) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'The supplier return could not be confirmed. Review the original dispatch and register before trying again.',
+          });
+        }
         domainError(error);
       }
     }),

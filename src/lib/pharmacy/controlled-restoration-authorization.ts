@@ -24,21 +24,30 @@ export const SOLO_PHARMACIST_WITNESS_POLICY = 'PHARMACY_SOLO_PHARMACIST_PIN';
 /** Register signature prefix the database accepts on a self-witnessed restoration. */
 export const SOLO_WITNESS_SIGNATURE_PREFIX = 'solo-pin:';
 
+type RestorationOptions = {
+  allowSoloSelfWitness?: boolean;
+  supplierDispatch?: boolean;
+  lateOwnerApproval?: boolean;
+  approvalReason?: string;
+};
+
 export class ControlledRestorationDenied extends Error {
   constructor(
     readonly forbidden = false,
     /** A sole pharmacist's own PIN was refused (wrong, or locked out). */
     readonly soloPinRefused = false,
-    supplierDispatch = false
+    supplierDispatch = false,
+    message?: string
   ) {
     super(
-      forbidden
-        ? 'Permission to change controlled stock is required.'
-        : soloPinRefused
-          ? 'Your PIN was not accepted. Check it and try again, or wait if your PIN is locked.'
-          : supplierDispatch
-            ? 'A different pharmacist must enter a valid witness PIN or approval code before dispatch.'
-            : 'A different pharmacist must enter a fresh witness PIN.'
+      message ??
+        (forbidden
+          ? 'Permission to change controlled stock is required.'
+          : soloPinRefused
+            ? 'Your PIN was not accepted. Check it and try again, or wait if your PIN is locked.'
+            : supplierDispatch
+              ? 'A different pharmacist must enter a valid witness PIN or approval code before dispatch.'
+              : 'A different pharmacist must enter a fresh witness PIN.')
     );
   }
 }
@@ -93,13 +102,33 @@ export async function authorizeControlledRestoration(
   scope: LedgerScope,
   input?: ControlledRestorationPin,
   actorCapability: 'pharmacy:dispense' | 'pharmacy:safety' = 'pharmacy:dispense',
-  options: { allowSoloSelfWitness?: boolean; supplierDispatch?: boolean } = {}
+  options: RestorationOptions = {}
 ): Promise<ControlledRestorationWitness> {
   const actor = await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   });
   if (!actor || !(await can(actor, actorCapability, undefined, { db }))) {
     throw new ControlledRestorationDenied(true);
+  }
+  if (!input && options.lateOwnerApproval)
+    throw new ControlledRestorationDenied(
+      false,
+      false,
+      true,
+      'Confirm the late entry with your own approval code or PIN.'
+    );
+  if (
+    !input &&
+    options.supplierDispatch &&
+    options.allowSoloSelfWitness &&
+    (await isSolePharmacist(db, scope.organizationId, scope.actorId))
+  ) {
+    throw new ControlledRestorationDenied(
+      false,
+      false,
+      true,
+      'Confirm the dispatch with your own approval code or PIN and a reason.'
+    );
   }
   if (!input) throw new ControlledRestorationDenied(false, false, options.supplierDispatch);
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
@@ -109,7 +138,29 @@ export async function authorizeControlledRestoration(
     { userId: scope.actorId, skipDrain: true }
   );
   // Throw only after the credential transaction has committed failed attempts.
-  if (result === 'SOLO_PIN_REFUSED') throw new ControlledRestorationDenied(false, true);
+  if (result === 'REASON_REQUIRED')
+    throw new ControlledRestorationDenied(
+      false,
+      false,
+      true,
+      'Enter a reason before confirming this register entry.'
+    );
+  if (result === 'SOLO_PIN_REFUSED')
+    throw new ControlledRestorationDenied(
+      false,
+      true,
+      options.supplierDispatch,
+      options.supplierDispatch
+        ? 'Your approval code or PIN was not accepted. Check it and try again.'
+        : undefined
+    );
+  if (!result && options.lateOwnerApproval)
+    throw new ControlledRestorationDenied(
+      false,
+      false,
+      true,
+      'Confirm the late entry with your own approval code or PIN.'
+    );
   if (!result) throw new ControlledRestorationDenied(false, false, options.supplierDispatch);
   return result;
 }
@@ -118,8 +169,8 @@ async function verifyRestorationPin(
   db: ScopedDb,
   scope: LedgerScope,
   input: ControlledRestorationPin,
-  options: { allowSoloSelfWitness?: boolean; supplierDispatch?: boolean }
-): Promise<ControlledRestorationWitness | 'SOLO_PIN_REFUSED' | null> {
+  options: RestorationOptions
+): Promise<ControlledRestorationWitness | 'SOLO_PIN_REFUSED' | 'REASON_REQUIRED' | null> {
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
@@ -147,16 +198,19 @@ async function verifyRestorationPin(
   // grant and a fresh PIN. The check runs only for a self-witness attempt, and
   // any second pharmacist ends the exception.
   const selfWitness = witness.id === scope.actorId;
+  if (options.lateOwnerApproval && !selfWitness) return null;
   if (
     selfWitness &&
+    !options.lateOwnerApproval &&
     !(
       options.allowSoloSelfWitness &&
-      !options.supplierDispatch &&
       (await isSolePharmacist(db, scope.organizationId, scope.actorId, now))
     )
   ) {
     return null;
   }
+  if (selfWitness && options.supplierDispatch && !options.approvalReason?.trim())
+    return 'REASON_REQUIRED';
   const refused = selfWitness ? 'SOLO_PIN_REFUSED' : null;
   if (isLockedOut(credential, now)) return refused;
   const method = await verifyApprovalSecret(db, {
@@ -167,7 +221,7 @@ async function verifyRestorationPin(
     action: options.supplierDispatch
       ? 'pharmacyPurchasing.dispatchPurchaseReturn'
       : 'pharmacy.controlledRestorationWitness',
-    approverRight: 'pharmacy:dispense',
+    approverRight: options.lateOwnerApproval ? 'OWNER' : 'pharmacy:dispense',
     requestedById: scope.actorId,
     now,
   });
@@ -182,15 +236,20 @@ async function verifyRestorationPin(
     where: { id: credential.id },
     data: clearLockout(),
   });
-  if (selfWitness) {
-    return {
-      witnessedByUserId: witness.id,
-      signatureRef: `${SOLO_WITNESS_SIGNATURE_PREFIX}${credential.id}:${randomUUID()}`,
-      soloSelfWitness: true,
-    };
-  }
   const signatureMethod =
     options.supplierDispatch && method === 'AUTHENTICATOR' ? 'authenticator' : 'pin';
+  if (selfWitness) {
+    const prefix = options.lateOwnerApproval
+      ? `late-owner-${signatureMethod}:`
+      : signatureMethod === 'pin'
+        ? SOLO_WITNESS_SIGNATURE_PREFIX
+        : 'solo-authenticator:';
+    return {
+      witnessedByUserId: witness.id,
+      signatureRef: `${prefix}${credential.id}:${randomUUID()}`,
+      soloSelfWitness: !options.lateOwnerApproval,
+    };
+  }
   return {
     witnessedByUserId: witness.id,
     signatureRef: `${signatureMethod}:${credential.id}:${randomUUID()}`,

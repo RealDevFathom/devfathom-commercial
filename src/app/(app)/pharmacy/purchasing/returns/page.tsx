@@ -1,3 +1,4 @@
+import { isSolePharmacist } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { approvalSecretKindFor } from '@/lib/approval-authenticator';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { FollowUpQueue } from './follow-up-queue';
@@ -207,10 +208,10 @@ export default async function PharmacyReturnsPage({
     selected.lines.some((line) => line.lot.batch.medicine.controlled);
 
   const needsWitness = dispatchWitness || Boolean(lateLine);
-  const witnessLabel =
-    needsWitness && (await approvalSecretKindFor(ctx.db, ctx.entitlements.organizationId)) === 'PIN'
-      ? 'Witness PIN'
-      : 'Witness approval code';
+  const credentialKind = needsWitness
+    ? await approvalSecretKindFor(ctx.db, ctx.entitlements.organizationId)
+    : 'PIN';
+  let selfApproval: 'late' | 'solo' | null = lateLine ? 'late' : null;
   let witnesses: { id: string; name: string }[] = [];
   let witnessHint = 'A different pharmacist must approve this dispatch.';
   if (needsWitness) {
@@ -220,12 +221,20 @@ export default async function PharmacyReturnsPage({
       })
     ) {
       try {
-        witnesses = await listControlledPinWitnesses(
-          ctx.db,
-          ctx.entitlements.organizationId,
-          ctx.session.user.id
-        );
-        if (!witnesses.length)
+        const orgId = ctx.entitlements.organizationId;
+        const userId = ctx.session.user.id;
+        if (!lateLine) {
+          witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId);
+          if (!witnesses.length && (await isSolePharmacist(ctx.db, orgId, userId)))
+            selfApproval = 'solo';
+        }
+        if (selfApproval)
+          witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId, userId);
+        if (selfApproval)
+          witnessHint = witnesses.length
+            ? 'Confirm with your own credential.'
+            : 'Your approval credential is unavailable. Check your approval settings.';
+        else if (!witnesses.length)
           witnessHint = 'No eligible independent pharmacist is available to witness this dispatch.';
       } catch {
         witnessHint = 'Witnesses could not be loaded. Reload this return before dispatch.';
@@ -234,6 +243,7 @@ export default async function PharmacyReturnsPage({
       witnessHint = 'A pharmacist with dispensing access must dispatch controlled stock.';
     }
   }
+  const witnessLabel = `${selfApproval ? 'Your' : 'Witness'} ${credentialKind === 'PIN' ? 'PIN' : 'approval code'}`;
   // The credit position across the branch, kept as two separately sourced
   // numbers rather than one that has been overwritten.
   const expectedMinor = returns
@@ -346,6 +356,9 @@ export default async function PharmacyReturnsPage({
                 pin: field(form, 'witnessPin'),
               }
             : undefined,
+          ...(optionalField(form, 'approvalReason')
+            ? { approvalReason: field(form, 'approvalReason') }
+            : {}),
           ...(action === 'record-late'
             ? { recordLateLineId: field(form, 'recordLateLineId') }
             : {}),
@@ -479,13 +492,14 @@ export default async function PharmacyReturnsPage({
                         has already moved.
                       </p>
                       <DispatchWitnessFields
+                        selfApproval={selfApproval}
                         witnesses={witnesses}
                         witnessLabel={witnessLabel}
                         witnessHint={witnessHint}
                         notice={notice}
                       />
                       <SubmitButton disabled={witnesses.length === 0}>
-                        Record witnessed late entry
+                        Record late entry
                       </SubmitButton>
                     </PurchasingActionForm>
                   ) : (
@@ -649,6 +663,7 @@ export default async function PharmacyReturnsPage({
               timeZone={ctx.organization?.timezone}
               onAdvance={advanceReturn}
               onAllocate={allocateCredit}
+              selfApproval={selfApproval}
               witnesses={dispatchWitness ? witnesses : null}
               witnessHint={witnessHint}
               witnessLabel={witnessLabel}
@@ -925,11 +940,13 @@ function Frame({
 }
 
 function DispatchWitnessFields({
+  selfApproval,
   witnesses,
   witnessLabel,
   witnessHint,
   notice,
 }: {
+  selfApproval: 'late' | 'solo' | null;
   witnesses: { id: string; name: string }[];
   witnessLabel: string;
   witnessHint: string;
@@ -937,16 +954,36 @@ function DispatchWitnessFields({
 }) {
   return (
     <div className="grid w-full gap-3 sm:grid-cols-2">
-      <SelectField
-        label="Dispatch witness"
-        name="witnessStaffProfileId"
-        notice={notice}
-        placeholder="Select a pharmacist"
-        emptyHint={witnessHint}
-        hint={witnessHint}
-        options={witnesses.map(({ id, name }) => ({ value: id, label: name }))}
-        required
-      />
+      {selfApproval ? (
+        <>
+          <input type="hidden" name="witnessStaffProfileId" value={witnesses[0]?.id ?? ''} />
+          <p className="text-sm text-text-body">
+            {selfApproval === 'late' ? 'Recorded late, no witness' : 'No second person available'}
+          </p>
+          {!witnesses.length && <p className="text-sm text-text-muted">{witnessHint}</p>}
+          <TextAreaField
+            name="approvalReason"
+            label={
+              selfApproval === 'late'
+                ? 'Reason for recording late'
+                : 'Reason for sending without a second person'
+            }
+            notice={notice}
+            required
+          />
+        </>
+      ) : (
+        <SelectField
+          label="Dispatch witness"
+          name="witnessStaffProfileId"
+          notice={notice}
+          placeholder="Select a pharmacist"
+          emptyHint={witnessHint}
+          hint={witnessHint}
+          options={witnesses.map(({ id, name }) => ({ value: id, label: name }))}
+          required
+        />
+      )}
       <TextField
         label={witnessLabel}
         name="witnessPin"
@@ -961,6 +998,7 @@ function DispatchWitnessFields({
 }
 
 function ReturnDetail({
+  selfApproval,
   witnesses,
   witnessHint,
   witnessLabel,
@@ -972,6 +1010,7 @@ function ReturnDetail({
   onAdvance,
   onAllocate,
 }: {
+  selfApproval: 'late' | 'solo' | null;
   witnesses: { id: string; name: string }[] | null;
   witnessHint: string;
   witnessLabel: string;
@@ -1140,6 +1179,7 @@ function ReturnDetail({
               <input name="action" type="hidden" value="dispatch" />
               {witnesses && (
                 <DispatchWitnessFields
+                  selfApproval={selfApproval}
                   witnesses={witnesses}
                   witnessLabel={witnessLabel}
                   witnessHint={witnessHint}

@@ -9,6 +9,8 @@ ALTER TABLE pharmacy_purchase_returns
   ADD COLUMN IF NOT EXISTS "dispatchedWithRegisterPolicy" boolean NOT NULL DEFAULT false;
 
 ALTER TABLE pharmacy_controlled_register_entries
+  ALTER COLUMN "witnessedByUserId" DROP NOT NULL,
+  ADD COLUMN IF NOT EXISTS "supplierReturnReason" text,
   ADD COLUMN IF NOT EXISTS "lateDispatchAt" timestamp(3),
   ADD COLUMN IF NOT EXISTS "sourcePurchaseEntryId" text,
   ADD COLUMN IF NOT EXISTS "supplierReturnLineId" text;
@@ -46,6 +48,25 @@ BEGIN
       );
   END IF;
 END $constraints$;
+
+-- Only a genuinely historical supplier return may have no witness. Keep
+-- every existing witness rule for other register kinds, including SQL NULL.
+ALTER TABLE pharmacy_controlled_register_entries
+  DROP CONSTRAINT IF EXISTS pharmacy_controlled_register_independent_witness;
+ALTER TABLE pharmacy_controlled_register_entries
+  ADD CONSTRAINT pharmacy_controlled_register_independent_witness CHECK (
+    ("witnessedByUserId" IS NOT NULL AND (
+      "recordedByUserId" <> "witnessedByUserId"
+      OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL
+          AND COALESCE("signatureRef", '') LIKE 'solo-pin:%')
+      OR (COALESCE("signatureRef", '') LIKE 'pharmacist-check-off:%'
+          AND ("entryKind" = 'SALE' OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL)))
+      OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" IS NULL
+          AND COALESCE("signatureRef",'') ~ '^solo-(pin|authenticator):')
+    ))
+    OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" IS NOT NULL
+        AND "witnessedByUserId" IS NULL AND COALESCE("signatureRef",'') ~ '^late-owner-(pin|authenticator):')
+  );
 
 ALTER TABLE pharmacy_controlled_register_entries DROP CONSTRAINT IF EXISTS pharmacy_controlled_register_kind_shape;
 ALTER TABLE pharmacy_controlled_register_entries
@@ -87,7 +108,16 @@ ALTER TABLE pharmacy_controlled_register_entries
         )
         OR (
           "entryKind"::text = 'RETURN_TO_SUPPLIER' AND "stockMovementId" IS NOT NULL
-          AND "recordedByUserId" <> "witnessedByUserId" AND (COALESCE("signatureRef", '') LIKE 'pin:%' OR COALESCE("signatureRef", '') LIKE 'authenticator:%')
+          AND (
+            ("lateDispatchAt" IS NULL AND "witnessedByUserId" IS NOT NULL AND "recordedByUserId" <> "witnessedByUserId"
+             AND COALESCE("signatureRef", '') ~ '^(pin|authenticator):' AND "supplierReturnReason" IS NULL)
+            OR (length(btrim(COALESCE("supplierReturnReason",''))) BETWEEN 1 AND 500 AND (
+              ("lateDispatchAt" IS NULL AND "witnessedByUserId" IS NOT NULL AND "recordedByUserId" = "witnessedByUserId"
+               AND COALESCE("signatureRef",'') ~ '^solo-(pin|authenticator):')
+              OR ("lateDispatchAt" IS NOT NULL AND "witnessedByUserId" IS NULL
+                  AND COALESCE("signatureRef",'') ~ '^late-owner-(pin|authenticator):')
+            ))
+          )
           AND length(btrim(COALESCE("counterpartyName", ''))) > 0
           AND "correctsEntryId" IS NULL AND "restorationMovementId" IS NULL
           AND "prescriptionId" IS NULL AND "patientId" IS NULL AND NOT emergency
@@ -154,7 +184,7 @@ BEGIN
     RETURN NEW;
   END IF;
   NEW."dispatchedWithRegisterPolicy" := OLD."dispatchedWithRegisterPolicy";
-  IF NEW.status <> 'DISPATCHED' OR OLD.status = NEW.status THEN RETURN NEW; END IF;
+  IF NEW.status NOT IN ('DISPATCHED','SETTLED') OR OLD.status IN ('DISPATCHED','SETTLED') THEN RETURN NEW; END IF;
   NEW."dispatchedWithRegisterPolicy" := true;
   IF EXISTS (
     SELECT FROM pharmacy_purchase_return_lines l
@@ -281,6 +311,42 @@ BEGIN
       RAISE EXCEPTION 'controlled register purchase does not match stock ledger movement' USING ERRCODE='23514';
     END IF;
   ELSIF NEW."entryKind" = 'RETURN_TO_SUPPLIER' THEN
+    -- The two self-confirmations are narrowly scoped exceptions. Recheck the
+    -- live owner or the absence of another eligible dispenser at insertion.
+    IF NEW."lateDispatchAt" IS NOT NULL THEN
+      IF NEW."recordedByUserId" IS DISTINCT FROM NULLIF(current_setting('app.current_user_id',true),'')
+        OR NOT EXISTS (
+          SELECT FROM users u LEFT JOIN organization_roles r
+            ON r."organizationId" = u."organizationId" AND r.id = u."organizationRoleId"
+          CROSS JOIN LATERAL (
+            SELECT bool_or(g.effect = 'DENY') AS denied,
+                   bool_or(g.capability = '*' AND g.effect = 'ALLOW') AS unrestricted
+            FROM (SELECT p.capability,p.effect FROM organization_role_permissions p
+                    WHERE p."organizationId" = u."organizationId" AND p."organizationRoleId" = r.id
+                  UNION ALL SELECT o.capability,o.effect FROM user_permission_overrides o
+                    WHERE o."organizationId" = u."organizationId" AND o."userId" = u.id
+                      AND (o."expiresAt" IS NULL OR o."expiresAt" > CURRENT_TIMESTAMP)) g
+          ) grants
+          WHERE u."organizationId" = NEW."organizationId" AND u.id = NEW."recordedByUserId"
+            AND u.status = 'ACTIVE' AND NOT COALESCE(grants.denied,false)
+            AND ((r."isSystem" AND r.key = 'owner') OR (u.role = 'ADMIN' AND grants.unrestricted))
+        ) THEN
+        RAISE EXCEPTION 'Only the acting pharmacy owner may confirm a late register entry.' USING ERRCODE='23514';
+      END IF;
+    ELSIF NEW."recordedByUserId" = NEW."witnessedByUserId" THEN
+      IF EXISTS (
+        SELECT FROM users u WHERE u."organizationId" = NEW."organizationId" AND u.id <> NEW."recordedByUserId"
+          AND u.status IN ('ACTIVE','ON_LEAVE') AND EXISTS (
+            SELECT FROM organization_role_permissions p WHERE p."organizationId" = u."organizationId"
+              AND p."organizationRoleId" = u."organizationRoleId" AND p.capability = 'pharmacy:dispense' AND p.effect = 'ALLOW'
+            UNION ALL SELECT FROM user_permission_overrides o WHERE o."organizationId" = u."organizationId"
+              AND o."userId" = u.id AND o.capability = 'pharmacy:dispense' AND o.effect = 'ALLOW'
+              AND (o."expiresAt" IS NULL OR o."expiresAt" > CURRENT_TIMESTAMP)
+          )
+      ) THEN
+        RAISE EXCEPTION 'A second pharmacist must witness this supplier dispatch.' USING ERRCODE='23514';
+      END IF;
+    END IF;
     -- Follow both sides to the receipt and supplier. Lot or supplier names alone
     -- cannot prove where a purchase or dispatch came from.
     IF NOT EXISTS (
@@ -304,6 +370,7 @@ BEGIN
         AND movement.kind = 'ADJUSTMENT' AND movement.disposition = 'AVAILABLE'
         AND (
           (NEW."lateDispatchAt" IS NULL AND doc.status = 'SUBMITTED'
+           AND movement."actorId" = NEW."recordedByUserId"
            AND movement."idempotencyKey" = 'supplier-return:' || line.id || ':out')
           OR (NEW."lateDispatchAt" IS NOT NULL AND doc.status IN ('DISPATCHED','SETTLED')
               AND NEW."lateDispatchAt" = doc."dispatchedAt" AND movement."occurredAt" = doc."dispatchedAt"
@@ -311,7 +378,7 @@ BEGIN
               AND NEW."createdAt"::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date
               AND movement.id = pharmacy_legacy_supplier_outgoing(NEW."organizationId", NEW."branchId", line.id))
         )
-        AND movement."actorId" = NEW."recordedByUserId" AND movement."quantityUnits" = -line."quantityUnits"
+        AND movement."quantityUnits" = -line."quantityUnits"
         AND NEW."quantityCanonicalUnits" = line."quantityUnits" AND NEW."balanceDelta" = movement."quantityUnits"
         AND purchase."quantityCanonicalUnits" >= (SELECT sum(r."quantityCanonicalUnits") FROM pharmacy_controlled_register_entries r
           WHERE r."organizationId" = NEW."organizationId" AND r."sourcePurchaseEntryId" = purchase.id)

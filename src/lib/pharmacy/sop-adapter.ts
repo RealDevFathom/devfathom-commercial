@@ -1159,6 +1159,8 @@ const REGISTER_DETAIL_SELECT = {
   id: true,
   serial: true,
   entryKind: true,
+  lateDispatchAt: true,
+  signatureRef: true,
   batchNumber: true,
   runningBalance: true,
   createdAt: true,
@@ -1199,6 +1201,8 @@ type RegisterDetailRow = {
   id: string;
   serial: number;
   entryKind: string;
+  lateDispatchAt?: Date | null;
+  signatureRef?: string | null;
   /** DEV-853: null when the lot's batch number was never recorded. */
   batchNumber: string | null;
   runningBalance: number;
@@ -1247,11 +1251,20 @@ function temperatureDetail(row: TemperatureDetailRow, timeZone: string): Pharmac
 
 function registerDetail(row: RegisterDetailRow): PharmacySopRecordDetail {
   const kind = words(REGISTER_KIND_WORDS, row.entryKind);
+  const approval =
+    row.entryKind === 'RETURN_TO_SUPPLIER'
+      ? row.lateDispatchAt
+        ? 'Recorded late, no witness'
+        : row.signatureRef?.startsWith('solo-')
+          ? 'No second person available'
+          : null
+      : null;
   return {
     kind: 'CONTROLLED_REGISTER_ENTRY',
     label: joinLabel(
       `Register entry ${row.serial}`,
       kind,
+      approval,
       row.medicine?.productName,
       `${batchPhrase(row.batchNumber, 'batch')}`,
       `balance ${row.runningBalance}`

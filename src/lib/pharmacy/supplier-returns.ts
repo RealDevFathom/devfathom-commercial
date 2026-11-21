@@ -19,6 +19,12 @@
  */
 
 const dispatchRefusals = {
+  PURCHASE_UNCLEAR:
+    'The return must identify one controlled purchase from this supplier for the quantity being sent.',
+  REGISTER_DISAGREES:
+    'The controlled register and stock balance disagree. Reconcile this batch before dispatch.',
+  REGISTER_REFUSED:
+    'The register could not confirm this supplier return. Check the original dispatch and register before trying again.',
   ALREADY_DISPATCHED: 'This return has already been dispatched.',
   LATE_OWNER_REQUIRED: 'Only the pharmacy owner can record a late supplier return.',
   LATE_DISPATCH_UNAVAILABLE: 'This line has no unrecorded controlled supplier dispatch.',

@@ -303,9 +303,18 @@ export function ControlledRegisterConsole() {
                             {batchNumberLabel(entry.batchNumber)}
                           </td>
                           <td className={cell}>
-                            {entry.witnessName ?? '—'}
+                            {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')}
                             {entry.signatureRef ? (
-                              <span className="mt-0.5 block text-text-muted">PIN witnessed</span>
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.lateDispatchAt
+                                  ? 'Owner confirmed'
+                                  : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
+                                      entry.signatureRef.startsWith('solo-')
+                                    ? 'Sender confirmed'
+                                    : entry.signatureRef.startsWith('authenticator:')
+                                      ? 'Approval code witnessed'
+                                      : 'PIN witnessed'}
+                              </span>
                             ) : null}
                             {open ? (
                               <span className="mt-0.5 block text-destructive">
@@ -473,6 +482,10 @@ type ShownEntry = {
   line: { medicine: { productName: string } } | null;
   correctsEntry: { serial: number } | null;
   lateDispatchAt?: Date | null;
+  sentByName?: string | null;
+  recordedByName?: string | null;
+  supplierReturnReason?: string | null;
+  signatureRef?: string | null;
   sourcePurchase: { serial: number } | null;
   refEntry: { serial: number } | null;
 };
@@ -495,12 +508,23 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
 }
 
 function supplierReturnLabel(
-  entry: Pick<ShownEntry, 'sourcePurchase' | 'lateDispatchAt' | 'createdAt'>
+  entry: Pick<
+    ShownEntry,
+    | 'sourcePurchase'
+    | 'lateDispatchAt'
+    | 'createdAt'
+    | 'sentByName'
+    | 'recordedByName'
+    | 'supplierReturnReason'
+    | 'signatureRef'
+  >
 ) {
   const label = `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
-  return entry.lateDispatchAt
-    ? `${label} · dispatched ${formatKarachiDateTime(entry.lateDispatchAt)} · recorded late ${formatKarachiDateTime(entry.createdAt)}`
-    : label;
+  if (entry.lateDispatchAt)
+    return `${label} · Recorded late, no witness · Sent by ${entry.sentByName ?? 'Name unavailable'} on ${formatKarachiDateTime(entry.lateDispatchAt)} · Recorded by ${entry.recordedByName ?? 'Name unavailable'} on ${formatKarachiDateTime(entry.createdAt)} · Reason: ${entry.supplierReturnReason ?? '—'}`;
+  if (entry.signatureRef?.startsWith('solo-'))
+    return `${label} · No second person available · Reason: ${entry.supplierReturnReason ?? '—'}`;
+  return label;
 }
 
 function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
@@ -522,7 +546,8 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
             </p>
             <p className="mt-1 text-text-muted">
               {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
-              {entry.witnessName ?? '—'} · balance {entry.runningBalance}
+              {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')} · balance{' '}
+              {entry.runningBalance}
             </p>
           </article>
         );

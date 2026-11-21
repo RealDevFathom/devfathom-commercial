@@ -47,4 +47,4 @@ export DEV293_UPGRADE_FIXTURE="$work/fixture.json"
 )
 bunx prisma migrate deploy
 bunx prisma generate
-bunx vitest run "$suite" -t 'reconciles a witnessed late entry after a develop dispatch'
+bunx vitest run "$suite" -t 'reconciles an owner-confirmed unwitnessed late entry after a develop dispatch'
