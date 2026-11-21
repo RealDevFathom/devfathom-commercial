@@ -375,6 +375,7 @@ export const pharmacyCardTerminalRouter = router({
         const witness = await authenticateRefundPin({
           ...pinArgs,
           actorId: input.secondApproval.userId,
+          requestedById: scope.actorId,
           pin: input.secondApproval.managerPin,
         });
         if ('blocked' in witness) return witness;

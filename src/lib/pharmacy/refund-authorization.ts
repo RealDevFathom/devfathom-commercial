@@ -70,14 +70,21 @@ export function actorMayRefund(
  * the cashier redeeming a voucher). Returns (never throws) a refusal so the caller's
  * transaction commits the lockout strike.
  *
- * DEV-961: this is always the person confirming their own action (`purpose: 'OWN_ACTION'`).
+ * The signed-in person confirms their own action. A separate reviewer approves on behalf
+ * of the requesting person, and the shared verifier records both identities.
  * Someone who holds an approver right (every manager and owner these routes admit) confirms
  * the way they approve: their authenticator code while the owner's setting is on, their
  * permanent PIN while it is off. Someone who holds none (a cashier) keeps their own PIN.
  */
 export async function verifyRefundPin(
   db: ScopedDb,
-  input: { organizationId: string; actorId: string; pin: string; action?: string },
+  input: {
+    organizationId: string;
+    actorId: string;
+    pin: string;
+    action?: string;
+    requestedById?: string;
+  },
   now = new Date()
 ): Promise<{ verified: true } | { blocked: string }> {
   const { organizationId, actorId, pin } = input;
@@ -108,8 +115,8 @@ export async function verifyRefundPin(
       secret: pin,
       action: input.action ?? 'pharmacy.refund',
       approverRight: 'pharmacy:manage',
-      purpose: 'OWN_ACTION',
-      requestedById: actorId,
+      purpose: input.requestedById && input.requestedById !== actorId ? 'APPROVAL' : 'OWN_ACTION',
+      requestedById: input.requestedById ?? actorId,
       now,
     }))
   ) {
@@ -137,6 +144,8 @@ export function authenticateRefundPin(input: {
   organizationId: string;
   actorId: string;
   pin: string;
+  /** The person requesting a different reviewer's approval. */
+  requestedById?: string;
   /** The refunding procedure, for the audit row. */
   action: string;
   /** DEV-881: another manager-PIN control reusing this check names its own policy. */

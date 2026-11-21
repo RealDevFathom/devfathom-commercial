@@ -607,7 +607,7 @@ describe('provider refund correction approval', () => {
     );
     expect(refundAuth.authenticateRefundPin).toHaveBeenNthCalledWith(
       2,
-      expect.objectContaining({ actorId: 'manager-b', pin: '9876' })
+      expect.objectContaining({ actorId: 'manager-b', requestedById: scope.actorId, pin: '9876' })
     );
   });
 });
