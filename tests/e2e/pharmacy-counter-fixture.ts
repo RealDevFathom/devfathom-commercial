@@ -145,6 +145,11 @@ export const PHARMACY_E2E = {
       },
       batchId: 'batch_pharmacy_counter_e2e_controlled',
       batchNumber: 'FMD-5501',
+      /**
+       * DEV-977 phase 3: the pack's GTIN, so a serialised (GS1) pack scan of this controlled
+       * medicine finds it. Synthetic, check digit valid; disposable lane only.
+       */
+      gtin: '08964000555019',
       unitsPerPack: 20,
       printedMrpMinor: 30_000,
       onHandUnits: 100,

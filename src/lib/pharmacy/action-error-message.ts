@@ -9,6 +9,12 @@ const ACTION_FAILURE_MESSAGES = {
 export const PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE =
   'You don’t have inventory access — ask an owner.';
 
+export const PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE =
+  'Ask your workspace owner for finance access to view these pharmacy accounts.';
+
+export const PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE =
+  'Ask your workspace owner for permission to manage pharmacy account transactions.';
+
 /** Return user-safe copy without exposing details from an unexpected server failure. */
 export function pharmacyActionErrorMessage(surface: keyof typeof ACTION_FAILURE_MESSAGES): string {
   return ACTION_FAILURE_MESSAGES[surface];

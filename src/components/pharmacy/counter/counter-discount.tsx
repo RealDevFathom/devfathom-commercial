@@ -34,6 +34,27 @@ export function counterDiscountMinor(held: CounterHeldDiscount, grossMinor: numb
   return held.kind === 'PERCENT' ? Math.floor((grossMinor * held.bps) / BPS) : held.minor;
 }
 
+/**
+ * DEV-977 phase 3: the whole-bill choice in the discount sheet. `apply` is the whole-bill
+ * procedure the bill's own form uses (DEV-956, with its approval dialog), and resolves to the
+ * refusal to show, or null once applied.
+ */
+export type CounterDiscountWholeBill = {
+  /** The bill is busy, offline or has taken a payment: no whole-bill discount now. */
+  disabled: boolean;
+  apply: (
+    discount: { kind: 'PERCENT'; bps: number } | { kind: 'AMOUNT'; minor: number },
+    label: string
+  ) => Promise<string | null>;
+};
+
+/** Who may approve a discount at this till, from the existing approvers read (DEV-929). */
+type DiscountApprover = { id: string; name: string; self: boolean };
+export type CounterDiscountApprovers =
+  | { status: 'loading' }
+  | { status: 'error' }
+  | { status: 'ready'; list: readonly DiscountApprover[] };
+
 export function describeCounterDiscount(held: CounterHeldDiscount): string {
   return held.kind === 'PERCENT' ? `${held.bps / 100}%` : `Rs ${formatMinor(held.minor)}`;
 }
@@ -60,6 +81,9 @@ export function CounterDiscountEntry({
   onHold,
   onClear,
   returnFocus,
+  wholeBill,
+  approvers,
+  onOpenChange,
 }: {
   branchId: string;
   held: CounterHeldDiscount | null;
@@ -68,6 +92,12 @@ export function CounterDiscountEntry({
   onClear: () => void;
   /** Where focus goes when the panel closes (the counter's search box). */
   returnFocus?: RefObject<HTMLElement | null>;
+  /** DEV-977 phase 3: offered only while the owner has the whole-bill discount on. */
+  wholeBill?: CounterDiscountWholeBill;
+  /** DEV-977 phase 3: who can approve, read while the sheet is open (the supervisor block). */
+  approvers?: CounterDiscountApprovers;
+  /** Told when the sheet opens and closes, so the approvers are read only while it is open. */
+  onOpenChange?: (open: boolean) => void;
 }) {
   const id = useId();
   const valueRef = useRef<HTMLInputElement>(null);
@@ -78,6 +108,10 @@ export function CounterDiscountEntry({
   const [kind, setKind] = useState<CounterHeldDiscount['kind']>('PERCENT');
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
+  const [target, setTarget] = useState<'ITEM' | 'BILL'>('ITEM');
+  const [sending, setSending] = useState(false);
+  // The whole bill can only be chosen while it is offered; otherwise the sheet is the next item's.
+  const toBill = target === 'BILL' && Boolean(wholeBill);
   const stored = maximum.data?.maxDiscountBps;
   // The owner's maximum in bps, or null when none is set (or it has not loaded).
   const maxBps = stored !== undefined && stored < NO_MAXIMUM_DISCOUNT_BPS ? stored : null;
@@ -108,7 +142,17 @@ export function CounterDiscountEntry({
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        onOpenChange?.(next);
+        if (!next) {
+          setTarget('ITEM');
+          setError(null);
+        }
+      }}
+    >
       <DialogTrigger render={<Button type="button" variant="outline" className="min-h-11" />}>
         Discount
       </DialogTrigger>
@@ -124,7 +168,8 @@ export function CounterDiscountEntry({
             className="flex min-h-0 flex-1 flex-col"
             onSubmit={(event) => {
               event.preventDefault();
-              if (disabled) return;
+              if (disabled || sending) return;
+              let discount: CounterHeldDiscount;
               if (kind === 'AMOUNT') {
                 // DEV-939: the shared typed-amount reader, so "12.50" is 1250 exactly, never via a float.
                 const amount = amountInputToMinor(value);
@@ -136,7 +181,7 @@ export function CounterDiscountEntry({
                   setError('Enter an amount in rupees above 0, with at most two decimal places.');
                   return;
                 }
-                onHold({ kind, minor: amount.minor });
+                discount = { kind, minor: amount.minor };
               } else {
                 const bps = percentToBps(value);
                 if (bps === null || bps === 0) {
@@ -151,18 +196,91 @@ export function CounterDiscountEntry({
                   );
                   return;
                 }
-                onHold({ kind, bps });
+                discount = { kind, bps };
               }
+              if (toBill && wholeBill) {
+                if (wholeBill.disabled) return;
+                // DEV-977 phase 3: the bill's own procedure and approval, unchanged.
+                setSending(true);
+                setError(null);
+                void wholeBill
+                  .apply(
+                    discount,
+                    discount.kind === 'PERCENT'
+                      ? `${discount.bps / 100}% off the bill`
+                      : `Rs ${formatMinor(discount.minor)} off the bill`
+                  )
+                  .then((refusal) => {
+                    setSending(false);
+                    if (refusal) {
+                      setError(refusal);
+                      return;
+                    }
+                    setValue('');
+                    setTarget('ITEM');
+                    setOpen(false);
+                    onOpenChange?.(false);
+                  });
+                return;
+              }
+              onHold(discount);
               setValue('');
               setError(null);
               setOpen(false);
+              onOpenChange?.(false);
             }}
           >
-            <CounterSheetHeader eyebrow="Discount" title="Discount on the next item" />
+            <CounterSheetHeader
+              eyebrow="Discount"
+              title={toBill ? 'Discount on the whole bill' : 'Discount on the next item'}
+            />
             <DialogDescription className="sr-only">
-              A manual discount on the next item you add to this bill.
+              {toBill
+                ? 'One discount shared over the items of this bill.'
+                : 'A manual discount on the next item you add to this bill.'}
             </DialogDescription>
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4.5 text-sm">
+              {wholeBill ? (
+                // DEV-977 phase 3 (Counter v2 A4): where the discount goes. "Next item" is the
+                // existing item discount, given when the item is added; "Whole bill" is the
+                // existing whole-bill discount, shared over the bill's items by the server.
+                <fieldset className="space-y-1.5">
+                  <legend className="text-[13px] font-semibold text-text-strong">Apply to</legend>
+                  <div
+                    data-counter-segmented=""
+                    className="inline-flex flex-wrap gap-1 rounded-sm bg-surface-sunken p-1"
+                  >
+                    {(
+                      [
+                        ['ITEM', 'Next item'],
+                        ['BILL', 'Whole bill'],
+                      ] as const
+                    ).map(([option, label]) => (
+                      <Button
+                        key={option}
+                        type="button"
+                        variant={target === option ? 'default' : 'ghost'}
+                        className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                        aria-pressed={target === option}
+                        disabled={disabled || (option === 'BILL' && wholeBill.disabled)}
+                        onClick={() => {
+                          setTarget(option);
+                          setError(null);
+                        }}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-text-muted">
+                    {wholeBill.disabled
+                      ? 'The whole bill can be discounted only before any payment is taken.'
+                      : toBill
+                        ? 'Shared over the bill’s items by price. Adding an item afterwards removes it, so give it once the bill is complete.'
+                        : 'Comes off the next item you add to this bill.'}
+                  </p>
+                </fieldset>
+              ) : null}
               <p id={`${id}-maximum`} className="text-text-body">
                 {maximum.isLoading
                   ? "Checking the owner's maximum discount…"
@@ -231,20 +349,89 @@ export function CounterDiscountEntry({
                 </p>
               ) : null}
               <CounterNote tone="warning">
-                <p id={`${id}-help`}>{approvalCopy.discountApproval}</p>
+                <p id={`${id}-help`}>
+                  {toBill ? approvalCopy.discountApprovalBill : approvalCopy.discountApproval}
+                </p>
               </CounterNote>
+              {approvers ? (
+                // DEV-977 phase 3 (Counter v2 A4): the supervisor block. It names who can approve
+                // (the existing approvers read); the approval itself is still asked for, with the
+                // approver's own code or PIN, in the counter's approval dialog, and only when the server
+                // says this member needs one. No PIN is typed here.
+                <section
+                  aria-labelledby={`${id}-supervisor`}
+                  className="space-y-2.5 border-t border-border-subtle pt-4"
+                >
+                  <h3
+                    id={`${id}-supervisor`}
+                    className="text-[13px] font-semibold text-text-strong"
+                  >
+                    Supervisor approval
+                  </h3>
+                  <CounterNote tone="warning">
+                    <p>
+                      <b className="font-semibold text-text-strong">
+                        A manager or owner must approve a discount you cannot give on your own.
+                      </b>{' '}
+                      {approvalCopy.discountSupervisorHow}{' '}
+                      {toBill ? 'when you apply it to the bill' : 'when you add the item'}. The
+                      approval and both names are saved with the sale.
+                    </p>
+                  </CounterNote>
+                  {approvers.status === 'loading' ? (
+                    <p role="status" className="text-text-muted">
+                      Checking who can approve…
+                    </p>
+                  ) : approvers.status === 'error' ? (
+                    <p role="status" className="text-text-muted">
+                      Who can approve could not be loaded. You are still asked for an approval if
+                      the discount needs one.
+                    </p>
+                  ) : approvers.list.length === 0 ? (
+                    <p role="status" className="text-text-muted">
+                      No manager or owner can approve a discount at this till yet. A discount that
+                      needs approval cannot be given until one is set up to approve.
+                    </p>
+                  ) : (
+                    <div className="space-y-1">
+                      <p id={`${id}-who`} className="text-xs text-text-muted">
+                        Who can approve
+                      </p>
+                      <ul aria-labelledby={`${id}-who`} className="flex flex-wrap gap-1.5">
+                        {approvers.list.map((approver) => (
+                          <li
+                            key={approver.id}
+                            className="rounded-full bg-surface-sunken px-3 py-1.5 font-semibold text-text-strong"
+                          >
+                            {approver.self ? `${approver.name} (you)` : approver.name}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </section>
+              ) : null}
             </div>
             <CounterSheetFooter>
               <Button
                 type="button"
                 variant="outline"
                 className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
-                onClick={() => setOpen(false)}
+                onClick={() => {
+                  setOpen(false);
+                  setTarget('ITEM');
+                  setError(null);
+                  onOpenChange?.(false);
+                }}
               >
                 Cancel
               </Button>
-              <Button type="submit" className="min-h-11" disabled={disabled}>
-                Apply to next item
+              <Button
+                type="submit"
+                className="min-h-11"
+                disabled={disabled || sending || (toBill && wholeBill?.disabled)}
+              >
+                {toBill ? (sending ? 'Applying…' : 'Apply to bill') : 'Apply to next item'}
               </Button>
             </CounterSheetFooter>
           </form>
