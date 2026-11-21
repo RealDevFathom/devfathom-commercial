@@ -216,8 +216,10 @@ beforeAll(async () => {
       [otherOrganizationId, `apappr-other-${suffix}`],
       [pairOrganizationId, `apappr-pair-${suffix}`],
     ]) {
+      // DEV-961: these reversals are approved with fixed PINs, which apply while the owner has
+      // the authenticator for approvals turned off.
       await client.query(
-        `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,status,"deploymentMode","createdAt","updatedAt") VALUES ($1,$2,'AP approver fixture','AP approver fixture','PHARMACY','ACTIVE','SHARED',now(),now())`,
+        `INSERT INTO organizations (id,slug,"legalName","displayName",vertical,status,"deploymentMode","requireApprovalAuthenticator","createdAt","updatedAt") VALUES ($1,$2,'AP approver fixture','AP approver fixture','PHARMACY','ACTIVE','SHARED',false,now(),now())`,
         [org, slug]
       );
       await client.query(

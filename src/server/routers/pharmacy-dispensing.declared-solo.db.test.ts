@@ -306,8 +306,9 @@ beforeAll(async () => {
   await withPlatformDb((tx) => tx.jurisdictionRuleSet.create({ data: rules }));
   await withPlatformDb((tx) =>
     tx.$executeRawUnsafe(
-      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
-       VALUES ($1, $1, 'Shift Rx', 'Shift Rx', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt", "requireApprovalAuthenticator")
+       VALUES ($1, $1, 'Shift Rx', 'Shift Rx', 'PHARMACY', 'ACTIVE', 'SHARED', now(), now(), false)`,
       ids.org
     )
   );

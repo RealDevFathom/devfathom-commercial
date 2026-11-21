@@ -235,10 +235,11 @@ beforeAll(async () => {
 
   await withPlatformDb((tx) =>
     tx.$executeRawUnsafe(
+      // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
       `INSERT INTO organizations
-         (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
-       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now()),
-              ($2, $2, $2, $2, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+         (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt", "requireApprovalAuthenticator")
+       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now(), false),
+              ($2, $2, $2, $2, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now(), false)`,
       X.org,
       Y.org
     )

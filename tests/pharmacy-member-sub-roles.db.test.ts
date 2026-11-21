@@ -140,8 +140,10 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       await c.connect();
       await c.query("SELECT set_config('app.is_platform_admin','true',false)");
       for (const org of ORGS) {
+        // DEV-961: these changes are confirmed with fixed PINs, which apply while the owner has
+        // the authenticator for approvals turned off.
         await c.query(
-          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"seatLimit","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',50,now(),now())`,
+          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"seatLimit","requireApprovalAuthenticator","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',50,false,now(),now())`,
           [org]
         );
         await c.query(
