@@ -36,6 +36,15 @@ export type CounterApprovalCopy = {
   witnessIntro: string;
   /** The discount sheet: who approves a discount the cashier may not give alone, and how. */
   discountApproval: string;
+  /** DEV-977 phase 3: the same, when the discount sheet applies to the whole bill. */
+  discountApprovalBill: string;
+  /** DEV-977 phase 3: the supervisor block's "how", before "when you add the item" (or apply). */
+  discountSupervisorHow: string;
+  /** DEV-977 phase 3: the controlled line's refusal notice, and the Authorise sheet's lines. */
+  controlledNeeds: string;
+  controlledSecretNeeded: string;
+  controlledReady: string;
+  controlledPharmacistOnly: string;
 };
 
 export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCopy> = {
@@ -55,6 +64,16 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
       'Controlled medicine. A different pharmacist must witness this return with the current code from their authenticator app (a pharmacist with no login enters their PIN). Nothing is saved on this device.',
     discountApproval:
       'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their approval code when you add the item.',
+    discountApprovalBill:
+      'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their approval code when you apply it.',
+    discountSupervisorHow:
+      'They choose their name and enter the current 6-digit code from their authenticator app on this till (a staff member with no login enters their PIN)',
+    controlledNeeds:
+      'Controlled medicine needs the patient address, the pharmacist’s approval code, and a prescription or an emergency prescriber.',
+    controlledSecretNeeded: 'the pharmacist’s approval code',
+    controlledReady: 'Ready. The pharmacist’s approval code is checked when the line is added.',
+    controlledPharmacistOnly:
+      'Controlled medicines need the patient’s address, a prescription or an emergency supply, and an independent pharmacist’s approval code. Ask the pharmacist on duty to add it at this till.',
   },
   PIN: {
     approverLabel: 'Approver PIN',
@@ -72,6 +91,15 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
       'Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The PIN is never saved on this device.',
     discountApproval:
       'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their PIN when you add the item.',
+    discountApprovalBill:
+      'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their PIN when you apply it.',
+    discountSupervisorHow: 'They choose their name and enter their own staff PIN on this till',
+    controlledNeeds:
+      'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber.',
+    controlledSecretNeeded: "the pharmacist's PIN",
+    controlledReady: "Ready. The pharmacist's PIN is checked when the line is added.",
+    controlledPharmacistOnly:
+      "Controlled medicines need the patient's address, a prescription or an emergency supply, and an independent pharmacist's PIN. Ask the pharmacist on duty to add it at this till.",
   },
 };
 
