@@ -269,96 +269,110 @@ it('bounds date-only transaction searches and new charges on the Karachi clock',
   });
 });
 
+// Golden billing days. The two leap-year schedules cover Jan 2028 through Feb 2029.
+const monthlySchedules = [
+  { name: 'first of the month', year: 2026, days: Array<number>(12).fill(1), nextDay: 1 },
+  {
+    name: '31 January, common year',
+    year: 2026,
+    days: [31, ...Array<number>(11).fill(28)],
+    nextDay: 28,
+  },
+  ...[30, 31].map((start) => ({
+    name: start + ' January, leap year',
+    year: 2028,
+    days: [start, ...Array<number>(12).fill(29), 28],
+    nextDay: 28,
+  })),
+];
+
 describe.each(['America/New_York', 'Asia/Karachi', 'UTC'] as const)(
   'recurring expense cycles in %s',
   (zone) => {
-    it.each([
-      'legacy first',
-      'legacy 31st catch-up',
-      'legacy 31st successive runs',
-      'local first at 00:30',
-    ] as const)(
-      'preserves the UTC develop schedule or local wall time over 2026 for %s',
-      async (schedule) => {
-        // Pinned from the UTC develop router. In a single catch-up its anchor stays
-        // at 31, but successive calls use the newly persisted date as their anchor.
-        const monthLabels = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
-        let labels = monthLabels.map((month) => month + '-01');
-        if (schedule === 'legacy 31st catch-up') {
-          labels = ['01-31', '03-03', '05-01', '07-01', '08-31', '10-01', '12-01'];
-        } else if (schedule === 'legacy 31st successive runs') {
-          labels = ['01-31', ...monthLabels.slice(2).map((month) => month + '-03')];
-        }
-        const expected = labels.map((label) => {
-          const date = '2026-' + label;
-          if (schedule !== 'local first at 00:30') return new Date(date + 'T00:00:00Z');
-          // At 00:30 on the first, New York observes daylight time April–November.
-          const month = Number(label.slice(0, 2));
-          const offsets = {
-            'America/New_York': month >= 4 && month <= 11 ? '-04:00' : '-05:00',
-            'Asia/Karachi': '+05:00',
-            UTC: 'Z',
-          };
-          return new Date(date + 'T00:30:00' + offsets[zone]);
-        });
-        const expense = {
-          id: 'r',
-          name: 'Subscription',
-          interval: 'monthly',
-          nextDueDate: expected[0]!,
-        };
-        mocks.recurringFindMany.mockImplementation(async () => [{ ...expense }]);
-        const ctx = context(zone);
-        const posted: Date[] = [];
-        const db = {
-          ...ctx.db,
-          organization: { findUnique: async () => ({ timezone: zone }) },
-          transaction: {
-            ...ctx.db.transaction,
-            createMany: ({ data }: { data: { date: Date }[] }) =>
-              posted.push(...data.map((row) => row.date)),
-          },
-          recurringExpense: {
-            ...ctx.db.recurringExpense,
-            update: ({ data }: { data: { nextDueDate: Date } }) => Object.assign(expense, data),
-          },
-          $transaction: vi.fn(),
-        };
-        const router = financeRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
-        const assistant = buildFinanceTools({
-          db,
-          ctx: { organizationId: 'org-1' },
-          isAdmin: true,
-          now: () => new Date(),
-        } as unknown as AssistantHelpers) as unknown as {
-          listRecurringExpenses: { execute(input: object): Promise<{ nextDueDate: Date }[]> };
-        };
-        vi.useFakeTimers({ toFake: ['Date'] });
-        try {
-          for (const due of expected) {
-            // At local midday a legacy label is still due today in all three zones.
-            vi.setSystemTime(
-              schedule === 'local first at 00:30' ? due : new Date(due.getTime() + 12 * 3_600_000)
-            );
-            expect((await router.getRecurringExpenses())[0]?.nextDueDate).toEqual(due);
-            expect((await assistant.listRecurringExpenses.execute({}))[0]?.nextDueDate).toEqual(
-              due
-            );
-            if (schedule === 'legacy 31st successive runs') {
-              expect((await router.postDueRecurringExpenses()).posted).toBe(1);
-              expect((await router.postDueRecurringExpenses()).posted).toBe(0);
-            }
+    describe.each(monthlySchedules)('$name', ({ year, days, nextDay }) => {
+      it.each([
+        { clock: 'legacy UTC date', successive: false },
+        { clock: 'legacy UTC date', successive: true },
+        { clock: 'local 00:30', successive: false },
+        { clock: 'local 00:30', successive: true },
+      ])(
+        'posts each month once ($clock, successive=$successive)',
+        async ({ clock, successive }) => {
+          function expectedOccurrence(day: number, index: number) {
+            const carrier = new Date(Date.UTC(year, index, day));
+            const label = carrier.toISOString().slice(0, 10);
+            if (clock === 'legacy UTC date') return carrier;
+            // At 00:30 on these fixture dates New York observes daylight time on
+            // April–November firsts in 2026, and March–October month ends.
+            const month = carrier.getUTCMonth() + 1;
+            const daylight = day === 1 ? month >= 4 && month <= 11 : month >= 3 && month <= 10;
+            const offsets = {
+              'America/New_York': daylight ? '-04:00' : '-05:00',
+              'Asia/Karachi': '+05:00',
+              UTC: 'Z',
+            };
+            return new Date(label + 'T00:30:00' + offsets[zone]);
           }
-          vi.setSystemTime(new Date('2026-12-31T12:00:00Z'));
-          const remaining = schedule === 'legacy 31st successive runs' ? 0 : expected.length;
-          expect((await router.postDueRecurringExpenses()).posted).toBe(remaining);
-          expect(posted).toEqual(expected);
-          expect((await router.postDueRecurringExpenses()).posted).toBe(0);
-          expect(posted).toEqual(expected);
-        } finally {
-          vi.useRealTimers();
+          const expected = days.map(expectedOccurrence);
+          const expense = {
+            id: 'r',
+            name: 'Subscription',
+            interval: 'monthly',
+            nextDueDate: expected[0]!,
+          };
+          mocks.recurringFindMany.mockImplementation(async () => [{ ...expense }]);
+          const ctx = context(zone);
+          const posted: Date[] = [];
+          const db = {
+            ...ctx.db,
+            organization: { findUnique: async () => ({ timezone: zone }) },
+            transaction: {
+              ...ctx.db.transaction,
+              createMany: ({ data }: { data: { date: Date }[] }) =>
+                posted.push(...data.map((row) => row.date)),
+            },
+            recurringExpense: {
+              ...ctx.db.recurringExpense,
+              update: ({ data }: { data: { nextDueDate: Date } }) => Object.assign(expense, data),
+            },
+            $transaction: vi.fn(),
+          };
+          const router = financeRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
+          const assistant = buildFinanceTools({
+            db,
+            ctx: { organizationId: 'org-1' },
+            isAdmin: true,
+            now: () => new Date(),
+          } as unknown as AssistantHelpers) as unknown as {
+            listRecurringExpenses: { execute(input: object): Promise<{ nextDueDate: Date }[]> };
+          };
+          vi.useFakeTimers({ toFake: ['Date'] });
+          try {
+            for (const due of expected) {
+              vi.setSystemTime(
+                clock === 'legacy UTC date' ? new Date(due.getTime() + 12 * 3_600_000) : due
+              );
+              expect((await router.getRecurringExpenses())[0]?.nextDueDate).toEqual(due);
+              expect((await assistant.listRecurringExpenses.execute({}))[0]?.nextDueDate).toEqual(
+                due
+              );
+              if (successive) {
+                expect((await router.postDueRecurringExpenses()).posted).toBe(1);
+                expect((await router.postDueRecurringExpenses()).posted).toBe(0);
+              }
+            }
+            expect((await router.postDueRecurringExpenses()).posted).toBe(
+              successive ? 0 : expected.length
+            );
+            expect(posted).toEqual(expected);
+            expect((await router.postDueRecurringExpenses()).posted).toBe(0);
+            expect(posted).toEqual(expected);
+            expect(expense.nextDueDate).toEqual(expectedOccurrence(nextDay, days.length));
+          } finally {
+            vi.useRealTimers();
+          }
         }
-      }
-    );
+      );
+    });
   }
 );

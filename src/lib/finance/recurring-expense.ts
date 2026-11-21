@@ -7,17 +7,17 @@ function isLegacyBillingDate(due: Date) {
   return due.getTime() % 86_400_000 === 0;
 }
 
-/** Advance the stored schedule in civil months, retaining its wall time and anchor day. */
+/** Advance the stored schedule in civil months, retaining its wall time and clamping the current billing day. */
 export function recurringExpenseSchedule(firstDue: Date, interval: string, zone?: string | null) {
   const step = monthsByInterval[interval.toLowerCase()] ?? 1;
   const scheduleZone = isLegacyBillingDate(firstDue) ? 'UTC' : zone;
-  const anchorDay = Number(workspaceToday(scheduleZone, firstDue).slice(-2));
   return (due: Date) => {
     const seconds = due.toISOString().slice(16);
     const wall = new Date(workspaceMinuteInput(due, scheduleZone) + seconds);
-    // Retain develop's month overflow and its anchor for this posting run.
-    wall.setUTCDate(anchorDay);
-    wall.setUTCMonth(wall.getUTCMonth() + step);
+    const billingDay = wall.getUTCDate();
+    // Day zero of the following month is the last day of the target month.
+    wall.setUTCMonth(wall.getUTCMonth() + step + 1, 0);
+    wall.setUTCDate(Math.min(billingDay, wall.getUTCDate()));
     const next = new Date(workspaceInstantFromInput(wall.toISOString().slice(0, 19), scheduleZone));
     next.setUTCMilliseconds(due.getUTCMilliseconds());
     return next;
