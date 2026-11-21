@@ -29,7 +29,7 @@ type Props = {
   branchId: string;
   query: string;
   medicines: { medicineId: string; displayName: string }[];
-  patient: { patientId: string; displayName: string } | null;
+  customer: { id: string; displayName: string } | null;
   disabled: boolean;
   onSaved: (message: string) => void;
 };
@@ -65,7 +65,7 @@ export function CounterDemandSheet(props: Props) {
     </Dialog>
   );
 }
-function DemandForm({ branchId, query, medicines, patient, disabled, onSaved }: Props) {
+function DemandForm({ branchId, query, medicines, customer, disabled, onSaved }: Props) {
   const [text, setText] = useState(query);
   const [quantity, setQuantity] = useState('1');
   const [reason, setReason] = useState<keyof typeof reasons>('STOCKOUT');
@@ -79,7 +79,7 @@ function DemandForm({ branchId, query, medicines, patient, disabled, onSaved }: 
   const [medicineId, setMedicineId] = useState(
     options.find((row) => row.displayName === query)?.medicineId ?? ''
   );
-  const eligible = Boolean(medicineId && patient);
+  const eligible = Boolean(medicineId && customer);
   return (
     <form
       className="flex min-h-0 flex-col"
@@ -93,8 +93,8 @@ function DemandForm({ branchId, query, medicines, patient, disabled, onSaved }: 
           quantity: Number(quantity),
           reason,
           followUp:
-            notify && eligible && patient
-              ? { patientId: patient.patientId, channel, reserveOnArrival: reserve }
+            notify && eligible && customer
+              ? { customerId: customer.id, channel, reserveOnArrival: reserve }
               : undefined,
         };
         const payload = JSON.stringify(input);
@@ -178,12 +178,12 @@ function DemandForm({ branchId, query, medicines, patient, disabled, onSaved }: 
         </label>
         {!eligible && (
           <p className="text-sm text-text-muted">
-            Select a catalogue medicine and link a patient for a restock reminder.
+            Select a catalogue medicine and link the customer for a restock reminder.
           </p>
         )}
         {notify && eligible && (
           <>
-            <p>Reminder for {patient?.displayName}</p>
+            <p>Reminder for {customer?.displayName}</p>
             <Label htmlFor="asked-channel">Message by</Label>
             <SelectField
               id="asked-channel"

@@ -2634,7 +2634,7 @@ export async function recordCounterDemand(
     quantity: number;
     reason:
       'STOCKOUT' | 'NOT_CARRIED' | 'PACK_UNAVAILABLE' | 'PRICE_REJECTED' | 'SUBSTITUTE_DECLINED';
-    followUp?: { patientId: string; channel: 'SMS' | 'WHATSAPP'; reserveOnArrival: boolean };
+    followUp?: { customerId: string; channel: 'SMS' | 'WHATSAPP'; reserveOnArrival: boolean };
   }
 ) {
   const { requestId, ...request } = input;
@@ -2675,11 +2675,19 @@ export async function recordCounterDemand(
     id
   );
   if (input.followUp) {
+    const { customerId, channel, reserveOnArrival } = input.followUp;
+    const customer = await db.pharmacyCustomer.findFirst({
+      where: { id: customerId, organizationId: scope.organizationId, active: true },
+      select: { patientId: true },
+    });
+    if (!customer) throw new PharmacySaleError('NOT_FOUND');
     await activateRestockBranch(db, scope);
     await addRestockInterest(db, scope, {
       demandEventId: id,
       quantityUnits: input.quantity,
-      ...input.followUp,
+      patientId: customer.patientId,
+      channel,
+      reserveOnArrival,
     });
   }
   return { id };

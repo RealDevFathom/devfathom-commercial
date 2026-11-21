@@ -227,3 +227,72 @@ describeIfDatabase('DEV-991 customer asked for it', () => {
     });
   });
 });
+
+describeIfDatabase('DEV-991 notify and reserve choices', () => {
+  it('uses the linked retail customer’s reminder consent and records only a future reserve request', async () => {
+    const { recordCounterDemand } = await import('./sales');
+    const scope = { organizationId: orgA, branchId: branchA, actorId };
+    const { medicine, patient, customer } = await inOrg(orgA, async (tx) => {
+      const medicine = await tx.medicine.create({
+        data: {
+          organizationId: orgA,
+          productName: 'Synthetic demand',
+          productFamily: 'PHARMACEUTICAL',
+        },
+      });
+      const patient = await tx.pharmacyPatient.create({
+        data: { organizationId: orgA, displayName: 'Test reminder contact' },
+      });
+      const customer = await tx.pharmacyCustomer.create({
+        data: { organizationId: orgA, patientId: patient.id, displayName: 'Test customer' },
+      });
+      return { medicine, patient, customer };
+    });
+    const input = {
+      requestId: randomUUID(),
+      requestedText: medicine.productName,
+      requestedMedicineId: medicine.id,
+      quantity: 2,
+      reason: 'STOCKOUT' as const,
+      followUp: { customerId: customer.id, channel: 'SMS' as const, reserveOnArrival: true },
+    };
+    const record = () => inOrg(orgA, (dbx) => recordCounterDemand(dbx, scope, input));
+    await expect(record()).rejects.toThrow(/CONSENT_REQUIRED/);
+    await inOrg(orgA, async (dbx) => {
+      expect(
+        await dbx.unfulfilledDemandEvent.count({ where: { requestedMedicineId: medicine.id } })
+      ).toBe(0);
+      await dbx.patientConsent.create({
+        data: {
+          organizationId: orgA,
+          patientId: patient.id,
+          purpose: 'REMINDERS',
+          channel: 'SMS',
+          version: 1,
+          granted: true,
+          recordedByUserId: actorId,
+        },
+      });
+    });
+    const { id } = await record();
+    await inOrg(
+      orgA,
+      async (dbx) => {
+        expect(
+          await dbx.pharmacyRestockInterest.findMany({ where: { demandEventId: id } })
+        ).toMatchObject([
+          {
+            patientId: patient.id,
+            channel: 'SMS',
+            reserveOnArrival: true,
+            quantityUnits: 2,
+            status: 'OPEN',
+          },
+        ]);
+        expect(await dbx.pharmacySale.count({ where: { branchId: branchA } })).toBe(0);
+        expect(await dbx.pharmacyInventoryLot.count({ where: { branchId: branchA } })).toBe(0);
+      },
+      { 'app.current_branch_id': branchA }
+    );
+  });
+});

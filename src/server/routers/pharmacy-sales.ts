@@ -4366,7 +4366,7 @@ export const pharmacySalesRouter = router({
           ]),
           followUp: z
             .object({
-              patientId: z.string().min(1),
+              customerId: z.string().min(1),
               channel: z.enum(['SMS', 'WHATSAPP']),
               reserveOnArrival: z.boolean(),
             })

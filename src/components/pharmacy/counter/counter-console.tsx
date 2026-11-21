@@ -4368,7 +4368,7 @@ function ScopedPharmacyCounterConsole({
           branchId={branchId}
           query={activeRow?.displayName ?? query}
           medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
-          patient={patient ?? null}
+          customer={customerQuery.data?.customer ?? null}
           disabled={busy || !connectionOnline}
           onSaved={(message) => setNotice({ tone: 'success', message })}
         />
