@@ -44,10 +44,16 @@ const moneyMinor = z.number().int().positive().max(999_999_999);
 const at = z.coerce.date();
 
 const financeGate = tagProcedureGate(
-  (async ({ ctx, next }) => {
+  async <Result>({
+    ctx,
+    next,
+  }: {
+    ctx: Parameters<typeof requirePharmacyFinance>[0];
+    next: () => Promise<Result>;
+  }) => {
     await requirePharmacyFinance(ctx);
     return next();
-  }) satisfies Parameters<typeof adminProcedure.use>[0],
+  },
   { kind: 'capability', action: 'finance:read' }
 );
 
