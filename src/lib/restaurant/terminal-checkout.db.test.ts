@@ -1272,10 +1272,13 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
           data: { branchId: ctx.branchA },
         })
       );
+      // Moving this operator to branch A ended the old binding. Reauthenticate
+      // on the reassigned device to exercise object-level replay authorization.
+      const reassignedToken = await establishUnlock(ctx.posB.secret, ctx.staffA, ctx.branchA);
       const beforeReassignedReplays = await moneyCounts();
       const deniedCutReplay = await call(deps.routes.bill, {
         secret: ctx.posB.secret,
-        session: tokenB,
+        session: reassignedToken,
         key: branchBCutKey,
         body: { orderId: branchBOrder.orderId, split: { kind: 'NONE' } },
       });
@@ -1285,7 +1288,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       const deniedCompReplay = await call(deps.routes.retainedComp, {
         secret: ctx.posB.secret,
-        session: tokenB,
+        session: reassignedToken,
         key: branchBCompKey,
         body: branchBCompBody,
       });
@@ -1773,60 +1776,70 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
 
   // ── Capability denial per route (C11) ────────────────────────────────────────
   describe('capability denial', () => {
-    it('refuses every money route when the acting operator lacks the capability', async () => {
-      const token = await establishUnlock(ctx.posA.secret, ctx.staffNoCap);
+    const mutations: { r: string; body: unknown }[] = [
+      { r: 'bill', body: { orderId: 'o', split: { kind: 'NONE' } } },
+      {
+        r: 'retainedComp',
+        body: {
+          billId: 'b',
+          billLineId: 'l',
+          reason: 'x',
+          approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
+        },
+      },
+      {
+        r: 'tender',
+        body: { billId: 'b', tender: { type: 'CASH', amount: '1.00', cashReceived: '1.00' } },
+      },
+      {
+        r: 'refund',
+        body: {
+          originalTenderId: 't',
+          amount: '1.00',
+          reason: 'x',
+          approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
+        },
+      },
+      { r: 'drawerOpen', body: { openingFloat: '1.00' } },
+      {
+        r: 'drawerMovement',
+        body: { drawerSessionId: 'd', kind: 'PAID_IN', amount: '1.00', reason: 'x' },
+      },
+      { r: 'drawerClose', body: { drawerSessionId: 'd', countedCash: '1.00' } },
+      { r: 'dayClose', body: { businessDate: TODAY } },
+    ];
+    const reads = [
+      ['summary', { orderId: 'o' }],
+      ['receipt', { billId: 'b' }],
+      ['dayPreview', { businessDate: TODAY }],
+    ] as const;
+    const deniedSessions = new Map<string, { secret: string; session: string }>();
+    beforeAll(async () => {
+      // A capability refusal locks its binding, so authorize a distinct device
+      // and session for each route before measuring the route's response.
+      for (const name of [...mutations.map((m) => m.r), ...reads.map(([r]) => r)]) {
+        const device = await enroll(ctx.branchA, uniqueKey('deny-pos'));
+        deniedSessions.set(name, {
+          secret: device.secret,
+          session: await establishUnlock(device.secret, ctx.staffNoCap),
+        });
+      }
+    }, 30_000);
 
-      const mutations: { r: string; body: unknown }[] = [
-        { r: 'bill', body: { orderId: 'o', split: { kind: 'NONE' } } },
-        {
-          r: 'retainedComp',
-          body: {
-            billId: 'b',
-            billLineId: 'l',
-            reason: 'x',
-            approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
-          },
-        },
-        {
-          r: 'tender',
-          body: { billId: 'b', tender: { type: 'CASH', amount: '1.00', cashReceived: '1.00' } },
-        },
-        {
-          r: 'refund',
-          body: {
-            originalTenderId: 't',
-            amount: '1.00',
-            reason: 'x',
-            approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
-          },
-        },
-        { r: 'drawerOpen', body: { openingFloat: '1.00' } },
-        {
-          r: 'drawerMovement',
-          body: { drawerSessionId: 'd', kind: 'PAID_IN', amount: '1.00', reason: 'x' },
-        },
-        { r: 'drawerClose', body: { drawerSessionId: 'd', countedCash: '1.00' } },
-        { r: 'dayClose', body: { businessDate: TODAY } },
-      ];
+    it('refuses every money route when the acting operator lacks the capability', async () => {
       for (const m of mutations) {
         const res = await call(deps.routes[m.r], {
-          secret: ctx.posA.secret,
-          session: token,
+          ...deniedSessions.get(m.r)!,
           key: uniqueKey('deny'),
           body: m.body,
         });
         expect(res.status, `mutation ${m.r}`).toBe(403);
       }
 
-      for (const [r, query] of [
-        ['summary', { orderId: 'o' }],
-        ['receipt', { billId: 'b' }],
-        ['dayPreview', { businessDate: TODAY }],
-      ] as const) {
+      for (const [r, query] of reads) {
         const res = await call(deps.routes[r], {
           method: 'GET',
-          secret: ctx.posA.secret,
-          session: token,
+          ...deniedSessions.get(r)!,
           query,
         });
         expect(res.status, `read ${r}`).toBe(403);

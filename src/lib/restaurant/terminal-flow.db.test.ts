@@ -382,6 +382,58 @@ describeIfDatabase('terminal transport end-to-end (real DB)', { timeout: 30_000 
     );
   });
 
+  it.each(['status', 'branch', 'grant'] as const)(
+    'ends only the affected operator session immediately after a %s edit',
+    async (change) => {
+      const { deviceId } = await enroll(`kitchen-access-${change}`);
+      await deps.withTenantDb(orgId, async (tx) => {
+        const profile = await tx.restaurantStaffProfile.create({
+          data: { displayName: 'Access fixture', primaryBranchId: branchId },
+        });
+        const grant = await tx.restaurantStaffCapabilityGrant.create({
+          data: { staffProfileId: profile.id, branchId, capability: 'kitchen:operate' },
+        });
+        const lastActivityAt = new Date('2026-01-01T00:00:00Z');
+        const session = await tx.restaurantTerminalSession.create({
+          data: {
+            deviceId,
+            activeStaffProfileId: profile.id,
+            lastActivityAt,
+            tokenHash: randomBytes(32).toString('hex'),
+          },
+        });
+        const other = await tx.restaurantTerminalSession.create({
+          data: {
+            deviceId,
+            activeStaffProfileId: STAFF.B.id,
+            lastActivityAt,
+            tokenHash: randomBytes(32).toString('hex'),
+          },
+        });
+        if (change === 'grant')
+          await tx.restaurantStaffCapabilityGrant.delete({ where: { id: grant.id } });
+        else
+          await tx.restaurantStaffProfile.update({
+            where: { id: profile.id },
+            data:
+              change === 'status'
+                ? { status: 'SUSPENDED' }
+                : { primaryBranchId: `branch_other_${suffix}` },
+          });
+        expect(
+          await tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: session.id } })
+        ).toMatchObject({ activeStaffProfileId: null, endedAt: expect.any(Date), lastActivityAt });
+        expect(
+          await tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: other.id } })
+        ).toMatchObject({ activeStaffProfileId: STAFF.B.id, endedAt: null, lastActivityAt });
+        await tx.restaurantStaffProfile.update({
+          where: { id: profile.id },
+          data: { status: 'ARCHIVED' },
+        });
+      });
+    }
+  );
+
   it('records a manager co-authorization and refuses a self-approval (C7)', async () => {
     const { deviceId, secret } = await enroll('coauth');
     const { token, sessionId } = await establish(secret);

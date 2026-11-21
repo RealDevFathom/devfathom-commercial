@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   operatorHasCapability: vi.fn(),
   attachCustomerToOrder: vi.fn(),
   orderFindFirst: vi.fn(),
+  updateSession: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -22,7 +23,11 @@ vi.mock('@/lib/restaurant/terminal-auth', () => ({
     (handler: (ctx: unknown, request: Request) => Promise<Response>) => (request: Request) =>
       handler(
         {
-          db: { restaurantOrder: { findFirst: mocks.orderFindFirst } },
+          db: {
+            restaurantOrder: { findFirst: mocks.orderFindFirst },
+            restaurantTerminalSession: { update: mocks.updateSession },
+          },
+          session: { id: 'session_1' },
           device: { branchId: 'branch_1' },
         },
         request
@@ -76,6 +81,10 @@ describe('POST customer attach capability', () => {
       expect.any(Date),
       'branch_1'
     );
+    expect(mocks.updateSession).toHaveBeenCalledWith({
+      where: { id: 'session_1' },
+      data: { activeStaffProfileId: null },
+    });
     expect(mocks.orderFindFirst).not.toHaveBeenCalled();
     expect(mocks.attachCustomerToOrder).not.toHaveBeenCalled();
   });

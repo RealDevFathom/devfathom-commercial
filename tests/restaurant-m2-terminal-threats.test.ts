@@ -74,6 +74,12 @@ const db = {
       return copy(row);
     },
   },
+  $queryRaw: async (_query: TemplateStringsArray, tokenHash: string, deviceId: string) => {
+    h.reads.sessionByHash += 1;
+    return h.store.sessions
+      .filter((row) => row.tokenHash === tokenHash && row.deviceId === deviceId)
+      .map(copy);
+  },
   restaurantTerminalSession: {
     create: async ({ data }: { data: Row }) => {
       const row = {

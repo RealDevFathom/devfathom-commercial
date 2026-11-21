@@ -41,13 +41,15 @@ import {
   verifyOperatorCredential,
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
+import { operatorHasCapability } from './operator-capability';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
 import {
   evaluateTerminalSession,
   isTerminalSessionTokenFormat,
-  resolveSessionByToken,
+  hashTerminalSessionToken,
+  lockDeniedOperator,
   touchSession,
   type TerminalInvalidReason,
   type TerminalSessionState,
@@ -122,7 +124,7 @@ export const TERMINAL_DEVICE_COOKIE = 'devfathom-terminal';
  *
  * A handler that RETURNS a response still commits, deliberately. `authenticateOperator`
  * advances the durable failed-attempt counter and the route then answers 401/423; that
- * brute-force evidence, and the device/session check-in, must survive a refusal. Only a
+ * brute-force evidence and the device check-in must survive a refusal. Only a
  * THROW rolls the request back.
  */
 export type TerminalErrorMapper = (err: unknown) => Response | null;
@@ -130,6 +132,8 @@ export type TerminalErrorMapper = (err: unknown) => Response | null;
 export type TerminalRouteOptions = {
   /** Shape a domain error into its public response, OUTSIDE the owning transaction. */
   mapError?: TerminalErrorMapper;
+  /** Lock the same binding after a thrown operator access refusal rolls back. */
+  isOperatorAccessError?: (err: unknown) => boolean;
   /**
    * Reject a malformed request before tenant scope and persistent device/session
    * check-ins. The validator must be side-effect free and inspect a cloned body.
@@ -456,6 +460,7 @@ export function withTerminalAuth<T extends unknown[]>(
       return unauthorized('Missing or malformed terminal session token.');
     }
 
+    let binding: { id: string; activeStaffProfileId: string } | undefined;
     try {
       const preflightRejection = await options.preflight?.(request);
       if (preflightRejection) return preflightRejection;
@@ -463,9 +468,14 @@ export function withTerminalAuth<T extends unknown[]>(
       return await withTenantDb(auth.organizationId, async (db) => {
         const now = new Date();
         // C5: authoritative, FRESH reads inside one consistent transaction.
-        const [device, session] = await Promise.all([
+        const [device, [session]] = await Promise.all([
           db.restaurantRegisteredDevice.findUnique({ where: { id: auth.deviceId } }),
-          resolveSessionByToken(db, sessionToken),
+          // Serialize requests and access revocations on the same binding.
+          db.$queryRaw<RestaurantTerminalSession[]>`
+            SELECT * FROM restaurant_terminal_sessions
+            WHERE "tokenHash" = ${hashTerminalSessionToken(sessionToken)} AND "deviceId" = ${auth.deviceId}
+            FOR UPDATE
+          `,
         ]);
         if (!device) return forbidden('This device has been revoked.');
         if (device.kind !== 'POS' && device.kind !== 'KDS')
@@ -486,18 +496,49 @@ export function withTerminalAuth<T extends unknown[]>(
           select: { active: true },
         });
         if (!branch?.active) {
+          if (session.activeStaffProfileId) await lockDeniedOperator(db, session.id);
           return forbidden('This branch is inactive. Contact a restaurant administrator.');
         }
 
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
-        if (entitlementRejection) return entitlementRejection;
+        if (entitlementRejection) {
+          if (session.activeStaffProfileId) await lockDeniedOperator(db, session.id);
+          return entitlementRejection;
+        }
 
-        await Promise.all([
-          touchDeviceLastSeen(db, device.id, now),
-          touchSession(db, session.id, now),
-        ]);
+        if (session.activeStaffProfileId !== null) {
+          const profile = await db.restaurantStaffProfile.findUnique({
+            where: { id: session.activeStaffProfileId },
+            select: { status: true, primaryBranchId: true },
+          });
+          // Match the primary-branch requirement at unlock and switch. A separate
+          // job grant cannot retain a terminal binding after a branch transfer.
+          if (
+            !profile ||
+            profile.status !== 'ACTIVE' ||
+            profile.primaryBranchId !== device.branchId ||
+            (device.kind === 'KDS' &&
+              !(await operatorHasCapability(
+                db,
+                session.activeStaffProfileId,
+                'kitchen:operate',
+                now,
+                device.branchId
+              )))
+          ) {
+            await lockDeniedOperator(db, session.id);
+            return forbidden('Operator access changed. Unlock the terminal again.');
+          }
+        }
 
-        return withOwnerReauthenticationScope(
+        if (options.isOperatorAccessError && session.activeStaffProfileId) {
+          binding = {
+            id: session.id,
+            activeStaffProfileId: session.activeStaffProfileId,
+          };
+        }
+        await touchDeviceLastSeen(db, device.id, now);
+        const response = await withOwnerReauthenticationScope(
           {
             actingStaffProfileId: session.activeStaffProfileId,
             deviceId: device.id,
@@ -517,11 +558,35 @@ export function withTerminalAuth<T extends unknown[]>(
               ...args
             )
         );
+        if (response.ok) await touchSession(db, session.id, new Date());
+        return response;
       });
     } catch (err) {
+      if (binding && options.isOperatorAccessError?.(err)) {
+        // A concurrent heartbeat may advance idle time after rollback. Lock the
+        // refused operator if still bound, without disturbing a different operator.
+        const where = { ...binding, endedAt: null };
+        await withTenantDb(auth.organizationId, (db) =>
+          db.restaurantTerminalSession.updateMany({
+            where,
+            data: { activeStaffProfileId: null },
+          })
+        );
+      }
       return respondToEscapedError('Terminal session-auth error:', err, options.mapError);
     }
   };
+}
+
+/** Device-only KDS reads are also used by an established display. When it
+ * presents a session, authenticate that exact binding before serving the read. */
+export function withKdsReadAuth(
+  handler: (ctx: TerminalDeviceContext, request: Request) => Promise<Response>
+) {
+  const deviceRead = withDeviceAuth(handler);
+  const sessionRead = withTerminalAuth(handler);
+  return (request: Request) =>
+    request.headers.has(SESSION_HEADER) ? sessionRead(request) : deviceRead(request);
 }
 
 // --- Operator credential authentication (C4) -------------------------------

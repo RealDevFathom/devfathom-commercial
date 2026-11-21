@@ -1,4 +1,5 @@
 import 'server-only';
+import { lockDeniedOperator } from './terminal-session';
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -297,14 +298,15 @@ export async function resolveDemoApproverIdentity(
 /** Gate the acting operator on `capability`; returns a 403 response when denied, or
  * null when the operator may proceed. */
 async function requireCapability(
-  db: ScopedDb,
+  ctx: TerminalContext,
   staffProfileId: string,
   capability: MoneyCapability,
   now: Date,
   branchId: string
 ): Promise<NextResponse | null> {
-  const allowed = await operatorHasCapability(db, staffProfileId, capability, now, branchId);
-  return allowed ? null : forbidden(`This operator lacks the "${capability}" capability.`);
+  if (await operatorHasCapability(ctx.db, staffProfileId, capability, now, branchId)) return null;
+  await lockDeniedOperator(ctx.db, ctx.session.id);
+  return forbidden(`This operator lacks the "${capability}" capability.`);
 }
 
 /**
@@ -535,7 +537,7 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
 
       const now = new Date();
       const denied = await requireCapability(
-        ctx.db,
+        ctx,
         operator.staffProfileId,
         opts.capability,
         now,
@@ -593,7 +595,7 @@ export function moneyReadRoute(opts: {
 
       const now = new Date();
       const denied = await requireCapability(
-        ctx.db,
+        ctx,
         operator.staffProfileId,
         opts.capability,
         now,

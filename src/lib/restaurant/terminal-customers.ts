@@ -1,4 +1,5 @@
 import 'server-only';
+import { lockDeniedOperator } from './terminal-session';
 
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
@@ -79,7 +80,11 @@ export type ConnectedCapability =
 
 const json = (body: unknown, status: number): NextResponse => NextResponse.json(body, { status });
 
-function forbidden(capability: ConnectedCapability): NextResponse {
+async function forbidden(
+  ctx: TerminalContext,
+  capability: ConnectedCapability
+): Promise<NextResponse> {
+  await lockDeniedOperator(ctx.db, ctx.session.id);
   return json({ error: `This operator lacks the "${capability}" capability.` }, 403);
 }
 
@@ -121,7 +126,7 @@ export function connectedReadRoute(opts: {
           ctx.device.branchId
         ))
       ) {
-        return forbidden(opts.capability);
+        return forbidden(ctx, opts.capability);
       }
       if (opts.moduleKey) {
         const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, ctx.db);
@@ -188,7 +193,7 @@ export function connectedMutationRoute<S extends z.ZodTypeAny, R extends boolean
           ctx.device.branchId
         ))
       ) {
-        return forbidden(opts.capability);
+        return forbidden(ctx, opts.capability);
       }
       for (const capability of opts.additionalCapabilities ?? []) {
         if (
@@ -200,7 +205,7 @@ export function connectedMutationRoute<S extends z.ZodTypeAny, R extends boolean
             ctx.device.branchId
           ))
         ) {
-          return forbidden(capability);
+          return forbidden(ctx, capability);
         }
       }
 

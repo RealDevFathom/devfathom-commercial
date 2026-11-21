@@ -67,6 +67,13 @@ export async function recordAuthenticatedCateringEvidence(ctx: TerminalContext, 
 }
 
 export const cateringEvidencePost = withTerminalAuth(recordAuthenticatedCateringEvidence, {
+  isOperatorAccessError(error) {
+    return (
+      (error instanceof TRPCError && error.code === 'FORBIDDEN') ||
+      (error instanceof CateringMoneyError &&
+        ['CAPABILITY_DENIED', 'ACTOR_MISMATCH', 'ACTOR_OR_DEVICE_DENIED'].includes(error.reason))
+    );
+  },
   // Mapping happens AFTER the owning transaction has rolled back.
   mapError(error) {
     if (error instanceof z.ZodError)

@@ -219,6 +219,19 @@ describeIfDatabase('WHA-1047 DELIVERY capability denial (real DB)', () => {
     }));
     expect(effectsAfterDenial).toEqual({ orders: 0, keys: 0, events: 0 });
 
+    const lockedSwitch = await call(deps.routes.switchOperator, {
+      staffProfileId: cashier.id,
+      type: 'PIN',
+      secret: cashier.pin,
+    });
+    expect(lockedSwitch.status).toBe(409);
+    const unlocked = await call(deps.routes.unlock, {
+      staffProfileId: denied.id,
+      type: 'PIN',
+      secret: denied.pin,
+    });
+    expect(unlocked.status).toBe(200);
+
     const switched = await call(deps.routes.switchOperator, {
       staffProfileId: cashier.id,
       type: 'PIN',

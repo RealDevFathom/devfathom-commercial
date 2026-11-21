@@ -96,6 +96,7 @@ const findLayout = vi.fn();
 const findBill = vi.fn();
 const createJob = vi.fn();
 const lock = vi.fn();
+const updateSession = vi.fn();
 
 beforeEach(() => {
   jobs = [];
@@ -125,9 +126,10 @@ beforeEach(() => {
     organizationId: 'org-1',
     device: { id: 'register-1', name: 'Counter', branchId: 'branch-1', kind: 'POS' },
     state: 'UNLOCKED',
-    session: { activeStaffProfileId: 'staff-1' },
+    session: { id: 'session-1', activeStaffProfileId: 'staff-1' },
     db: {
       $executeRawUnsafe: lock,
+      restaurantTerminalSession: { update: updateSession },
       restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
       loyaltyPointsEntry: {
         aggregate: async () => ({ _sum: { points: 640 } }),
@@ -489,6 +491,11 @@ describe('Restaurant receipt dispatch', () => {
     const missing = await post({ billId: 'missing-bill', action: 'print' }, 'missing-key');
     expect(existing.status).toBe(403);
     expect(missing.status).toBe(403);
+    expect(updateSession).toHaveBeenCalledTimes(2);
+    expect(updateSession).toHaveBeenCalledWith({
+      where: { id: 'session-1' },
+      data: { activeStaffProfileId: null },
+    });
     expect(await existing.json()).toEqual(await missing.json());
     expect(findBill).not.toHaveBeenCalled();
   });
