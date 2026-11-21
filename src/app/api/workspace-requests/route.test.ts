@@ -7,7 +7,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 vi.mock('@/lib/rate-limit', () => ({ rateLimit: mocks.gate }));
 vi.mock('@/server/audit', () => ({ ipFromHeaders: () => '127.0.0.1' }));
-import { syntheticLicencePdf } from '@/lib/workspace-requests/licence-test-fixtures';
+import { LICENCE_DOCUMENT_REFUSAL } from '@/lib/workspace-requests/licence-document';
+import {
+  syntheticClassicLicence,
+  syntheticLicencePdf,
+} from '@/lib/workspace-requests/licence-test-fixtures';
 import { POST } from './route';
 beforeEach(() => {
   vi.clearAllMocks();
@@ -95,7 +99,7 @@ it('requires a real supported document and persists its bytes privately', async 
   expect(response.status).toBe(201);
   const document = JSON.parse(mocks.create.mock.calls[0][0].data.notes).document;
   expect(Buffer.from(document.base64, 'base64')).toEqual(pdf);
-  expect(document).toMatchObject({ name: 'licence.pdf', type: 'application/pdf' });
+  expect(document).toMatchObject({ name: 'licence.pdf', type: 'application/pdf', checked: true });
 });
 it('bounds actual request bytes, including requests without a content length', async () => {
   const req = new Request('https://app.example.test/api/workspace-requests', {
@@ -107,5 +111,27 @@ it('bounds actual request bytes, including requests without a content length', a
     body: 'x'.repeat(1200000),
   });
   expect((await POST(req)).status).toBe(413);
+  expect(mocks.create).not.toHaveBeenCalled();
+});
+
+it('uses the same plain message for malformed, encrypted and active PDFs', async () => {
+  for (const bytes of [
+    Buffer.from('%PDF-1.7\nIncomplete'),
+    syntheticClassicLicence({ trailer: '/Encrypt << /Filter /Standard >>' }),
+    syntheticClassicLicence({ catalog: '/OpenAction << /S /Launch >>' }),
+  ]) {
+    const response = await POST(
+      request(
+        pharmacy,
+        undefined,
+        new File([Uint8Array.from(bytes)], 'licence.pdf', { type: 'application/pdf' })
+      )
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: LICENCE_DOCUMENT_REFUSAL,
+      fields: { licenceCopy: [LICENCE_DOCUMENT_REFUSAL] },
+    });
+  }
   expect(mocks.create).not.toHaveBeenCalled();
 });

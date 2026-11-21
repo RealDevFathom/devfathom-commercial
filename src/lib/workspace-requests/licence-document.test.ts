@@ -3,7 +3,17 @@ import sharp from 'sharp';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { MAX_LICENCE_FILE_BYTES, verifyLicenceDocument } from './licence-document';
-import { syntheticLicencePdf, syntheticLicencePdfWithObjectStream } from './licence-test-fixtures';
+import {
+  syntheticClassicLicence,
+  syntheticHybridLicence,
+  syntheticLicencePdf,
+  syntheticLicencePdfWithObjectStream,
+  syntheticLicenceRevision,
+  syntheticLicenceStreamRevision,
+  syntheticLinearizedLicence,
+  syntheticScannerLicence,
+  syntheticWordLicence,
+} from './licence-test-fixtures';
 
 const pdf = syntheticLicencePdf();
 let png: Buffer;
@@ -81,5 +91,91 @@ describe('public licence document structure', () => {
     await expect(
       verifyLicenceDocument(Buffer.concat([atLimit, Buffer.from('\n')]), 'application/pdf')
     ).resolves.toBeNull();
+  });
+});
+
+describe('licence PDF formats and inactive content policy', () => {
+  it.each([
+    ['scanner', syntheticScannerLicence],
+    ['linearized', syntheticLinearizedLicence],
+    [
+      'incrementally updated linearized',
+      () =>
+        syntheticLicenceRevision(syntheticLinearizedLicence(), '', false, {
+          catalog: 3,
+          pages: 1,
+          size: 6,
+        }),
+    ],
+    ['incremental', () => syntheticLicenceRevision(pdf)],
+    ['incremental with a sparse xref stream', () => syntheticLicenceStreamRevision(pdf)],
+    [
+      'signed revision with inert signature metadata',
+      () => syntheticLicenceRevision(pdf, '', true),
+    ],
+    ['hybrid-reference', syntheticHybridLicence],
+    [
+      'ImageMagick-style version spacing',
+      () => syntheticClassicLicence({ header: '%PDF-1.7 \r\n' }),
+    ],
+    ['Pillow-style free entry', () => syntheticClassicLicence({ freeGeneration: 65536 })],
+    ['Word-style metadata and opening destination', syntheticWordLicence],
+  ])('accepts a generated %s PDF', async (_label, make) => {
+    await expect(verifyLicenceDocument(make(), 'application/pdf')).resolves.toEqual({
+      type: 'application/pdf',
+      name: 'licence.pdf',
+    });
+  });
+
+  it.each([
+    ['password protection', '/Encrypt << /Filter /Standard >>', ''],
+    ['JavaScript name tree', '', '/Names << /JavaScript << >> >>'],
+    ['script entry', '', '/JS null'],
+    ['escaped script name', '', '/J#53 null'],
+    ['coded opening action', '', '/OpenAction << /S /JavaScript >>'],
+    ['launch action', '', '/OpenAction << /S /Launch >>'],
+    ['additional action with indirect name', '', '/AA << /O << /S 4 0 R >> >>'],
+    ['embedded files tree', '', '/Names << /EmbeddedFiles << >> >>'],
+    [
+      'file specification with embedded stream metadata',
+      '',
+      '/AF [<< /Type /Filespec /EF << /F 4 0 R >> >>]',
+    ],
+    ['rich media annotation metadata', '', '/Annots [<< /Subtype /RichMedia >>]'],
+  ])('refuses %s using inert metadata', async (_label, trailer, catalog) => {
+    const extras = catalog.includes('4 0 R') ? [Buffer.from('4 0 obj\n/Launch\nendobj\n')] : [];
+    await expect(
+      verifyLicenceDocument(
+        syntheticClassicLicence({ trailer, catalog, extras }),
+        'application/pdf'
+      )
+    ).resolves.toBeNull();
+  });
+
+  it('checks the parsed objects inside structural streams for forbidden entries', async () => {
+    await expect(
+      verifyLicenceDocument(syntheticLicencePdfWithObjectStream('/JS null'), 'application/pdf')
+    ).resolves.toBeNull();
+  });
+
+  it('checks older revisions even when the active catalog replaces their metadata', async () => {
+    const base = syntheticClassicLicence({ catalog: '/JS null' });
+    await expect(
+      verifyLicenceDocument(syntheticLicenceRevision(base), 'application/pdf')
+    ).resolves.toBeNull();
+  });
+
+  it('validates historical cross-reference entries and rejects an unlinked revision', async () => {
+    const badBase = Buffer.from(pdf.toString().replace('0000000009 00000', '0000000010 00000'));
+    await expect(
+      verifyLicenceDocument(syntheticLicenceRevision(badBase), 'application/pdf')
+    ).resolves.toBeNull();
+    const revision = syntheticLicenceRevision(pdf);
+    const unlinked = Buffer.from(
+      revision
+        .toString()
+        .replace(/\/Prev (\d+)/, (_match, value: string) => ' '.repeat(value.length + 6))
+    );
+    await expect(verifyLicenceDocument(unlinked, 'application/pdf')).resolves.toBeNull();
   });
 });

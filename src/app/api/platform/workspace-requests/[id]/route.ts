@@ -1,7 +1,7 @@
 import { getPlatformSession, canPlatform } from '@/lib/platform/auth';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import {
-  MAX_LICENCE_FILE_BYTES,
+  readStoredLicence,
   verifyLicenceDocument,
 } from '@/lib/workspace-requests/licence-document';
 
@@ -24,24 +24,28 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
   }
   if (!intake || typeof intake !== 'object')
     return Response.json({ error: 'Not found.' }, { status: 404 });
-  const headers = { 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' };
+  const headers = {
+    'Cache-Control': 'private, no-store',
+    'X-Content-Type-Options': 'nosniff',
+    'Content-Security-Policy': 'sandbox',
+  };
   if (new URL(request.url).searchParams.get('document') === '1') {
-    const document = intake.document;
-    if (
-      typeof document?.base64 !== 'string' ||
-      document.base64.length > Math.ceil(MAX_LICENCE_FILE_BYTES / 3) * 4
-    )
+    const document = readStoredLicence(intake.document);
+    if (!document) return Response.json({ error: 'Not found.' }, { status: 404 });
+    const verified = await verifyLicenceDocument(document.bytes, document.type);
+    // Only evidence received before receipt checks may fall back to a generic
+    // attachment. The old type and filename carry no authority in that case.
+    if (!verified && !document.legacy)
       return Response.json({ error: 'Not found.' }, { status: 404 });
-    const bytes = Buffer.from(document.base64, 'base64');
-    // Older leads contain sender-chosen names and were only checked for magic bytes.
-    const verified = await verifyLicenceDocument(bytes, document.type);
-    if (!verified || bytes.toString('base64') !== document.base64)
-      return Response.json({ error: 'Not found.' }, { status: 404 });
-    return new Response(bytes, {
+    const download = verified ?? {
+      type: 'application/octet-stream',
+      name: 'licence-unverified.bin',
+    };
+    return new Response(document.bytes, {
       headers: {
         ...headers,
-        'Content-Type': verified.type,
-        'Content-Disposition': `attachment; filename="${verified.name}"`,
+        'Content-Type': download.type,
+        'Content-Disposition': `attachment; filename="${download.name}"`,
       },
     });
   }

@@ -3,6 +3,9 @@ import sharp from 'sharp';
 
 import { hasPdfStructure } from './pdf-structure';
 
+export const LICENCE_DOCUMENT_REFUSAL =
+  'Upload a normal PDF or a JPG or PNG photo. Use a readable file without password protection, scripts, actions that open programs, or embedded files or media.';
+
 export const MAX_LICENCE_FILE_BYTES = 1024 * 1024;
 const MAX_IMAGE_PIXELS = 16_000_000;
 const MAX_PNG_RASTER_BYTES = 64 * 1024 * 1024;
@@ -194,4 +197,20 @@ export async function verifyLicenceDocument(bytes: Buffer, claimedType: unknown)
   } catch {
     return null;
   }
+}
+
+/** Decode private stored evidence without trusting its supplied filename. */
+export function readStoredLicence(document: unknown) {
+  if (!document || typeof document !== 'object') return null;
+  const { base64, type, checked } = document as Record<string, unknown>;
+  if (
+    typeof base64 !== 'string' ||
+    base64.length > Math.ceil(MAX_LICENCE_FILE_BYTES / 3) * 4 ||
+    (type !== 'application/pdf' && type !== 'image/png' && type !== 'image/jpeg')
+  )
+    return null;
+  const bytes = Buffer.from(base64, 'base64');
+  if (!bytes.length || bytes.length > MAX_LICENCE_FILE_BYTES || bytes.toString('base64') !== base64)
+    return null;
+  return { bytes, type, legacy: checked === undefined };
 }

@@ -4,6 +4,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { ipFromHeaders } from '@/server/audit';
 import { workspaceRequestSchema } from '@/app/login/register/request-schema';
 import {
+  LICENCE_DOCUMENT_REFUSAL,
   MAX_LICENCE_FILE_BYTES,
   verifyLicenceDocument,
 } from '@/lib/workspace-requests/licence-document';
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
         { error: 'Check the highlighted fields.', fields: parsed.error.flatten().fieldErrors },
         { status: 400 }
       );
-    let document: { name: string; type: string; base64: string } | undefined;
+    let document: { name: string; type: string; base64: string; checked: true } | undefined;
     if (parsed.data.vertical === 'pharmacy') {
       const file = form.get('licenceCopy');
       if (!(file instanceof File) || !file.size || file.size > MAX_LICENCE_FILE_BYTES)
@@ -87,14 +88,15 @@ export async function POST(request: Request) {
       if (!verified)
         return Response.json(
           {
-            error: 'The document must be a valid PDF, JPG or PNG.',
-            fields: { licenceCopy: ['Unsupported document content.'] },
+            error: LICENCE_DOCUMENT_REFUSAL,
+            fields: { licenceCopy: [LICENCE_DOCUMENT_REFUSAL] },
           },
           { status: 400 }
         );
       // Private evidence stays inside the existing platform lead; no public upload URL.
       document = {
         ...verified,
+        checked: true,
         base64: buffer.toString('base64'),
       };
     }

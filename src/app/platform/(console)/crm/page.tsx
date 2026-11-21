@@ -8,8 +8,25 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { buttonVariants } from '@/components/ui/button';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import {
+  readStoredLicence,
+  verifyLicenceDocument,
+} from '@/lib/workspace-requests/licence-document';
 
 const stages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'] as const;
+
+async function hasUncheckedLicence(notes: string | null): Promise<boolean> {
+  if (!notes) return false;
+  let document: unknown;
+  try {
+    document = JSON.parse(notes)?.document;
+  } catch {
+    return false;
+  }
+  if (!document || typeof document !== 'object' || 'checked' in document) return false;
+  const stored = readStoredLicence(document);
+  return !!stored && !(await verifyLicenceDocument(stored.bytes, stored.type));
+}
 
 function money(value: number | null, currency: string) {
   if (value === null) return 'Value pending';
@@ -71,6 +88,13 @@ export default async function CrmPage() {
       followUps,
     };
   });
+  // Historical images may need full decoding. Check them one at a time,
+  // outside the database transaction, to bound memory per CRM request.
+  const uncheckedLicences = new Set<string>();
+  for (const lead of data.leads) {
+    if (lead.source === 'workspace-request:pharmacy' && (await hasUncheckedLicence(lead.notes)))
+      uncheckedLicences.add(lead.id);
+  }
   const accountOptions = data.accounts.map((item) => ({ label: item.name, value: item.id }));
   const opportunityOptions = data.opportunities
     .filter((item) => !['WON', 'LOST'].includes(item.stage))
@@ -228,6 +252,12 @@ export default async function CrmPage() {
                                   className="text-xs text-warning"
                                 >
                                   Untrusted file from the public.
+                                  {uncheckedLicences.has(lead.id) && (
+                                    <span className="mt-1 block max-w-64">
+                                      This file was received before file checks were added and has
+                                      not passed them.
+                                    </span>
+                                  )}
                                 </p>
                                 <a
                                   aria-describedby={`licence-warning-${lead.id}`}

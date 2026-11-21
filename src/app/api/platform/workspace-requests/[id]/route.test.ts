@@ -62,6 +62,7 @@ it('delivers private evidence as an attachment and omits bytes from details JSON
   expect(doc.headers.get('content-disposition')).toBe('attachment; filename="licence.pdf"');
   expect(doc.headers.get('content-type')).toBe('application/pdf');
   expect(doc.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(doc.headers.get('content-security-policy')).toBe('sandbox');
 });
 it('does not reinterpret ordinary lead notes as workspace intake', async () => {
   m.find.mockResolvedValue({ source: 'Direct', notes: '{}' });
@@ -75,19 +76,34 @@ it('does not reinterpret ordinary lead notes as workspace intake', async () => {
   ).toBe(404);
 });
 
-it('withholds malformed legacy evidence while preserving its request details', async () => {
+it('preserves malformed legacy evidence only as a sandboxed generic attachment', async () => {
+  const bytes = Buffer.from('%PDF-1.7\nEvidence');
+  const notes = {
+    details: { companyName: 'Pharmacy' },
+    document: { type: 'application/pdf', name: 'legacy.pdf', base64: bytes.toString('base64') },
+  };
   m.find.mockResolvedValue({
     source: 'workspace-request:pharmacy',
-    notes: JSON.stringify({
-      details: { companyName: 'Pharmacy' },
-      document: {
-        type: 'application/pdf',
-        name: 'legacy.pdf',
-        base64: Buffer.from('%PDF-1.7\nEvidence').toString('base64'),
-      },
-    }),
+    notes: JSON.stringify(notes),
   });
   const base = 'https://admin.example.test/api/platform/workspace-requests/lead';
-  expect((await GET(new Request(base + '?document=1'), params)).status).toBe(404);
+  const request = new Request(base + '?document=1');
+  m.allowed.mockReturnValueOnce(false);
+  expect((await GET(request, params)).status).toBe(403);
+  const response = await GET(request, params);
+  expect(response.status).toBe(200);
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  expect(response.headers.get('content-disposition')).toBe(
+    'attachment; filename="licence-unverified.bin"'
+  );
+  expect(response.headers.get('content-type')).toBe('application/octet-stream');
+  expect(response.headers.get('content-security-policy')).toBe('sandbox');
+  expect(response.headers.get('x-content-type-options')).toBe('nosniff');
   expect((await GET(new Request(base), params)).status).toBe(200);
+
+  m.find.mockResolvedValue({
+    source: 'workspace-request:pharmacy',
+    notes: JSON.stringify({ ...notes, document: { ...notes.document, checked: true } }),
+  });
+  expect((await GET(request, params)).status).toBe(404);
 });

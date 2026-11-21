@@ -9,9 +9,20 @@ type Reference = { id: number; generation: number };
 type Dictionary = Map<string, PdfValue>;
 type PdfValue = number | string | boolean | null | Reference | Dictionary | PdfValue[];
 type Entry = { offset: number; generation: number } | { container: number; index: number };
+type Section = {
+  offset: number;
+  end: number;
+  trailer: Dictionary;
+  entries: Map<number, Entry | null>;
+  stream?: Indirect;
+};
+type Region = { offset: number; end: number };
 type Indirect = { id: number; generation: number; value: PdfValue; stream?: Buffer; end: number };
 
 const MAX_OBJECTS = 4_096;
+const MAX_REVISIONS = 64;
+const MAX_INDEX_ENTRIES = 65_536;
+const MAX_POLICY_VALUES = 1_000_000;
 const MAX_STRUCTURAL_BYTES = 8 * 1024 * 1024;
 const whitespace = /[\0\t\n\f\r ]+/y;
 const boundary = '(?=[\\0\\t\\n\\f\\r ()<>\\[\\]/%]|$)';
@@ -246,216 +257,528 @@ function xrefStreamContents(object: Indirect, decoded: Buffer, rowSize: number, 
   return data;
 }
 
-/** Validate a complete unencrypted, single-revision PDF container and its indexed objects. */
-export function hasPdfStructure(bytes: Buffer): boolean {
-  try {
-    const source = bytes.toString('latin1');
-    const header = /^%PDF-(?:1\.[0-7]|2\.0)(?:\r\n|[\r\n])/.exec(source);
-    const footer =
-      /(?:^|[\r\n])startxref[\t ]*(?:\r\n|[\r\n])[\t ]*(\d+)[\t ]*(?:\r\n|[\r\n])%%EOF[\t\r\n ]*$/.exec(
-        source
-      );
-    requirePdf(header && footer);
-    const xrefOffset = Number(footer[1]);
-    requirePdf(
-      Number.isSafeInteger(xrefOffset) &&
-        xrefOffset >= header[0].length &&
-        xrefOffset < footer.index
-    );
-    const xref = new Reader(source, xrefOffset);
-    const entries = new Map<number, Entry>();
-    const used = new Set<number>();
-    let structuralBudget = MAX_STRUCTURAL_BYTES;
-    let trailer: Dictionary;
-    let xrefObject: Indirect | undefined;
-    const add = (id: number, entry?: Entry) => {
-      requirePdf(id < MAX_OBJECTS && !used.has(id));
-      used.add(id);
-      if (entry) entries.set(id, entry);
-    };
-    if (xref.word('xref')) {
-      xref.skip();
-      while (!xref.word('trailer')) {
-        const first = xref.integer();
-        const count = xref.integer();
-        requirePdf(count > 0 && first + count <= MAX_OBJECTS);
-        for (let i = 0; i < count; i++) {
-          const offset = xref.integer();
-          const generation = xref.integer();
-          xref.skip();
-          requirePdf(generation <= 65535);
-          if (xref.word('n')) add(first + i, { offset, generation });
-          else {
-            requirePdf(xref.word('f'));
-            add(first + i);
-          }
-        }
-        xref.skip();
-      }
-      trailer = dictionary(xref.value());
-    } else {
-      xrefObject = objectAt(source, bytes, xrefOffset);
-      trailer = dictionary(xrefObject.value);
-      requirePdf(trailer.get('/Type') === '/XRef');
-      const widths = trailer.get('/W');
-      const index = trailer.get('/Index') ?? [0, directInteger(trailer.get('/Size'))];
-      requirePdf(
-        Array.isArray(widths) &&
-          widths.length === 3 &&
-          Array.isArray(index) &&
-          index.length % 2 === 0
-      );
-      const [a, b, c] = widths.map(directInteger);
-      requirePdf(a <= 1 && b >= 1 && b <= 4 && c <= 4);
-      const rowSize = a + b + c;
-      const ranges = index.map(directInteger);
-      const rows = ranges.reduce((total, n, i) => (i % 2 ? total + n : total), 0);
-      requirePdf(rows <= MAX_OBJECTS);
-      const decoded = decodeStructure(xrefObject, rows * (rowSize + 1));
-      structuralBudget -= decoded.length;
-      const data = xrefStreamContents(xrefObject, decoded, rowSize, rows);
-      let cursor = 0;
-      for (let range = 0; range < ranges.length; range += 2) {
-        const first = ranges[range];
-        const count = ranges[range + 1];
-        requirePdf(first + count <= MAX_OBJECTS);
-        for (let i = 0; i < count; i++) {
-          const type = a ? data.readUIntBE(cursor, a) : 1;
-          const n = data.readUIntBE(cursor + a, b);
-          const m = c ? data.readUIntBE(cursor + a + b, c) : 0;
-          cursor += rowSize;
-          if (type === 1) add(first + i, { offset: n, generation: m });
-          else if (type === 2) add(first + i, { container: n, index: m });
-          else {
-            requirePdf(type === 0);
-            add(first + i);
-          }
-        }
-      }
-      xref.at = xrefObject.end;
-    }
-    const trailerEnd = xref.at;
-    // The footer must be the next non-padding data after this cross-reference.
-    requirePdf(
-      trailerEnd <= footer.index && /^[\0\t\n\f\r ]*$/.test(source.slice(trailerEnd, footer.index))
-    );
-    requirePdf(!trailer.has('/Prev') && !trailer.has('/XRefStm') && !trailer.has('/Encrypt'));
-    const size = directInteger(trailer.get('/Size'));
-    requirePdf(
-      size <= MAX_OBJECTS && [...used].every((id) => id < size) && used.has(0) && !entries.has(0)
-    );
+const footerPattern =
+  /startxref[\t ]*(?:\r\n|[\r\n])[\t ]*(\d+)[\t ]*(?:\r\n|[\r\n])%%EOF[\t ]*(?:\r\n|[\r\n]|$)/y;
+const lastFooterPattern =
+  /(?:^|[\r\n])startxref[\t ]*(?:\r\n|[\r\n])[\t ]*(\d+)[\t ]*(?:\r\n|[\r\n])%%EOF[\t\r\n ]*$/;
 
-    const objects = new Map<number, Indirect>();
-    if (xrefObject) {
-      const entry = entries.get(xrefObject.id);
+function footerAt(source: string, offset: number, expected: number, optional = false) {
+  const reader = new Reader(source, offset);
+  reader.match(whitespace);
+  const footer = reader.match(footerPattern);
+  if (optional && !footer) return offset;
+  requirePdf(footer && Number(footer[1]) === expected);
+  return reader.at;
+}
+
+function readSection(
+  source: string,
+  bytes: Buffer,
+  offset: number,
+  decode: typeof decodeStructure
+): Section {
+  const reader = new Reader(source, offset);
+  const entries = new Map<number, Entry | null>();
+  const add = (id: number, entry: Entry | null) => {
+    requirePdf(id < MAX_OBJECTS && !entries.has(id) && (id !== 0 || entry === null));
+    entries.set(id, entry);
+  };
+
+  let trailer: Dictionary;
+  let stream: Indirect | undefined;
+  if (reader.word('xref')) {
+    reader.skip();
+    while (!reader.word('trailer')) {
+      const first = reader.integer();
+      const count = reader.integer();
+      requirePdf(count > 0 && first + count <= MAX_OBJECTS);
+      for (let id = first; id < first + count; id++) {
+        const offset = reader.integer();
+        const generation = reader.integer();
+        reader.skip();
+        if (reader.word('n')) {
+          requirePdf(generation <= 65535);
+          add(id, { offset, generation });
+        } else {
+          // Pillow uses 65536 for the reserved free object zero.
+          requirePdf(
+            reader.word('f') && (generation <= 65535 || (id === 0 && generation === 65536))
+          );
+          add(id, null);
+        }
+      }
+      reader.skip();
+    }
+    trailer = dictionary(reader.value());
+  } else {
+    stream = objectAt(source, bytes, offset);
+    trailer = dictionary(stream.value);
+    requirePdf(trailer.get('/Type') === '/XRef');
+    const widths = trailer.get('/W');
+    const index = trailer.get('/Index') ?? [0, directInteger(trailer.get('/Size'))];
+    requirePdf(
+      Array.isArray(widths) && widths.length === 3 && Array.isArray(index) && index.length % 2 === 0
+    );
+    const [a, b, c] = widths.map(directInteger);
+    requirePdf(a <= 1 && b >= 1 && b <= 4 && c <= 4);
+    const rowSize = a + b + c;
+    const ranges = index.map(directInteger);
+    const rows = ranges.reduce((total, n, i) => (i % 2 ? total + n : total), 0);
+    requirePdf(rows > 0 && rows <= MAX_OBJECTS);
+    const data = xrefStreamContents(stream, decode(stream, rows * (rowSize + 1)), rowSize, rows);
+    let cursor = 0;
+    for (let range = 0; range < ranges.length; range += 2) {
+      const first = ranges[range];
+      const count = ranges[range + 1];
+      requirePdf(first + count <= MAX_OBJECTS);
+      for (let i = 0; i < count; i++) {
+        const type = a ? data.readUIntBE(cursor, a) : 1;
+        const n = data.readUIntBE(cursor + a, b);
+        const m = c ? data.readUIntBE(cursor + a + b, c) : 0;
+        cursor += rowSize;
+        requirePdf(type <= 2 && (type !== 1 || m <= 65535));
+        add(
+          first + i,
+          type === 0 ? null : type === 1 ? { offset: n, generation: m } : { container: n, index: m }
+        );
+      }
+    }
+    reader.at = stream.end;
+  }
+
+  const size = directInteger(trailer.get('/Size'));
+  requirePdf(size <= MAX_OBJECTS && [...entries.keys()].every((id) => id < size));
+  requirePdf(!trailer.has('/Encrypt'));
+  return { offset, end: reader.at, trailer, entries, stream };
+}
+
+function readObjectStream(
+  object: Indirect,
+  decode: typeof decodeStructure
+): Array<{ id: number; value: PdfValue }> {
+  const info = dictionary(object.value);
+  requirePdf(info.get('/Type') === '/ObjStm' && (info.get('/DecodeParms') ?? null) === null);
+  const decoded = decode(object, MAX_STRUCTURAL_BYTES);
+  const first = directInteger(info.get('/First'));
+  const count = directInteger(info.get('/N'));
+  requirePdf(count <= MAX_OBJECTS && first <= decoded.length);
+  const source = decoded.toString('latin1');
+  const index = new Reader(source.slice(0, first), 0);
+  const offsets: Array<{ id: number; offset: number }> = [];
+  const seen = new Set<number>();
+  for (let i = 0; i < count; i++) {
+    const id = index.integer();
+    const offset = first + index.integer();
+    requirePdf(id > 0 && id < MAX_OBJECTS && !seen.has(id));
+    requirePdf(offset < decoded.length && (i ? offset > offsets[i - 1].offset : offset === first));
+    seen.add(id);
+    offsets.push({ id, offset });
+  }
+  index.skip();
+  requirePdf(index.at === first && (count > 0 || first === decoded.length));
+  return offsets.map(({ id, offset }, i) => {
+    const end = offsets[i + 1]?.offset ?? decoded.length;
+    const reader = new Reader(source.slice(offset, end), 0);
+    const value = reader.value();
+    reader.skip();
+    requirePdf(reader.at === end - offset);
+    return { id, value };
+  });
+}
+
+const forbiddenKeys = new Set([
+  '/Encrypt',
+  '/JS',
+  '/JavaScript',
+  '/Launch',
+  '/EmbeddedFiles',
+  '/EF',
+  '/RichMedia',
+  '/RichMediaContent',
+  '/RichMediaSettings',
+  '/3DD',
+  '/3DA',
+  '/XFA',
+]);
+const executableActions = new Set([
+  '/JavaScript',
+  '/Launch',
+  '/Rendition',
+  '/RichMediaExecute',
+  '/Movie',
+  '/Sound',
+  '/GoToE',
+  '/GoTo3DView',
+]);
+const embeddedTypes = new Set([
+  '/EmbeddedFile',
+  '/RichMedia',
+  '/Movie',
+  '/Sound',
+  '/Screen',
+  '/3D',
+]);
+
+function isReference(value: PdfValue | undefined): value is Reference {
+  return Boolean(value && typeof value === 'object' && 'id' in value);
+}
+
+// PDF names have already been decoded by the reader. Strings and stream data are
+// never interpreted as script and cannot be mistaken for dictionary names.
+function assertInactive(
+  value: PdfValue,
+  resolve: (ref: Reference) => PdfValue,
+  charge: () => void
+) {
+  function dereference(value: PdfValue | undefined) {
+    for (let hops = 0; isReference(value); hops++) {
+      requirePdf(hops < 32);
+      value = resolve(value);
+    }
+    return value;
+  }
+  function visit(value: PdfValue) {
+    charge();
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!(value instanceof Map)) return;
+    if (dereference(value.get('/Type')) === '/Filespec') {
+      requirePdf(!value.has('/RF'));
+      for (const key of ['/F', '/UF', '/DOS', '/Mac', '/Unix'])
+        requirePdf(!(dereference(value.get(key)) instanceof Map));
+    }
+    for (const [key, entry] of value) {
+      requirePdf(!forbiddenKeys.has(key));
+      if (key === '/S' || key === '/Type' || key === '/Subtype' || key === '/Filter') {
+        const name = dereference(entry);
+        if (typeof name === 'string') {
+          requirePdf(
+            key === '/S'
+              ? !executableActions.has(name)
+              : key === '/Filter'
+                ? name !== '/Crypt'
+                : !embeddedTypes.has(name)
+          );
+        }
+        if (key === '/Filter' && Array.isArray(name))
+          requirePdf(name.every((filter) => dereference(filter) !== '/Crypt'));
+      }
+      if (key === '/OpenAction' || key === '/AA') {
+        const action = dereference(entry);
+        requirePdf(
+          action === null ||
+            action instanceof Map ||
+            (key === '/OpenAction' && Array.isArray(action))
+        );
+      }
+      visit(entry);
+    }
+  }
+  visit(value);
+}
+
+function countPages(catalog: Dictionary, resolve: (ref: Reference) => PdfValue) {
+  requirePdf(catalog.get('/Type') === '/Catalog');
+  const seen = new Set<number>();
+  function count(ref: Reference, parent?: Reference, depth = 0): number {
+    requirePdf(depth <= 32 && !seen.has(ref.id));
+    seen.add(ref.id);
+    const page = dictionary(resolve(ref));
+    if (parent) {
+      const link = reference(page.get('/Parent'));
+      requirePdf(link.id === parent.id && link.generation === parent.generation);
+      if (page.get('/Type') === '/Page') return 1;
+    }
+    requirePdf(page.get('/Type') === '/Pages');
+    const kids = page.get('/Kids');
+    requirePdf(Array.isArray(kids) && kids.length <= MAX_OBJECTS);
+    const total = kids.reduce<number>((sum, kid) => sum + count(reference(kid), ref, depth + 1), 0);
+    requirePdf(total === directInteger(page.get('/Count')));
+    return total;
+  }
+  return count(reference(catalog.get('/Pages')));
+}
+
+function validatePdf(bytes: Buffer) {
+  const source = bytes.toString('latin1');
+  const header = /^%PDF-(?:1\.[0-7]|2\.0)[\t ]*(?:\r\n|[\r\n])/.exec(source);
+  const footer = lastFooterPattern.exec(source);
+  requirePdf(header && footer);
+  const headerEnd = header[0].length;
+  const regions = new Map<number, Region>();
+  const physicalObjects = new Map<number, Indirect>();
+  const objectStreams = new Map<Indirect, ReturnType<typeof readObjectStream>>();
+  const sections = new Map<number, Section>();
+  let remainingDecoded = MAX_STRUCTURAL_BYTES;
+  let remainingEntries = MAX_INDEX_ENTRIES;
+  let remainingPolicy = MAX_POLICY_VALUES;
+  const decode: typeof decodeStructure = (object, limit) => {
+    const decoded = decodeStructure(object, Math.min(limit, remainingDecoded));
+    remainingDecoded -= decoded.length;
+    return decoded;
+  };
+  const chargePolicy = () => requirePdf(--remainingPolicy >= 0);
+
+  function section(offset: number) {
+    requirePdf(
+      Number.isSafeInteger(offset) &&
+        offset >= headerEnd &&
+        offset < footer!.index &&
+        !sections.has(offset)
+    );
+    const parsed = readSection(source, bytes, offset, decode);
+    remainingEntries -= parsed.entries.size;
+    requirePdf(remainingEntries >= 0);
+    if (parsed.stream) physicalObjects.set(offset, parsed.stream);
+    sections.set(offset, parsed);
+    return parsed;
+  }
+
+  function parts(primary: Section): Section[] {
+    const supplementOffset = primary.trailer.get('/XRefStm');
+    if (supplementOffset === undefined) return [primary];
+    const offset = directInteger(supplementOffset);
+    requirePdf(!primary.stream && offset < primary.offset);
+    const supplemental = section(offset);
+    requirePdf(supplemental.stream && !supplemental.trailer.has('/XRefStm'));
+    if (supplemental.trailer.has('/Prev')) directInteger(supplemental.trailer.get('/Prev'));
+    regions.set(offset, supplemental);
+    // Hybrid stream entries take precedence over the classic table's entries.
+    return [primary, supplemental];
+  }
+
+  type Revision = { primary: Section; sections: Section[]; end: number; linearization?: Indirect };
+  const revisions: Revision[] = [];
+  let offset: number | undefined = Number(footer[1]);
+  while (offset !== undefined) {
+    requirePdf(revisions.length < MAX_REVISIONS);
+    const primary = section(offset);
+    const primaryParts = parts(primary);
+    const previous = primary.trailer.get('/Prev');
+    const prev = previous === undefined ? undefined : directInteger(previous);
+    requirePdf(prev !== offset);
+    if (prev !== undefined && prev > offset) {
+      // Linearization places the first-page section up front and points
+      // forward to the main cross-reference at the end of the first revision.
+      const first = new Reader(source, headerEnd);
+      first.skip();
+      const parametersOffset = first.at;
+      const parameters = objectAt(source, bytes, parametersOffset);
+      const info = dictionary(parameters.value);
+      requirePdf(!parameters.stream && info.get('/Linearized') === 1 && parameters.end <= 1024);
+      first.at = parameters.end;
+      first.skip();
+      requirePdf(first.at === offset);
+      const main = section(prev);
+      requirePdf(!main.trailer.has('/Prev'));
+      const end = footerAt(source, main.end, offset);
+      const declaredLength = directInteger(info.get('/L'));
+      requirePdf(
+        declaredLength >= end &&
+          declaredLength <= bytes.length &&
+          /^[\0\t\n\f\r ]*$/.test(source.slice(end, declaredLength))
+      );
+      const firstPageEnd = directInteger(info.get('/E'));
+      const mainIndex = directInteger(info.get('/T'));
+      const hints = info.get('/H');
+      requirePdf(firstPageEnd > offset && firstPageEnd <= prev);
+      // For a stream, /T can point at the padding immediately before its header.
+      requirePdf(
+        main.stream
+          ? mainIndex >= offset &&
+              mainIndex <= prev &&
+              /^[\0\t\n\f\r ]*$/.test(source.slice(mainIndex, prev))
+          : mainIndex >= prev && mainIndex <= main.end
+      );
+      requirePdf(Array.isArray(hints) && (hints.length === 2 || hints.length === 4));
+      for (let i = 0; i < hints.length; i += 2) {
+        const start = directInteger(hints[i]);
+        const length = directInteger(hints[i + 1]);
+        requirePdf(start >= headerEnd && length > 0 && start + length <= prev);
+      }
+      physicalObjects.set(parametersOffset, parameters);
+      regions.set(primary.offset, {
+        offset: primary.offset,
+        end: footerAt(source, primary.end, 0, true),
+      });
+      regions.set(main.offset, { offset: main.offset, end });
+      revisions.push({
+        primary,
+        sections: [...parts(main), ...primaryParts],
+        end,
+        linearization: parameters,
+      });
+      break;
+    }
+    const end = footerAt(source, primary.end, offset);
+    regions.set(primary.offset, { offset: primary.offset, end });
+    revisions.push({ primary, sections: primaryParts, end });
+    offset = prev;
+  }
+  requirePdf(/^[\0\t\n\f\r ]*$/.test(source.slice(revisions[0].end)));
+
+  for (const section of sections.values()) {
+    // A hybrid stream can carry a pointer to the corresponding older index.
+    // Primary pointers have already been consumed by the revision walker.
+    const prev = section.trailer.get('/Prev');
+    if (prev !== undefined) {
+      const linked = directInteger(prev);
+      requirePdf(sections.has(linked) || (linked === 0 && section.stream));
+    }
+  }
+
+  const active = new Map<number, Entry | null>();
+  let root: PdfValue | undefined;
+  let previousEnd = headerEnd;
+  for (const revision of revisions.reverse()) {
+    requirePdf(revision.end > previousEnd);
+    const parts = revision.sections;
+    for (const part of parts) {
+      requirePdf(part.offset >= previousEnd && part.end <= revision.end);
+      for (const [id, entry] of part.entries) active.set(id, entry);
+    }
+    requirePdf(active.get(0) === null);
+    for (const part of parts) {
+      const stream = part.stream;
+      if (!stream) continue;
+      // Some incremental writers omit the stream itself from the index. The
+      // section pointer already locates it, and any explicit entry must agree.
+      requirePdf(stream.id > 0);
+      if (!active.has(stream.id)) {
+        active.set(stream.id, { offset: part.offset, generation: stream.generation });
+      }
+      const entry = active.get(stream.id);
       requirePdf(
         entry &&
           'offset' in entry &&
-          entry.offset === xrefOffset &&
-          entry.generation === xrefObject.generation
+          entry.offset === part.offset &&
+          entry.generation === stream.generation
       );
-      objects.set(xrefObject.id, xrefObject);
     }
+    const size = directInteger(revision.primary.trailer.get('/Size'));
+    requirePdf([...active.keys()].every((id) => id < size));
+    root = revision.primary.trailer.get('/Root') ?? root;
     const resolving = new Set<number>();
-    function resolve(ref: Reference): Indirect {
-      const cached = objects.get(ref.id);
-      if (cached) {
-        requirePdf(cached.generation === ref.generation);
-        return cached;
+
+    function physical(id: number, entry: Extract<Entry, { offset: number }>): Indirect {
+      requirePdf(entry.offset >= headerEnd && entry.offset < revision.end);
+      let object = physicalObjects.get(entry.offset);
+      if (!object) {
+        requirePdf(entry.offset >= previousEnd);
+        object = objectAt(source, bytes, entry.offset, resolve);
+        physicalObjects.set(entry.offset, object);
       }
-      const entry = entries.get(ref.id);
-      requirePdf(entry && resolving.size < 32 && !resolving.has(ref.id));
-      resolving.add(ref.id);
-      if ('offset' in entry) {
+      requirePdf(
+        object.id === id && object.generation === entry.generation && object.end <= revision.end
+      );
+      if (object.stream && !sections.has(entry.offset)) {
+        const length = dictionary(object.value).get('/Length');
         requirePdf(
-          entry.offset >= header![0].length &&
-            entry.offset < xrefOffset &&
-            entry.generation === ref.generation
+          object.stream.length === directInteger(isReference(length) ? resolve(length) : length)
         );
-        const obj = objectAt(source, bytes, entry.offset, (ref) => resolve(ref).value);
-        requirePdf(obj.id === ref.id && obj.generation === ref.generation && obj.end <= xrefOffset);
-        objects.set(ref.id, obj);
-      } else {
-        requirePdf(ref.generation === 0);
-        const container = resolve({ id: entry.container, generation: 0 });
-        const info = dictionary(container.value);
-        requirePdf(info.get('/Type') === '/ObjStm' && (info.get('/DecodeParms') ?? null) === null);
-        const decoded = decodeStructure(container, structuralBudget);
-        structuralBudget -= decoded.length;
-        const first = directInteger(info.get('/First'));
-        const count = directInteger(info.get('/N'));
-        requirePdf(count <= MAX_OBJECTS && first <= decoded.length);
-        const objectSource = decoded.toString('latin1');
-        const index = new Reader(objectSource.slice(0, first), 0);
-        const offsets: Array<{ id: number; offset: number }> = [];
-        for (let i = 0; i < count; i++) {
-          const id = index.integer();
-          const offset = first + index.integer();
-          const entry = entries.get(id);
-          requirePdf(
-            entry && 'container' in entry && entry.container === container.id && entry.index === i
-          );
-          requirePdf(
-            offset < decoded.length && (i ? offset > offsets[i - 1].offset : offset === first)
-          );
-          offsets.push({ id, offset });
-        }
-        index.skip();
-        requirePdf(index.at === first);
-        for (const [i, { id, offset }] of offsets.entries()) {
-          const end = offsets[i + 1]?.offset ?? decoded.length;
-          const reader = new Reader(objectSource.slice(offset, end), 0);
-          const value = reader.value();
-          reader.skip();
-          requirePdf(reader.at === end - offset);
-          objects.set(id, { id, generation: 0, value, end: 0 });
-        }
       }
-      resolving.delete(ref.id);
-      const object = objects.get(ref.id);
-      requirePdf(object);
+      if (!regions.has(entry.offset))
+        regions.set(entry.offset, { offset: entry.offset, end: object.end });
       return object;
     }
 
-    const physical = [...entries]
-      .flatMap(([id, entry]) =>
-        'offset' in entry && entry.offset < xrefOffset ? [{ id, ...entry }] : []
-      )
-      .sort((a, b) => a.offset - b.offset);
-    const gap = new Reader(source, header[0].length);
-    for (const entry of physical) {
-      gap.skip();
-      requirePdf(gap.at === entry.offset);
-      gap.at = resolve(entry).end;
+    function compressed(object: Indirect) {
+      const existing = objectStreams.get(object);
+      if (existing) return existing;
+      const values = readObjectStream(object, decode);
+      objectStreams.set(object, values);
+      return values;
     }
-    gap.skip();
-    requirePdf(gap.at === xrefOffset);
-    for (const [id, entry] of entries)
-      resolve({ id, generation: 'offset' in entry ? entry.generation : 0 });
 
-    const catalog = dictionary(resolve(reference(trailer.get('/Root'))).value);
-    requirePdf(catalog.get('/Type') === '/Catalog');
-    const seenPages = new Set<number>();
-    function pageCount(ref: Reference, parent?: Reference, depth = 0): number {
-      requirePdf(depth <= 32 && !seenPages.has(ref.id));
-      seenPages.add(ref.id);
-      const page = dictionary(resolve(ref).value);
-      if (parent) {
-        const link = reference(page.get('/Parent'));
-        requirePdf(link.id === parent.id && link.generation === parent.generation);
-        if (page.get('/Type') === '/Page') return 1;
+    function resolve(ref: Reference): PdfValue {
+      const entry = active.get(ref.id);
+      requirePdf(entry && !resolving.has(ref.id) && resolving.size < 32);
+      resolving.add(ref.id);
+      let value: PdfValue;
+      if ('offset' in entry) {
+        requirePdf(entry.generation === ref.generation);
+        value = physical(ref.id, entry).value;
+      } else {
+        const container = active.get(entry.container);
+        requirePdf(
+          ref.generation === 0 && container && 'offset' in container && container.generation === 0
+        );
+        const object = compressed(physical(entry.container, container))[entry.index];
+        requirePdf(object?.id === ref.id);
+        value = object.value;
       }
-      requirePdf(page.get('/Type') === '/Pages');
-      const kids = page.get('/Kids');
-      requirePdf(Array.isArray(kids) && kids.length <= MAX_OBJECTS);
-      const count = kids.reduce<number>(
-        (sum, kid) => sum + pageCount(reference(kid), ref, depth + 1),
-        0
-      );
-      requirePdf(count === directInteger(page.get('/Count')));
-      return count;
+      resolving.delete(ref.id);
+      return value;
     }
-    requirePdf(pageCount(reference(catalog.get('/Pages'))) > 0);
+
+    const inspect = (value: PdfValue) => assertInactive(value, resolve, chargePolicy);
+    for (const part of parts) {
+      inspect(part.trailer);
+      for (const [id, entry] of part.entries) {
+        if (entry && 'offset' in entry) {
+          const obj = physical(id, entry);
+          inspect(obj.value);
+          // Inspect every member, even entries omitted from this xref or
+          // superseded in a later update.
+          if (obj.value instanceof Map && obj.value.get('/Type') === '/ObjStm')
+            for (const item of compressed(obj)) inspect(item.value);
+        } else if (entry) {
+          const container = active.get(entry.container);
+          requirePdf(container && 'offset' in container && container.generation === 0);
+          const object = compressed(physical(entry.container, container))[entry.index];
+          requirePdf(object?.id === id);
+          inspect(object.value);
+        }
+      }
+    }
+    // An update can change an indirect action name referenced by older objects.
+    for (const [id, entry] of active) {
+      if (entry) inspect(resolve({ id, generation: 'offset' in entry ? entry.generation : 0 }));
+    }
+    const pages = countPages(dictionary(resolve(reference(root))), resolve);
+    requirePdf(pages > 0);
+    if (revision.linearization) {
+      const parameters = revision.linearization;
+      const entry = active.get(parameters.id);
+      const info = dictionary(parameters.value);
+      requirePdf(
+        entry && 'offset' in entry && physical(parameters.id, entry).end === parameters.end
+      );
+      requirePdf(
+        info.get('/N') === pages &&
+          dictionary(resolve({ id: directInteger(info.get('/O')), generation: 0 })).get('/Type') ===
+            '/Page'
+      );
+      const hints = info.get('/H') as PdfValue[];
+      for (let i = 0; i < hints.length; i += 2) {
+        const offset = directInteger(hints[i]);
+        const end = offset + directInteger(hints[i + 1]);
+        const hint = physicalObjects.get(offset);
+        requirePdf(
+          hint?.stream && hint.end <= end && /^[\0\t\n\f\r ]*$/.test(source.slice(hint.end, end))
+        );
+      }
+    }
+    previousEnd = revision.end;
+  }
+
+  // Every byte is part of an indexed object, a cross-reference section, or PDF padding.
+  const cursor = new Reader(source, headerEnd);
+  for (const { offset, end } of [...regions.values()].sort((a, b) => a.offset - b.offset)) {
+    cursor.skip();
+    requirePdf(cursor.at === offset);
+    cursor.at = end;
+  }
+  cursor.skip();
+  requirePdf(cursor.at === source.length);
+}
+
+/** Validate the complete PDF container and inspect every revision for active content. */
+export function hasPdfStructure(bytes: Buffer): boolean {
+  try {
+    validatePdf(bytes);
     return true;
   } catch (error) {
     if (
