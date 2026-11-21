@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
-import { passwordResetDenial, passwordResetDenialFor } from './admin-password-reset';
+import {
+  passwordResetDenial,
+  passwordResetDenialFor,
+  RESET_PARTY_SELECT,
+} from './admin-password-reset';
 
 type Party = Parameters<typeof passwordResetDenialFor>[0];
 
@@ -86,5 +90,27 @@ describe('passwordResetDenial', () => {
     expect(await passwordResetDenial(db, { actorId: 'a', targetId: 'gone' })).toBe(
       'Member not found.'
     );
+  });
+});
+
+describe('DEV-1004: the override-expiry filter takes the time of each read', () => {
+  it('excludes an override that expired after the module loaded', () => {
+    vi.useFakeTimers();
+    try {
+      const at = new Date('2031-05-01T10:00:00.000Z');
+      vi.setSystemTime(at);
+      const first = RESET_PARTY_SELECT.permissionOverrides.where.OR[1] as {
+        expiresAt: { gt: Date };
+      };
+      expect(first.expiresAt.gt).toEqual(at);
+      const later = new Date('2031-05-02T10:00:00.000Z');
+      vi.setSystemTime(later);
+      const spread = { ...RESET_PARTY_SELECT, id: true };
+      expect(
+        (spread.permissionOverrides.where.OR[1] as { expiresAt: { gt: Date } }).expiresAt.gt
+      ).toEqual(later);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -12,7 +12,9 @@ export const reviewListInput = reviewBatchInput
   .extend({
     query: z.string().trim().max(120).default(''),
     page: z.number().int().min(1).max(10000).default(1),
-    filter: z.enum(['all', 'stock', 'price', 'collision', 'not-created']).default('all'),
+    filter: z
+      .enum(['all', 'stock', 'price', 'collision', 'not-created', 'codes-not-added'])
+      .default('all'),
   })
   .strict();
 export const REVIEW_PAGE_SIZE = 25;
@@ -94,6 +96,21 @@ export async function listStagedMedicines(
       in: (
         await db.pharmacyStagedMedicineLink.findMany({
           where: { organizationId, batchId: batch.id, outcome: 'NOT_CREATED' },
+          select: { sourceKey: true },
+        })
+      ).map((link) => link.sourceKey),
+    };
+  // DEV-1004: the created rows whose old code, generic name or barcode was not added, so the
+  // person who imported the file can see each of them (the creation step names only counts).
+  if (input.filter === 'codes-not-added')
+    where.sourceKey = {
+      in: (
+        await db.pharmacyStagedMedicineLink.findMany({
+          where: {
+            organizationId,
+            batchId: batch.id,
+            OR: [{ aliasesNotAdded: { isEmpty: false } }, { barcodeAttached: false }],
+          },
           select: { sourceKey: true },
         })
       ).map((link) => link.sourceKey),

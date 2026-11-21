@@ -875,6 +875,29 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
         expect(JSON.stringify(result)).not.toMatch(/pharmacist_c|@|Former Pharmacist/);
       });
 
+      it('names a reviewer listed after the first 500 members (DEV-1004)', async () => {
+        members[0]!.record = {
+          ...owner,
+          permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+        };
+        for (let n = 0; n < 600; n += 1)
+          addMember(`cashier_${String(n).padStart(3, '0')}`, cashier);
+        addMember('pharmacist_c', pharmacist);
+        // The database pages the members as asked; the reviewer is on the second page.
+        const listed = db.user.findMany.getMockImplementation()!;
+        db.user.findMany.mockImplementation(
+          async (args: { skip?: number; take?: number; where: never }) => {
+            const all = (await listed(args)) as unknown[];
+            const from = args.skip ?? 0;
+            return args.take === undefined ? all.slice(from) : all.slice(from, from + args.take);
+          }
+        );
+        await expect(soloCaller().catalogueSelfApproval()).resolves.toEqual({
+          canSelfApprove: false,
+          reviewers: ['Ayesha Khan'],
+        });
+      });
+
       it('gives a member without the review right nothing', async () => {
         addMember('cashier_b', cashier);
         addMember('pharmacist_c', pharmacist);

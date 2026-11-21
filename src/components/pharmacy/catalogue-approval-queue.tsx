@@ -98,7 +98,7 @@ type ApprovalMode = 'DIRECT' | 'PIN' | 'OTHER_REVIEWER' | 'CHECKING';
 const MAX_NAMED_REVIEWERS = 5;
 
 /** "Ask Ayesha Khan or Bilal Ahmed to approve this." — names only, from the server. */
-function askReviewers(names: readonly string[]): string {
+export function askReviewers(names: readonly string[]): string {
   if (!names.length)
     return 'Nobody else can approve it yet. Give another member the catalogue review permission, then ask them to approve this.';
   const shown = names.slice(0, MAX_NAMED_REVIEWERS);

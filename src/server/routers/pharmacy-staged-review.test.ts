@@ -199,6 +199,25 @@ describe('staged review authorization and reads', () => {
     const all = await caller().stagedRows({ ...scope });
     expect(all.rows[0]!.notCreatedReason).toBeNull();
   });
+  it('DEV-1004: lists the created rows whose codes or barcodes were not added', async () => {
+    db.pharmacyStagedMedicineLink.findMany
+      .mockResolvedValueOnce([{ sourceKey: 'alias-key' }, { sourceKey: 'barcode-key' }])
+      .mockResolvedValueOnce([]);
+    await caller().stagedRows({ ...scope, filter: 'codes-not-added' });
+    expect(db.pharmacyStagedMedicineLink.findMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        organizationId: 'org_a',
+        batchId: 'batch_a',
+        OR: [{ aliasesNotAdded: { isEmpty: false } }, { barcodeAttached: false }],
+      },
+      select: { sourceKey: true },
+    });
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ sourceKey: { in: ['alias-key', 'barcode-key'] } }),
+      })
+    );
+  });
   it('includes retained collision flags when targetNaturalKey is null', async () => {
     await caller().stagedRows({ ...scope, filter: 'collision' });
     expect(JSON.stringify(db.pharmacyMigrationRow.findMany.mock.calls)).toContain(

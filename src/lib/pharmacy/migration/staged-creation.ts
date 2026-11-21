@@ -510,7 +510,7 @@ export function refusalCause(error: unknown): string {
 
 /**
  * DEV-1002: more rows than this refused for one and the same reason in a step (or every row of
- * a step of two or more) is not a few bad rows in the file but a cause that would refuse any row,
+ * a step of two or more, all for that one reason: DEV-1004) is not a few bad rows in the file but a cause that would refuse any row,
  * such as a broken rule in the database. A NOT_CREATED record is permanent, so such a step is
  * undone and nothing is recorded; it stops as soon as the bound is passed.
  */
@@ -588,11 +588,12 @@ async function writeRows(tx: ScopedDb, organizationId: string, writes: readonly 
     if (innerLevels.length) await tx.packLevel.createMany({ data: innerLevels });
     const aliases = writes.flatMap((write) => write.aliases);
     if (aliases.length) await tx.medicineAlias.createMany({ data: aliases, skipDuplicates: true });
-    await tx.medicineProvenance.createMany({ data: writes.flatMap((write) => write.provenance) });
   }
   const barcodes = writes.flatMap((write) => (write.barcode ? [write.barcode] : []));
   if (barcodes.length) {
-    // A barcode another person added since it was checked is skipped too, and reported.
+    // A barcode another person added since it was checked is skipped too, and reported. Two rows
+    // of this group with one barcode: the first row (in file order) keeps it. A row refused
+    // before this write never holds it, so the next row with it gets it (DEV-1004).
     await tx.medicineBarcode.createMany({ data: barcodes, skipDuplicates: true });
     const attached = new Set(
       (
@@ -605,6 +606,15 @@ async function writeRows(tx: ScopedDb, organizationId: string, writes: readonly 
     for (const write of writes)
       if (write.barcode) write.link.barcodeAttached = attached.has(write.barcode.id);
   }
+  if (medicines.length)
+    // The import asserts a barcode only for the rows that hold it.
+    await tx.medicineProvenance.createMany({
+      data: writes.flatMap((write) =>
+        write.provenance.filter(
+          (item) => item.field !== 'barcode' || write.link.barcodeAttached === true
+        )
+      ),
+    });
   const safetyStocks = writes.flatMap((write) => (write.safetyStock ? [write.safetyStock] : []));
   if (safetyStocks.length) await tx.pharmacySafetyStock.createMany({ data: safetyStocks });
   await tx.pharmacyStagedMedicineLink.createMany({ data: writes.map((write) => write.link) });
@@ -717,7 +727,8 @@ export async function createStagedMedicinesChunk(
     )
   );
   // A barcode is unique in the organization: one already on another pack is skipped and
-  // reported on the row's link, never moved; within this chunk the first row keeps it.
+  // reported on the row's link, never moved. Within this chunk the first row written keeps it
+  // (writeRows), so a row refused by the database never takes it from the next (DEV-1004).
   const wanted = [
     ...new Set(planned.flatMap(({ plan }) => (plan.barcode ? [normalized(plan.barcode)] : []))),
   ].filter(Boolean);
@@ -739,6 +750,12 @@ export async function createStagedMedicinesChunk(
   const now = new Date();
   const writes: RowWrite[] = [];
   for (const { row, plan } of planned) {
+    // DEV-1004: a barcode longer than the catalogue holds is reported as read, never cut to a
+    // shorter code that is not the one on the pack.
+    const read = row.barcode?.trim() ?? null;
+    const whole = plan.barcode !== null && read === plan.barcode;
+    const barcodeAsRead =
+      plan.barcode === null ? null : whole ? plan.barcode : cutText(read ?? '', 300);
     const link = {
       sourceKey: row.sourceKey,
       batchId: request.batchId,
@@ -765,7 +782,7 @@ export async function createStagedMedicinesChunk(
           medicineId: existing.medicineId,
           packLevelId: existing.packLevelId,
           outcome: 'MATCHED',
-          barcode: plan.barcode,
+          barcode: barcodeAsRead,
           barcodeAttached: plan.barcode ? false : null,
           // The existing medicine's thresholds are not changed here either.
           reorderLevelApplied: plan.reorderLevelPacks === null ? null : false,
@@ -809,10 +826,15 @@ export async function createStagedMedicinesChunk(
       else aliasesNotAdded.push(value);
     }
     let barcode: RowWrite['barcode'];
-    if (plan.barcode) {
+    if (plan.barcode && whole) {
       const normalizedCode = normalized(plan.barcode);
-      if (normalizedCode && !taken.has(normalizedCode)) {
-        taken.add(normalizedCode);
+      // DEV-1004: attached only when the database and the counter's scan read the code alike;
+      // a code they read differently ("AB½12") could be stored but never scanned.
+      if (
+        normalizedCode &&
+        normalizedCode === normalizeMedicineText(plan.barcode) &&
+        !taken.has(normalizedCode)
+      ) {
         barcode = {
           id: randomUUID(),
           presentationId,
@@ -862,7 +884,7 @@ export async function createStagedMedicinesChunk(
         ...link,
         medicineId,
         packLevelId: outerId,
-        barcode: plan.barcode,
+        barcode: barcodeAsRead,
         barcodeAttached: plan.barcode ? Boolean(barcode) : null,
         reorderLevelApplied: plan.reorderLevelPacks === null ? null : reorderUnits !== null,
         aliasesNotAdded,
@@ -912,8 +934,13 @@ export async function createStagedMedicinesChunk(
   }
   const refused: { write: RowWrite; error: unknown }[] = [];
   const written = await writeIsolated(tx, organizationId, writes, refused);
-  // Every row of a step refused is a cause that would refuse any row: undo, record nothing.
-  if (writes.length > 1 && refused.length === writes.length)
+  // Every row of a step refused for one and the same cause is a cause that would refuse any row:
+  // undo, record nothing. Rows refused for different causes are each recorded (DEV-1004).
+  if (
+    writes.length > 1 &&
+    refused.length === writes.length &&
+    new Set(refused.map(({ error }) => causeKey(error))).size === 1
+  )
     throw new StagedCreationSystemicRefusal(refused[0]!.error, refused.length);
   for (const { write, error } of refused)
     notCreated.push({

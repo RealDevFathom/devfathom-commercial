@@ -1065,7 +1065,16 @@ export async function transferStock(
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
   }
 
-  const arrangement = arrangementFor(input.units, source.unitsPerPack);
+  // DEV-1004: the move takes whole packs and loose units as the balance holds them now: whole
+  // packs first, as many as it has, and the rest loose. A bill line changed meanwhile can leave
+  // the units loose; a move the balance cannot cover in either form is refused here, never left
+  // to the balance's database check.
+  const packed = arrangementFor(input.units, source.unitsPerPack);
+  const sealedPacks = Math.min(packed.sealedPacks, Number(source.sealedPacks));
+  const arrangement = {
+    sealedPacks,
+    looseUnits: input.units - sealedPacks * source.unitsPerPack,
+  };
   if (arrangement.looseUnits > source.looseUnits) {
     throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
   }

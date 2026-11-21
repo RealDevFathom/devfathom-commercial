@@ -183,6 +183,8 @@ suite(title, () => {
     const permission = (path: string) => `      - action: read\n        path: ${path}\n`;
     let yaml = block
       .replace('REPLACE_WITH_READER_PASSWORD', READER_PASSWORD)
+      // The app server here is this test process, which reaches the relay from the same address.
+      .replace("ips: ['10.20.30.50/32']", `ips: ['${privateAddress}/32']`)
       .replace('10.20.30.40:8888', `${privateAddress}:${hlsPort}`)
       .replace('/etc/mediamtx/camera-gateway.key', join(dir, 'relay.key'))
       .replace('/etc/mediamtx/camera-gateway.crt', join(dir, 'relay.crt'))

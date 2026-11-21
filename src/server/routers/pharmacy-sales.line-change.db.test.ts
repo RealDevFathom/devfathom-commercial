@@ -980,6 +980,221 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     ]);
   });
 
+  it('counts each line in the staff-void signal by the value its own changes took off (DEV-1004)', async () => {
+    const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
+    const today = workspaceToday('UTC');
+    const cashierVoids = async () => {
+      const { facts } = await withTenantDb(ids.org, (db) =>
+        readPharmacyAnomalyFacts(db, { branchIds: [ids.branch], from: today, to: today })
+      );
+      const row = facts.staffVoid.find((fact) => fact.userId === ids.cashierB);
+      return {
+        voidEvents: row?.voidEvents ?? 0,
+        lineVoids: row?.lineVoids ?? 0,
+        lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
+      };
+    };
+    let expected = await cashierVoids();
+    const expectAdded = async (voids: number, minor: number) => {
+      expected = {
+        voidEvents: expected.voidEvents + voids,
+        lineVoids: expected.lineVoids + voids,
+        lineVoidNetMinor: expected.lineVoidNetMinor + minor,
+      };
+      expect(await cashierVoids()).toEqual(expected);
+    };
+    // A strip of the cheap medicine is PKR 20.00; of the dear one PKR 500.00.
+    const cheap = await oneLot('Antacid void signal', 600);
+    const dear = await stockedItem('Biologic void signal', [
+      { expiresAt: '2028-01-01', units: 60, mrp: 50_000 },
+    ]);
+    const lineOf = (saleId: string, saleLineId: string) => ({ saleId, saleLineId });
+
+    // 1. 3 strips lowered to 1 and raised back to 3: the line lost nothing.
+    const resized = await bill(ids.cashierB, [(id) => strip(cheap, id, 3)]);
+    const lowered = await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(resized.saleId, resized.lineIds[0]!), cheap, 1))
+    );
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(resized.saleId, lowered.line.id), cheap, 3))
+    );
+    await expectAdded(0, 0);
+
+    // 2. 3 strips lowered to 1: one void, worth the 2 strips that came off.
+    const reduced = await bill(ids.cashierB, [(id) => strip(cheap, id, 3)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(reduced.saleId, reduced.lineIds[0]!), cheap, 1))
+    );
+    await expectAdded(1, 4_000);
+
+    // 3. The dear strip removed and the cheap line raised from 1 to 26 strips (worth as much):
+    //    the removal still counts in full.
+    const swapped = await bill(ids.cashierB, [
+      (id) => strip(dear, id, 1),
+      (id) => strip(cheap, id, 1),
+    ]);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove(lineOf(swapped.saleId, swapped.lineIds[0]!)))
+    );
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(swapped.saleId, swapped.lineIds[1]!), cheap, 26))
+    );
+    await expectAdded(1, 50_000);
+
+    // 4. The dear strip removed and a new cheap line added: the removal counts in full.
+    const replaced = await bill(ids.cashierB, [(id) => strip(dear, id, 1)]);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove(lineOf(replaced.saleId, replaced.lineIds[0]!)))
+    );
+    await act(ids.cashierB, (api) => api.addLine(strip(cheap, replaced.saleId, 25)));
+    await expectAdded(1, 50_000);
+
+    // 5. Five times a strip added and removed again: five voids.
+    const cycled = await bill(ids.cashierB, []);
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      const added = await act(ids.cashierB, (api) => api.addLine(strip(cheap, cycled.saleId, 1)));
+      await act(ids.cashierB, (api) =>
+        api.removeLine(remove(lineOf(cycled.saleId, added.line.id)))
+      );
+    }
+    await expectAdded(5, 10_000);
+  }, 120_000);
+
+  it('charges each reduction to whoever made it, and only when units come off (DEV-1004)', async () => {
+    const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
+    const today = workspaceToday('UTC');
+    const voidsOf = async (userId: string) => {
+      const { facts } = await withTenantDb(ids.org, (db) =>
+        readPharmacyAnomalyFacts(db, { branchIds: [ids.branch], from: today, to: today })
+      );
+      const row = facts.staffVoid.find((fact) => fact.userId === userId);
+      return {
+        voidEvents: row?.voidEvents ?? 0,
+        lineVoids: row?.lineVoids ?? 0,
+        lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
+      };
+    };
+    const expected = {
+      [ids.cashierB]: await voidsOf(ids.cashierB),
+      [ids.manager]: await voidsOf(ids.manager),
+    };
+    const expectAdded = async (userId: string, voids: number, minor: number) => {
+      const before = expected[userId]!;
+      expected[userId] = {
+        voidEvents: before.voidEvents + voids,
+        lineVoids: before.lineVoids + voids,
+        lineVoidNetMinor: before.lineVoidNetMinor + minor,
+      };
+      expect(await voidsOf(userId)).toEqual(expected[userId]);
+    };
+    const lineOf = (saleId: string, saleLineId: string) => ({ saleId, saleLineId });
+    // A strip of 10 at PKR 20.05: its 10 tablets sell for PKR 20.00 in all.
+    const odd = await stockedItem('Antacid odd MRP', [
+      { expiresAt: '2028-01-01', units: 200, mrp: 2005 },
+    ]);
+    const otc = await oneLot('Antacid who changed it', 400);
+
+    // 1 strip changed to the same 10 tablets: no unit came off, so no void, although the
+    // tablets' prices add up to 5 paisa less.
+    const loosened = await bill(ids.cashierB, [(id) => strip(odd, id, 1)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(loosened.saleId, loosened.lineIds[0]!), odd, 10, 'UNIT'))
+    );
+    await expectAdded(ids.cashierB, 0, 0);
+
+    // 3 strips changed to 29 tablets: one tablet came off, worth PKR 2.00.
+    const trimmed = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(trimmed.saleId, trimmed.lineIds[0]!), otc, 29, 'UNIT'))
+    );
+    await expectAdded(ids.cashierB, 1, 200);
+
+    // The cashier lowers 3 strips to 1, then the manager raises it to 2: the cashier is charged
+    // for the 2 strips they took off; the manager's raise takes nothing off and offsets nothing.
+    const raisedByManager = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    const loweredByCashier = await act(ids.cashierB, (api) =>
+      api.changeLine(change(lineOf(raisedByManager.saleId, raisedByManager.lineIds[0]!), otc, 1))
+    );
+    await act(ids.manager, (api) =>
+      api.changeLine(change(lineOf(raisedByManager.saleId, loweredByCashier.line.id), otc, 2))
+    );
+    await expectAdded(ids.cashierB, 1, 4_000);
+    await expectAdded(ids.manager, 0, 0);
+
+    // The manager lowers 3 strips to 1, then the cashier removes the line: the manager is
+    // charged for 2 strips and the cashier for the 1 they removed.
+    const removedByCashier = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    const loweredByManager = await act(ids.manager, (api) =>
+      api.changeLine(change(lineOf(removedByCashier.saleId, removedByCashier.lineIds[0]!), otc, 1))
+    );
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove(lineOf(removedByCashier.saleId, loweredByManager.line.id)))
+    );
+    await expectAdded(ids.manager, 1, 4_000);
+    await expectAdded(ids.cashierB, 1, 2_000);
+  }, 120_000);
+
+  it('leaves a whole-bill discount given after a change out of the staff-void value (DEV-1004)', async () => {
+    const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
+    const { applyBillDiscount } = await import('@/lib/pharmacy/bill-discount-service');
+    const today = workspaceToday('UTC');
+    const cashierVoids = async () => {
+      const { facts } = await withTenantDb(ids.org, (db) =>
+        readPharmacyAnomalyFacts(db, { branchIds: [ids.branch], from: today, to: today })
+      );
+      const row = facts.staffVoid.find((fact) => fact.userId === ids.cashierB);
+      return {
+        voidEvents: row?.voidEvents ?? 0,
+        lineVoids: row?.lineVoids ?? 0,
+        lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
+      };
+    };
+    await withPlatformDb(
+      (db) =>
+        db.$executeRaw`UPDATE "organizations" SET "pharmacyBillDiscountEnabled" = true WHERE "id" = ${ids.org}`
+    );
+    const discountTenPercent = (saleId: string) =>
+      withTenantDb(ids.org, (db) =>
+        applyBillDiscount(
+          db,
+          { organizationId: ids.org, branchId: ids.branch, actorId: ids.cashierB },
+          {
+            saleId,
+            request: { kind: 'PERCENT', bps: 1_000 },
+            approval: {
+              approvedByUserId: ids.manager,
+              approvalPolicy: 'MANAGER_APPROVAL',
+              selfApproved: false,
+            },
+          }
+        )
+      );
+    const otc = await oneLot('Antacid bill discount void', 400);
+    const before = await cashierVoids();
+    // 10 strips raised to 11, then a 10% discount on the whole bill: only goods were added.
+    const raised = await bill(ids.cashierB, [(id) => strip(otc, id, 10)]);
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change({ saleId: raised.saleId, saleLineId: raised.lineIds[0]! }, otc, 11))
+    );
+    await expect(discountTenPercent(raised.saleId)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(await cashierVoids()).toEqual(before);
+    // A line genuinely removed, then a whole-bill discount on what is left: still one void,
+    // worth the strip that came off.
+    const trimmed = await bill(ids.cashierB, [
+      (id) => strip(otc, id, 1),
+      (id) => strip(otc, id, 2),
+    ]);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove({ saleId: trimmed.saleId, saleLineId: trimmed.lineIds[0]! }))
+    );
+    await expect(discountTenPercent(trimmed.saleId)).resolves.toMatchObject({ status: 'APPLIED' });
+    expect(await cashierVoids()).toEqual({
+      voidEvents: before.voidEvents + 1,
+      lineVoids: before.lineVoids + 1,
+      lineVoidNetMinor: before.lineVoidNetMinor + 2000,
+    });
+  });
+
   it('totals after any sequence of changes and removals equal a fresh bill of the same lines', async () => {
     // One lot, at an MRP that does not divide evenly into tablets, so every loose price is
     // rounded: a fresh bill of the same lines then allocates and rounds exactly the same way.
@@ -1170,6 +1385,49 @@ describeIfDatabase('DEV-977B concurrent line changes', () => {
         expect(result.status === 'rejected' ? String(result.reason) : 'ok').toBe('ok');
     }
     await expectStockMatchesBills(otc.medicineId, await received(otc.medicineId));
+  }, 120_000);
+
+  it('a stock move racing a change is refused in plain terms, never with a database error (DEV-1004)', async () => {
+    const { PharmacyInventoryError } = await import('@/lib/pharmacy/inventory');
+    const shelf = await withTenantDb(ids.org, (tx) =>
+      tx.pharmacyStockLocation.create({
+        data: { branchId: ids.branch, code: `SHELF-${suffix}`, name: 'Shelf', kind: 'STORE' },
+      })
+    );
+    const scope = { organizationId: ids.org, branchId: ids.branch, actorId: ids.manager };
+    for (let round = 0; round < 4; round += 1) {
+      // Every unit of the lot is loose (stockedItem breaks the packs); the move asks for one
+      // whole strip and five tablets while a bill line grows into the same lot.
+      const item = await oneLot(`Antacid move ${round}`, 30);
+      const { saleId, lineIds } = await bill(ids.cashier, [(id) => strip(item, id, 1)]);
+      const move = () =>
+        withTenantDb(ids.org, (db) =>
+          ledger.transferStock(db, scope, {
+            inventoryLotId: item.lots[0]!,
+            fromStockLocationId: locationId,
+            toStockLocationId: shelf.id,
+            units: 15,
+            at: new Date(),
+            idempotencyKeyPrefix: key(),
+          })
+        );
+      const grow = () =>
+        act(ids.cashier, (api) =>
+          api.changeLine(change({ saleId, saleLineId: lineIds[0]! }, item, 2))
+        );
+      const results = await Promise.allSettled(round % 2 ? [grow(), move()] : [move(), grow()]);
+      const moved = results[round % 2 ? 1 : 0]!;
+      if (moved.status === 'rejected') {
+        expect(moved.reason).toBeInstanceOf(PharmacyInventoryError);
+        expect(['INVALID_ARRANGEMENT', 'INSUFFICIENT_STOCK']).toContain(
+          (moved.reason as InstanceType<typeof PharmacyInventoryError>).reason
+        );
+      }
+      const grown = results[round % 2 ? 0 : 1]!;
+      if (grown.status === 'rejected')
+        expect(String(grown.reason)).not.toMatch(/Database error|violates|constraint/i);
+      await expectStockMatchesBills(item.medicineId, await received(item.medicineId));
+    }
   }, 120_000);
 
   // Last: it closes the branch's business day for the rest of this file.

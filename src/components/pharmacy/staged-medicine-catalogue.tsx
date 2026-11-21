@@ -55,7 +55,13 @@ async function loadReview(
       ...selected,
       query: text('query'),
       page: Number(text('page') || '1'),
-      filter: (text('filter') || 'all') as 'all' | 'stock' | 'price' | 'collision' | 'not-created',
+      filter: (text('filter') || 'all') as
+        | 'all'
+        | 'stock'
+        | 'price'
+        | 'collision'
+        | 'not-created'
+        | 'codes-not-added',
     });
     const explicit = {
       branchId: text('branchId'),
@@ -303,6 +309,7 @@ export async function StagedMedicineCatalogue({
                 <option value="price">Open verified price gaps</option>
                 <option value="collision">Name collisions</option>
                 <option value="not-created">Could not be created</option>
+                <option value="codes-not-added">Codes or barcodes not added</option>
               </select>
             </label>
             <Button type="submit" className="min-h-11">

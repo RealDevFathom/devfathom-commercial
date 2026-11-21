@@ -233,15 +233,13 @@ async function readShiftFigures(db: ScopedDb, scope: LedgerScope, shift: ShiftRo
     db.pharmacyDrawerMovement.findMany({ where, select: { kind: true, amountMinor: true } }),
     // DEV-977B: the bill lines changed or removed in this shift; each void names the one open
     // shift the change happened in (sales.ts), so it is counted here and in no other shift.
-    db.pharmacySaleEvent.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        kind: 'VOIDED',
-        payload: { path: ['shiftId'], equals: shift.id },
-      },
-      select: { payload: true },
-    }),
+    // DEV-1004: written with the predicate of the partial index on line-void events (migration
+    // 20261118127000). Under row-level security the index narrows to this organisation and
+    // branch, and the shift is checked over the branch's line voids only, never every sale event.
+    db.$queryRaw<{ payload: Prisma.JsonValue }[]>(Prisma.sql`
+      SELECT "payload" FROM "pharmacy_sale_events"
+       WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+         AND "kind" = 'VOIDED' AND ("payload"->>'shiftId') = ${shift.id}`),
   ]);
   return computeCashShiftFigures({
     openingFloatMinor: shift.openingFloatMinor,

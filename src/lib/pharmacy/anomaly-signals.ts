@@ -44,7 +44,15 @@ export type AnomalyFactSet = {
   staffVoid: Array<{
     branchId: string;
     userId: string;
+    /** Whole bills voided plus `lineVoids`. */
     voidEvents: number;
+    /**
+     * DEV-1004: bill lines this person changed or removed at the counter so that fewer units
+     * remained, each counted once, and the value those changes took off. A person's raise offsets
+     * only their own reduction of the same line; a removal is never offset by another line.
+     */
+    lineVoids?: number;
+    lineVoidNetMinor?: number;
     completedSales: number;
     occurredAt: Date;
     sourceObservedAt: Date;
@@ -126,6 +134,20 @@ const abs = (value: number) => Math.abs(value);
 const rateBps = (part: number, total: number) =>
   total <= 0 ? 0 : Math.round((abs(part) * 10_000) / total);
 const money = (minor: number) => `PKR ${(minor / 100).toFixed(2)}`;
+
+/**
+ * DEV-1004: what the void count is made of. A bill line changed or removed counts once for each
+ * person whose own changes took units off it; nothing on another line offsets it.
+ */
+function staffVoidBreakdown(fact: {
+  voidEvents: number;
+  lineVoids?: number;
+  lineVoidNetMinor?: number;
+}): string {
+  const lines = fact.lineVoids ?? 0;
+  const wholeBills = fact.voidEvents - lines;
+  return `${wholeBills} ${wholeBills === 1 ? 'is a whole bill' : 'are whole bills'} voided and ${lines} ${lines === 1 ? 'is a line' : 'are lines'} this person took units off, ${money(fact.lineVoidNetMinor ?? 0)} in all. Each change counts against the person who made it, only when it leaves fewer units on the line: lowering a quantity and raising it again yourself is not a void, and nor is selling the same units as loose tablets. A removed line always counts in full; raising or adding another line does not offset it.`;
+}
 
 function finalize(
   candidate: Omit<
@@ -261,12 +283,14 @@ export function detectPharmacyAnomalies(
           scope: { branchId: fact.branchId, userId: fact.userId },
           exactNumbers: {
             voidEvents: fact.voidEvents,
+            lineVoids: fact.lineVoids ?? 0,
+            lineVoidNetMinor: fact.lineVoidNetMinor ?? 0,
             completedSales: fact.completedSales,
             voidRateBps,
             thresholdEvents: policy.staffVoid.minimumEvents,
             thresholdRateBps: policy.staffVoid.minimumRateBps,
           },
-          explanation: `${fact.voidEvents} void events were recorded for this staff member (${(voidRateBps / 100).toFixed(2)}% of completed sales plus voids), meeting the configurable review thresholds. Review the sale-event audit trail; this pattern does not establish abuse.`,
+          explanation: `${fact.voidEvents} void events were recorded for this staff member (${(voidRateBps / 100).toFixed(2)}% of completed sales plus voids), meeting the configurable review thresholds. ${staffVoidBreakdown(fact)} Review the sale-event audit trail; this pattern does not establish abuse.`,
           sourceObservedAt: fact.sourceObservedAt,
           estimateMethod: null,
           estimateWindow: null,
