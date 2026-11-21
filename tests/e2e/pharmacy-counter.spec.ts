@@ -964,7 +964,10 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
  */
 async function holdPrintDialogsOpen(page: Page) {
   await page.context().addInitScript(() => {
-    window.print = () => {};
+    window.print = () => {
+      const root = document.documentElement;
+      root.dataset.printRequests = String(Number(root.dataset.printRequests ?? 0) + 1);
+    };
   });
 }
 
@@ -1609,6 +1612,7 @@ test('Counter v2 — Enter adds one unit; quantity, unit and remove on the bill 
 test('Counter v2 — cash with change, the paid bill and its receipt, and a print window that leaves the counter working', async ({
   page,
 }) => {
+  test.setTimeout(75_000);
   const otc = PHARMACY_E2E.medicines.otc;
   await holdPrintDialogsOpen(page);
   await openCounter(page);
@@ -1644,11 +1648,42 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
   const print = receiptSheet.getByRole('button', { name: 'Print receipt', exact: true });
   await qaShots(page, 'receipt', { focus: print });
 
+  const blocked = page.getByText('Allow pop-ups for this site, then retry Print receipt.', {
+    exact: true,
+  });
+  const notice = page.getByText(/Finish or cancel printing in the print window/);
+  // Simulate a browser blocking just the first isolated print window. No
+  // document may be sent and the cashier must explicitly retry.
+  await page.evaluate(() => {
+    const open = window.open;
+    window.open = (...args) => {
+      if (!String(args[0]).startsWith('/pharmacy/counter/print-window.html#'))
+        return open.apply(window, args);
+      window.open = open;
+      return null;
+    };
+  });
+  await pressControl(print);
+  await expect(blocked).toBeVisible({ timeout: 15_000 });
+  await expect(notice).toHaveCount(0);
+  expect(page.context().pages()).toEqual([page]);
+
+  const slowPrintPage = '**/pharmacy/counter/print-window.html';
+  await page.context().route(slowPrintPage, async (route) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 8_000));
+    await route.continue();
+  });
+
   // DEV-973: the print window is its own browsing context. While its print dialog is open
   // (held open here), the counter keeps working: the next search runs at once.
   const popupPromise = page.waitForEvent('popup');
   await pressControl(print);
   const popup = await popupPromise;
+  await page.context().unroute(slowPrintPage);
+  await expect(popup.locator('html')).toHaveAttribute('data-print-requests', '1');
+  await expect(blocked).toBeHidden();
+  await expect(notice).toBeVisible();
+  await expect(popup.locator('body')).not.toContainText('Reprint — not a new sale');
   await expect(popup.locator('body')).toContainText(otc.name);
   await expect(popup.locator('body')).toContainText(receiptNumber);
   await page.keyboard.press('Escape');
@@ -1666,7 +1701,25 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
     timeout: 5_000,
   });
   expect(popup.isClosed()).toBe(false);
-  await popup.close();
+  const cancelled = popup.waitForEvent('close');
+  await popup.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+  await cancelled;
+  await expect(notice).toHaveCount(0);
+  expect(page.context().pages()).toEqual([page]);
+
+  await page.keyboard.press('Alt+r');
+  await expect(receiptSheet).toBeVisible();
+  const reprintPromise = page.waitForEvent('popup');
+  await pressControl(print);
+  const reprint = await reprintPromise;
+  await expect(reprint.locator('html')).toHaveAttribute('data-print-requests', '1');
+  await expect(reprint.locator('body')).toContainText(receiptNumber);
+  await expect(reprint.locator('body')).toContainText('Reprint — not a new sale');
+  const finished = reprint.waitForEvent('close');
+  await pressControl(reprint.getByRole('button', { name: 'Close', exact: true }));
+  await finished;
+  await expect(notice).toHaveCount(0);
+  expect(page.context().pages()).toEqual([page]);
 });
 
 test('Counter v2 — a wallet not set up, a payment not confirmed, then cash plus JazzCash with payer and reference', async ({

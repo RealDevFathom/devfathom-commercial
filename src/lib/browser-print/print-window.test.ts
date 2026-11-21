@@ -73,6 +73,48 @@ describe('DEV-973 isolated print window', () => {
     expect(getOpenPrintWindowCount()).toBe(before);
   });
 
+  it('hands the document over once when the print page takes eight seconds to load', async () => {
+    vi.useFakeTimers();
+    const windows = installFakePrintWindows({ ready: false });
+    const handle = openPrintWindow('popup');
+    const sent = sendToPrintWindow(handle, html, messages);
+    const outcome = sent.then(
+      () => 'sent',
+      (error: Error) => error.message
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(isPrintWindowOpen(handle)).toBe(true);
+    windows.last().ready();
+    await expect(outcome).resolves.toBe('sent');
+    expect(windows.last().printRequests()).toBe(1);
+    windows.closeAll();
+  });
+
+  it('keeps the blocked message when receipt data takes longer than the window timeout', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
+    const handle = openPrintWindow('popup');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await expect(sendToPrintWindow(handle, html, messages)).rejects.toThrow('Allow pop-ups');
+  });
+
+  it('prints only in the new window when a cashier retries before the old page loads', async () => {
+    vi.useFakeTimers();
+    const windows = installFakePrintWindows({ ready: false });
+    const first = printInWindow(html, { features: 'popup', ...messages });
+    const blocked = expect(first).rejects.toThrow('Allow pop-ups');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await blocked;
+    const old = windows.last();
+    const retry = printInWindow(html, { features: 'popup', ...messages });
+    old.ready();
+    windows.last().ready();
+    await retry;
+    expect(old.messages).toEqual([{ type: 'close' }]);
+    expect(windows.last().printRequests()).toBe(1);
+    windows.closeAll();
+  });
+
   it('never calls print() on the window or this page; the window prints itself once loaded', async () => {
     const windows = installFakePrintWindows({ ready: false });
     const pagePrint = vi.spyOn(window, 'print').mockImplementation(() => {});

@@ -19,7 +19,8 @@ const source = readFileSync(path.join(process.cwd(), 'public/pharmacy-counter-sw
 class MemoryCache {
   rows = new Map<string, Response>();
   key(request: RequestInfo | URL) {
-    const url = typeof request === 'string' ? request : request instanceof URL ? request.href : request.url;
+    const url =
+      typeof request === 'string' ? request : request instanceof URL ? request.href : request.url;
     return new URL(url, ORIGIN).href;
   }
   async match(request: RequestInfo | URL) {
@@ -47,7 +48,10 @@ function harness() {
   let hold: Promise<void> | null = null;
   const fetched: string[] = [];
   const network = async (input: RequestInfo | URL) => {
-    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url, ORIGIN);
+    const url = new URL(
+      typeof input === 'string' ? input : input instanceof URL ? input.href : input.url,
+      ORIGIN
+    );
     fetched.push(url.pathname);
     if (hold) await hold;
     if (!online) throw new TypeError('Failed to fetch');
@@ -62,19 +66,24 @@ function harness() {
     }
     if (url.pathname === '/pharmacy/counter') {
       nonce += 1;
-      const page = new Response(`<html><script nonce="n${nonce}"></script>counter for user</html>`, {
-        status: 200,
-        headers: {
-          'content-type': 'text/html; charset=utf-8',
-          'content-security-policy': `script-src 'self' 'nonce-n${nonce}'`,
-        },
-      });
+      const page = new Response(
+        `<html><script nonce="n${nonce}"></script>counter for user</html>`,
+        {
+          status: 200,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': `script-src 'self' 'nonce-n${nonce}'`,
+          },
+        }
+      );
       Object.defineProperty(page, 'type', { value: 'basic' });
       return page;
     }
     const other = new Response(`body of ${url.pathname}`, {
       status: 200,
-      headers: { 'content-type': url.pathname.startsWith('/_next/') ? 'text/javascript' : 'application/json' },
+      headers: {
+        'content-type': url.pathname.startsWith('/_next/') ? 'text/javascript' : 'application/json',
+      },
     });
     Object.defineProperty(other, 'type', { value: 'basic' });
     return other;
@@ -85,11 +94,25 @@ function harness() {
     caches,
     clients: { claim: async () => undefined },
     skipWaiting: () => undefined,
-    addEventListener: (type: string, listener: (event: unknown) => void) => listeners.set(type, listener),
+    addEventListener: (type: string, listener: (event: unknown) => void) =>
+      listeners.set(type, listener),
   };
-  vm.runInNewContext(source, { self, fetch: network, URL, Response, Request, Promise, Array, Boolean, TypeError });
+  vm.runInNewContext(source, {
+    self,
+    fetch: network,
+    URL,
+    Response,
+    Request,
+    Promise,
+    Array,
+    Boolean,
+    TypeError,
+  });
 
-  async function request(url: string, init: { mode?: string; method?: string; headers?: Record<string, string> } = {}) {
+  async function request(
+    url: string,
+    init: { mode?: string; method?: string; headers?: Record<string, string> } = {}
+  ) {
     const req = {
       url: new URL(url, ORIGIN).href,
       method: init.method ?? 'GET',
@@ -97,7 +120,10 @@ function harness() {
       headers: new Headers(init.headers ?? {}),
     };
     let responded: Promise<Response> | null = null;
-    listeners.get('fetch')!({ request: req, respondWith: (value: Promise<Response>) => (responded = value) });
+    listeners.get('fetch')!({
+      request: req,
+      respondWith: (value: Promise<Response>) => (responded = value),
+    });
     if (!responded) return { handled: false as const, response: await network(req.url) };
     return { handled: true as const, response: await responded };
   }
@@ -118,6 +144,13 @@ function harness() {
   return {
     stores,
     fetched,
+    async activate() {
+      let activation: Promise<unknown> | undefined;
+      listeners.get('activate')!({
+        waitUntil: (work: Promise<unknown>) => (activation = work),
+      });
+      await activation;
+    },
     request,
     message,
     send,
@@ -170,7 +203,12 @@ describe('DEV-957 counter service worker', () => {
   });
 
   it('opens the stored counter page with no connection, with its own CSP header and nonce', async () => {
-    expect(await sw.message({ type: 'arm', assets: ['/_next/static/chunks/app.js', 'https://cdn.test/x.js', '/api/trpc/x'] })).toEqual({ type: 'armed', ok: true });
+    expect(
+      await sw.message({
+        type: 'arm',
+        assets: ['/_next/static/chunks/app.js', 'https://cdn.test/x.js', '/api/trpc/x'],
+      })
+    ).toEqual({ type: 'armed', ok: true });
     sw.setOnline(false);
     const { response } = await sw.request('/pharmacy/counter?branchId=b1', { mode: 'navigate' });
     const html = await response.text();
@@ -187,9 +225,13 @@ describe('DEV-957 counter service worker', () => {
 
   it('goes to the network first and refreshes the stored page while online', async () => {
     await sw.message({ type: 'arm', assets: [] });
-    const first = await (await sw.request('/pharmacy/counter', { mode: 'navigate' })).response.text();
+    const first = await (
+      await sw.request('/pharmacy/counter', { mode: 'navigate' })
+    ).response.text();
     sw.setOnline(false);
-    const offline = await (await sw.request('/pharmacy/counter', { mode: 'navigate' })).response.text();
+    const offline = await (
+      await sw.request('/pharmacy/counter', { mode: 'navigate' })
+    ).response.text();
     expect(offline).toBe(first);
   });
 
@@ -215,7 +257,9 @@ describe('DEV-957 counter service worker', () => {
 
   it('does not store a redirect to sign-in or an error page as the counter', async () => {
     await sw.message({ type: 'arm', assets: [] });
-    const stored = await (await sw.request('/pharmacy/counter', { mode: 'navigate' })).response.text();
+    const stored = await (
+      await sw.request('/pharmacy/counter', { mode: 'navigate' })
+    ).response.text();
     for (const answer of ['redirect', 'error'] as const) {
       sw.answerCounterWith(answer);
       const passed = await sw.request('/pharmacy/counter', { mode: 'navigate' });
@@ -223,7 +267,9 @@ describe('DEV-957 counter service worker', () => {
       expect(await passed.response.text()).toBe(answer === 'redirect' ? 'sign in' : 'oops');
     }
     sw.setOnline(false);
-    const offline = await (await sw.request('/pharmacy/counter', { mode: 'navigate' })).response.text();
+    const offline = await (
+      await sw.request('/pharmacy/counter', { mode: 'navigate' })
+    ).response.text();
     expect(offline).toBe(stored);
     // Arming against a sign-in redirect stores nothing new and says so.
     sw.setOnline(true);
@@ -237,6 +283,7 @@ describe('DEV-957 counter service worker', () => {
     expect(sw.stores.has('devfathom-pharmacy-counter-shell-v1')).toBe(false);
     expect(sw.stores.has('devfathom-pharmacy-counter-assets-v1')).toBe(false);
     expect(sw.stores.has('devfathom-pharmacy-counter-print-v1')).toBe(false);
+    expect(sw.stores.has('devfathom-pharmacy-counter-print-v2')).toBe(false);
     sw.setOnline(false);
     await expect(sw.request('/pharmacy/counter', { mode: 'navigate' })).rejects.toThrow();
     await expect(
@@ -248,9 +295,27 @@ describe('DEV-957 counter service worker', () => {
     const PAGE = '/pharmacy/counter/print-window.html';
     const SCRIPT = '/pharmacy/counter/print-window.js';
 
+    it('replaces the stale print cache on upgrade before the first offline print', async () => {
+      const stale = new MemoryCache();
+      await stale.put(PAGE, new Response('old print page'));
+      await stale.put(SCRIPT, new Response('old print script'));
+      sw.stores.set('devfathom-pharmacy-counter-print-v1', stale);
+      sw.stores.set('devfathom-pharmacy-counter-shell-v1', new MemoryCache());
+
+      await sw.activate();
+
+      expect(sw.stores.has('devfathom-pharmacy-counter-print-v1')).toBe(false);
+      expect(sw.stores.has('devfathom-pharmacy-counter-shell-v1')).toBe(true);
+      sw.setOnline(false);
+      for (const path of [PAGE, SCRIPT]) {
+        const { response } = await sw.request(path);
+        expect(await response.text()).toBe(`body of ${path}`);
+      }
+    });
+
     it('keeps the print page and its script once armed, so an offline print opens at once', async () => {
       expect(await sw.message({ type: 'arm', assets: [] })).toEqual({ type: 'armed', ok: true });
-      const kept = [...sw.stores.get('devfathom-pharmacy-counter-print-v1')!.rows.keys()];
+      const kept = [...sw.stores.get('devfathom-pharmacy-counter-print-v2')!.rows.keys()];
       expect(kept.sort()).toEqual([`${ORIGIN}${PAGE}`, `${ORIGIN}${SCRIPT}`].sort());
       sw.setOnline(false);
       // The opened window's address carries only a channel id in its fragment.
