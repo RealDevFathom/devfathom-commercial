@@ -36,7 +36,11 @@ vi.mock('@/lib/trpc', () => ({
 }));
 
 import { ApprovalSecretKindContext } from './counter-approval-copy';
-import { CounterRxPanel, type CounterRxPanelProps } from './counter-rx-panel';
+import {
+  CounterControlledAuthorization,
+  CounterRxPanel,
+  type CounterRxPanelProps,
+} from './counter-rx-panel';
 
 const patient: CounterPatientPanel = {
   patientId: 'patient-1',
@@ -492,4 +496,48 @@ describe('DEV-977 phase 2B: controlled medicine authorisation in the Counter v2 
       'Pharmacist, done:done',
     ]);
   });
+});
+
+describe('DEV-977 phase 3: the authorization inside the "Authorise" sheet', () => {
+  it.each([
+    ['CODE', 'Pharmacist’s approval code', /approval code are required/],
+    ['PIN', 'Pharmacist PIN', /a pharmacist PIN are required/],
+  ] as const)(
+    'drops the heading the sheet already shows, keeping the region, steps and fields (%s)',
+    (mode, label, intro) => {
+      render(
+        <ApprovalSecretKindContext.Provider value={mode}>
+          <CounterControlledAuthorization
+            inSheet
+            patient={null}
+            controlled={{
+              prescriptionLineId: '',
+              staffProfileId: '',
+              pin: '',
+              pharmacists: [],
+              loading: false,
+              error: false,
+              patientAddress: '',
+              rxSerialWritten: false,
+              emergency: false,
+              prescriberName: '',
+              prescriberRegNo: '',
+              refSerial: '',
+              onChange: () => {},
+            }}
+          />
+        </ApprovalSecretKindContext.Provider>
+      );
+      const region = screen.getByRole('region', { name: 'Controlled medicine authorization' });
+      expect(
+        within(region).queryByRole('heading', { name: 'Controlled medicine authorization' })
+      ).toBeNull();
+      expect(within(region).queryByText('Controlled medicine · online only')).toBeNull();
+      // The approvals setting still decides the wording inside the sheet.
+      expect(region).toHaveTextContent(intro);
+      expect(within(region).getByRole('list', { name: 'Authorization steps' })).toBeInTheDocument();
+      expect(within(region).getByLabelText('Patient address')).toBeDisabled();
+      expect(within(region).getByLabelText(label)).toBeInTheDocument();
+    }
+  );
 });
