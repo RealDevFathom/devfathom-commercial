@@ -268,3 +268,81 @@ it('bounds date-only transaction searches and new charges on the Karachi clock',
     data: expect.objectContaining({ nextDueDate: new Date('2026-11-01T19:00:00Z') }),
   });
 });
+
+describe.each(['America/New_York', 'Asia/Karachi', 'UTC'])(
+  'recurring expense cycles in %s',
+  (zone) => {
+    it.each(['legacy first', 'legacy month end', 'local month end'] as const)(
+      'posts each of twelve months once and lists the same next occurrence for %s',
+      async (schedule) => {
+        const monthEnds = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        const expected = monthEnds.map((last, i) => {
+          const month = String(i + 1).padStart(2, '0');
+          const day = schedule === 'legacy first' ? '01' : String(last);
+          const label = `2026-${month}-${day}`;
+          if (schedule !== 'local month end') return new Date(label + 'T00:00:00Z');
+          // In 2026 New York month ends observe daylight time from March through October.
+          const offset =
+            zone === 'America/New_York'
+              ? i >= 2 && i <= 9
+                ? '-04:00'
+                : '-05:00'
+              : zone === 'Asia/Karachi'
+                ? '+05:00'
+                : 'Z';
+          return new Date(label + 'T00:30:00' + offset);
+        });
+        const expense = {
+          id: 'r',
+          name: 'Subscription',
+          interval: 'monthly',
+          nextDueDate: expected[0]!,
+        };
+        mocks.recurringFindMany.mockImplementation(async () => [{ ...expense }]);
+        const ctx = context(zone);
+        const posted: Date[] = [];
+        const db = {
+          ...ctx.db,
+          organization: { findUnique: async () => ({ timezone: zone }) },
+          transaction: {
+            ...ctx.db.transaction,
+            createMany: ({ data }: { data: { date: Date }[] }) =>
+              posted.push(...data.map((row) => row.date)),
+          },
+          recurringExpense: {
+            ...ctx.db.recurringExpense,
+            update: ({ data }: { data: { nextDueDate: Date } }) => Object.assign(expense, data),
+          },
+          $transaction: vi.fn(),
+        };
+        const router = financeRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
+        const assistant = buildFinanceTools({
+          db,
+          ctx: { organizationId: 'org-1' },
+          isAdmin: true,
+          now: () => new Date(),
+        } as unknown as AssistantHelpers) as unknown as {
+          listRecurringExpenses: { execute(input: object): Promise<{ nextDueDate: Date }[]> };
+        };
+        vi.useFakeTimers({ toFake: ['Date'] });
+        try {
+          for (const due of expected) {
+            vi.setSystemTime(due);
+            expect((await router.getRecurringExpenses())[0]?.nextDueDate).toEqual(due);
+            expect((await assistant.listRecurringExpenses.execute({}))[0]?.nextDueDate).toEqual(
+              due
+            );
+          }
+          const end = expected[11]!;
+          vi.setSystemTime(new Date(end.getTime() + 60_000));
+          expect((await router.postDueRecurringExpenses()).posted).toBe(12);
+          expect(posted).toEqual(expected);
+          expect((await router.postDueRecurringExpenses()).posted).toBe(0);
+          expect(posted).toEqual(expected);
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    );
+  }
+);
