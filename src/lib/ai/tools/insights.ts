@@ -1,3 +1,4 @@
+import { workspaceMonthRange } from '@/lib/timezone';
 /**
  * INSIGHTS / cross-cutting intelligence tools for the DevFathom assistant.
  *
@@ -511,15 +512,19 @@ export function buildInsightsTools(h: AssistantHelpers): ToolSet {
       };
 
       if (isAdmin) {
-        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+        const org = await h.db.organization.findUnique({
+          where: { id: h.ctx.organizationId },
+          select: { timezone: true },
+        });
+        const startOfMonth = workspaceMonthRange(org?.timezone, now).from;
         const [incomeResult, expenseResult, outstandingResult] = await Promise.all([
           h.db.transaction.aggregate({
             _sum: { amount: true },
-            where: { type: 'INCOME', date: { gte: startOfMonth } },
+            where: { type: 'INCOME', date: { gte: startOfMonth, lte: now } },
           }),
           h.db.transaction.aggregate({
             _sum: { amount: true },
-            where: { type: 'EXPENSE', date: { gte: startOfMonth } },
+            where: { type: 'EXPENSE', date: { gte: startOfMonth, lte: now } },
           }),
           h.db.invoice.count({ where: { status: { in: ['SENT', 'OVERDUE'] } } }),
         ]);

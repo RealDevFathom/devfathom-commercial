@@ -76,3 +76,12 @@ describe('no-expiry lots (QA-3)', () => {
     expect(advice.proposalAllowed).toBe(false);
   });
 });
+
+it('shows the projected clearance date at 00:30 in Karachi', () => {
+  const [item] = adviseExpiryLots(
+    [fact({ onHandUnits: 1, soldUnits: 30, historyDays: 30 })],
+    new Date('2026-09-05T00:30:00+05:00'),
+    'Asia/Karachi'
+  );
+  expect(item?.explanation).toContain('Projected clear: 2026-09-06');
+});

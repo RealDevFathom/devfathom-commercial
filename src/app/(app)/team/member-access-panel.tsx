@@ -1,6 +1,9 @@
 'use client';
 
-import { useOwnApprovalLabel } from '@/components/pharmacy/own-approval-copy';
+import {
+  useApprovalSecretKind,
+  useOwnApprovalLabel,
+} from '@/components/pharmacy/own-approval-copy';
 
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { ShieldAlert } from 'lucide-react';
@@ -107,7 +110,7 @@ function PinConfirm({
   onConfirm: (pin: string) => Promise<MemberAccessOutcome>;
   onCancel: () => void;
 }) {
-  const approvalLabel = useOwnApprovalLabel();
+  const needsCode = useApprovalSecretKind() === 'CODE';
   const id = useId();
   const [error, setError] = useState<string | null>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -130,14 +133,14 @@ function PinConfirm({
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="grid gap-1.5 text-sm">
-          {approvalLabel}
+          {needsCode ? 'Your approval code' : 'Your PIN'}
           <Input
             name="pin"
             type="password"
             inputMode="numeric"
-            autoComplete="off"
+            autoComplete={needsCode ? 'one-time-code' : 'off'}
             required
-            maxLength={8}
+            maxLength={needsCode ? 6 : 8}
             autoFocus
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? `${id}-error` : undefined}
@@ -162,23 +165,26 @@ function PinConfirm({
 
 function SubRoleRow({
   subRole,
-  ticking,
+  locked,
+  weightyLine,
+  roleNote,
+  personal,
   editor,
   onChanged,
 }: {
   subRole: SubRole;
-  ticking?: Ticking;
-  editor?: MemberAccessEditor;
+  locked: string | null;
+  weightyLine?: string;
+  roleNote?: string;
+  personal?: 'ALLOW' | 'DENY';
+  editor?: Pick<MemberAccessEditor, 'pending' | 'setSubRole'>;
   onChanged: (notice: Notice) => void;
 }) {
   const id = useId();
   const [confirming, setConfirming] = useState<{ giving: boolean } | null>(null);
   const stateLabel =
     subRole.state === 'on' ? 'Allowed' : subRole.state === 'partial' ? 'Partly allowed' : '';
-  const locked = lockedNote(ticking, subRole);
   const editable = Boolean(editor) && locked === null;
-  const weightyLine = ticking?.weighty[subRole.key];
-  const personal = ticking?.personal[subRole.key];
 
   function toggle(checked: boolean) {
     if (!editor || !editable || editor.pending) return;
@@ -200,7 +206,13 @@ function SubRoleRow({
         disabled={!editable || editor?.pending}
         onCheckedChange={(checked) => toggle(checked)}
         aria-labelledby={`${id}-label`}
-        aria-describedby={`${id}-description`}
+        aria-describedby={[
+          roleNote && `${id}-role-note`,
+          editor && locked && `${id}-locked`,
+          `${id}-description`,
+        ]
+          .filter(Boolean)
+          .join(' ')}
       />
       <div className="min-w-0 flex-1 space-y-0.5">
         <p id={`${id}-label`} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -218,6 +230,16 @@ function SubRoleRow({
             </span>
           ) : null}
         </p>
+        {roleNote && (
+          <p id={`${id}-role-note`} className="text-xs text-text-muted">
+            {roleNote}
+          </p>
+        )}
+        {editor && locked ? (
+          <p id={`${id}-locked`} className="text-xs text-text-muted">
+            {locked}
+          </p>
+        ) : null}
         <ul
           id={`${id}-description`}
           className="list-disc space-y-0.5 pl-4 text-xs leading-relaxed text-text-muted"
@@ -226,9 +248,6 @@ function SubRoleRow({
             <li key={line}>{line}</li>
           ))}
         </ul>
-        {ticking?.editing.allowed && locked ? (
-          <p className="text-xs text-text-muted">{locked}</p>
-        ) : null}
         {confirming && editor && weightyLine ? (
           <PinConfirm
             subRole={subRole}
@@ -468,28 +487,14 @@ export function MemberAccessView(access: {
       {editor && ticking ? (
         <StartingRole ticking={ticking} groups={groups} editor={editor} onChanged={setNotice} />
       ) : null}
-      <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
-        {groups.map((group) => (
-          <section
-            key={group.roleKey}
-            aria-labelledby={`access-group-${group.roleKey}`}
-            className="min-w-0 border-t border-border-subtle pt-3"
-          >
-            <Eyebrow id={`access-group-${group.roleKey}`}>{group.roleName}</Eyebrow>
-            <ul className="divide-y divide-border-subtle">
-              {group.subRoles.map((subRole) => (
-                <SubRoleRow
-                  key={subRole.key}
-                  subRole={subRole}
-                  ticking={ticking}
-                  editor={editor}
-                  onChanged={setNotice}
-                />
-              ))}
-            </ul>
-          </section>
-        ))}
-      </div>
+      <SubRoleGroups
+        groups={groups}
+        lockedNoteFor={(subRole) => lockedNote(ticking, subRole)}
+        weighty={ticking?.weighty}
+        personal={ticking?.personal}
+        editor={editor}
+        onChanged={setNotice}
+      />
     </div>
   );
 }
@@ -523,5 +528,52 @@ export function MemberAccessButton({ userId, name }: { userId: string; name: str
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+export function SubRoleGroups({
+  groups,
+  lockedNoteFor,
+  roleNotes,
+  weighty,
+  personal,
+  editor,
+  onChanged,
+}: {
+  groups: MemberAccess['groups'];
+  lockedNoteFor: (subRole: SubRole) => string | null;
+  roleNotes?: Record<string, string>;
+  weighty?: Readonly<Record<string, string>>;
+  personal?: Ticking['personal'];
+  editor?: Pick<MemberAccessEditor, 'pending' | 'setSubRole'>;
+  onChanged: (notice: Notice) => void;
+}) {
+  const groupId = useId();
+  return (
+    <div className="grid gap-x-6 gap-y-4 sm:grid-cols-2">
+      {groups.map((group) => (
+        <section
+          key={group.roleKey}
+          aria-labelledby={`${groupId}-${group.roleKey}`}
+          className="min-w-0 border-t border-border-subtle pt-3"
+        >
+          <Eyebrow id={`${groupId}-${group.roleKey}`}>{group.roleName}</Eyebrow>
+          <ul className="divide-y divide-border-subtle">
+            {group.subRoles.map((subRole) => (
+              <SubRoleRow
+                key={subRole.key}
+                subRole={subRole}
+                locked={lockedNoteFor(subRole)}
+                roleNote={roleNotes?.[subRole.key]}
+                weightyLine={weighty?.[subRole.key]}
+                personal={personal?.[subRole.key]}
+                editor={editor}
+                onChanged={onChanged}
+              />
+            ))}
+          </ul>
+        </section>
+      ))}
+    </div>
   );
 }

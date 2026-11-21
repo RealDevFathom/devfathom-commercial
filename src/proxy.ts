@@ -62,6 +62,14 @@ function isPrivateUploadPath(pathname: string): boolean {
   }
 }
 
+function isWorkspaceRequestDownload(pathname: string): boolean {
+  try {
+    return /^\/api\/platform\/workspace-requests\/[^/]+\/?$/.test(decodeURIComponent(pathname));
+  } catch {
+    return false;
+  }
+}
+
 export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
@@ -72,7 +80,12 @@ export async function proxy(request: Request) {
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
   const next = () => {
     const response = NextResponse.next({ request: { headers: requestHeaders } });
-    response.headers.set('Content-Security-Policy', csp);
+    // Next uses the proxy's response header in place of the handler's policy.
+    // Keep the page policy and enforce the attachment sandbox at this boundary.
+    response.headers.set(
+      'Content-Security-Policy',
+      isWorkspaceRequestDownload(pathname) ? `${csp}; sandbox` : csp
+    );
     if (pathname === '/demo' || pathname.startsWith('/demo/')) {
       response.headers.set('X-Robots-Tag', 'noindex, nofollow');
     }

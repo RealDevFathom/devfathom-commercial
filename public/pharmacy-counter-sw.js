@@ -24,7 +24,8 @@
 
 const SHELL_CACHE = 'devfathom-pharmacy-counter-shell-v1';
 const ASSET_CACHE = 'devfathom-pharmacy-counter-assets-v1';
-const PRINT_CACHE = 'devfathom-pharmacy-counter-print-v1';
+// Bump when either print file changes, so the first print after an update is fresh.
+const PRINT_CACHE = 'devfathom-pharmacy-counter-print-v2';
 const SHELL_PATH = '/pharmacy/counter';
 const PRINT_PATHS = ['/pharmacy/counter/print-window.html', '/pharmacy/counter/print-window.js'];
 const OWN_CACHES = [SHELL_CACHE, ASSET_CACHE, PRINT_CACHE];
@@ -112,8 +113,7 @@ async function shellResponse(request) {
   const started = generation;
   try {
     const response = await fetch(request);
-    if (storableShell(response) && (await armed()))
-      await storeShell(response.clone(), started);
+    if (storableShell(response) && (await armed())) await storeShell(response.clone(), started);
     return response;
   } catch (error) {
     // `has` first: opening a cache creates it, and an existing shell cache is
@@ -145,11 +145,13 @@ async function printResponse(request, url) {
   const stored = (await self.caches.has(PRINT_CACHE))
     ? await (await self.caches.open(PRINT_CACHE)).match(key)
     : undefined;
-  const refresh = fetch(key, { credentials: 'same-origin' }).then(async (response) => {
-    if (storableAsset(response) && (await armed()))
-      await guardedPut(PRINT_CACHE, key, response.clone(), started);
-    return response;
-  });
+  const refresh = fetch(key, { credentials: 'same-origin', cache: 'no-store' }).then(
+    async (response) => {
+      if (storableAsset(response) && (await armed()))
+        await guardedPut(PRINT_CACHE, key, response.clone(), started);
+      return response;
+    }
+  );
   if (stored) {
     refresh.catch(() => undefined);
     return stored;
@@ -157,21 +159,28 @@ async function printResponse(request, url) {
   return refresh;
 }
 
-async function arm(assets) {
-  const started = generation;
-  const shell = await fetch(SHELL_PATH, { credentials: 'same-origin', cache: 'no-store' });
-  if (!storableShell(shell)) return false;
-  if (!(await storeShell(shell, started))) return false;
+async function cachePrintFiles(started) {
   for (const path of PRINT_PATHS) {
     if (started !== generation) return false;
     try {
       const response = await fetch(path, { credentials: 'same-origin', cache: 'no-store' });
-      if (storableAsset(response) && !(await guardedPut(PRINT_CACHE, self.location.origin + path, response, started)))
+      if (
+        storableAsset(response) &&
+        !(await guardedPut(PRINT_CACHE, self.location.origin + path, response, started))
+      )
         return false;
     } catch {
       // Fetched again next time online; printing online still works.
     }
   }
+  return started === generation;
+}
+
+async function arm(assets) {
+  const started = generation;
+  const shell = await fetch(SHELL_PATH, { credentials: 'same-origin', cache: 'no-store' });
+  if (!storableShell(shell)) return false;
+  if (!(await storeShell(shell, started)) || !(await cachePrintFiles(started))) return false;
   for (const href of Array.isArray(assets) ? assets.slice(0, 400) : []) {
     let url;
     try {
@@ -206,11 +215,16 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(
     (async () => {
       const names = await self.caches.keys();
-      await Promise.all(
-        names
-          .filter((name) => name.startsWith('devfathom-pharmacy-counter-') && !OWN_CACHES.includes(name))
-          .map((name) => self.caches.delete(name))
+      const retired = names.filter(
+        (name) => name.startsWith('devfathom-pharmacy-counter-') && !OWN_CACHES.includes(name)
       );
+      const started = generation;
+      if (
+        retired.some((name) => name.startsWith('devfathom-pharmacy-counter-print-')) &&
+        (await armed())
+      )
+        await cachePrintFiles(started);
+      await Promise.all(retired.map((name) => self.caches.delete(name)));
       await self.clients.claim();
     })()
   );

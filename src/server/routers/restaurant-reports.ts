@@ -71,7 +71,7 @@ async function availableBranches(ctx: TRPCContext) {
           active: true,
         },
         orderBy: { name: 'asc' },
-        select: { id: true, name: true },
+        select: { id: true, name: true, timezone: true, businessDayCutoff: true },
       }),
     };
   const userId = ctx.session!.user.id;
@@ -93,7 +93,7 @@ async function availableBranches(ctx: TRPCContext) {
         active: true,
       },
       orderBy: { name: 'asc' },
-      select: { id: true, name: true },
+      select: { id: true, name: true, timezone: true, businessDayCutoff: true },
     }),
   };
 }

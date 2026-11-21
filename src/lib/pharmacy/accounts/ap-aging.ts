@@ -137,7 +137,7 @@ export function computeApAging(
 ): ApAgingView {
   const rows: ApAgingRow[] = [];
   for (const invoice of invoices) {
-    if (!(invoice.invoiceDate < window.cutoff)) continue;
+    if (invoice.invoiceDate > window.day) continue;
     if (invoice.status === 'REVERSED' && before(invoice.reversedAt, window.cutoff)) continue;
     const paidMinor = invoice.settlements
       .filter(
@@ -225,7 +225,7 @@ export async function readApAging(
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      invoiceDate: { lt: window.cutoff },
+      invoiceDate: { lt: new Date(window.day.getTime() + DAY_MS) },
       ...(options.payeeName ? { payeeKey: normalizePayeeKey(options.payeeName) } : {}),
       OR: [{ status: 'POSTED' as const }, { reversedAt: { gte: window.cutoff } }],
     },
