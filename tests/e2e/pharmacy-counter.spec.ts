@@ -533,6 +533,8 @@ async function saveWalletMerchants(
  * into docs/design-system/reference/counter-v2/qa-phase-2b/.
  */
 const QA_DIR = 'playwright-artifacts/pharmacy-counter-qa-phase-2b';
+/** DEV-977 phase 3: the shots of the surfaces phase 3 adds, kept apart from phase 2B's. */
+const QA3_DIR = 'playwright-artifacts/pharmacy-counter-qa-phase-3';
 const QA_KEYBOARD_WIDTHS = [1366, 375] as const;
 const QA_STATE_WIDTHS = [1440, 1366, 1024, 768, 375] as const;
 
@@ -542,10 +544,12 @@ async function qaShots(
   {
     focus,
     widths = QA_KEYBOARD_WIDTHS,
+    dir = QA_DIR,
   }: {
     /** A control inside the panel: it takes the keyboard focus for the shot. */
     focus: Locator;
     widths?: readonly number[];
+    dir?: string;
   }
 ) {
   const original = page.viewportSize();
@@ -570,7 +574,7 @@ async function qaShots(
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
         `${name} ${width} ${theme}: no sideways scroll`
       ).toBe(true);
-      await page.screenshot({ path: `${QA_DIR}/${name}-${width}-${theme}.png` });
+      await page.screenshot({ path: `${dir}/${name}-${width}-${theme}.png` });
     }
   }
   await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
@@ -1698,6 +1702,12 @@ test('Counter v2 — a wallet not set up, a payment not confirmed, then cash plu
   });
   const summary = sheet.getByRole('region', { name: 'Payment summary' });
   await expect(summary).toContainText('6.00');
+  // DEV-977 phase 3 (A2): "Paid so far" adds up what the server recorded.
+  const paidSoFar = summary.getByRole('group', { name: 'Paid so far' });
+  await expect(paidSoFar).toContainText(/Paid so far\s*4\.00/);
+  await expect(paidSoFar.getByRole('list', { name: 'Recorded payments' })).toContainText(
+    /1\. Cash · Recorded\s*4\.00/
+  );
 
   // The rest by JazzCash: the payer's name and the transaction ID, then Enter.
   const wallets = sheet.getByRole('group', { name: 'Wallet' });
@@ -1711,6 +1721,11 @@ test('Counter v2 — a wallet not set up, a payment not confirmed, then cash plu
   await reference.focus();
   await reference.fill('4501');
   await qaShots(page, 'payment-wallet-split', { focus: reference, widths: QA_STATE_WIDTHS });
+  await qaShots(page, 'payment-paid-so-far', {
+    focus: reference,
+    widths: QA_STATE_WIDTHS,
+    dir: QA3_DIR,
+  });
 
   // B8: the owner switches JazzCash off while the sheet is open. Reloading the merchant
   // details says so in plain words and payment by it is refused.
@@ -1824,12 +1839,14 @@ test('Counter v2 — Enter on a controlled medicine opens the authorisation it a
   await expect(page.getByText(/complete the authorization panel/).first()).toBeVisible({
     timeout: 15_000,
   });
-  const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
-  await expect(checks).toBeVisible();
+  // DEV-977 phase 3 (A5): the authorisation has its own sheet.
+  const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
+  await expect(sheet).toBeVisible();
   // The notice sends the cashier to the authorisation panel, so the panel must be there.
   await expect(
-    checks.getByRole('region', { name: 'Controlled medicine authorization' })
+    sheet.getByRole('region', { name: 'Controlled medicine authorization' })
   ).toBeVisible();
+  await expect(sheet.getByRole('button', { name: 'Authorise line' })).toBeDisabled();
 });
 
 test('Counter v2 — controlled medicine: patient, prescription or emergency supply, approving pharmacist; then the line is locked', async ({
@@ -1840,10 +1857,16 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await openDrawer(page);
   await search(page, 'Fathomadol');
   await stageFirstResult(page, controlled.name);
-  await page.keyboard.press('Shift+F2');
-  const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
-  await expect(checks).toBeVisible();
-  const auth = checks.getByRole('region', { name: 'Controlled medicine authorization' });
+  // DEV-977 phase 3 (A5): adding it opens its own "Authorise" sheet; nothing is added yet.
+  await page.keyboard.press('F6');
+  const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
+  await expect(sheet).toBeVisible({ timeout: 15_000 });
+  await expect(sheet).toContainText('Controlled medicine · online only');
+  await expect(page.getByRole('table', { name: 'Cart lines' })).not.toContainText(controlled.name);
+  const authorise = sheet.getByRole('button', { name: 'Authorise line' });
+  await expect(authorise).toBeDisabled();
+  await expect(sheet).toContainText(/Still needed: the patient/);
+  const auth = sheet.getByRole('region', { name: 'Controlled medicine authorization' });
   await expect(auth).toBeVisible();
   const steps = auth.getByRole('list', { name: 'Authorization steps' });
   await expect(steps.getByRole('listitem')).toHaveText([
@@ -1852,12 +1875,18 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
     /Pharmacist\s*, to do/,
   ]);
 
-  // 1 · Patient
+  // 1 · Patient: chosen in the checks sheet, then back to the authorisation.
+  await pressControl(sheet.getByRole('button', { name: 'Find the patient' }));
+  const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
+  await expect(checks).toBeVisible();
   const find = checks.getByLabel('Find patient');
   await find.focus();
   await find.fill(PHARMACY_E2E.patientName);
   await find.press('Enter');
   await pressControl(checks.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+  await pressControl(checks.getByRole('button', { name: /^Authorise Fathomadol/ }));
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText(PHARMACY_E2E.patientName);
   const address = auth.getByLabel('Patient address');
   await address.focus();
   await address.fill('House 12, Street 4, Gulberg, Lahore');
@@ -1884,12 +1913,16 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await pin.fill(PHARMACY_E2E.pharmacistPin);
   await expect(steps.getByRole('listitem').nth(2)).toHaveText(/Pharmacist\s*, done/);
   await qaShots(page, 'controlled-step-3-pharmacist', { focus: pin, widths: QA_STATE_WIDTHS });
-  await qaShots(page, 'checks', { focus: pin });
+  await expect(authorise).toBeEnabled();
+  await qaShots(page, 'controlled-sheet-ready', {
+    focus: authorise,
+    widths: QA_STATE_WIDTHS,
+    dir: QA3_DIR,
+  });
 
-  await page.keyboard.press('Escape');
-  await expect(checks).toBeHidden();
-  await page.keyboard.press('F6');
+  await pressControl(authorise);
   await expect(page.getByText(`1 × ${controlled.name} added.`)).toBeVisible({ timeout: 15_000 });
+  await expect(sheet).toBeHidden();
   const line = billLine(page, controlled.name);
   await expect(line).toContainText('Controlled');
   await expect(line).toContainText(controlled.batchNumber);
@@ -1911,6 +1944,177 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
   });
+});
+
+test('Counter v2 — a scanned serialised pack of a controlled medicine waits, as scanned, in its authorisation', async ({
+  page,
+}) => {
+  const controlled = PHARMACY_E2E.medicines.controlled;
+  await openCounter(page);
+  await openDrawer(page);
+  // DEV-977 phase 3: a GS1 pack scan of a controlled medicine is not staged (that would drop
+  // the pack's own lot): it waits in the "Authorise" sheet, and nothing is on the bill.
+  const serial = `E2E977${Date.now().toString(36).toUpperCase()}`;
+  await scan(page, `(01)${controlled.gtin}(10)${controlled.batchNumber}(21)${serial}`);
+  const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
+  await expect(sheet).toBeVisible({ timeout: 15_000 });
+  await expect(sheet).toContainText(
+    'One scanned pack. Its own batch is kept; nothing is on the bill until it is authorised.'
+  );
+  await expect(
+    page.getByText(/complete the authorization panel, then press Authorise line\./).first()
+  ).toBeVisible();
+  await expect(
+    sheet.getByRole('region', { name: 'Controlled medicine authorization' })
+  ).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Next line' })).toHaveCount(0);
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toHaveCount(0);
+  const authorise = sheet.getByRole('button', { name: 'Authorise line' });
+  await expect(authorise).toBeDisabled();
+  await qaShots(page, 'controlled-pack-waiting', {
+    focus: sheet.getByRole('button', { name: 'Find the patient' }),
+    widths: QA_STATE_WIDTHS,
+    dir: QA3_DIR,
+  });
+  // Closed without adding, the pack is let go and the cashier is told to scan it again.
+  await page.keyboard.press('Escape');
+  await expect(sheet).toBeHidden();
+  await expect(
+    page.getByText(
+      new RegExp(
+        `The scanned pack of Fathomadol.* was not added\\. Scan it again to authorise it\\.`
+      )
+    )
+  ).toBeVisible();
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toHaveCount(0);
+});
+
+test('Counter v2 — the discount sheet: whole bill or next item, and who can approve', async ({
+  page,
+}) => {
+  const otc = PHARMACY_E2E.medicines.otc;
+  // The owner's whole-bill switch, on for this test only (the disposable lane's own row).
+  const setBillDiscount = async (enabled: boolean) => {
+    const { Client } = await import('pg');
+    const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+    await db.connect();
+    try {
+      await db.query('BEGIN');
+      await db.query(
+        "SELECT set_config('app.is_platform_admin', 'true', true), set_config('app.current_organization_id', $1, true)",
+        [PHARMACY_E2E.organizationId]
+      );
+      await db.query('UPDATE organizations SET "pharmacyBillDiscountEnabled" = $2 WHERE id = $1', [
+        PHARMACY_E2E.organizationId,
+        enabled,
+      ]);
+      await db.query('COMMIT');
+    } finally {
+      await db.end();
+    }
+  };
+  await setBillDiscount(true);
+  try {
+    await openCounter(page, PHARMACY_E2E.cashierEmail);
+    await openDrawer(page);
+    await search(page, otc.brandName);
+    await addFirstResult(page, otc.name);
+    await expect(billLine(page, otc.name)).toBeVisible({ timeout: 15_000 });
+    const totals = page.getByRole('complementary', { name: 'Bill total' });
+    await pressControl(totals.getByRole('button', { name: 'Discount', exact: true }));
+    const sheet = page.getByRole('dialog', { name: /^Discount on the / });
+    await expect(sheet).toHaveAccessibleName('Discount on the next item');
+    // A4: the supervisor block names who can approve; the PIN is asked for later, if needed.
+    const supervisor = sheet.getByRole('region', { name: 'Supervisor approval' });
+    await expect(supervisor).toContainText(
+      'A manager or owner must approve a discount you cannot give on your own.'
+    );
+    await expect(supervisor.getByRole('list', { name: 'Who can approve' })).toContainText(
+      'Pharmacy Administrator'
+    );
+    await expect(supervisor.getByLabel(/PIN/)).toHaveCount(0);
+    // A4: "Apply to": the next item, or the whole bill.
+    const applyTo = sheet.getByRole('group', { name: 'Apply to' });
+    await expect(applyTo.getByRole('button', { name: 'Next item' })).toHaveAttribute(
+      'aria-pressed',
+      'true'
+    );
+    await pressControl(applyTo.getByRole('button', { name: 'Whole bill' }));
+    await expect(sheet).toHaveAccessibleName('Discount on the whole bill');
+    await expect(supervisor).toContainText('when you apply it to the bill');
+    const value = sheet.getByLabel('Discount (%)');
+    await value.focus();
+    await value.fill('10');
+    await qaShots(page, 'discount-whole-bill', {
+      focus: value,
+      widths: QA_STATE_WIDTHS,
+      dir: QA3_DIR,
+    });
+    await pressControl(sheet.getByRole('button', { name: 'Apply to bill' }));
+    // The whole-bill procedure's own approval dialog, unchanged.
+    const approval = page.getByRole('dialog', { name: 'Approve this discount?' });
+    await expect(approval).toBeVisible({ timeout: 15_000 });
+    await expect(approval).toContainText('Whole bill: a discount of 10% off the bill.');
+    const approver = approval.getByRole('combobox', { name: 'Approving manager or owner' });
+    await approver.focus();
+    await approver.selectOption({ label: 'Pharmacy Administrator' });
+    const pin = approval.getByLabel(/^(Approver PIN|Approval code)$/);
+    await pin.focus();
+    await pin.fill(PHARMACY_E2E.adminPin);
+    await pressControl(approval.getByRole('button', { name: 'Approve discount' }));
+    await expect(approval).toBeHidden();
+    await expect(
+      page.getByText(/A whole-bill discount of Rs 0\.25 is on the bill, shared over 1 item\./)
+    ).toBeVisible({ timeout: 15_000 });
+    await expect(totals).toContainText('2.25');
+    await tenderCash(page, '2.25');
+    await expect(
+      page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+    ).toBeVisible({ timeout: 15_000 });
+  } finally {
+    await setBillDiscount(false);
+  }
+});
+
+test('Counter v2 — the "Counter status" strip is a tab stop only while it scrolls', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const strip = page.getByRole('group', { name: 'Counter status' });
+  for (const width of [1440, 1366, 1024, 768, 375]) {
+    await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
+    await expect(strip).toBeVisible();
+    // Let the strip measure itself at this width.
+    await expect
+      .poll(async () => {
+        const scrolls = await strip.evaluate(
+          (element) => element.scrollWidth > element.clientWidth + 1
+        );
+        const tabStop = (await strip.getAttribute('tabindex')) === '0';
+        return scrolls === tabStop;
+      })
+      .toBe(true);
+    const scrolls = await strip.evaluate(
+      (element) => element.scrollWidth > element.clientWidth + 1
+    );
+    if (scrolls) {
+      // It scrolls: the keyboard reaches it, with the Studio focus ring.
+      await strip.focus();
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+      await expect(strip).toBeFocused();
+      expect(await strip.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+    } else {
+      await expect(strip).not.toHaveAttribute('tabindex');
+    }
+  }
+  // At the phone width the pills do not fit, so the strip is reachable there.
+  await page.setViewportSize({ width: 375, height: 812 });
+  await expect(strip).toHaveAttribute('tabindex', '0');
+  await qaShots(page, 'status-strip-375', { focus: strip, widths: [375], dir: QA3_DIR });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(strip).not.toHaveAttribute('tabindex');
 });
 
 test('Counter v2 — offline: a price check only, no offline bill, and "Sign-in not checked"', async ({
@@ -2079,7 +2283,29 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await qaShots(page, 'no-permission', {
     focus: dialog.getByRole('button', { name: 'Find receipt', exact: true }),
   });
+  // DEV-977 phase 3 (C6): the design's "Got it" sits below the card, never inside it.
+  const gotIt = dialog.getByRole('button', { name: 'Got it' });
+  await expect(card.getByRole('button')).toHaveCount(0);
+  await expect(gotIt).toBeVisible();
+  await qaShots(page, 'no-permission-got-it', {
+    focus: gotIt,
+    widths: QA_STATE_WIDTHS,
+    dir: QA3_DIR,
+  });
   await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  // Opened again, "Got it" closes it from the keyboard.
+  await pressControl(page.getByRole('button', { name: 'Returns', exact: true }));
+  await receiptField.focus();
+  await receiptField.fill(receiptNumber);
+  await pressControl(dialog.getByRole('button', { name: 'Find receipt', exact: true }));
+  await pressControl(
+    dialog
+      .getByRole('button', { name: new RegExp('Receipt ' + receiptNumber + ' ·') })
+      .filter({ hasText: label! })
+  );
+  await expect(card).toBeVisible({ timeout: 15_000 });
+  await pressControl(gotIt);
   await expect(dialog).toBeHidden();
 });
 
