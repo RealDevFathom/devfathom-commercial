@@ -1,3 +1,13 @@
+import { FinanceAccountCode } from '@/generated/prisma/enums';
+import { hasModule } from '@/lib/entitlements';
+import { can, subjectFromSession } from '@/lib/abac';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
+import { isBalanceSheetLiability } from '@/lib/pharmacy/accounts/balance-sheet';
+import {
+  outstandingProviderRefunds,
+  changeProviderRefund,
+  loadOriginalReview,
+} from '@/lib/pharmacy/card-terminal/provider-refunds';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -36,7 +46,7 @@ import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
 
-import { protectedProcedure, router } from '../trpc';
+import { protectedProcedure, router, type TRPCContext } from '../trpc';
 import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales';
 
 /**
@@ -165,7 +175,257 @@ function fail(error: unknown): never {
   return failPharmacySale(error);
 }
 
+async function requireReviewer(ctx: TRPCContext, branch: string) {
+  const scope = await requireCounterReceiptAccess(ctx, branch, true);
+  if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+    throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
+  return scope;
+}
+
+async function requireMappingAccess(ctx: TRPCContext) {
+  const org = ctx.organization?.id;
+  const user = ctx.session?.user;
+  if (
+    !org ||
+    !user ||
+    ctx.entitlements.organizationId !== org ||
+    !hasModule(ctx.entitlements, 'pharmacy-core')
+  )
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  const db = ctx.db as ScopedDb;
+  if (await actorIsPharmacyOwner(db, org, user.id)) return org;
+  const accountant = await db.user.findFirst({
+    where: {
+      id: user.id,
+      organizationId: org,
+      status: 'ACTIVE',
+      organizationRole: { key: 'accountant' },
+    },
+    select: { id: true },
+  });
+  if (
+    !accountant ||
+    !(await can(subjectFromSession(user), 'reports:financial', undefined, { db, source: 'TRPC' }))
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Only the owner or accountant can manage the provider refund account.',
+    });
+  return org;
+}
+
 export const pharmacyCardTerminalRouter = router({
+  refundMapping: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = await requireMappingAccess(ctx);
+    return ctx.db.organization.findUniqueOrThrow({
+      where: { id: organizationId },
+      select: { terminalRefundAccount: true, usesCustomFinanceChart: true },
+    });
+  }),
+  setRefundMapping: protectedProcedure
+    .input(
+      z
+        .object({
+          usesCustomFinanceChart: z.boolean(),
+          account: z.enum(FinanceAccountCode).nullable(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = await requireMappingAccess(ctx);
+      if (
+        input.account &&
+        (!isBalanceSheetLiability(input.account) || input.account === 'MANUAL_NONTRADE_ACCRUAL')
+      )
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Choose a liability account available for provider refunds.',
+        });
+      await ctx.db.organization.update({
+        where: { id: organizationId },
+        data: {
+          usesCustomFinanceChart: input.usesCustomFinanceChart,
+          terminalRefundAccount: input.account,
+        },
+      });
+      annotateAudit(ctx, {
+        metadata: { account: input.account, usesCustomFinanceChart: input.usesCustomFinanceChart },
+      });
+      return { saved: true };
+    }),
+  providerRefunds: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireReviewer(ctx, input.branchId);
+      const booked = await outstandingProviderRefunds(ctx.db as ScopedDb, scope);
+      const historical = await ctx.db.$queryRaw<
+        { id: string; attemptId: string; amountMinor: number | null }[]
+      >`
+      SELECT 'review:'||a.id AS id,a.id AS "attemptId",COALESCE(a."approvedAmountMinor", CASE WHEN a."reviewReason" IS DISTINCT FROM 'Terminal approved a different amount' THEN a."amountMinor" END) AS "amountMinor"
+      FROM pharmacy_card_terminal_attempts a WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a.status='REVERSED'
+      AND NOT EXISTS (SELECT 1 FROM pharmacy_terminal_refund_events e WHERE e."attemptId"=a.id)`;
+      return { booked, historical };
+    }),
+  reviewHistory: protectedProcedure
+    .input(z.object({ branchId, attemptKey }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireReviewer(ctx, input.branchId);
+      const where = { organizationId: scope.organizationId, branchId: scope.branchId };
+      const attempt = await ctx.db.pharmacyCardTerminalAttempt.findFirstOrThrow({
+        where: { ...where, attemptKey: input.attemptKey },
+        select: {
+          id: true,
+          status: true,
+          resolvedById: true,
+          resolvedAt: true,
+          resolutionReason: true,
+        },
+      });
+      const events = await ctx.db.pharmacyTerminalRefundEvent.findMany({
+        where: { ...where, attemptId: attempt.id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          previousId: true,
+          kind: true,
+          amountMinor: true,
+          createdAt: true,
+          reason: true,
+          actorId: true,
+          secondApproverId: true,
+        },
+      });
+      return {
+        attempt,
+        originalReviewId: attempt.resolvedById ? 'review:' + attempt.id : null,
+        events,
+      };
+    }),
+  recordRefundAction: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          previousId: z.string().min(1).max(200),
+          commandKey: attemptKey,
+          kind: z.enum(['DECLINED', 'OWED', 'SETTLED', 'BOOK_HISTORICAL']),
+          resolutionReason: z.string().trim().min(3).max(200),
+          slipRef: z.string().trim().min(1).max(64),
+          managerPin: z.string().regex(/^\d{4,8}$/),
+          secondApproval: z
+            .object({
+              userId: z.string().min(1).max(128),
+              managerPin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
+          verifiedAmountMinor: z.number().int().positive().max(2147483647).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireReviewer(ctx, input.branchId);
+      const db = ctx.db as ScopedDb;
+      const action = 'pharmacyCardTerminal.recordRefundAction';
+      const pinArgs = {
+        organizationId: scope.organizationId,
+        action,
+        policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+      };
+      const previous = await db.pharmacyTerminalRefundEvent.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          id: input.previousId,
+        },
+      });
+      const attemptId =
+        previous?.attemptId ??
+        (input.previousId.startsWith('review:') ? input.previousId.slice(7) : '');
+      const attempt = await db.pharmacyCardTerminalAttempt.findFirst({
+        where: { organizationId: scope.organizationId, branchId: scope.branchId, id: attemptId },
+      });
+      if (!attempt) throw new TRPCError({ code: 'NOT_FOUND' });
+      const needsPeer =
+        (input.kind === 'DECLINED' || input.kind === 'OWED') &&
+        (previous?.actorId === scope.actorId || attempt.resolvedById === scope.actorId);
+      if (attempt.actorId === scope.actorId || needsPeer || input.secondApproval) {
+        const others = await otherCardTerminalReviewers(db, scope);
+        if (attempt.actorId === scope.actorId && others.length)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: cardTerminalOwnChargeMessage(others[0].name),
+          });
+        if (
+          (needsPeer || input.secondApproval) &&
+          !others.some((p) => p.id === input.secondApproval?.userId)
+        )
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'A different reviewer must approve your correction with their own PIN.',
+          });
+      }
+      const pin = await authenticateRefundPin({
+        ...pinArgs,
+        actorId: scope.actorId,
+        pin: input.managerPin,
+      });
+      if ('blocked' in pin) return pin;
+      if (input.secondApproval) {
+        const witness = await authenticateRefundPin({
+          ...pinArgs,
+          actorId: input.secondApproval.userId,
+          pin: input.secondApproval.managerPin,
+        });
+        if ('blocked' in witness) return witness;
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        await requireReviewer({ ...ctx, db }, scope.branchId);
+        if (input.kind === 'BOOK_HISTORICAL') {
+          if (input.previousId !== 'review:' + attempt.id || attempt.status !== 'REVERSED')
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Choose an original refund-owed review.',
+            });
+          const root = await loadOriginalReview(db, scope, attemptId, input.verifiedAmountMinor);
+          annotateAudit(ctx, {
+            metadata: {
+              attemptId,
+              refundEventId: root.id,
+              verifiedBy: scope.actorId,
+              pinVerified: true,
+            },
+          });
+          return {
+            id: root.id,
+            kind: root.kind,
+            previousId: root.previousId,
+            amountMinor: root.amountMinor,
+          };
+        }
+        if (!previous) await loadOriginalReview(db, scope, attemptId, input.verifiedAmountMinor);
+        const event = await changeProviderRefund(
+          db,
+          scope,
+          {
+            previousId: input.previousId,
+            kind: input.kind,
+            verifiedAmountMinor: input.verifiedAmountMinor,
+            commandKey: input.commandKey,
+            slipRef: input.slipRef,
+            reason: input.resolutionReason,
+          },
+          { pinVerified: true, secondApproverId: input.secondApproval?.userId }
+        );
+        return {
+          id: event.id,
+          kind: event.kind,
+          previousId: event.previousId,
+          amountMinor: event.amountMinor,
+        };
+      });
+    }),
   availability: protectedProcedure
     .input(z.object({ branchId, deviceId: z.string().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
@@ -245,6 +505,7 @@ export const pharmacyCardTerminalRouter = router({
           branchId,
           attemptKey,
           outcome: z.enum(['DECLINED', 'REVERSED']),
+          verifiedAmountMinor: z.number().int().positive().max(2147483647).optional(),
           // Both are typed by hand, so the request audit redacts them by key (a card number may be
           // typed by mistake); the attempt's own audit entry records them card-number masked.
           resolutionReason: z.string().trim().min(3).max(200),
@@ -297,6 +558,9 @@ export const pharmacyCardTerminalRouter = router({
           }),
           policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
           soloOwner,
+          ...(input.verifiedAmountMinor === undefined
+            ? {}
+            : { verifiedAmountMinor: input.verifiedAmountMinor }),
         };
         annotateAudit(ctx, { metadata: { ...approval, branchId: scope.branchId } });
         if ('blocked' in pin) return pin;

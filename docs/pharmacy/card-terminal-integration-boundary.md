@@ -190,17 +190,13 @@ digits, approval code, terminal id, PIN or a secret, and every value passes the 
 
 ## Refund and void of a terminal-paid sale
 
-No terminal refund or void is built: both are provider capabilities that wait for a bound
-provider. Until then:
+An authorized terminal-tender refund records the amount owed after the usual day, tender and returned-value checks. The refund row reserves that amount against the sale and tender. Once fully covered, an otherwise voidable bill can follow the existing void process. A cash fallback is refused.
 
-- `refundPharmacyTender` refuses a tender that a settled attempt links to with
-  `CARD_TERMINAL_REFUND_VIA_PROVIDER`, with or without the manual cash fallback. Nothing is paid
-  out of the drawer. The counter says: do not give cash, refund it through the card provider's own
-  refund process, and keep the provider's refund slip with the bill.
-- Voiding a bill that still holds an unrefunded terminal tender is refused with
-  `BILL_HAS_CARD_TERMINAL_PAYMENT`, which says the same, instead of sending the cashier to a refund
-  that would refuse.
-- Manual Card and Wallet tenders are not looked up and keep their own refund path.
+A review marked REVERSED debits the card settlement account (BANK). A tender refund debits SALES_CLEARING because the sale return already reversed the revenue. Both credit the configured current liability. The default chart uses **Card refunds payable (provider)**. In Pharmacy settings, the owner or accountant can map a different liability. A custom chart requires an explicit mapping. Settlement debits the liability used for that obligation and credits BANK, even if the mapping has since changed.
+
+Managers use `pharmacyCardTerminal.providerRefunds` for outstanding obligations and older unbooked reversals. `reviewHistory` returns the original review and its linked events. `recordRefundAction` takes the predecessor ID, a command key, a reason, a slip reference and the reviewer's fresh PIN. It records a provider-confirmed settlement or appends the opposite review decision. Reusing the same command returns the same event. A completed settlement or terminal-confirmed charge cannot be erased by a correction.
+
+A correction requires the original branch, review and second-person controls. The owner can correct a review. Other reviewers must hold the same role or a strictly higher role as evidenced by its grants. Correcting one's own decision also requires another eligible reviewer's fresh PIN. A legacy decision without an authority snapshot requires owner authority. Use `BOOK_HISTORICAL` to book an older reversal. A historical mismatch without a recorded approved amount requires an amount verified from the provider statement.
 
 ## Deferred, by the owner's decision
 
@@ -213,12 +209,6 @@ change does not include:
 
 These must also exist before any provider is admitted:
 
-- **A wrong DECLINED cannot be corrected.** A resolution is final. The trail is the resolver, the
-  time, the reason, the slip reference and the audit row.
-- **Money owed back is not in the books.** For a REVERSED attempt, and for a refused refund of a
-  terminal-paid sale, the amount lives only on the attempt row (or the tender). No liability is
-  posted, and there is no list of refunds owed through the provider. A terminal-paid sale cannot
-  be voided.
 - **The timeout must be checked against the real provider.** The shared 45-second timeout gives
   the sweep a 90-second NOT_FOUND grace (twice the timeout).
 
@@ -254,7 +244,7 @@ and the real-device test linked:
     day closes;
   - a cashier, a wrong PIN and "not charged" for a reported charge change nothing;
   - every committed step keeps its audit entry when the request rolls back, and the refund of the
-    terminal-paid tender is refused;
+    terminal-paid tender refuses cash fallback;
   - the sweep's audit entries name the system.
 - `tests/pharmacy-card-terminal-review-migration.test.ts`: the resolution migration keeps every
   earlier guard rule.

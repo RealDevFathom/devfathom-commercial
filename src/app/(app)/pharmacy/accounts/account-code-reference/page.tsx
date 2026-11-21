@@ -1,3 +1,5 @@
+import Link from 'next/link';
+import { buttonVariants } from '@/components/ui/button';
 import type { Metadata } from 'next';
 
 import { PageHeader } from '@/components/ui/page-header';
@@ -27,6 +29,14 @@ const header = (
   <PageHeader
     eyebrow="Pharmacy accounts"
     heading="Account code reference"
+    actions={
+      <Link
+        href="/pharmacy/settings/provider-refunds"
+        className={buttonVariants({ variant: 'outline' })}
+      >
+        Provider refund settings
+      </Link>
+    }
     description="Canonical account codes and the debit or credit side that normally increases each account."
   />
 );

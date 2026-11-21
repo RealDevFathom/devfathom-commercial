@@ -772,6 +772,7 @@ async function refundTenderInTransaction(
     // owner with a fresh PIN (DEV-647), so any open till of the branch may pay the
     // refund out (DEV-821).
     return refundPharmacyTender(db, scope, refund, {
+      recordProviderRefundOwed: true,
       requireCurrentBusinessDate: true,
       drawerOperator: { kind: 'COUNTER', actorIsManager: true },
     });

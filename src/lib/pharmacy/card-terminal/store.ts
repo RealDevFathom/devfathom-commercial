@@ -11,6 +11,7 @@ import {
 } from '../settlement';
 import type { LedgerScope } from '../stock-ledger';
 import { redactForLog } from './cardholder-data';
+import { recordTerminalRefundRoot } from './provider-refunds';
 import { OPEN_ATTEMPT_STATUSES } from './open-attempts';
 
 export { OPEN_ATTEMPT_STATUSES } from './open-attempts';
@@ -51,6 +52,7 @@ export type CardTerminalAttemptPatch = {
   Pick<
     CardTerminalAttempt,
     | 'providerRef'
+    | 'approvedAmountMinor'
     | 'approvalCode'
     | 'cardBrand'
     | 'cardLast4'
@@ -395,6 +397,15 @@ export function prismaCardTerminalAttemptStore(
         const next = await db.pharmacyCardTerminalAttempt.findFirst({
           where: { ...scoped(scope), id: current.id },
         });
+        if (next && current.status === 'MANUAL_REVIEW' && patch.resolvedById) {
+          await recordTerminalRefundRoot(db, scope, next, {
+            terminalConfirmed: current.providerRef !== null,
+            verifiedAmountMinor:
+              typeof detail?.verifiedAmountMinor === 'number'
+                ? detail.verifiedAmountMinor
+                : undefined,
+          });
+        }
         if (next) await audit(db, scope, next, current.status, detail);
         return next;
       }),

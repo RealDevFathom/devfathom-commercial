@@ -1,3 +1,4 @@
+import { recordTerminalRefundRoot } from './card-terminal/provider-refunds';
 import { pricePrepaidSale } from './prepaid-discount';
 import { assertPrepaidPin, movePrepaid, PREPAID_PROVIDER } from './prepaid-tiers';
 import { requestCounterEvidence } from './counter-evidence';
@@ -538,6 +539,8 @@ export type PharmacyDrawerOperator =
 /** Options for an online counter call; replay and delivery paths omit them. */
 export type PharmacySettlementOptions = {
   requireCurrentBusinessDate?: boolean;
+  /** Authorized refund procedure can recognize the obligation without paying cash. */
+  recordProviderRefundOwed?: boolean;
   /** Omitted: the caller is treated as a counter user who is not a manager. */
   drawerOperator?: PharmacyDrawerOperator;
   /**
@@ -998,8 +1001,9 @@ export async function refundPharmacyTender(
   if (tender.type === 'LOYALTY' && tender.sale.status === 'VOID')
     throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   // DEV-743: an integrated card-terminal charge is refunded through the provider's own process.
-  // No terminal refund is built yet, so it is refused here, and never paid out as cash instead.
-  if (!input.adapter && (await anyCardTerminalTender(db, scope, [tender])))
+  // Only the PIN-authorized refund route records the obligation. It never pays out cash.
+  const terminalRefund = !input.adapter && (await anyCardTerminalTender(db, scope, [tender]));
+  if (terminalRefund && (!options.recordProviderRefundOwed || input.manualCashFallback))
     throw new PharmacySettlementError('CARD_TERMINAL_REFUND_VIA_PROVIDER');
   assertRefundWithinTender(
     tender.amountMinor,
@@ -1060,6 +1064,7 @@ export async function refundPharmacyTender(
   if (tender.provider === PREPAID_PROVIDER && input.manualCashFallback === true)
     throw new PharmacySettlementError('PREPAID_REFUND_RESTORES_BALANCE');
   const manualReversalRequired =
+    !terminalRefund &&
     tender.provider !== PREPAID_PROVIDER &&
     (tender.type === 'CARD' || tender.type === 'WALLET') &&
     !input.adapter &&
@@ -1072,7 +1077,11 @@ export async function refundPharmacyTender(
   let drawerSessionId: string | undefined;
   if (tender.provider === PREPAID_PROVIDER) {
     if (!tender.sale.customerId) throw new PharmacySettlementError('INVALID_AMOUNT');
-  } else if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
+  } else if (
+    !terminalRefund &&
+    (tender.type === 'CARD' || tender.type === 'WALLET') &&
+    !manualReversalRequired
+  ) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -1091,31 +1100,28 @@ export async function refundPharmacyTender(
     if (!result.approved) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     providerRef = result.providerRef;
   } else if (tender.type === 'CASH' || manualReversalRequired) {
-    const drawer = await resolveOperatingPharmacyDrawer(
-      db,
-      scope,
-      input,
-      options.drawerOperator
-    );
+    const drawer = await resolveOperatingPharmacyDrawer(db, scope, input, options.drawerOperator);
     drawerSessionId = drawer.id;
   }
   // DEV-958B: the database puts the refund in the counter's open cash shift.
-  const refund = await withCashShiftRefusal(db.pharmacyRefund.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      saleId: tender.saleId,
-      originalTenderId: tender.id,
-      createdAt: providerPostingAt,
-      amountMinor: input.amountMinor,
-      providerRef,
-      drawerSessionId,
-      deviceId: input.deviceId,
-      businessDate: input.businessDate,
-      reason: refundReason,
-      actorId: scope.actorId,
-    },
-  }));
+  const refund = await withCashShiftRefusal(
+    db.pharmacyRefund.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: tender.saleId,
+        originalTenderId: tender.id,
+        createdAt: providerPostingAt,
+        amountMinor: input.amountMinor,
+        providerRef,
+        drawerSessionId,
+        deviceId: input.deviceId,
+        businessDate: input.businessDate,
+        reason: refundReason,
+        actorId: scope.actorId,
+      },
+    })
+  );
   if (tender.provider === PREPAID_PROVIDER)
     await movePrepaid(db, scope, {
       customerId: tender.sale.customerId!,
@@ -1125,7 +1131,19 @@ export async function refundPharmacyTender(
       refundId: refund.id,
       idempotencyKey: `prepaid:restore:${refund.id}`,
     });
-  await postTenderRefundEntry(db, scope, { refundId: refund.id, at: refund.createdAt });
+  if (terminalRefund) {
+    const attempt = await db.pharmacyCardTerminalAttempt.findFirstOrThrow({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        tenderId: tender.id,
+        status: 'SETTLED',
+      },
+    });
+    await recordTerminalRefundRoot(db, scope, attempt, { terminalConfirmed: true, refund });
+  } else {
+    await postTenderRefundEntry(db, scope, { refundId: refund.id, at: refund.createdAt });
+  }
   if (tender.type === 'LOYALTY' && tender.sale.customerId) {
     await restoreRefundedLoyaltyPoints(db, scope, {
       refundId: refund.id,
@@ -1137,20 +1155,23 @@ export async function refundPharmacyTender(
   if (tender.type !== 'LOYALTY' && tender.sale.customerId)
     await reverseRefundedEarnedPoints(db, scope, refund.id);
   if (drawerSessionId)
-    await withCashShiftRefusal(db.pharmacyDrawerMovement.create({
-      data: {
-        organizationId: scope.organizationId,
-        drawerSessionId,
-        kind: 'CASH_REFUND',
-        amountMinor: input.amountMinor,
-        reason: refundReason,
-        actorId: scope.actorId,
-        ...cashShiftOf(refund),
-      },
-    }));
+    await withCashShiftRefusal(
+      db.pharmacyDrawerMovement.create({
+        data: {
+          organizationId: scope.organizationId,
+          drawerSessionId,
+          kind: 'CASH_REFUND',
+          amountMinor: input.amountMinor,
+          reason: refundReason,
+          actorId: scope.actorId,
+          ...cashShiftOf(refund),
+        },
+      })
+    );
   await requestCounterEvidence(db, scope, { kind: 'REFUND', subjectId: refund.id });
   const result = {
     refundId: refund.id,
+    ...(terminalRefund ? { providerRefundOwed: true } : {}),
     manualReversalRequired,
     originalTenderId: tender.id,
     amountMinor: refund.amountMinor,

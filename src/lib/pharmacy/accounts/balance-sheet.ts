@@ -12,6 +12,7 @@ export type BalanceSheetSection = 'assets' | 'liabilities' | 'openingEquity' | '
 type Classification = { section: BalanceSheetSection; normalSide: 'DEBIT' | 'CREDIT' };
 
 const CLASSIFICATIONS: Record<string, Classification> = {
+  CARD_REFUNDS_PAYABLE: { section: 'liabilities', normalSide: 'CREDIT' },
   CUSTOMER_PREPAID: { section: 'liabilities', normalSide: 'CREDIT' },
   CASH: { section: 'assets', normalSide: 'DEBIT' },
   BANK: { section: 'assets', normalSide: 'DEBIT' },
@@ -33,6 +34,10 @@ const CLASSIFICATIONS: Record<string, Classification> = {
   OPERATING_EXPENSE: { section: 'currentResult', normalSide: 'DEBIT' },
   CASH_OVER_SHORT: { section: 'currentResult', normalSide: 'DEBIT' },
 };
+
+export function isBalanceSheetLiability(accountCode: string) {
+  return CLASSIFICATIONS[accountCode]?.section === 'liabilities';
+}
 
 export type ClassifiedBalance = PostedAccountBalance & {
   section: BalanceSheetSection | 'unmapped';

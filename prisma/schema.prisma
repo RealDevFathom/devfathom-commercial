@@ -1774,6 +1774,7 @@ model PharmacyCardTerminalAttempt {
   businessDate   DateTime                          @db.Date
   status         PharmacyCardTerminalAttemptStatus @default(CREATED)
   providerRef    String?
+  approvedAmountMinor Int?
   approvalCode   String?
   cardBrand      String?
   cardLast4      String?
@@ -1798,6 +1799,33 @@ model PharmacyCardTerminalAttempt {
   @@index([organizationId, branchId, status])
   @@index([organizationId, saleId])
   @@map("pharmacy_card_terminal_attempts")
+}
+
+/// Append-only decisions. Each correction or settlement names its predecessor.
+model PharmacyTerminalRefundEvent {
+  id                   String @id
+  organizationId       String
+  branchId             String
+  attemptId            String
+  refundId             String?
+  previousId           String? @unique
+  kind                 String
+  amountMinor          Int
+  actorId              String
+  reason               String
+  slipRef              String
+  roleIdentity           String?
+  roleRules              String[]
+  secondApproverId       String?
+  ownerAuthority       Boolean
+  terminalConfirmed    Boolean
+  commandKey           String
+  journalId            String? @unique
+  createdAt            DateTime @default(now())
+
+  @@unique([organizationId, commandKey])
+  @@index([organizationId, branchId, attemptId])
+  @@map("pharmacy_terminal_refund_events")
 }
 
 model PharmacyRefund {
@@ -3362,6 +3390,7 @@ enum FinanceJournalSide {
 /// query rather than a special case — there is no account here that no adapter
 /// posts to.
 enum FinanceAccountCode {
+  CARD_REFUNDS_PAYABLE
   CUSTOMER_PREPAID
   /// Asset. Perpetual stock value, carried per lot and location.
   INVENTORY
@@ -3420,6 +3449,7 @@ enum FinanceSourceKind {
   PHARMACY_AP_INVOICE
   /// DEV-694: a manager-approved set-off of a supplier credit note against an AP invoice.
   PHARMACY_AP_CREDIT_SET_OFF
+  PHARMACY_TERMINAL_REFUND
 }
 
 /// CEO-JVCORE-20261025: the only journal-voucher purpose the pharmacy general
@@ -6236,6 +6266,9 @@ model Organization {
   /// DEV-66: the owner's maximum discount on a pharmacy line, in basis points of the
   /// undiscounted price. The stored default 10000 means no maximum is set yet; once the
   /// owner sets one it is enforced on the server for everyone.
+  /// A custom chart requires an explicit liability mapping.
+  terminalRefundAccount         FinanceAccountCode?
+  usesCustomFinanceChart        Boolean @default(false)
   pharmacyMaxDiscountBps        Int                            @default(10000)
   /// DEV-956: the owner's switch for one whole-bill discount at the pharmacy counter.
   /// Off by default; with it off nothing at the counter changes.

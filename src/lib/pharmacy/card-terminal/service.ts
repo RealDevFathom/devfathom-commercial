@@ -211,6 +211,12 @@ export function nextAttemptPatch(
         .replace(/[\s-]+/g, '_');
       const evidence = {
         providerRef: response.providerRef,
+        approvedAmountMinor:
+          Number.isSafeInteger(response.amountMinor) &&
+          response.amountMinor > 0 &&
+          response.amountMinor <= 2147483647
+            ? response.amountMinor
+            : null,
         approvalCode:
           response.approvalCode && APPROVAL_CODE.test(response.approvalCode)
             ? response.approvalCode

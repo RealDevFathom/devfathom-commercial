@@ -152,6 +152,26 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'protectedProcedure + requireCounterReceiptAccess(canonical pharmacy:counter)',
     lines: ['take-payment/take-payment-branches-by'],
   },
+  'pharmacyCardTerminal.providerRefunds': {
+    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage',
+    lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
+  },
+  'pharmacyCardTerminal.reviewHistory': {
+    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage',
+    lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
+  },
+  'pharmacyCardTerminal.recordRefundAction': {
+    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage + fresh PIN, second-person approval and role comparison for corrections',
+    lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
+  },
+  'pharmacyCardTerminal.refundMapping': {
+    gate: 'protectedProcedure + pharmacy-core + live owner or active accountant with reports:financial',
+    none: 'Requires pharmacy-core + live owner or active accountant with reports:financial.',
+  },
+  'pharmacyCardTerminal.setRefundMapping': {
+    gate: 'protectedProcedure + pharmacy-core + live owner or active accountant with reports:financial',
+    none: 'Requires pharmacy-core + live owner or active accountant with reports:financial.',
+  },
   'pharmacyCardTerminal.resolveReview': {
     gate: 'requireCounterReceiptAccess(pharmacy:counter) AND actorMayRefund (pharmacy:manage) + own fresh PIN; not own charge unless no other reviewer',
     lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],

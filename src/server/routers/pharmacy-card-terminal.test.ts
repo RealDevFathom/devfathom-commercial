@@ -100,7 +100,19 @@ const app = router({ pharmacyCardTerminal: pharmacyCardTerminalRouter });
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
 const businessDate = new Date('2026-11-18T00:00:00.000Z');
 
-const requestDb = { $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(requestDb)) };
+const requestDb = {
+  pharmacyTerminalRefundEvent: {
+    findFirst: vi.fn(async () => ({ actorId: scope.actorId, attemptId: 'reviewed' })),
+  },
+  pharmacyCardTerminalAttempt: {
+    findFirst: vi.fn(async () => ({
+      id: 'reviewed',
+      actorId: 'cashier',
+      resolvedById: scope.actorId,
+    })),
+  },
+  $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(requestDb)),
+};
 
 function caller() {
   const db = requestDb;
@@ -552,5 +564,50 @@ describe('DEV-743 card-terminal router', () => {
       expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
       expect(store.all()[0]).toMatchObject({ status: 'MANUAL_REVIEW' });
     });
+  });
+});
+
+describe('provider refund correction approval', () => {
+  const edit = {
+    branchId: 'branch-a',
+    previousId: 'review:reviewed',
+    commandKey: 'change-1001',
+    kind: 'DECLINED' as const,
+    resolutionReason: 'Provider confirmed no charge',
+    slipRef: 'SLIP-991',
+    managerPin: '1234',
+  };
+  it('refuses a cashier before reading the decision or either PIN', async () => {
+    await expect(caller().recordRefundAction(edit)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(requestDb.pharmacyTerminalRefundEvent.findFirst).not.toHaveBeenCalled();
+    expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
+  });
+  it('requires another eligible reviewer and that reviewer’s own verified PIN, even for the original manager', async () => {
+    refundAuth.actorMayRefund.mockResolvedValue(true);
+    await expect(caller().recordRefundAction(edit)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().recordRefundAction({
+        ...edit,
+        secondApproval: { userId: scope.actorId, managerPin: '9876' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
+    refundAuth.authenticateRefundPin
+      .mockResolvedValueOnce({ verified: true })
+      .mockResolvedValueOnce({ blocked: 'PIN refused' });
+    expect(
+      await caller().recordRefundAction({
+        ...edit,
+        secondApproval: { userId: 'manager-b', managerPin: '9876' },
+      })
+    ).toEqual({ blocked: 'PIN refused' });
+    expect(refundAuth.authenticateRefundPin).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ actorId: scope.actorId, pin: '1234' })
+    );
+    expect(refundAuth.authenticateRefundPin).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ actorId: 'manager-b', pin: '9876' })
+    );
   });
 });
