@@ -177,6 +177,7 @@ type Opened = {
   message: string | null;
   state: CounterRuntimeState | null;
   unreachable?: boolean;
+  hasSession?: boolean;
   credentialExpiresAt?: string | null;
   renewalFailed?: boolean;
 };
@@ -374,6 +375,7 @@ export function useCounterOffline(input: {
           "This counter's credential could not be renewed just now. It keeps working until it expires; the counter tries again when it next opens online.";
       finish({
         status: 'ready',
+        hasSession: Boolean(counter.sessionToken),
         message,
         state: counter.runtime.snapshot(),
         unreachable,
@@ -446,11 +448,12 @@ export function useCounterOffline(input: {
     [state]
   );
   const ready = current?.status === 'ready' && state !== null;
+  const canResolveConflict = online && !serverUnreachable && current?.hasSession;
   const enrolmentName = enrolment?.name ?? '';
   const actions = useMemo<CounterOfflineActions | null>(() => {
     if (!ready) return null;
     return {
-      ...(online && !serverUnreachable && sessionTokenRef.current
+      ...(canResolveConflict
         ? {
             async resolveConflict(commandId: string, reason: string) {
               const runtime = runtimeRef.current;
@@ -536,7 +539,7 @@ export function useCounterOffline(input: {
         };
       },
     };
-  }, [ready, refresh, enrolmentName, online, serverUnreachable]);
+  }, [ready, refresh, enrolmentName, canResolveConflict]);
   const idle = {
     message: null,
     readiness: null,
