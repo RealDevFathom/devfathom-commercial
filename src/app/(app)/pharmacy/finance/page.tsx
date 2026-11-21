@@ -17,7 +17,12 @@ import { DayEndHourPanel } from '@/components/pharmacy/counter/day-end-hour-pane
 import { DiscountMaximumPanel } from '@/components/pharmacy/counter/discount-maximum-panel';
 import { BillDiscountSettingPanel } from '@/components/pharmacy/counter/bill-discount-setting-panel';
 import { StatusPill } from '@/components/ui/status-pill';
-import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
+import {
+  pharmacyActionErrorMessage,
+  isPharmacyActionForbidden,
+  PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
+  PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE,
+} from '@/lib/pharmacy/action-error-message';
 import {
   isCounterKhataRepayment,
   isNativeApSettlementTransaction,
@@ -125,7 +130,8 @@ export default async function PharmacyFinancePage({
   let workspace: Awaited<ReturnType<typeof caller.workspace>>;
   try {
     workspace = await caller.workspace({ branchId: branch.id });
-  } catch {
+  } catch (error) {
+    const denied = isPharmacyActionForbidden(error);
     return (
       <div className="space-y-6">
         <PageHeader
@@ -133,9 +139,11 @@ export default async function PharmacyFinancePage({
           heading="Finance"
           description="Bookkeeping, reconciliation, close, and tax profile controls."
         />
-        <SectionCard title="Finance could not load">
+        <SectionCard title={denied ? 'Finance access required' : 'Finance could not load'}>
           <p className="text-sm text-text-muted">
-            Refresh the page. No financial data was changed.
+            {denied
+              ? PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE
+              : 'Refresh the page. No financial data was changed.'}
           </p>
         </SectionCard>
       </div>
@@ -283,7 +291,15 @@ export default async function PharmacyFinancePage({
       // Preserve Next.js control-flow errors without trusting a user/provider-controlled
       // `digest` property as proof that an arbitrary thrown value is a framework error.
       unstable_rethrow(error);
-      redirect(destination(branchId || branch.id, pharmacyActionErrorMessage('finance'), 'error'));
+      redirect(
+        destination(
+          branchId || branch.id,
+          isPharmacyActionForbidden(error)
+            ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
+            : pharmacyActionErrorMessage('finance'),
+          'error'
+        )
+      );
     }
   }
 
@@ -396,6 +412,11 @@ export default async function PharmacyFinancePage({
           {query.notice}
         </div>
       ) : null}
+      {!workspace.mayManageAccounts && (
+        <SectionCard title="View-only finance access">
+          <p className="text-sm text-text-muted">{PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE}</p>
+        </SectionCard>
+      )}
       <SectionCard title="Working branch" eyebrow="Organization scope">
         <form method="get" className="flex flex-wrap items-end gap-3">
           {(
@@ -499,7 +520,7 @@ export default async function PharmacyFinancePage({
                 </label>
               ))}
             </fieldset>
-            <Button className="md:col-span-3" type="submit">
+            <Button disabled={!workspace.mayManageAccounts} className="md:col-span-3" type="submit">
               Create settlement batch
             </Button>
           </form>
@@ -612,7 +633,7 @@ export default async function PharmacyFinancePage({
               Memo
               <Input className="mt-1 min-h-11" name="memo" />
             </label>
-            <Button className="sm:col-span-2" type="submit">
+            <Button disabled={!workspace.mayManageAccounts} className="sm:col-span-2" type="submit">
               Post transaction
             </Button>
           </form>
@@ -629,7 +650,12 @@ export default async function PharmacyFinancePage({
               Period ends (exclusive)
               <Input className="mt-1 min-h-11" type="date" name="endsAt" required />
             </label>
-            <Button className="sm:col-span-2" type="submit" variant="destructive">
+            <Button
+              disabled={!workspace.mayManageAccounts}
+              className="sm:col-span-2"
+              type="submit"
+              variant="destructive"
+            >
               Close period
             </Button>
           </form>
@@ -660,7 +686,11 @@ export default async function PharmacyFinancePage({
                         required
                         placeholder="Reason for controlled reopen"
                       />
-                      <Button type="submit" variant="secondary">
+                      <Button
+                        disabled={!workspace.mayManageAccounts}
+                        type="submit"
+                        variant="secondary"
+                      >
                         Reopen
                       </Button>
                     </form>
@@ -734,7 +764,11 @@ export default async function PharmacyFinancePage({
                             required
                             placeholder="Reversal reason"
                           />
-                          <Button type="submit" variant="destructive">
+                          <Button
+                            disabled={!workspace.mayManageAccounts}
+                            type="submit"
+                            variant="destructive"
+                          >
                             Reverse
                           </Button>
                         </form>
@@ -799,7 +833,9 @@ export default async function PharmacyFinancePage({
                   required
                 />
               </label>
-              <Button type="submit">Match POS settlement to statement</Button>
+              <Button disabled={!workspace.mayManageAccounts} type="submit">
+                Match POS settlement to statement
+              </Button>
             </form>
           ) : null}
           <form action={perform} className="grid gap-3 sm:grid-cols-2">
@@ -825,7 +861,12 @@ export default async function PharmacyFinancePage({
               Bank description
               <Input className="mt-1 min-h-11" name="description" required />
             </label>
-            <Button type="submit" variant="secondary" className="sm:col-span-2">
+            <Button
+              disabled={!workspace.mayManageAccounts}
+              type="submit"
+              variant="secondary"
+              className="sm:col-span-2"
+            >
               Add statement line
             </Button>
           </form>
@@ -869,7 +910,9 @@ export default async function PharmacyFinancePage({
                   required
                 />
               </label>
-              <Button type="submit">Match selected records</Button>
+              <Button disabled={!workspace.mayManageAccounts} type="submit">
+                Match selected records
+              </Button>
             </form>
           ) : (
             <p className="mt-5 text-sm text-text-muted">
@@ -929,7 +972,7 @@ export default async function PharmacyFinancePage({
                 Verify against the final gazette before operational use.
               </span>
             </label>
-            <Button type="submit" className="sm:col-span-2">
+            <Button disabled={!workspace.mayManageAccounts} type="submit" className="sm:col-span-2">
               Publish approved version
             </Button>
           </form>

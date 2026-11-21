@@ -1,6 +1,8 @@
+import { PHARMACY_FINANCE_MANAGE } from '@/lib/abac/pharmacy-finance-actions';
 import 'server-only';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { canAccessPharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { otherCardTerminalReviewers } from '@/lib/pharmacy/card-terminal/review-approvers';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -50,7 +52,8 @@ export async function otherApReversalApprovers(
     const options = { db, now, source: 'TRPC' as const };
     if (
       !(await can(subject, 'admin:access', undefined, options)) ||
-      !(await can(subject, 'finance:read', undefined, options))
+      !(await canAccessPharmacyFinance(user, options)) ||
+      !(await canAccessPharmacyFinance(user, options, PHARMACY_FINANCE_MANAGE))
     )
       continue;
     approvers.push({ id: user.id, name: user.name });

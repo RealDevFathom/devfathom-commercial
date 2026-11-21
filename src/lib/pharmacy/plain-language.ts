@@ -102,6 +102,8 @@ export const PHARMACY_COPY = {
   tender: {
     balance: 'Balance due',
     payments: 'Recorded payments',
+    /** DEV-977 phase 3 (Counter v2 A2): the sum of the payments already recorded on a bill. */
+    paidSoFar: 'Paid so far',
     nextPayment: 'Payment',
     remaining: 'Remaining after this payment',
     cashShort: 'Cash received is less than the payment amount.',

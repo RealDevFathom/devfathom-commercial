@@ -11,6 +11,7 @@ import {
   type PlatformJobType,
   type PrismaClient,
 } from '@/generated/prisma/client';
+import { endSupportSessions } from '@/lib/platform/capabilities';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
 import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
@@ -818,10 +819,16 @@ async function setDeploymentAvailability(
     },
   });
   if (suspended) {
-    await db.platformSupportSession.updateMany({
-      where: { organizationId, status: 'ACTIVE' },
-      data: { status: 'REVOKED', endedAt: now },
-    });
+    const { reason } = objectPayload(job.payload);
+    await endSupportSessions(
+      db,
+      { organizationId },
+      typeof reason === 'string' && reason.trim()
+        ? `Organization suspended: ${reason.trim()}`
+        : 'Organization suspended.',
+      job.requestedById,
+      'REVOKED'
+    );
   }
   return { organizationId, deployments: deployments.count, suspended };
 }

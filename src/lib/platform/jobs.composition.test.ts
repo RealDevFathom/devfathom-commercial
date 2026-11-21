@@ -13,6 +13,7 @@ const m = vi.hoisted(() => ({
   lifecycle: vi.fn(),
   deployment: vi.fn(),
   support: vi.fn(),
+  supportAudits: vi.fn(),
   scope: vi.fn(),
   snapshot: vi.fn(),
   retention: vi.fn(),
@@ -54,10 +55,10 @@ const db = {
   },
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
-  platformAuditLog: { create: m.platformAudit },
+  platformAuditLog: { create: m.platformAudit, createMany: m.supportAudits },
   organizationDeployment: { updateMany: m.deployment },
   organizationIdentityConnection: { findFirst: vi.fn(), update: vi.fn() },
-  platformSupportSession: { updateMany: m.support },
+  platformSupportSession: { updateMany: m.support, updateManyAndReturn: m.support },
   pharmacyCustomer: { findMany: m.consent },
   pharmacyWhatsAppConsentArchive: { createMany: m.archiveCreate, deleteMany: m.archiveDelete },
 };
@@ -259,6 +260,14 @@ describe('composed platform worker boundaries', () => {
   });
   it('recovers stale work and preserves suspend revocation after a successful enqueue', async () => {
     queue(job('SUSPEND'));
+    m.support.mockResolvedValue([
+      {
+        id: 'session-1',
+        platformUserId: 'support-1',
+        tenantUserId: 'admin-1',
+        organizationId: 'tenant-a',
+      },
+    ]);
     await expect(processPlatformJobs(1)).resolves.toEqual({
       recovered: 2,
       claimed: 1,
@@ -276,7 +285,22 @@ describe('composed platform worker boundaries', () => {
     );
     expect(m.support).toHaveBeenCalledWith({
       where: { organizationId: 'tenant-a', status: 'ACTIVE' },
-      data: { status: 'REVOKED', endedAt: now },
+      data: { status: 'REVOKED', endedAt: now, tokenCiphertext: null, launchTokenHash: null },
+      select: { id: true, platformUserId: true, organizationId: true, tenantUserId: true },
+    });
+    expect(m.supportAudits).toHaveBeenCalledWith({
+      data: [
+        {
+          organizationId: 'tenant-a',
+          actorPlatformUserId: 'platform-admin-1',
+          actorTenantUserId: 'admin-1',
+          action: 'support.session.ended',
+          targetType: 'PlatformSupportSession',
+          targetId: 'session-1',
+          reason: 'Organization suspended.',
+          metadata: { sessionPlatformUserId: 'support-1' },
+        },
+      ],
     });
     expect(m.deployment).toHaveBeenCalledWith(
       expect.objectContaining({
