@@ -5,6 +5,7 @@ import { selectFieldControl } from '@/lib/testing/select-field';
 
 const mocks = vi.hoisted(() => ({
   overview: undefined as unknown,
+  authenticatorRequired: false,
   mutations: new Map<string, { mutate: ReturnType<typeof vi.fn>; isPending: boolean }>(),
 }));
 
@@ -24,6 +25,9 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/app/(app)/team/team-content', () => ({ AddMemberModal: () => null }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: {
+      mode: { useQuery: () => ({ data: { required: mocks.authenticatorRequired } }) },
+    },
     useUtils: () => ({ organizationAdmin: { overview: { invalidate: vi.fn() } } }),
     organizationAdmin: new Proxy(
       {},
@@ -118,12 +122,26 @@ async function chooseLastWithKeyboard(trigger: HTMLElement, name: string) {
 }
 
 beforeEach(() => {
+  mocks.authenticatorRequired = false;
   mocks.mutations.clear();
   mocks.overview = overview();
 });
 afterEach(cleanup);
 
 describe('organization shared controls preserve upstream access behavior', () => {
+  it('uses the authenticator label and submits the typed approval code in code mode', () => {
+    mocks.authenticatorRequired = true;
+    const form = openMember();
+    fireEvent.change(within(form).getByLabelText(/^Your approval code/), {
+      target: { value: '123456' },
+    });
+    fireEvent.submit(form);
+    expect(mutation('updateMember').mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ pin: '123456' }),
+      expect.anything()
+    );
+  });
+
   it('keeps pharmacy labels and stored roles, then submits keyboard selection with the typed PIN', async () => {
     const form = openMember();
     const role = within(form).getByRole('combobox', { name: 'System role' });
