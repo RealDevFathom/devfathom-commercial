@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import type Hls from 'hls.js';
+import {
+  CAMERA_CODEC_UNSUPPORTED_MESSAGE,
+  CAMERA_H265_PLAYER_MESSAGE,
+  isH265Codec,
+} from '@/lib/cameras/diagnostic-messages';
 import { startCameraLiveSession, type CameraLiveGrant } from '@/lib/cameras/live-session';
 
 export type CameraLivePlayerProps = {
@@ -159,13 +164,25 @@ export function CameraLivePlayer({
               playlistLoadPolicy: policy,
               fragLoadPolicy: policy,
             });
+            // The playlist names the codec; H.265 then gets a plain browser note
+            // instead of a black picture (the app never transcodes).
+            let h265 = false;
+            hls.on(HlsPlayer.Events.MANIFEST_LOADED, (_event, data) => {
+              h265 = data.levels.some((level) => isH265Codec(level.videoCodec));
+            });
             hls.on(HlsPlayer.Events.ERROR, (_event, data) => {
               // Denied media must stop immediately, including nonfatal network events.
               if (data.fatal || data.response?.code === 401 || data.response?.code === 403)
                 stop(
-                  data.type === HlsPlayer.ErrorTypes.MEDIA_ERROR
-                    ? 'This stream or codec is unsupported. Ask the gateway owner to check the video format.'
-                    : 'Video unavailable or access ended. Close and reopen live view to request access.'
+                  data.details === HlsPlayer.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR
+                    ? h265
+                      ? CAMERA_H265_PLAYER_MESSAGE
+                      : CAMERA_CODEC_UNSUPPORTED_MESSAGE
+                    : data.type === HlsPlayer.ErrorTypes.MEDIA_ERROR
+                      ? h265
+                        ? CAMERA_H265_PLAYER_MESSAGE
+                        : 'This stream or codec is unsupported. Ask the gateway owner to check the video format.'
+                      : 'Video unavailable or access ended. Close and reopen live view to request access.'
                 );
             });
             hls.on(HlsPlayer.Events.MANIFEST_PARSED, play);

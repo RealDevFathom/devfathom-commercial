@@ -1,6 +1,8 @@
 import { request as httpsRequest } from 'node:https';
 import { isIPv4 } from 'node:net';
 
+import { isH265Codec } from './diagnostic-messages';
+
 /**
  * The product surface a binding serves. Restaurant and pharmacy cameras live in
  * separate tables, so a binding must name its vertical: an identifier from one
@@ -33,7 +35,9 @@ export type CameraTransportFailure =
   | 'credentials-missing'
   | 'auth-failed'
   | 'gateway-unreachable'
-  | 'unsupported-stream';
+  | 'unsupported-stream'
+  /** The relay answered with a flow this client does not support (version or set-up). */
+  | 'relay-unsupported';
 
 export class CameraTransportError extends Error {
   constructor(readonly code: CameraTransportFailure) {
@@ -212,9 +216,205 @@ export function rewriteCameraManifest(text: string, resourceUrl: (name: string) 
     .join('\n');
 }
 
+/** The video codec named by a playlist's CODECS attributes; never a guess from bytes. */
+export type CameraVideoCodec = 'h264' | 'h265' | 'unknown';
+
+/**
+ * H.264 (`avc1`/`avc3`) or H.265 (`hvc1`/`hev1`) from `CODECS="…"` in a master
+ * playlist. The app never transcodes, so an H.265 camera plays only where the
+ * browser itself decodes H.265.
+ */
+export function cameraVideoCodec(manifest: string): CameraVideoCodec {
+  const codecs = [...manifest.matchAll(/\bCODECS="([^"]*)"/g)].flatMap((match) =>
+    match[1].split(',').map((codec) => codec.trim().toLowerCase())
+  );
+  if (codecs.some(isH265Codec)) return 'h265';
+  if (codecs.some((codec) => codec.startsWith('avc1') || codec.startsWith('avc3'))) return 'h264';
+  return 'unknown';
+}
+
+// MediaMTX v1.18.0+ HLS sessions (internal/servers/hls/http_server.go, session.go,
+// muxer_instance.go): GET <path>/index.m3u8 answers 302 to the same path with
+// `?cookieCheck=1`; that request checks the reader login and opens a session whose
+// UUID secret arrives as the `hlsSession` cookie (or a `session` query parameter for
+// clients without cookies). Later playlist and segment requests must carry it from
+// the same client address; the relay drops a session after 30 s without requests.
+const COOKIE_CHECK = 'cookieCheck=1';
+const SESSION_COOKIE = 'hlsSession';
+const SESSION_SECRET = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const SESSION_QUERY =
+  /\?session=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?=["\r\n]|$)/gm;
+
+type Upstream = { status: number; location?: string; cookies: string[]; bytes: Buffer };
+
+function sessionCookie(cookies: string[]): string | undefined {
+  const values = cookies
+    .map((cookie) => cookie.split(';', 1)[0].trim())
+    .filter((pair) => pair.startsWith(`${SESSION_COOKIE}=`))
+    .map((pair) => pair.slice(SESSION_COOKIE.length + 1));
+  if (!values.length) return undefined;
+  // Older releases send the same value twice (plain and partitioned); anything else
+  // is not a session this client understands.
+  if (values.some((value) => value !== values[0] || !SESSION_SECRET.test(value)))
+    throw new CameraTransportError('relay-unsupported');
+  return values[0];
+}
+
+/**
+ * Remove the relay session secret from playlist references so the bytes handed to
+ * the route (and so to the browser) never contain it, then prove it is gone.
+ */
+function withoutSessionSecret(bytes: Buffer, known?: string) {
+  let text = bytes.toString('utf8');
+  const found = new Set([...text.matchAll(SESSION_QUERY)].map((match) => match[1]));
+  if (found.size > 1 || (known && found.size === 1 && !found.has(known)))
+    throw new CameraTransportError('relay-unsupported');
+  const secret = known ?? [...found][0];
+  if (!secret) return { bytes, secret };
+  text = text.replace(SESSION_QUERY, '');
+  if (text.includes(secret)) throw new CameraTransportError('unsupported-stream');
+  return { bytes: Buffer.from(text, 'utf8'), secret };
+}
+
 export function createMediaMtxTransport(raw: string, request = httpsRequest) {
   const bindings = parseBindings(raw);
   let active = 0;
+  // Latest relay session per binding: at most one entry per configured binding.
+  // Server-side only; never returned, logged or sent anywhere but its own relay.
+  const sessions = new Map<Binding, string>();
+  const renewing = new Map<Binding, Promise<string | undefined>>();
+
+  function get(
+    binding: Binding,
+    pathAndQuery: string,
+    maximum: number,
+    session?: string
+  ): Promise<Upstream> {
+    const target = new URL(`${binding.path}/${pathAndQuery}`, binding.baseUrl);
+    return new Promise<Upstream>((resolve, reject) => {
+      const fail = (code: CameraTransportFailure) => reject(new CameraTransportError(code));
+      const req = request(
+        target,
+        {
+          method: 'GET',
+          agent: false,
+          family: 4,
+          rejectUnauthorized: true,
+          // Connect only to the configured address while retaining TLS hostname
+          // verification. No attacker-controlled DNS or redirect can change it.
+          lookup: (_host, _options, callback) => callback(null, binding.address, 4),
+          headers: {
+            Authorization: `Basic ${Buffer.from(`${binding.username}:${binding.password}`).toString('base64')}`,
+            'Accept-Encoding': 'identity',
+            // `cookieCheck=1` keeps the relay in cookie mode, so its playlists name
+            // segments without the session secret in a query string.
+            Cookie: session ? `${COOKIE_CHECK}; ${SESSION_COOKIE}=${session}` : COOKIE_CHECK,
+          },
+        },
+        (res) => {
+          const status = res.statusCode ?? 0;
+          const location = res.headers.location;
+          const cookies = res.headers['set-cookie'] ?? [];
+          if (status !== 200) {
+            res.destroy();
+            resolve({ status, location, cookies, bytes: Buffer.alloc(0) });
+            return;
+          }
+          if (
+            Number(res.headers['content-length'] ?? 0) > maximum ||
+            res.headers['content-encoding']
+          ) {
+            fail('gateway-unreachable');
+            res.destroy();
+            return;
+          }
+          const chunks: Buffer[] = [];
+          let size = 0;
+          res.on('data', (chunk: Buffer) => {
+            size += chunk.length;
+            if (size > maximum) {
+              fail('unsupported-stream');
+              res.destroy();
+            } else chunks.push(chunk);
+          });
+          res.on('error', () => fail('gateway-unreachable'));
+          res.on('end', () => resolve({ status, location, cookies, bytes: Buffer.concat(chunks) }));
+        }
+      );
+      const timer = setTimeout(
+        () => req.destroy(new CameraTransportError('gateway-unreachable')),
+        DEADLINE_MS
+      );
+      req.on('error', () => fail('gateway-unreachable'));
+      req.on('close', () => clearTimeout(timer));
+      req.end();
+    });
+  }
+
+  function refuse(status: number): never {
+    throw new CameraTransportError(
+      status === 401 || status === 403
+        ? 'auth-failed'
+        : status === 404 || status === 415
+          ? 'unsupported-stream'
+          : status >= 300 && status < 400
+            ? 'relay-unsupported'
+            : 'gateway-unreachable'
+    );
+  }
+
+  /**
+   * Read the master playlist, opening a relay session when the relay manages them.
+   * The only redirect ever followed is the relay's own same-path `?cookieCheck=1`
+   * step, compared as an exact string: never another host, port, scheme or path.
+   */
+  async function open(binding: Binding) {
+    let res = await get(binding, 'index.m3u8', MAX_MANIFEST_BYTES);
+    if (res.status === 302 || res.status === 303 || res.status === 307) {
+      if (res.location !== `/${binding.path}/index.m3u8?${COOKIE_CHECK}`)
+        throw new CameraTransportError('relay-unsupported');
+      res = await get(binding, `index.m3u8?${COOKIE_CHECK}`, MAX_MANIFEST_BYTES);
+      if (res.status >= 300 && res.status < 400)
+        throw new CameraTransportError('relay-unsupported');
+    }
+    if (res.status !== 200) refuse(res.status);
+    const cookie = sessionCookie(res.cookies);
+    const { bytes, secret } = withoutSessionSecret(res.bytes, cookie);
+    // A relay without sessions (before v1.18.0) authenticates every request instead.
+    if (secret) sessions.set(binding, secret);
+    else sessions.delete(binding);
+    return { bytes, secret };
+  }
+
+  /** One renewal per binding at a time; concurrent reads share its result. */
+  function renew(binding: Binding) {
+    let pending = renewing.get(binding);
+    if (!pending) {
+      pending = open(binding)
+        .then((result) => result.secret)
+        .finally(() => renewing.delete(binding));
+      renewing.set(binding, pending);
+    }
+    return pending;
+  }
+
+  async function fetchResource(binding: Binding, resource: string, maximum: number) {
+    if (resource === 'index.m3u8') return (await open(binding)).bytes;
+    const session = sessions.get(binding);
+    let res = await get(binding, resource, maximum, session);
+    if (res.status === 401) {
+      // The relay ended the session (idle, restart) or none was open yet: open a
+      // fresh one and retry once. A relay without sessions answers 401 only for a
+      // refused login, and that refusal stands.
+      const renewed = await renew(binding);
+      if (!renewed) refuse(res.status);
+      res = await get(binding, resource, maximum, renewed);
+      if (res.status === 401) throw new CameraTransportError('relay-unsupported');
+    }
+    if (res.status !== 200) refuse(res.status);
+    if (!resource.endsWith('.m3u8')) return res.bytes;
+    return withoutSessionSecret(res.bytes, sessions.get(binding)).bytes;
+  }
 
   async function read(scope: CameraBindingScope, resource = 'index.m3u8') {
     cameraResourceName(resource);
@@ -234,64 +434,9 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
     if (active >= 16) throw new CameraTransportError('gateway-unreachable');
     const manifest = resource.endsWith('.m3u8');
     const maximum = manifest ? MAX_MANIFEST_BYTES : MAX_SEGMENT_BYTES;
-    const target = new URL(`${binding.path}/${resource}`, binding.baseUrl);
     active++;
     try {
-      const bytes = await new Promise<Buffer>((resolve, reject) => {
-        const fail = (code: CameraTransportFailure) => reject(new CameraTransportError(code));
-        const req = request(
-          target,
-          {
-            method: 'GET',
-            agent: false,
-            family: 4,
-            rejectUnauthorized: true,
-            // Connect only to the configured address while retaining TLS hostname
-            // verification. No attacker-controlled DNS or redirect can change it.
-            lookup: (_host, _options, callback) => callback(null, binding.address, 4),
-            headers: {
-              Authorization: `Basic ${Buffer.from(`${binding.username}:${binding.password}`).toString('base64')}`,
-              'Accept-Encoding': 'identity',
-            },
-          },
-          (res) => {
-            const status = res.statusCode ?? 0;
-            if (
-              status !== 200 ||
-              Number(res.headers['content-length'] ?? 0) > maximum ||
-              res.headers['content-encoding']
-            ) {
-              fail(
-                status === 401 || status === 403
-                  ? 'auth-failed'
-                  : status === 404 || status === 415
-                    ? 'unsupported-stream'
-                    : 'gateway-unreachable'
-              );
-              res.destroy();
-              return;
-            }
-            const chunks: Buffer[] = [];
-            let size = 0;
-            res.on('data', (chunk: Buffer) => {
-              size += chunk.length;
-              if (size > maximum) {
-                fail('unsupported-stream');
-                res.destroy();
-              } else chunks.push(chunk);
-            });
-            res.on('error', () => fail('gateway-unreachable'));
-            res.on('end', () => resolve(Buffer.concat(chunks)));
-          }
-        );
-        const timer = setTimeout(
-          () => req.destroy(new CameraTransportError('gateway-unreachable')),
-          DEADLINE_MS
-        );
-        req.on('error', () => fail('gateway-unreachable'));
-        req.on('close', () => clearTimeout(timer));
-        req.end();
-      });
+      const bytes = await fetchResource(binding, resource, maximum);
       return {
         bytes,
         manifest,
@@ -311,11 +456,27 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
 
   return {
     read,
+    /**
+     * Reads the master playlist and its first media playlist, so `ok` also proves
+     * the relay's session flow. It still proves no frames or browser decoding.
+     */
     async diagnose(scope: CameraBindingScope) {
       try {
         const result = await read(scope);
-        rewriteCameraManifest(result.bytes.toString('utf8'), (name) => name);
-        return { outcome: 'ok' as const, discoveredProfile: 'Configured HLS gateway' };
+        const text = result.bytes.toString('utf8');
+        const names: string[] = [];
+        rewriteCameraManifest(text, (name) => {
+          names.push(name);
+          return name;
+        });
+        const media = names.find((name) => name.endsWith('.m3u8'));
+        if (media)
+          rewriteCameraManifest((await read(scope, media)).bytes.toString('utf8'), (name) => name);
+        return {
+          outcome: 'ok' as const,
+          discoveredProfile: 'Configured HLS gateway',
+          videoCodec: cameraVideoCodec(text),
+        };
       } catch (error) {
         return {
           outcome:
