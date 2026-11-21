@@ -7,6 +7,7 @@ import { PASSWORD_RESET_TTL_MS } from '@/lib/auth/admin-password-reset';
 import { findLoginCandidates } from '@/lib/auth/login-candidates';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { appUrl, sendEmail, templates } from '@/lib/email';
+import { claimJob, runClaimedJob } from '@/lib/platform/job-runner';
 import { hashInviteToken } from '@/lib/invite-token';
 import { isTenantLifecycleAccessible, resolveOrganizationByHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
@@ -55,7 +56,6 @@ export async function enqueuePasswordReset(
     after(async () => {
       if (!job) return;
       try {
-        const { processPasswordResetJob } = await import('@/lib/platform/jobs');
         await processPasswordResetJob(job.id);
       } catch {
         console.warn('[password-reset] immediate worker unavailable');
@@ -196,4 +196,10 @@ export async function runPasswordResetJob(
   }
   if (failed) throw new Error('Password reset delivery failed.');
   return {};
+}
+
+/** The immediate worker may claim only its own due reset row. */
+export async function processPasswordResetJob(id: string): Promise<void> {
+  const job = await claimJob(id);
+  if (job) await runClaimedJob(job, runPasswordResetJob);
 }

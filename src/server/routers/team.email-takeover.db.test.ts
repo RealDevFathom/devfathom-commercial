@@ -34,9 +34,12 @@ vi.mock('@/lib/email', async (importOriginal) => ({
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 
 import { sendEmail } from '@/lib/email';
-import { processPasswordResetJob } from '@/lib/platform/jobs';
 import { hashInviteToken } from '@/lib/invite-token';
-import { enqueuePasswordReset, runPasswordResetJob } from '@/lib/auth/password-reset-request';
+import {
+  enqueuePasswordReset,
+  runPasswordResetJob,
+  processPasswordResetJob,
+} from '@/lib/auth/password-reset-request';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { router, type TRPCContext } from '../trpc';
