@@ -4,6 +4,8 @@ import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
+  APPROVAL_AUTHENTICATOR_SETUP_MESSAGE,
+  approvalAuthenticatorSetupBlocks,
   evaluateSessionUser,
   TEMPORARY_PASSWORD_MESSAGE,
   temporaryPasswordBlocks,
@@ -227,6 +229,19 @@ function assertTemporaryPasswordChanged(
 }
 
 /**
+ * DEV-961: a member who can approve and has not set up their approval authenticator, while
+ * the organization requires one, may call only the set-up procedures. Checked per procedure,
+ * so a batch, a server action or a server-side caller cannot reach anything else.
+ */
+function assertApprovalAuthenticatorSetUp(
+  user: { approvalAuthenticatorSetupRequired?: boolean | null },
+  path: string
+) {
+  if (!approvalAuthenticatorSetupBlocks(user, path)) return;
+  throw new TRPCError({ code: 'FORBIDDEN', message: APPROVAL_AUTHENTICATOR_SETUP_MESSAGE });
+}
+
+/**
  * Audit middleware. Installed as the OUTERMOST middleware on protected/admin
  * procedures so it wraps the auth checks — meaning even FORBIDDEN/UNAUTHORIZED
  * attempts are recorded (with whatever actor the session carries).
@@ -312,6 +327,7 @@ const requireActiveUser = gated(
     }
     assertSessionUsable(ctx.session.user);
     assertTemporaryPasswordChanged(ctx.session.user, path);
+    assertApprovalAuthenticatorSetUp(ctx.session.user, path);
     assertDemoProcedureAllowed(ctx, path, type);
     return next({ ctx: { ...ctx, session: ctx.session } });
   }),
@@ -387,6 +403,7 @@ async function assertCapabilities(
   }
   assertSessionUsable(session.user);
   assertTemporaryPasswordChanged(session.user, path);
+  assertApprovalAuthenticatorSetUp(session.user, path);
   assertDemoProcedureAllowed(ctx, path, type);
   const subject = subjectFromSession(session.user);
   for (const action of actions) {

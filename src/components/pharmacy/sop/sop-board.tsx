@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useId, useState } from 'react';
 
 import { fieldClass, WorkspaceState } from '@/components/pharmacy/dispensing/field';
@@ -335,7 +337,7 @@ function StartOnDemand({
       >
         <label className="grid gap-1.5 text-sm font-medium text-text-strong" htmlFor={id}>
           <span>Procedure</span>
-          <select
+          <StudioSelect
             id={id}
             className={fieldClass}
             value={templateId}
@@ -349,7 +351,7 @@ function StartOnDemand({
                 {template.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <Button
           type="submit"

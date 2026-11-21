@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { type FormEvent, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -127,7 +129,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
           <div className="my-4 space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="split-kind">Split method</Label>
-              <select
+              <StudioSelect
                 id="split-kind"
                 value={kind}
                 disabled={pending}
@@ -140,7 +142,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                 <option value="BY_ITEM">By item</option>
                 <option value="BY_SEAT">By seat</option>
                 <option value="FRACTIONAL">Fractional</option>
-              </select>
+              </StudioSelect>
             </div>
             {kind === 'BY_ITEM' ? (
               <div className="space-y-1.5">
@@ -174,7 +176,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                         <Label htmlFor={`split-item-${item.id}`} className="text-xs">
                           Guest bill
                         </Label>
-                        <select
+                        <StudioSelect
                           id={`split-item-${item.id}`}
                           aria-label={`Guest bill for ${item.name}, order line ${index + 1}`}
                           value={assignments[item.id]}
@@ -204,7 +206,7 @@ export function SplitBillDialog({ items, disabled = false, onSplit }: SplitBillD
                               Bill {index + 1}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </div>
                     </div>
                   ))}

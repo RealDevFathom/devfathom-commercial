@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField } from '@/components/ui/select-field';
+
 type BranchOption = {
   id: string;
   name: string;
@@ -51,7 +53,7 @@ export function RestaurantBranchSelect({
         : 'Select a branch';
 
   return (
-    <select
+    <SelectField
       id={id}
       name={name}
       value={value}
@@ -76,6 +78,6 @@ export function RestaurantBranchSelect({
           {branch.isDefault ? ' (default)' : ''}
         </option>
       ))}
-    </select>
+    </SelectField>
   );
 }

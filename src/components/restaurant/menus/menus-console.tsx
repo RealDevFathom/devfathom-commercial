@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useState, useTransition, type FormEvent, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
@@ -793,7 +795,7 @@ export function RestaurantMenusConsole({
                 ) : (
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
                     <Field label="Menu">
-                      <select
+                      <StudioSelect
                         value={selectedMenu?.id ?? ''}
                         className={selectClass}
                         onChange={(event) => setSelectedMenuId(event.target.value)}
@@ -803,7 +805,7 @@ export function RestaurantMenusConsole({
                             {brandsById.get(menu.brandId)?.name ?? 'Unknown brand'} — {menu.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     {selectedMenu ? (
                       <div className="flex flex-wrap gap-2">
@@ -1021,7 +1023,7 @@ export function RestaurantMenusConsole({
                   />
                 ) : (
                   <Field label="Price list">
-                    <select
+                    <StudioSelect
                       value={selectedPriceList?.id ?? ''}
                       className={selectClass}
                       onChange={(event) => setSelectedPriceListId(event.target.value)}
@@ -1032,7 +1034,7 @@ export function RestaurantMenusConsole({
                           {list.isDefault ? ' — default' : ''}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </Field>
                 )}
               </SectionCard>
@@ -1594,24 +1596,24 @@ export function RestaurantMenusConsole({
                     }}
                   >
                     <Field label="Preview branch menu">
-                      <select name="publicationId" className={selectClass} required>
+                      <StudioSelect name="publicationId" className={selectClass} required>
                         {snapshot.publications.map((publication) => (
                           <option key={publication.id} value={publication.id}>
                             {branchesById.get(publication.branchId)?.name ?? 'Unknown branch'} —{' '}
                             {menusById.get(publication.menuId)?.name ?? 'Unknown menu'}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Preview channel">
-                      <select name="channel" className={selectClass} defaultValue="DINE_IN">
+                      <StudioSelect name="channel" className={selectClass} defaultValue="DINE_IN">
                         {channels.map((channel) => (
                           <option key={channel} value={channel}>
                             {channel.replace('_', ' ')}
                           </option>
                         ))}
                         <option value="DELIVERY">DELIVERY</option>
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Preview instant">
                       <Input name="at" type="datetime-local" className="h-11" />
@@ -1738,7 +1740,7 @@ export function RestaurantMenusConsole({
                 <>
                   {!editor.item ? (
                     <Field label="Brand">
-                      <select name="brandId" required className={selectClass}>
+                      <StudioSelect name="brandId" required className={selectClass}>
                         {snapshot?.brands
                           .filter((brand) => brand.status === 'ACTIVE')
                           .map((brand) => (
@@ -1746,7 +1748,7 @@ export function RestaurantMenusConsole({
                               {brand.name}
                             </option>
                           ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                   ) : null}
                   <Field label="Menu name">
@@ -1800,7 +1802,7 @@ export function RestaurantMenusConsole({
                   ) : (
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Canonical product">
-                        <select
+                        <StudioSelect
                           name="productId"
                           required
                           value={editor.productId}
@@ -1814,17 +1816,17 @@ export function RestaurantMenusConsole({
                               {product.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Canonical variant">
-                        <select name="variantId" defaultValue="" className={selectClass}>
+                        <StudioSelect name="variantId" defaultValue="" className={selectClass}>
                           <option value="">Base product</option>
                           {productsById.get(editor.productId)?.variants.map((variant) => (
                             <option key={variant.id} value={variant.id}>
                               {variant.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                     </div>
                   )}
@@ -1876,7 +1878,7 @@ export function RestaurantMenusConsole({
                   ) : (
                     <div className="grid gap-4 sm:grid-cols-2">
                       <Field label="Canonical product">
-                        <select
+                        <StudioSelect
                           name="productId"
                           required
                           value={editor.productId}
@@ -1890,17 +1892,17 @@ export function RestaurantMenusConsole({
                               {product.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                       <Field label="Canonical variant">
-                        <select name="variantId" defaultValue="" className={selectClass}>
+                        <StudioSelect name="variantId" defaultValue="" className={selectClass}>
                           <option value="">Base product</option>
                           {productsById.get(editor.productId)?.variants.map((variant) => (
                             <option key={variant.id} value={variant.id}>
                               {variant.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </Field>
                     </div>
                   )}
@@ -1922,34 +1924,34 @@ export function RestaurantMenusConsole({
                 <>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <Field label="Branch">
-                      <select name="branchId" required className={selectClass}>
+                      <StudioSelect name="branchId" required className={selectClass}>
                         {snapshot?.branches.map((branch) => (
                           <option key={branch.id} value={branch.id} disabled={!branch.active}>
                             {branch.name}
                             {branch.active ? '' : ' — inactive'}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                     <Field label="Menu">
-                      <select name="menuId" required className={selectClass}>
+                      <StudioSelect name="menuId" required className={selectClass}>
                         {snapshot?.menus.map((menu) => (
                           <option key={menu.id} value={menu.id}>
                             {menu.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </Field>
                   </div>
                   <Field label="Publication price list">
-                    <select name="priceListId" defaultValue="" className={selectClass}>
+                    <StudioSelect name="priceListId" defaultValue="" className={selectClass}>
                       <option value="">Default fallback only</option>
                       {snapshot?.priceLists.map((list) => (
                         <option key={list.id} value={list.id}>
                           {list.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </Field>
                 </>
               ) : null}
@@ -1987,7 +1989,7 @@ export function RestaurantMenusConsole({
               {editor.kind === 'window' ? (
                 <>
                   <Field label="Scope">
-                    <select name="menuItemId" defaultValue="" className={selectClass}>
+                    <StudioSelect name="menuItemId" defaultValue="" className={selectClass}>
                       <option value="">Whole publication</option>
                       {publicationItems.map((item) => (
                         <option key={item.id} value={item.id}>
@@ -1996,7 +1998,7 @@ export function RestaurantMenusConsole({
                             'Unknown item'}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </Field>
                   <Field label="Daypart label">
                     <Input name="label" maxLength={120} className="h-11" />
@@ -2059,7 +2061,7 @@ export function RestaurantMenusConsole({
               {editor.kind === 'override' ? (
                 <>
                   <Field label="Menu item">
-                    <select
+                    <StudioSelect
                       name="menuItemId"
                       required
                       value={editor.menuItemId}
@@ -2074,7 +2076,7 @@ export function RestaurantMenusConsole({
                             'Unknown item'}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                     {editor.item ? (
                       <input type="hidden" name="menuItemId" value={editor.menuItemId} />
                     ) : null}

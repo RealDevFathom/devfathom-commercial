@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -617,13 +618,13 @@ export default async function PharmacyInventoryPage({
         <form className="flex flex-wrap items-end gap-3" method="get">
           <label className="min-w-64 flex-1 text-sm text-text-body">
             Branch
-            <select className={inputClass} defaultValue={branch.id} name="branch">
+            <StudioSelect className={inputClass} defaultValue={branch.id} name="branch">
               {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name} · {item.city}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" variant="secondary">
             Open branch
@@ -825,7 +826,7 @@ export default async function PharmacyInventoryPage({
               </label>
               <label className="text-sm">
                 Storage type
-                <select className={inputClass} name="kind">
+                <StudioSelect className={inputClass} name="kind">
                   {['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS'].map(
                     (kind) => (
                       <option key={kind} value={kind}>
@@ -833,7 +834,7 @@ export default async function PharmacyInventoryPage({
                       </option>
                     )
                   )}
-                </select>
+                </StudioSelect>
               </label>
               <label className="flex min-h-11 items-center gap-2 self-end text-sm">
                 <input name="coldChain" type="checkbox" /> Validated cold-chain zone
@@ -863,14 +864,14 @@ export default async function PharmacyInventoryPage({
                 <input name="branchId" type="hidden" value={branch.id} />
                 <label className="text-sm">
                   Validated zone
-                  <select className={inputClass} name="stockLocationId">
+                  <StudioSelect className={inputClass} name="stockLocationId">
                     {coldChainLocations.map((location) => (
                       <option key={location.id} value={location.id}>
                         {location.name} · {location.minimumTemperatureC}–
                         {location.maximumTemperatureC} °C
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="text-sm">
                   Reading °C
@@ -928,7 +929,7 @@ export default async function PharmacyInventoryPage({
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
                 Lot and location
-                <select className={inputClass} name="position">
+                <StudioSelect className={inputClass} name="position">
                   {available.map(({ lot, balance }) => (
                     <option
                       key={`${lot.id}:${balance.stockLocationId}`}
@@ -938,7 +939,7 @@ export default async function PharmacyInventoryPage({
                       {balance.location.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Variance threshold
@@ -1149,7 +1150,7 @@ export default async function PharmacyInventoryPage({
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
               Lot
-              <select className={inputClass} name="position">
+              <StudioSelect className={inputClass} name="position">
                 {writeOffPositions.map(({ lot, balance }) => (
                   <option
                     key={`${lot.id}:${balance.stockLocationId}:${balance.disposition}`}
@@ -1159,7 +1160,7 @@ export default async function PharmacyInventoryPage({
                     {balance.location.name} · {label(balance.disposition)}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm">
               Units
@@ -1167,7 +1168,7 @@ export default async function PharmacyInventoryPage({
             </label>
             <label className="text-sm">
               Co-authorizing witness
-              <select className={inputClass} name="witnessId">
+              <StudioSelect className={inputClass} name="witnessId">
                 {writeOffWitnesses.soloSelfWitness ? (
                   <option value={viewerId}>You (solo witness)</option>
                 ) : (
@@ -1178,7 +1179,7 @@ export default async function PharmacyInventoryPage({
                     </option>
                   ))
                 )}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm">
               Witness PIN
@@ -1227,7 +1228,7 @@ export default async function PharmacyInventoryPage({
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
               Manually held stock
-              <select className={inputClass} name="position">
+              <StudioSelect className={inputClass} name="position">
                 {releasableQuarantined.map(({ lot, balance }) => (
                   <option
                     key={`${lot.id}:${balance.stockLocationId}`}
@@ -1237,7 +1238,7 @@ export default async function PharmacyInventoryPage({
                     {balance.location.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm">
               Units
@@ -1267,7 +1268,7 @@ export default async function PharmacyInventoryPage({
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
               Stock
-              <select className={inputClass} name="position">
+              <StudioSelect className={inputClass} name="position">
                 {available.map(({ lot, balance }) => (
                   <option
                     key={`${lot.id}:${balance.stockLocationId}`}
@@ -1277,17 +1278,17 @@ export default async function PharmacyInventoryPage({
                     {balance.location.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm">
               Destination branch and location
-              <select className={inputClass} name="destination">
+              <StudioSelect className={inputClass} name="destination">
                 {destinationLocations.map((l) => (
                   <option key={l.id} value={`${l.branchId}:${l.id}`}>
                     {branchNames.get(l.branchId)} · {l.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="text-sm">
               Units
@@ -1375,13 +1376,13 @@ export default async function PharmacyInventoryPage({
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
                 Manufacturing batch
-                <select className={inputClass} name="batchId">
+                <StudioSelect className={inputClass} name="batchId">
                   {lots.map((lot) => (
                     <option key={lot.batch.id} value={lot.batch.id}>
                       {lotProductLabel(lot)} · {batchPhrase(lot.batch.batchNumber, 'batch')}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="text-sm">
                 Recall reference

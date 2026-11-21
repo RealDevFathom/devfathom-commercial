@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 
@@ -287,7 +289,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
       htmlFor={pickerId}
     >
       <span>Branch</span>
-      <select
+      <StudioSelect
         id={pickerId}
         className={fieldClass}
         value={branch.pharmacyBranchId}
@@ -302,7 +304,7 @@ function Workspace({ access, branches }: { access: SopAccess; branches: SopBranc
             {row.sopBranchId ? '' : ' · not set up'}
           </option>
         ))}
-      </select>
+      </StudioSelect>
     </label>
   );
 

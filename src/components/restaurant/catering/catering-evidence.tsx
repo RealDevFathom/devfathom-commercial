@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useContext, useEffect, useRef, useState } from 'react';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { Button } from '@/components/ui/button';
@@ -327,7 +329,7 @@ export function CateringEvidence({
                 >
                   <label>
                     Original consumption
-                    <select className={control} name="movement" required defaultValue="">
+                    <StudioSelect className={control} name="movement" required defaultValue="">
                       <option value="" disabled>
                         Select consumption
                       </option>
@@ -343,15 +345,15 @@ export function CateringEvidence({
                             {source.canonicalUnit.name}
                           </option>
                         ))}
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label>
                     Disposition
-                    <select className={control} name="kind">
+                    <StudioSelect className={control} name="kind">
                       <option value="UNUSED_RETURN">Unused return</option>
                       <option value="WASTE">Waste</option>
                       <option value="NO_RETURN">No return</option>
-                    </select>
+                    </StudioSelect>
                   </label>
                   <label>
                     Canonical quantity
@@ -578,10 +580,10 @@ function CateringMoneyForm({
         {!refund ? (
           <label>
             Receipt kind
-            <select name="kind" className={control}>
+            <StudioSelect name="kind" className={control}>
               <option value="DEPOSIT">Deposit</option>
               <option value="BALANCE">Balance</option>
-            </select>
+            </StudioSelect>
           </label>
         ) : null}
         <label>
@@ -597,14 +599,14 @@ function CateringMoneyForm({
         </label>
         <label>
           Evidence type
-          <select
+          <StudioSelect
             className={control}
             value={source}
             onChange={(e) => setSource(e.target.value as typeof source)}
           >
             <option value="OPERATOR_ATTESTED">Operator-attested</option>
             <option value="CASH">Cash drawer</option>
-          </select>
+          </StudioSelect>
         </label>
         {source === 'CASH' ? (
           <label>

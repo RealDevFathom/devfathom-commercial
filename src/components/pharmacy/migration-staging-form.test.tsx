@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import '@testing-library/jest-dom/vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -42,7 +43,9 @@ async function upload() {
     value: async () => new TextEncoder().encode('Product,Pack,Qty\nExample,30,29').buffer,
   });
   fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
-  await screen.findByLabelText('Quantity column counts');
+  await screen.findByLabelText('Quantity column counts', {
+    selector: ':not([data-select-field-native][aria-hidden="true"])',
+  });
 }
 describe('staging column mapping', () => {
   it.each(['PACKS', 'UNITS'])(
@@ -50,12 +53,25 @@ describe('staging column mapping', () => {
     async (unit) => {
       render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
       await upload();
-      expect(screen.getByLabelText('Quantity column counts')).toHaveValue('');
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Quantity column counts', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('');
       expect(screen.getByRole('button', { name: 'Stage for review' })).toBeDisabled();
       expect(mocks.stage).not.toHaveBeenCalled();
-      fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-        target: { value: unit },
-      });
+      fireEvent.change(
+        selectFieldControl(
+          screen.getByLabelText('Quantity column counts', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        {
+          target: { value: unit },
+        }
+      );
       fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
       await waitFor(() =>
         expect(mocks.stage).toHaveBeenCalledWith(
@@ -86,9 +102,16 @@ describe('staging column mapping', () => {
     });
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
     await upload();
-    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-      target: { value: 'UNITS' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'UNITS' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
     expect(
       await screen.findByText(
@@ -110,9 +133,16 @@ describe('staging column mapping', () => {
     });
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
     await upload();
-    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-      target: { value: 'UNITS' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'UNITS' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
     expect(
       await screen.findByText(
@@ -136,24 +166,56 @@ describe('staging column mapping', () => {
   it('resets the quantity choice for a new file', async () => {
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
     await upload();
-    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-      target: { value: 'PACKS' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PACKS' },
+      }
+    );
     await upload();
-    expect(screen.getByLabelText('Quantity column counts')).toHaveValue('');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('');
     expect(screen.getByRole('button', { name: 'Stage for review' })).toBeDisabled();
   });
   it('preserves the mapping and choice after a server refusal', async () => {
     mocks.stage.mockResolvedValue({ error: 'Map each field to a distinct column in this file.' });
     render(<MigrationStagingForm branchId="branch_a" route="/pharmacy/medicines/staged" />);
     await upload();
-    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-      target: { value: 'PACKS' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PACKS' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('distinct column');
-    expect(screen.getByLabelText('Quantity column counts')).toHaveValue('PACKS');
-    expect(screen.getByLabelText('Quantity')).toHaveValue('2');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('PACKS');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Quantity', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('2');
     expect(mocks.push).not.toHaveBeenCalled();
   });
   it('accepts a catalogue-sized file and reports a replayed batch without a duplicate', async () => {
@@ -176,13 +238,22 @@ describe('staging column mapping', () => {
       value: async () => new TextEncoder().encode(text).buffer,
     });
     fireEvent.change(screen.getByLabelText('Source file'), { target: { files: [file] } });
-    await screen.findByLabelText('Quantity column counts');
+    await screen.findByLabelText('Quantity column counts', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     expect(mocks.read).toHaveBeenCalledWith(
       expect.objectContaining({ fileName: 'catalogue.csv', branchId: 'branch_a' })
     );
-    fireEvent.change(screen.getByLabelText('Quantity column counts'), {
-      target: { value: 'PACKS' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Quantity column counts', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PACKS' },
+      }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Stage for review' }));
     expect(
       await screen.findByText(/already staged with the same columns: 18,933 rows/)

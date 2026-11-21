@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
@@ -992,7 +994,7 @@ export function SopAdminView({
                     </label>
                     <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
                       <span className={labelClass}>Assign to</span>
-                      <select
+                      <StudioSelect
                         name="assigneeMode"
                         className={selectClass}
                         value={assigneeMode}
@@ -1001,7 +1003,7 @@ export function SopAdminView({
                       >
                         <option value="role">A job role (claimable pool)</option>
                         <option value="person">A named person (assigned directly)</option>
-                      </select>
+                      </StudioSelect>
                     </label>
                     <p
                       id="assignee-mode-help"
@@ -1015,13 +1017,13 @@ export function SopAdminView({
                       <label className="space-y-1.5 sm:col-span-2 xl:col-span-1 2xl:col-span-2">
                         <span className={labelClass}>Job role</span>
                         {jobRoles.length ? (
-                          <select name="assigneeJobRoleId" required className={selectClass}>
+                          <StudioSelect name="assigneeJobRoleId" required className={selectClass}>
                             {jobRoles.map((role) => (
                               <option key={role.id} value={role.id}>
                                 {role.name}
                               </option>
                             ))}
-                          </select>
+                          </StudioSelect>
                         ) : (
                           <p className="rounded-md border border-dashed border-border-subtle px-3 py-2 text-xs text-text-muted">
                             No active job roles yet. Create them in staff administration before
@@ -1043,7 +1045,7 @@ export function SopAdminView({
                     )}
                     <label className="space-y-1.5">
                       <span className={labelClass}>Frequency</span>
-                      <select
+                      <StudioSelect
                         name="frequency"
                         className={selectClass}
                         value={frequency}
@@ -1054,7 +1056,7 @@ export function SopAdminView({
                         <option value="WEEKLY">Weekly</option>
                         <option value="MONTHLY">Monthly</option>
                         <option value="INTERVAL">Every N minutes</option>
-                      </select>
+                      </StudioSelect>
                     </label>
                     <label className="space-y-1.5">
                       <span className={labelClass}>Every</span>
@@ -1076,7 +1078,7 @@ export function SopAdminView({
                     {frequency === 'INTERVAL' ? (
                       <label className="space-y-1.5">
                         <span className={labelClass}>Interval unit</span>
-                        <select
+                        <StudioSelect
                           name="intervalUnit"
                           className={selectClass}
                           value={intervalUnit}
@@ -1086,7 +1088,7 @@ export function SopAdminView({
                         >
                           <option value="minutes">Minutes</option>
                           <option value="hours">Hours</option>
-                        </select>
+                        </StudioSelect>
                       </label>
                     ) : null}
                     {frequency === 'WEEKLY' || frequency === 'INTERVAL' ? (

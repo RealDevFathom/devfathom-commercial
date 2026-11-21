@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, test, vi } from 'vitest';
 import { RestaurantCameraWizard } from './restaurant-camera-wizard';
@@ -23,9 +24,16 @@ const callbacks = {
 describe('RestaurantCameraWizard', () => {
   function fill() {
     fireEvent.change(screen.getByLabelText('Camera name'), { target: { value: 'Kitchen' } });
-    fireEvent.change(screen.getByLabelText('Camera gateway'), {
-      target: { value: 'gateway-internal' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Camera gateway', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'gateway-internal' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Host / stream source'), {
       target: { value: 'Kitchen channel' },
     });
@@ -75,12 +83,16 @@ describe('RestaurantCameraWizard', () => {
         onSubmit={onSubmit}
       />
     );
-    const watches = screen.getByLabelText('Watches');
+    const watches = screen.getByLabelText('Watches', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
     expect(
-      Array.from((watches as HTMLSelectElement).options).map((option) => option.textContent)
+      Array.from(selectFieldControl(watches as HTMLSelectElement).options).map(
+        (option) => option.textContent
+      )
     ).toEqual(['Not set', 'Kitchen', 'Counter']);
     fill();
-    fireEvent.change(watches, { target: { value: 'KITCHEN' } });
+    fireEvent.change(selectFieldControl(watches), { target: { value: 'KITCHEN' } });
     fireEvent.click(screen.getByRole('button', { name: 'Register camera' }));
     await waitFor(() =>
       expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ preset: 'KITCHEN' }))
@@ -135,17 +147,25 @@ describe('RestaurantCameraWizard', () => {
     expect(screen.getByText('Using another brand? Configure manually')).toBeVisible();
     expect(screen.getByLabelText('Camera name')).toBeVisible();
     expect(screen.getByLabelText('Password')).toBeVisible();
-    expect(screen.getByRole('option', { name: 'Main gateway — active' })).toHaveValue(
+    expect(screen.getByRole('option', { hidden: true, name: 'Main gateway — active' })).toHaveValue(
       'gateway-internal'
     );
   });
   test('enables the gateway choice when one branch arrives asynchronously', () => {
     const view = render(<RestaurantCameraWizard branches={[]} presets={[]} {...callbacks} />);
-    expect(screen.getByLabelText('Camera gateway')).toBeDisabled();
+    expect(
+      screen.getByLabelText('Camera gateway', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeDisabled();
 
     view.rerender(<RestaurantCameraWizard branches={branch} presets={[]} {...callbacks} />);
-    expect(screen.getByLabelText('Camera gateway')).toBeEnabled();
-    expect(screen.getByRole('option', { name: 'Main gateway — active' })).toHaveValue(
+    expect(
+      screen.getByLabelText('Camera gateway', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeEnabled();
+    expect(screen.getByRole('option', { hidden: true, name: 'Main gateway — active' })).toHaveValue(
       'gateway-internal'
     );
   });

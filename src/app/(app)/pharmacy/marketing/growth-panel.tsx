@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import Link from 'next/link';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -374,13 +375,13 @@ export function GrowthPanel({
                           <input type="hidden" name="recommendation" value={index} />
                           <label className="block text-sm">
                             Decision
-                            <select name="decision" className={control} defaultValue="EDIT">
+                            <StudioSelect name="decision" className={control} defaultValue="EDIT">
                               <option value="EDIT">Save edits for review</option>
                               <option value="APPROVE" disabled={!templates.length}>
                                 Approve insight and create draft
                               </option>
                               <option value="REJECT">Reject insight</option>
-                            </select>
+                            </StudioSelect>
                           </label>
                           <div className="grid gap-4 sm:grid-cols-2">
                             <label className="text-sm">
@@ -394,7 +395,7 @@ export function GrowthPanel({
                             </label>
                             <label className="text-sm">
                               Reviewed template
-                              <select
+                              <StudioSelect
                                 name="templateId"
                                 defaultValue={edit?.templateId ?? templates[0]?.id ?? ''}
                                 className={control}
@@ -405,7 +406,7 @@ export function GrowthPanel({
                                     {t.name}
                                   </option>
                                 ))}
-                              </select>
+                              </StudioSelect>
                             </label>
                             <label className="text-sm">
                               Send date and time ({zoneLabel})
