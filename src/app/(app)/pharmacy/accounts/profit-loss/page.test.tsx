@@ -94,6 +94,7 @@ it('returns the required net fixture through the authorized endpoint, independen
     'admin:access',
     'reports:operational',
     'reports:financial',
+    'finance:read',
   ]);
   expect(mocks.branch).toHaveBeenCalledWith({
     where: { organizationId: 'org_1', id: 'branch_1', active: true },
@@ -391,7 +392,9 @@ it('renders a labeled loading state', () => {
 });
 
 it('reads the picked days on the organization clock at the day boundary', async () => {
-  mocks.context.mockResolvedValue(context({ organization: { id: 'org_1', timezone: 'Asia/Karachi' } }));
+  mocks.context.mockResolvedValue(
+    context({ organization: { id: 'org_1', timezone: 'Asia/Karachi' } })
+  );
   const html = await renderPage();
   expect(html).toContain('From (PKT)');
   expect(html).toContain('To, exclusive (PKT)');
