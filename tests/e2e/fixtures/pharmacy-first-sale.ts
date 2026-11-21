@@ -1,5 +1,6 @@
 import { resolvePharmacyE2eDatabaseUrl } from '../../../scripts/pharmacy-e2e-environment';
 import { platformAuthentication } from './platform-control-plane';
+import { fixtureTotp } from './restaurant-platform-auth';
 /**
  * Fresh-tenant acceptance journey; business setup and the sale use rendered UI.
  * Staging uses operator-owned, real evidence in PHARMACY_FIRST_SALE_INPUT.
@@ -9,6 +10,7 @@ import { platformAuthentication } from './platform-control-plane';
  */
 import { randomInt, randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { setTimeout as waitForClock } from 'node:timers/promises';
 
 import AxeBuilder from '@axe-core/playwright';
 import {
@@ -323,7 +325,38 @@ export async function freshPharmacyFirstSale(
     await click(actor.getByRole('button', { name: 'Save PIN', exact: true }));
     await expect(actor.getByText('Your PIN is set.', { exact: false })).toBeVisible();
   };
-  const inviteAdministrator = async (name: string, email: string, title: string) => {
+  const enrollApprovalAuthenticator = async (actor: Page, password: string) => {
+    await expect(actor).toHaveURL(/\/approval-authenticator-setup(?:\?|$)/);
+    const start = actor.getByRole('form', { name: 'Start set-up' });
+    await start.getByLabel('Your current password', { exact: true }).fill(password);
+    await click(start.getByRole('button', { name: 'Continue', exact: true }));
+    const enroll = actor.getByRole('form', { name: 'Confirm your authenticator' });
+    const secret = (await enroll.locator('code').textContent())?.trim();
+    if (!secret) throw new Error('Approval authenticator did not provide a setup key.');
+
+    const period = 30_000;
+    let lastStep = -1;
+    const nextCode = async () => {
+      // Enrollment and every approval consume their code. Wait for the authenticator's
+      // rollover only when the current code has already been used by this actor.
+      const untilNextCode = (lastStep + 1) * period - Date.now();
+      if (untilNextCode > 0) await waitForClock(untilNextCode);
+      lastStep = Math.max(lastStep + 1, Math.floor(Date.now() / period));
+      return fixtureTotp(secret, lastStep * period);
+    };
+    await enroll.getByLabel('6-digit code from your app', { exact: true }).fill(await nextCode());
+    await click(enroll.getByRole('button', { name: 'Check code and turn on', exact: true }));
+    await click(actor.getByRole('checkbox', { name: 'I have saved my recovery codes' }));
+    await click(actor.getByRole('button', { name: 'Continue to the workspace', exact: true }));
+    await expect(actor).not.toHaveURL(/\/approval-authenticator-setup/);
+    return nextCode;
+  };
+  const inviteAdministrator = async (
+    name: string,
+    email: string,
+    title: string,
+    ownerApproval: () => Promise<string>
+  ) => {
     await page.goto(new URL('/team', tenantOrigin).href);
     await click(page.getByRole('button', { name: 'Add Member', exact: true }));
     await page.getByPlaceholder('Ali Raza', { exact: true }).fill(name);
@@ -333,7 +366,8 @@ export async function freshPharmacyFirstSale(
     // DEV-827: a pharmacy invite grants exactly the chosen role.
     await choose(page.getByLabel('Role', { exact: true }), 'Administrator');
     await expect(page.getByText('Access level: Admin.', { exact: false })).toBeVisible();
-    if (disposable) await page.getByLabel('Your PIN', { exact: true }).fill(ownerPin);
+    // Team still labels the field "Your PIN"; the verifier uses the workspace's approval mode.
+    if (disposable) await page.getByLabel('Your PIN', { exact: true }).fill(await ownerApproval());
     await click(page.getByRole('button', { name: 'Send Invite', exact: true }));
     const invitation = page
       .getByText('Invite link', { exact: true })
@@ -362,20 +396,26 @@ export async function freshPharmacyFirstSale(
       await expect(actor).not.toHaveURL(/\/login/);
     }
   };
-  const grantCatalogueReviewOnTeam = async () => {
+  const grantCatalogueReviewOnTeam = async (ownerApproval: () => Promise<string>) => {
     // Only another owner may change the original owner's access. Deactivate the
     // temporary owner afterward so the journey still exercises solo approval.
     const name = 'Temporary test owner';
     const email = `temporary-owner-${suffix}@${data.emailDomain}`;
     const password = `Wha1203!${randomUUID()}`;
     const pin = '625849';
-    const invitation = await inviteAdministrator(name, email, 'Temporary access administrator');
+    const invitation = await inviteAdministrator(
+      name,
+      email,
+      'Temporary access administrator',
+      ownerApproval
+    );
     const grantor = await browser.newPage();
     observe(grantor);
     let response: Response;
     try {
       await acceptInvitation(grantor, invitation, password);
       await signInAfterInvitation(grantor, email, password);
+      const grantorApproval = await enrollApprovalAuthenticator(grantor, password);
       await grantor.goto(new URL('/pharmacy/settings/pin', tenantOrigin).href);
       await savePin(grantor, password, pin);
       await grantor.goto(new URL('/team', tenantOrigin).href);
@@ -388,7 +428,7 @@ export async function freshPharmacyFirstSale(
       const tick = grantor.getByRole('checkbox', { name: new RegExp(`^${reviewLabel}`) });
       await click(tick);
       const confirmation = grantor.getByRole('form', { name: `Give ${reviewLabel}?` });
-      await confirmation.getByLabel('Your PIN', { exact: true }).fill(pin);
+      await confirmation.getByLabel('Your PIN', { exact: true }).fill(await grantorApproval());
       const updated = grantor.waitForResponse(
         (result) =>
           new URL(result.url()).pathname === '/api/trpc/organizationAdmin.setMemberSubRole' &&
@@ -410,7 +450,7 @@ export async function freshPharmacyFirstSale(
       has: page.getByRole('button', { name: 'Update access', exact: true }),
     });
     await access.locator('select[name="status"]').selectOption('INACTIVE');
-    await fill(access, { pin: ownerPin });
+    await fill(access, { pin: await ownerApproval() });
     await click(access.getByRole('button', { name: 'Update access', exact: true }));
     await expect(member.locator('summary').getByText('INACTIVE', { exact: true })).toBeVisible();
     return response;
@@ -506,15 +546,17 @@ export async function freshPharmacyFirstSale(
     await page.goto(new URL('/login', tenantOrigin).href);
     await signInOwner(rotatedOwnerPassword);
     await expect(page).not.toHaveURL(/\/login/);
+    const ownerApproval = disposable
+      ? await enrollApprovalAuthenticator(page, rotatedOwnerPassword)
+      : async () => ownerPin;
     await setup(page);
     await expect(row(page, 'Commercial package').getByText('Done', { exact: true })).toBeVisible();
     await expect(
       row(page, 'Owner and role templates').getByText('Done', { exact: true })
     ).toBeVisible();
 
-    // DEV-931: onboarding asks the new owner to create his own PIN before the first step
-    // that needs it (confirming his own medicine import). He creates it on "Your PIN" with
-    // his account password, as a real owner would.
+    // DEV-931: the owner creates his PIN credential from "Your PIN" with his account
+    // password. The approval verifier tracks lockout on this credential in both modes.
     const pinPrompt = page
       .locator('[data-slot="section-card"]')
       .filter({ has: page.getByRole('heading', { name: 'Create your PIN', exact: true }) });
@@ -523,7 +565,7 @@ export async function freshPharmacyFirstSale(
     await noRawIdEntry(page);
     await savePin(page, rotatedOwnerPassword, ownerPin);
     // Wildcard ownership deliberately cannot confirm regulated reference changes.
-    const ownerUpdated = stagingGrant ?? (await grantCatalogueReviewOnTeam());
+    const ownerUpdated = stagingGrant ?? (await grantCatalogueReviewOnTeam(ownerApproval));
     expect(ownerUpdated.status()).toBe(200);
     await setup(page);
     await expect(page.getByRole('heading', { name: 'Create your PIN', exact: true })).toHaveCount(
@@ -634,10 +676,15 @@ export async function freshPharmacyFirstSale(
         }
       }
     }
-    // The solo owner approves his own import with the PIN he created above.
+    // The solo owner reauthenticates to approve his own import.
     await page
-      .getByLabel('Solo owner PIN for reference self-approval', { exact: true })
-      .fill(ownerPin);
+      .getByLabel(
+        disposable
+          ? 'Your approval code for reference self-approval'
+          : 'Solo owner PIN for reference self-approval',
+        { exact: true }
+      )
+      .fill(await ownerApproval());
     const confirmation = proposal.getByRole('button', {
       name: 'Confirm reference proposal',
       exact: true,
@@ -714,7 +761,8 @@ export async function freshPharmacyFirstSale(
     const invitation = await inviteAdministrator(
       'Test second approver',
       colleagueEmail,
-      'Purchasing reviewer'
+      'Purchasing reviewer',
+      ownerApproval
     );
     await acceptInvitation(colleague, invitation, colleaguePassword);
     // A system administrator still needs an explicit procurement grant.
@@ -735,6 +783,7 @@ export async function freshPharmacyFirstSale(
     await click(colleagueGrant.getByRole('button', { name: 'Set override', exact: true }));
     expect((await colleagueUpdated).status()).toBe(200);
     await signInAfterInvitation(colleague, colleagueEmail, colleaguePassword);
+    if (disposable) await enrollApprovalAuthenticator(colleague, colleaguePassword);
     await setup(colleague);
     await click(page.getByRole('button', { name: 'Done', exact: true }));
     await setup(page);
