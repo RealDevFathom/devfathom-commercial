@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { hasModule } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
-import { adminProcedure, router } from '@/server/trpc';
+import { adminProcedure, router, type TRPCContext } from '@/server/trpc';
 
 /**
  * CAM-3 camera privacy settings, one contract for both verticals. Pharmacy
@@ -148,11 +148,10 @@ export async function revokeCameraStreamGrant(
 const vertical = z.enum(['pharmacy', 'restaurant']);
 
 function organizationFor(
-  ctx: {
-    entitlements: Parameters<typeof hasModule>[0] & { organizationId?: string | null };
-  },
+  ctx: Pick<TRPCContext, 'support' | 'entitlements'>,
   input: { vertical: CameraPrivacyVertical }
 ): string {
+  if (input.vertical === 'restaurant' && ctx.support) throw new TRPCError({ code: 'FORBIDDEN' });
   if (!hasModule(ctx.entitlements, MODULE[input.vertical])) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Camera settings are not enabled.' });
   }
