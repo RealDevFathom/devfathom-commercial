@@ -66,6 +66,8 @@ export type CounterReceiptViewProps = {
   /** Marker returned by the server for the most recently allocated browser copy. */
   reprint: boolean;
   printing?: boolean;
+  printPending?: boolean;
+  printError?: string;
   evidence?: readonly CounterEvidenceView[] | null;
   /** The owner-only evidence read failed; cached stills are already withheld. */
   evidenceError?: boolean;
@@ -243,6 +245,8 @@ export function CounterReceiptView({
   format,
   reprint,
   printing = false,
+  printPending = false,
+  printError,
   evidence,
   evidenceError = false,
   evidenceRefreshing = false,
@@ -436,11 +440,22 @@ export function CounterReceiptView({
           type="button"
           className="h-11"
           disabled={
-            printing || document === null || receipt.receiptNumber === null || !receipt.completedAt
+            printing ||
+            printPending ||
+            document === null ||
+            receipt.receiptNumber === null ||
+            !receipt.completedAt
           }
+          aria-busy={printPending || undefined}
           onClick={() => void onPrint()}
         >
-          {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
+          {printPending
+            ? 'Printing receipt…'
+            : printing
+              ? 'Loading receipt…'
+              : reprint
+                ? 'Reprint receipt'
+                : 'Print receipt'}
         </Button>
         {receipt.receiptNumber === null ? (
           <StatusPill
@@ -454,6 +469,12 @@ export function CounterReceiptView({
           <StatusPill status="settled" tone="success" label={`#${receipt.receiptNumber}`} />
         )}
       </div>
+
+      {printError ? (
+        <p role="alert" className="text-sm text-destructive">
+          {printError}
+        </p>
+      ) : null}
 
       {branchId && settled ? (
         <CounterThermalPrint

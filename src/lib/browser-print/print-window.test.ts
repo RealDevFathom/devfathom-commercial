@@ -61,6 +61,37 @@ describe('DEV-973 isolated print window', () => {
     windows.closeAll();
   });
 
+  it('reports a Chromium popup block immediately when window.open leaves activation intact', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 Chrome/156.0.0.0',
+      userActivation: { isActive: true },
+    });
+    const windows = installFakePrintWindows({ blocked: true });
+    windows.open.mockReturnValueOnce(null);
+    const count = getOpenPrintWindowCount();
+    const failed = vi.fn();
+    void printInWindow(html, { features: 'popup', ...messages }).catch(failed);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failed).toHaveBeenCalledExactlyOnceWith(new Error('Allow pop-ups'));
+    expect(getOpenPrintWindowCount()).toBe(count);
+  });
+
+  it('waits for a slow WebKit popup when activation stays active on success', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 Version/26.1 Safari/605.1.15',
+      userActivation: { isActive: true },
+    });
+    const windows = installFakePrintWindows({ ready: false });
+    const printing = printInWindow(html, { features: 'popup', ...messages });
+    await vi.advanceTimersByTimeAsync(8_000);
+    windows.last().ready();
+    await printing;
+    expect(windows.last().printRequests()).toBe(1);
+    windows.closeAll();
+  });
+
   it('reports a blocked pop-up once its print page fails to announce itself', async () => {
     vi.useFakeTimers();
     installFakePrintWindows({ blocked: true });

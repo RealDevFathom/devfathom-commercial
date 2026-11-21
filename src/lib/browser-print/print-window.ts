@@ -15,9 +15,9 @@
  * only, held in memory, never in a URL query, storage or a server request), and
  * the print page prints itself and handles dismissal.
  *
- * With `noopener`, `window.open` returns null whether or not the browser blocked
- * the window, so "blocked" means the print page never announced itself within
- * `PRINT_WINDOW_READY_TIMEOUT_MS`. The print page lives inside the counter
+ * With `noopener`, `window.open` returns null even for an open window. Chromium
+ * consumes transient activation on creation. Without a reliable activation
+ * signal, wait for the page to announce itself. The page lives inside the counter
  * service worker's scope, which keeps a copy for offline printing.
  * Returning never confirms that paper came out.
  */
@@ -53,6 +53,8 @@ type Entry = {
   sent: boolean;
   readiness: Promise<void>;
   settle: (error?: PrintWindowError) => void;
+  closed: Promise<void>;
+  resolveClosed: () => void;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -80,6 +82,7 @@ function dispose(id: string): void {
   entries.delete(id);
   if (entry.timer) clearTimeout(entry.timer);
   entry.settle(new PrintWindowError('closed'));
+  entry.resolveClosed();
   try {
     entry.channel.close();
   } catch {
@@ -95,6 +98,7 @@ function abandon(id: string, reason: 'blocked' | 'closed'): void {
   entry.open = false;
   entry.failure = new PrintWindowError(reason);
   entry.settle(entry.failure);
+  entry.resolveClosed();
   if (entry.ready) {
     post(entry, { type: 'close' });
     dispose(id);
@@ -120,6 +124,7 @@ function onMessage(id: string, data: unknown): void {
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = null;
     entry.settle();
+    emit();
   } else if (type === 'closed') {
     dispose(id);
   }
@@ -150,6 +155,10 @@ export function openPrintWindow(features: string): PrintWindow {
   });
   // Nobody may be waiting yet; a failure is still reported to whoever asks.
   readiness.catch(() => {});
+  let resolveClosed!: Entry['resolveClosed'];
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   const entry: Entry = {
     channel,
     open: true,
@@ -158,6 +167,8 @@ export function openPrintWindow(features: string): PrintWindow {
     sent: false,
     readiness,
     settle,
+    closed,
+    resolveClosed,
     timer: null,
   };
   // Listen before opening: the print page announces itself as soon as it loads.
@@ -171,7 +182,13 @@ export function openPrintWindow(features: string): PrintWindow {
   try {
     // noopener: its own browsing-context group, so its print dialog cannot
     // pause this page; and no reference back into this page.
-    window.open(`${PRINT_WINDOW_PATH}#${id}`, '_blank', `noopener,${features}`);
+    // WebKit can open a popup without consuming activation, so only use this
+    // signal on Chromium and only when the operator's activation was present.
+    const activated =
+      /\bChrom(?:e|ium)\//.test(navigator.userAgent) && navigator.userActivation?.isActive;
+    const popup = window.open(`${PRINT_WINDOW_PATH}#${id}`, '_blank', `noopener,${features}`);
+    if (popup === null && activated && navigator.userActivation?.isActive && !entry.ready)
+      abandon(id, 'blocked');
   } catch {
     abandon(id, 'blocked');
   }
@@ -185,6 +202,11 @@ export function printWindowReady(handle: PrintWindow): Promise<void> {
     return Promise.reject(entry?.failure ?? new PrintWindowError('closed'));
   }
   return entry.readiness;
+}
+
+/** Resolves when the window closes or can no longer be used. */
+export function printWindowClosed(handle: PrintWindow): Promise<void> {
+  return entries.get(handle.id)?.closed ?? Promise.resolve();
 }
 
 /** True until the operator closes the window, it is cancelled, or it never loaded. */
@@ -252,12 +274,18 @@ export function closePrintWindow(handle: PrintWindow): void {
 
 /** Asks every open print window to come to the front. */
 export function focusPrintWindows(): void {
-  for (const entry of entries.values()) if (entry.open) post(entry, { type: 'focus' });
+  for (const entry of entries.values())
+    if (entry.open && entry.ready) post(entry, { type: 'focus' });
 }
 
 /** For `useSyncExternalStore`: how many print windows are open right now. */
 export function getOpenPrintWindowCount(): number {
   return openCount;
+}
+
+/** Only windows that announced themselves can show a finish-or-cancel notice. */
+export function getConfirmedPrintWindowCount(): number {
+  return Array.from(entries.values()).filter((entry) => entry.open && entry.ready).length;
 }
 
 export function subscribePrintWindows(listener: () => void): () => void {

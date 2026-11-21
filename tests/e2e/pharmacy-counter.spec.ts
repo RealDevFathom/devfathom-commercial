@@ -1683,7 +1683,7 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
 
   await page.keyboard.press('Alt+r');
   await expect(receiptSheet).toBeVisible();
-  const blocked = page.getByText('Allow pop-ups for this site, then retry Print receipt.', {
+  const blocked = receiptSheet.getByText('Allow pop-ups for this site, then retry Print receipt.', {
     exact: true,
   });
   // Simulate a browser blocking the first reprint attempt. No
@@ -1698,7 +1698,8 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
     };
   });
   await pressControl(print);
-  await expect(blocked).toBeVisible({ timeout: 15_000 });
+  await expect(blocked).toBeVisible({ timeout: 2_000 });
+  await expect(print).toBeEnabled();
   await expect(notice).toHaveCount(0);
   expect(page.context().pages()).toEqual([page]);
 
@@ -1710,11 +1711,18 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
 
   const reprintPromise = page.waitForEvent('popup');
   await pressControl(print);
+  const busyPrint = receiptSheet.getByRole('button', { name: 'Printing receipt…' });
+  await expect(busyPrint).toBeVisible();
+  await expect(busyPrint).toHaveAttribute('aria-busy', 'true');
+  await expect(busyPrint).toBeDisabled();
+  await expect(notice).toHaveCount(0);
+  await page.keyboard.press('F10');
   const reprint = await reprintPromise;
   await page.context().unroute(slowPrintPage);
   await expect(blocked).toBeHidden();
   await expect(notice).toBeVisible();
   await expect(reprint.locator('html')).toHaveAttribute('data-print-requests', '1');
+  expect(page.context().pages()).toHaveLength(2);
   await expect(reprint.locator('body')).toContainText(receiptNumber);
   await expect(reprint.locator('body')).toContainText('Reprint — not a new sale');
   const close = reprint.getByRole('button', { name: 'Close', exact: true });
@@ -1988,6 +1996,17 @@ test('Counter v2 — Enter on a controlled medicine opens the authorisation it a
   await qaShots(page, 'status-strip-375', { focus: strip, widths: [375], dir: QA3_DIR });
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(strip).not.toHaveAttribute('tabindex');
+  await expect
+    .poll(() =>
+      strip.evaluate((element) => {
+        const edge = element.getBoundingClientRect().right;
+        const lastPillEdge = Math.max(
+          ...Array.from(element.children, (child) => child.getBoundingClientRect().right)
+        );
+        return edge - lastPillEdge;
+      })
+    )
+    .toBeGreaterThanOrEqual(8);
 });
 
 test('Counter v2 — controlled medicine: patient, prescription or emergency supply, approving pharmacist; then the line is locked', async ({
