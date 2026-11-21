@@ -325,7 +325,7 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       }
     );
 
-    it('protects role-wide edits even without holders and keeps personal refusals and role edits tenant-scoped', async () => {
+    it('refuses role-wide edits from another tenant, a non-owner or an owner changing their own access', async () => {
       const owner = callers.admin('ownerb');
       const args = { roleId: `${orgB}_role_inventory`, subRoleKey: 'receive-stock', ticked: true };
       await expect(owner.setRoleSubRole(args)).rejects.toMatchObject({
@@ -348,6 +348,11 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       await expect(
         owner.setRoleSubRole({ ...args, subRoleKey: '*', pin: PIN })
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    });
+
+    it('requires fresh approval on an empty role and audits an idempotent role-wide edit once', async () => {
+      const owner = callers.admin('ownerb');
+      const args = { roleId: `${orgB}_role_inventory`, subRoleKey: 'receive-stock', ticked: true };
       await expect(owner.setRoleSubRole({ ...args, pin: '0000' })).rejects.toMatchObject({
         code: 'FORBIDDEN',
       });
@@ -364,12 +369,16 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
           [args.roleId]
         )
       ).toEqual([{ actorId: id('ownerb') }]);
+    });
+
+    it('keeps personal refusals when the same sub-role is granted role-wide', async () => {
+      const owner = callers.admin('ownerb');
       await rows(
         `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:inventory','DENY','fixture',now())`,
         [id('personal_refusal'), orgB, id('cashierb2')]
       );
       await owner.setRoleSubRole({
-        ...args,
+        ticked: true,
         roleId: cashierRoleB,
         subRoleKey: 'manage-stock',
         pin: PIN,
