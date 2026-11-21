@@ -1,6 +1,7 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PHARMACY_SUB_ROLES, pharmacySubRoleGroups } from '@/lib/abac/pharmacy-sub-roles';
+import { selectFieldControl } from '@/lib/testing/select-field';
 
 const state = vi.hoisted(() => ({
   query: vi.fn(),
@@ -372,9 +373,14 @@ describe('DEV-959B: ticking for one person', () => {
     state.applyRole.mockResolvedValue({ changed: [] });
     render(<MemberAccessPanel userId="u_1" />);
     const form = screen.getByRole('form', { name: 'Start from a ready-made role' });
-    fireEvent.change(within(form).getByLabelText('Start from a ready-made role'), {
-      target: { value: 'pharmacist' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByRole('combobox', { name: 'Start from a ready-made role' })
+      ),
+      {
+        target: { value: 'pharmacist' },
+      }
+    );
     // Before confirming, the role's weighty sub-roles are listed with their one-line texts.
     expect(within(form).getByText(/gives these sub-roles that carry extra weight/)).toBeVisible();
     expect(
@@ -392,6 +398,77 @@ describe('DEV-959B: ticking for one person', () => {
         roleKey: 'pharmacist',
         pin: '2468',
       })
+    );
+  });
+
+  it('preserves keyboard role selection, PIN validation, refused values and successful native reset', async () => {
+    editable(cashier);
+    state.applyRole
+      .mockRejectedValueOnce(new Error('That PIN is not right.'))
+      .mockResolvedValueOnce({ changed: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    const form = screen.getByRole('form', {
+      name: 'Start from a ready-made role',
+    }) as HTMLFormElement;
+    const role = within(form).getByRole('combobox', { name: 'Start from a ready-made role' });
+    const native = selectFieldControl(role);
+    const pin = within(form).getByLabelText('Your PIN');
+    expect(role).toHaveTextContent('Cashier');
+    expect(native).toHaveValue('cashier');
+    // The upstream selector has no name: roleKey comes from controlled state,
+    // while only the PIN is a successful form control.
+    expect(Array.from(new FormData(form))).toEqual([['pin', '']]);
+    expect(pin).not.toBeRequired();
+    act(() => role.focus());
+    fireEvent.keyDown(role, { key: 'ArrowDown' });
+    const listbox = await screen.findByRole('listbox');
+    const option = within(listbox).getByRole('option', { name: 'Pharmacist', exact: true });
+    await waitFor(() => expect(listbox).toContainElement(document.activeElement as HTMLElement));
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    const position = within(listbox).getAllByRole('option').indexOf(option);
+    for (let index = 0; index < position; index++)
+      fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    await waitFor(() => expect(option).toHaveFocus());
+    fireEvent.keyDown(option, { key: 'Enter' });
+    // jsdom needs the keyboard activation default action supplied explicitly.
+    // Actual browser Enter is verified separately without this click fallback.
+    fireEvent.click(option, { detail: 0 });
+    expect(role).toHaveTextContent('Pharmacist');
+    expect(native).toHaveValue('pharmacist');
+    expect(pin).toBeRequired();
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    expect(state.applyRole).not.toHaveBeenCalled();
+    fireEvent.change(pin, { target: { value: '2468' } });
+    expect(Array.from(new FormData(form))).toEqual([['pin', '2468']]);
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That PIN is not right.');
+    expect(native).toHaveValue('pharmacist');
+    expect(pin).toHaveValue('2468');
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    await waitFor(() =>
+      expect(state.applyRole).toHaveBeenLastCalledWith({
+        userId: 'u_1',
+        roleKey: 'pharmacist',
+        pin: '2468',
+      })
+    );
+    await waitFor(() => {
+      expect(pin).toHaveValue('');
+      // Clearing the prior error renders the controlled selection again.
+      expect(native).toHaveValue('pharmacist');
+      expect(role).toHaveTextContent('Pharmacist');
+    });
+    expect(Array.from(new FormData(form))).toEqual([['pin', '']]);
+  });
+
+  it('omits an empty PIN when applying a ready-made role without weighty sub-roles', async () => {
+    editable(cashier);
+    state.applyRole.mockResolvedValue({ changed: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    const form = screen.getByRole('form', { name: 'Start from a ready-made role' });
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    await waitFor(() =>
+      expect(state.applyRole).toHaveBeenCalledWith({ userId: 'u_1', roleKey: 'cashier' })
     );
   });
 
