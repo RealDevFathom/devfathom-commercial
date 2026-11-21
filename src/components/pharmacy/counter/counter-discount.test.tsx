@@ -1,6 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
+import { ApprovalSecretKindContext } from './counter-approval-copy';
 import { CounterDiscountEntry } from './counter-discount';
 
 vi.mock('@/lib/trpc', () => ({
@@ -183,7 +184,44 @@ describe('DEV-977 phase 3: the supervisor block in the discount sheet (A4)', () 
   it('says when nobody can approve at this till', async () => {
     open({ approvers: { status: 'ready', list: [] } });
     expect(
-      await screen.findByText(/No manager or owner with an active staff PIN can approve here/)
+      await screen.findByText(/No manager or owner can approve a discount at this till yet/)
     ).toBeInTheDocument();
+  });
+});
+
+describe('DEV-961 with DEV-977 phase 3: the sheet follows the approvals setting', () => {
+  it.each([
+    [
+      'CODE',
+      'They choose their name and enter the current 6-digit code from their authenticator app on this till (a staff member with no login enters their PIN) when you apply it to the bill.',
+      'a manager or owner approves with their approval code when you apply it.',
+    ],
+    [
+      'PIN',
+      'They choose their name and enter their own staff PIN on this till when you apply it to the bill.',
+      'a manager or owner approves with their PIN when you apply it.',
+    ],
+  ] as const)('words the supervisor block and the whole-bill note for %s', (mode, how, note) => {
+    render(
+      <ApprovalSecretKindContext.Provider value={mode}>
+        <CounterDiscountEntry
+          branchId="branch-a"
+          held={null}
+          disabled={false}
+          onHold={vi.fn()}
+          onClear={vi.fn()}
+          approvers={{ status: 'ready', list: [] }}
+          wholeBill={{ disabled: false, apply: vi.fn() }}
+        />
+      </ApprovalSecretKindContext.Provider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Whole bill' }));
+    const sheet = screen.getByRole('dialog', { name: 'Discount on the whole bill' });
+    expect(within(sheet).getByRole('region', { name: 'Supervisor approval' })).toHaveTextContent(
+      how
+    );
+    expect(sheet).toHaveTextContent(note);
+    if (mode === 'CODE') expect(sheet).not.toHaveTextContent(/with their PIN when/);
   });
 });

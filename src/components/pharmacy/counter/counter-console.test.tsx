@@ -246,6 +246,8 @@ vi.mock('@/lib/trpc', async () => {
       pharmacyAccess: router(['navigation']),
       // DEV-950: prescription lines waiting for a signature at payment.
       pharmacyDispensing: router(['counterSignStatus', 'selfSignReview']),
+      // DEV-961: the owner's authenticator setting, for the wording of approval fields.
+      approvalAuthenticator: router(['mode']),
     },
   };
 });
@@ -573,6 +575,9 @@ beforeEach(() => {
     'counterSignStatus',
   ])
     mocks.queries[name] = query();
+  // DEV-961: these approvals are written for permanent PINs (the owner turned the
+  // authenticator off); a test about the default says so.
+  mocks.queries.mode = query({ required: false });
   // DEV-929: no maximum discount is set unless a test says otherwise.
   mocks.queries.discountMaximum = query({ maxDiscountBps: 10_000, canChange: false });
   // DEV-956: the whole-bill discount is off unless a test switches it on.
@@ -2239,6 +2244,24 @@ it.each([404, 200])(
     );
   }
 );
+
+it('DEV-961: asks for an approval code while the authenticator setting is on (the default)', async () => {
+  mocks.queries.mode = query({ required: true });
+  mocks.khataAccounts.mockResolvedValue([
+    { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
+  ]);
+  mocks.khataApprovers.mockResolvedValue([
+    { id: 'staff-manager', name: 'Manager Sana', self: false },
+  ]);
+  renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+  chooseTender('KHATA');
+  await screen.findByText(/Ledger balance/);
+  fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
+  await screen.findByRole('option', { name: 'Manager Sana' });
+  const field = screen.getByLabelText('Approval code');
+  expect(field).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
+  expect(screen.queryByLabelText('Approver PIN')).not.toBeInTheDocument();
+});
 
 it('DEV-290: sends a manager PIN approval with the tender but never stores it', async () => {
   mocks.khataAccounts.mockResolvedValue([
@@ -4457,6 +4480,108 @@ describe('PharmacyCounterConsole barcode safety', () => {
         })
       );
     });
+
+    // DEV-977 phase 3 review: the typed PIN or code never outlives the sheet.
+    it('clears the typed PIN when the sheet closes, by Escape or Close, and on a new scan', async () => {
+      const row = controlledPack();
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const name = `Authorise ${row.displayName}`;
+      // The line form route: the medicine stays staged, so the fields stay on screen.
+      act(stageControlledMedicine);
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      let sheet = await screen.findByRole('dialog', { name });
+      fillAuthorization();
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('1234');
+      fireEvent.keyDown(sheet, { key: 'Escape' });
+      await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      sheet = await screen.findByRole('dialog', { name });
+      act(() => mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '4321'));
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
+      // A scanned pack opens the sheet afresh with no PIN in it.
+      scan(payload);
+      await screen.findByRole('dialog', { name });
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    // DEV-977 phase 3 review: without Pharmacy Safety, "only a pharmacist" would be untrue.
+    it('says the counter cannot take the authorisation when Pharmacy Safety is not switched on', async () => {
+      const row = controlledPack();
+      mocks.entitlements.enabledModules = mocks.entitlements.enabledModules.filter(
+        (module: string) => module !== 'pharmacy-safety'
+      );
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      const notice = await screen.findByText(/This counter cannot take that authorisation/);
+      expect(notice).toHaveTextContent(
+        'it needs Pharmacy Safety, which is not switched on for this business. Ask the owner.'
+      );
+      expect(screen.queryByText(/Only a pharmacist can authorise it/)).toBeNull();
+      const sheet = screen.getByRole('dialog', { name: `Authorise ${row.displayName}` });
+      expect(
+        within(sheet).getByRole('heading', {
+          name: 'This line cannot be authorised at this counter',
+        })
+      ).toBeInTheDocument();
+      expect(sheet).toHaveTextContent('needs Pharmacy Safety, which is not switched on');
+      expect(within(sheet).queryByText(/A pharmacist must authorise this line/)).toBeNull();
+      expect(within(sheet).queryByRole('button', { name: 'Authorise line' })).toBeNull();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    // DEV-961 with DEV-977 phase 3: the sheet and its notice follow the approvals setting.
+    it.each([
+      ['CODE', true, 'the pharmacist’s approval code'],
+      ['PIN', false, "the pharmacist's PIN"],
+    ] as const)(
+      'words the Authorise sheet and its notice for the %s setting',
+      async (_mode, required, secret) => {
+        const row = controlledPack();
+        mocks.queries.mode = query({ required });
+        render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+        scan(payload);
+        const notice = await screen.findByText(/complete the authorization panel/);
+        expect(notice).toHaveTextContent(
+          required
+            ? 'Controlled medicine needs the patient address, the pharmacist’s approval code, and a prescription or an emergency prescriber.'
+            : 'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber.'
+        );
+        const sheet = screen.getByRole('dialog', { name: `Authorise ${row.displayName}` });
+        expect(sheet).toHaveTextContent(new RegExp(`Still needed: .*${secret}\\.`));
+        fillAuthorization();
+        expect(sheet).toHaveTextContent(
+          `Ready. ${required ? 'The pharmacist’s approval code' : "The pharmacist's PIN"} is checked when the line is added.`
+        );
+        if (required) expect(sheet).not.toHaveTextContent(/PIN is checked/);
+      }
+    );
+
+    it.each([
+      ['CODE', true, 'an independent pharmacist’s approval code'],
+      ['PIN', false, "an independent pharmacist's PIN"],
+    ] as const)(
+      'words the pharmacist-only card for the %s setting',
+      async (_mode, required, secret) => {
+        const row = controlledPack();
+        mocks.queries.mode = query({ required });
+        Object.assign(mocks.queries.controlledPharmacists!, {
+          isSuccess: false,
+          isError: true,
+          error: Object.assign(new Error('Forbidden'), { data: { code: 'FORBIDDEN' } }),
+        });
+        render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+        scan(payload);
+        const sheet = await screen.findByRole('dialog', { name: `Authorise ${row.displayName}` });
+        expect(
+          within(sheet).getByRole('heading', { name: 'A pharmacist must authorise this line' })
+        ).toBeInTheDocument();
+        expect(sheet).toHaveTextContent(secret);
+      }
+    );
 
     it('lets the waiting pack go, and says so, when the sheet is closed without adding it', async () => {
       const row = controlledPack();

@@ -110,7 +110,8 @@ async function newLink() {
       try {
         await owner.query("SELECT set_config('app.is_platform_admin','true',false)");
         await owner.query(
-          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',now(),now())`,
+          // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt", "requireApprovalAuthenticator") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',now(),now(), false)`,
           [org]
         );
       } finally {

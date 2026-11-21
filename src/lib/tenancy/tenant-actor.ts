@@ -8,11 +8,13 @@ import {
 import { cache } from 'react';
 import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
 import { headers } from 'next/headers';
+import { getServerActionRequestMetadata } from 'next/dist/server/lib/server-action-request-meta';
 import type { Session } from 'next-auth';
 import {
   isSharedHost,
   isTenantLifecycleAccessible,
   requestHost,
+  REQUEST_METHOD_HEADER,
   requireOrganizationForRequest,
   resolveOrganizationById,
   resolveOrganizationByHost,
@@ -25,7 +27,9 @@ import { getSupportSession, type SupportIdentity } from '@/lib/tenancy/support-s
 import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
 import { demoPersonaForUser } from '@/lib/demo/personas';
 import {
+  ApprovalAuthenticatorSetupRequiredError,
   evaluateSessionUser,
+  isApprovalAuthenticatorSetupApiExempt,
   isPasswordChangeApiExempt,
   isSessionUsable,
   liveDemoAccessExpiry,
@@ -51,6 +55,34 @@ type ResolveTenantActorOptions = {
 async function requestSession(): Promise<Session | null> {
   const { auth } = await import('@/lib/auth');
   return auth();
+}
+
+/**
+ * DEV-961: whether the current request, which carries no `Request` (a server component or a
+ * server action), is anything but a page render. A page renders only for GET or HEAD. Every
+ * other method is refused, and so is anything Next itself would run as a server action, decided
+ * by Next's own function (`next/dist/server/lib/server-action-request-meta.js`, lines 24-48 in
+ * Next 16.4.6): a POST with a `Next-Action` header (a fetch action), or a POST whose body is
+ * `application/x-www-form-urlencoded` or `multipart/form-data` (a plain form submission, which
+ * Next decodes as an action from its `$ACTION_ID_` field with no header at all,
+ * `app-render/action-handler.js` lines 689-733). The method comes from the proxy, which
+ * always overwrites `REQUEST_METHOD_HEADER`; where it is missing the request is checked as a
+ * POST, so a form body or an action header is still refused. Outside a request (a job, a
+ * script) there is nothing to refuse.
+ */
+async function isNonPageRequest(): Promise<boolean> {
+  let requestHeaders: Headers;
+  try {
+    requestHeaders = new Headers(await headers());
+  } catch {
+    return false;
+  }
+  const method = (requestHeaders.get(REQUEST_METHOD_HEADER) ?? '').toUpperCase();
+  if (method && method !== 'GET' && method !== 'HEAD') return true;
+  return getServerActionRequestMetadata({
+    headers: requestHeaders,
+    method: method || 'POST',
+  } as Parameters<typeof getServerActionRequestMetadata>[0]).isPossibleServerAction;
 }
 
 async function currentRequestHost(): Promise<string | null> {
@@ -194,6 +226,21 @@ async function resolveTenantActorUncached(
       !isPasswordChangeApiExempt(options.request)
     ) {
       throw new PasswordChangeRequiredError();
+    }
+    // DEV-961: until a member who can approve sets up their approval authenticator, every
+    // request that is not a page render refuses them here: every route handler (under /api
+    // or not: exports, downloads, uploads) and every server action. Only the set-up screen's
+    // own tRPC calls and sign-out are exempt. A page render (GET or HEAD with no server action)
+    // is not refused here: the (app) layout sends it to the set-up screen. This is the one place every route handler and
+    // server action resolves its signed-in member (`tests/approval-authenticator-route-gate`
+    // enumerates them); API tokens are gated the same way in `authenticateApiRequest`.
+    if (
+      session.user.approvalAuthenticatorSetupRequired === true &&
+      (options.request
+        ? !isApprovalAuthenticatorSetupApiExempt(options.request)
+        : await isNonPageRequest())
+    ) {
+      throw new ApprovalAuthenticatorSetupRequiredError();
     }
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;

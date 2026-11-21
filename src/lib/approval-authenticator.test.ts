@@ -9,10 +9,15 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   verifyOperatorCredential: vi.fn(),
 }));
+const gate = vi.hoisted(() => ({ holdsAnyApprovalRight: vi.fn() }));
+vi.mock('@/lib/approval-authenticator-gate', () => ({
+  holdsAnyApprovalRight: gate.holdsAnyApprovalRight,
+}));
 
 import {
   APPROVAL_TOTP_WINDOW,
   approvalAuthenticatorResetDenial,
+  consumeMemberApprovalCode,
   verifyApprovalSecret,
 } from './approval-authenticator';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
@@ -86,7 +91,7 @@ function fakeDb(options: { enrolled?: boolean; required?: boolean; organization?
       findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
         options.organization === false || where.id !== 'org'
           ? null
-          : { requireApprovalAuthenticator: options.required ?? false }
+          : { requireApprovalAuthenticator: options.required ?? true }
       ),
     },
     approvalAuthenticator: {
@@ -112,6 +117,7 @@ function verify(db: ReturnType<typeof fakeDb>, secret: string, now = NOW) {
     credentialHash: `hash:${PIN}`,
     secret,
     action: 'pharmacySales.refundTender',
+    approverRight: 'pharmacy:manage',
     requestedById: 'cashier',
     now,
   });
@@ -122,51 +128,60 @@ beforeEach(() => {
   vi.mocked(verifyOperatorCredential).mockImplementation(
     async (_type, secret, credentialHash) => credentialHash === `hash:${secret}`
   );
+  gate.holdsAnyApprovalRight.mockResolvedValue(true);
 });
 
-describe('DEV-879 approval authenticator: who uses a PIN and who uses a code', () => {
-  it('keeps accepting the PIN of an approver who has not enrolled, so nothing breaks', async () => {
-    const db = fakeDb({ enrolled: false });
-    await expect(verify(db, PIN)).resolves.toBe('PIN');
-    await expect(verify(db, '0000')).resolves.toBeNull();
-    expect(db.auditLog.create).not.toHaveBeenCalled();
-  });
-
-  it('accepts the current code of an enrolled approver', async () => {
+describe('DEV-961 approval authenticator: who uses a PIN and who uses a code', () => {
+  it('ON (the default): an approver with a web login approves with the current app code', async () => {
     const db = fakeDb();
     await expect(verify(db, codeAt(SECRET, STEP))).resolves.toBe('AUTHENTICATOR');
     expect(db.row?.lastUsedStep).toBe(STEP);
   });
 
-  it('no longer accepts the fixed PIN once the approver has enrolled', async () => {
-    const db = fakeDb();
-    await expect(verify(db, PIN)).resolves.toBeNull();
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
-    expect(db.approvalAuthenticator.updateMany).not.toHaveBeenCalled();
+  it('ON: refuses the permanent PIN, whether or not the approver set up the app', async () => {
+    for (const enrolled of [true, false]) {
+      const db = fakeDb({ enrolled });
+      await expect(verify(db, PIN)).resolves.toBeNull();
+      expect(verifyOperatorCredential).not.toHaveBeenCalled();
+      expect(db.approvalAuthenticator.updateMany).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    }
   });
 
-  it('refuses every PIN when the owner requires an authenticator for approvals', async () => {
-    const db = fakeDb({ enrolled: false, required: true });
-    await expect(verify(db, PIN)).resolves.toBeNull();
-    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+  it('OFF: everyone approves with their permanent PIN, enrolled or not, and app codes are refused', async () => {
+    for (const enrolled of [true, false]) {
+      const db = fakeDb({ enrolled, required: false });
+      await expect(verify(db, PIN)).resolves.toBe('PIN');
+      await expect(verify(db, '0000')).resolves.toBeNull();
+      await expect(verify(db, codeAt(SECRET, STEP))).resolves.toBeNull();
+      // The app stays set up and untouched while the setting is off.
+      expect(db.approvalAuthenticator.updateMany).not.toHaveBeenCalled();
+      expect(db.row?.lastUsedStep ?? null).toBeNull();
+    }
   });
 
-  it('still accepts an enrolled approver code when the organization requires one', async () => {
-    const db = fakeDb({ required: true });
+  it('ON again: the app set up before restores codes without a new set-up', async () => {
+    const db = fakeDb({ required: false });
+    await expect(verify(db, PIN)).resolves.toBe('PIN');
+    db.organization.findFirst.mockResolvedValue({ requireApprovalAuthenticator: true } as never);
     await expect(verify(db, codeAt(SECRET, STEP))).resolves.toBe('AUTHENTICATOR');
+    await expect(verify(db, PIN)).resolves.toBeNull();
   });
 
   it('fails closed when the organization cannot be read', async () => {
-    const db = fakeDb({ enrolled: false, organization: false });
-    await expect(verify(db, PIN)).resolves.toBeNull();
+    for (const enrolled of [true, false]) {
+      const db = fakeDb({ enrolled, organization: false });
+      await expect(verify(db, PIN)).resolves.toBeNull();
+      await expect(verify(db, codeAt(SECRET, STEP))).resolves.toBeNull();
+    }
   });
 
   it('only consults a confirmed enrolment, never a pending one', async () => {
     const db = fakeDb();
     db.row!.enabledAt = null;
     await expect(verify(db, codeAt(SECRET, STEP))).resolves.toBeNull();
-    // The pending secret does not turn the PIN off either.
-    await expect(verify(db, PIN)).resolves.toBe('PIN');
+    // A pending secret does not bring the PIN back while the setting is on.
+    await expect(verify(db, PIN)).resolves.toBeNull();
     expect(db.approvalAuthenticator.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({ enabledAt: { not: null }, organizationId: 'org' }),
@@ -178,6 +193,52 @@ describe('DEV-879 approval authenticator: who uses a PIN and who uses a code', (
     const db = fakeDb();
     db.row!.encryptedSecret = 'v1.broken.secret.value';
     await expect(verify(db, codeAt(SECRET, STEP))).resolves.toBeNull();
+  });
+});
+
+describe('DEV-961 confirming one’s own action with one’s own PIN', () => {
+  const ownAction = (db: ReturnType<typeof fakeDb>, secret: string) =>
+    verifyApprovalSecret(db as never, {
+      organizationId: 'org',
+      approverUserId: 'manager',
+      credentialHash: `hash:${PIN}`,
+      secret,
+      action: 'pharmacy.voucherRedemption',
+      approverRight: 'pharmacy:manage',
+      purpose: 'OWN_ACTION',
+      requestedById: 'manager',
+      now: NOW,
+    });
+
+  it('ON: a person with no approver right (a cashier) keeps their own PIN', async () => {
+    gate.holdsAnyApprovalRight.mockResolvedValue(false);
+    const db = fakeDb({ enrolled: false });
+    await expect(ownAction(db, PIN)).resolves.toBe('PIN');
+    await expect(ownAction(db, '0000')).resolves.toBeNull();
+    expect(gate.holdsAnyApprovalRight).toHaveBeenCalledWith(db, {
+      organizationId: 'org',
+      userId: 'manager',
+      now: NOW,
+    });
+  });
+
+  it('ON: a person who holds an approver right confirms with the app code, never the PIN', async () => {
+    const db = fakeDb();
+    await expect(ownAction(db, PIN)).resolves.toBeNull();
+    await expect(ownAction(db, codeAt(SECRET, STEP))).resolves.toBe('AUTHENTICATOR');
+  });
+
+  it('OFF: everyone confirms with their own PIN', async () => {
+    const db = fakeDb({ required: false });
+    await expect(ownAction(db, PIN)).resolves.toBe('PIN');
+    expect(gate.holdsAnyApprovalRight).not.toHaveBeenCalled();
+  });
+
+  it('a second-person approval never takes the own-PIN exception', async () => {
+    gate.holdsAnyApprovalRight.mockResolvedValue(false);
+    const db = fakeDb({ enrolled: false });
+    await expect(verify(db, PIN)).resolves.toBeNull();
+    expect(gate.holdsAnyApprovalRight).not.toHaveBeenCalled();
   });
 });
 
@@ -255,6 +316,7 @@ describe('DEV-879 approval authenticator: audit without the code', () => {
           approvalMethod: 'AUTHENTICATOR',
           approverId: 'manager',
           approvedAction: 'pharmacySales.refundTender',
+          approverRight: 'pharmacy:manage',
           approvedAt: NOW.toISOString(),
           requestedById: 'cashier',
         }),
@@ -264,6 +326,42 @@ describe('DEV-879 approval authenticator: audit without the code', () => {
     expect(written).not.toContain(code);
     expect(written).not.toContain(SECRET);
     expect(written).not.toContain(db.row!.encryptedSecret);
+  });
+
+  it('writes the same row for a PIN approval, with the method PIN and never the PIN', async () => {
+    const db = fakeDb({ required: false });
+    await expect(verify(db, PIN)).resolves.toBe('PIN');
+    const codeDb = fakeDb();
+    await verify(codeDb, codeAt(SECRET, STEP));
+    const pinRow = db.auditLog.create.mock.calls[0]![0].data;
+    const codeRow = codeDb.auditLog.create.mock.calls[0]![0].data;
+    expect(Object.keys(pinRow).sort()).toEqual(Object.keys(codeRow).sort());
+    expect(Object.keys(pinRow.metadata).sort()).toEqual(Object.keys(codeRow.metadata).sort());
+    expect(pinRow).toMatchObject({
+      organizationId: 'org',
+      actorId: 'manager',
+      source: 'AUTH',
+      category: 'AUTH',
+      action: 'pharmacySales.refundTender',
+      description: 'Approved with a PIN',
+      outcome: 'SUCCESS',
+      metadata: {
+        approvalMethod: 'PIN',
+        approvalPurpose: 'APPROVAL',
+        approverId: 'manager',
+        approvedAction: 'pharmacySales.refundTender',
+        approverRight: 'pharmacy:manage',
+        approvedAt: NOW.toISOString(),
+        requestedById: 'cashier',
+      },
+    });
+    expect(JSON.stringify(db.auditLog.create.mock.calls)).not.toContain(PIN);
+  });
+
+  it('writes no row for a refused PIN', async () => {
+    const db = fakeDb({ required: false });
+    await expect(verify(db, '0000')).resolves.toBeNull();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 });
 
@@ -330,5 +428,92 @@ describe('DEV-879 approval authenticator recovery: owner or administrator only',
       permissionOverrides: [{ capability: 'pharmacy:refund', effect: 'DENY' }],
     };
     expect(approvalAuthenticatorResetDenial(restricted, manager)).not.toBeNull();
+  });
+});
+
+describe('DEV-961 authenticator by default: the shared approval path', () => {
+  it('refuses an approval whose approver right is not in the shared registry, before any check', async () => {
+    const db = fakeDb({ enrolled: false });
+    for (const right of ['pharmacy:sell', 'admin:access', '', undefined]) {
+      await expect(
+        verifyApprovalSecret(db as never, {
+          organizationId: 'org',
+          approverUserId: 'manager',
+          credentialHash: `hash:${PIN}`,
+          secret: PIN,
+          action: 'pharmacySales.refundTender',
+          approverRight: right as never,
+          now: NOW,
+        })
+      ).resolves.toBeNull();
+    }
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(db.organization.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('keeps the PIN of a terminal-only staff profile (no web login) while the requirement is on', async () => {
+    const db = fakeDb({ enrolled: false, required: true });
+    const terminalOnly = (secret: string) =>
+      verifyApprovalSecret(db as never, {
+        organizationId: 'org',
+        approverUserId: null,
+        credentialHash: `hash:${PIN}`,
+        secret,
+        action: 'restaurant.terminal.coAuthorize',
+        approverRight: 'coauth:approve',
+        requestedByStaffProfileId: 'staff_cashier',
+        now: NOW,
+      });
+    await expect(terminalOnly(PIN)).resolves.toBe('PIN');
+    await expect(terminalOnly('0000')).resolves.toBeNull();
+    // A member with a web login and no authenticator is still refused.
+    await expect(verify(db, PIN)).resolves.toBeNull();
+  });
+
+  it('still fails closed for a terminal-only profile when the organization cannot be read', async () => {
+    const db = fakeDb({ enrolled: false, organization: false });
+    await expect(
+      verifyApprovalSecret(db as never, {
+        organizationId: 'org',
+        approverUserId: null,
+        credentialHash: `hash:${PIN}`,
+        secret: PIN,
+        action: 'restaurant.terminal.coAuthorize',
+        approverRight: 'coauth:approve',
+        now: NOW,
+      })
+    ).resolves.toBeNull();
+  });
+
+  it('with the requirement off, approvals take the permanent PIN exactly as before', async () => {
+    const db = fakeDb({ enrolled: false, required: false });
+    await expect(verify(db, PIN)).resolves.toBe('PIN');
+  });
+
+  it('consumes the owner’s own code for a confirmation, once, with an audit row', async () => {
+    const db = fakeDb();
+    const confirm = (code: string) =>
+      consumeMemberApprovalCode(db as never, {
+        organizationId: 'org',
+        userId: 'manager',
+        code,
+        action: 'approvalAuthenticator.setRequired',
+        now: NOW,
+      });
+    await expect(confirm('000000')).resolves.toBe(false);
+    await expect(confirm(codeAt(SECRET, STEP))).resolves.toBe(true);
+    await expect(confirm(codeAt(SECRET, STEP))).resolves.toBe(false);
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
+    expect(JSON.stringify(db.auditLog.create.mock.calls)).not.toContain(SECRET);
+    const none = fakeDb({ enrolled: false });
+    await expect(
+      consumeMemberApprovalCode(none as never, {
+        organizationId: 'org',
+        userId: 'manager',
+        code: codeAt(SECRET, STEP),
+        action: 'approvalAuthenticator.setRequired',
+        now: NOW,
+      })
+    ).resolves.toBe(false);
   });
 });

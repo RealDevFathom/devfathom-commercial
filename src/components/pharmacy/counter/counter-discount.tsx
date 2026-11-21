@@ -13,6 +13,7 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { BPS, NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
 import { percentToBps } from './discount-maximum-panel';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import {
   COUNTER_SHEET_BACKDROP,
   CounterNote,
@@ -101,6 +102,8 @@ export function CounterDiscountEntry({
   const id = useId();
   const valueRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
+  // DEV-961: how a manager or owner approves follows the authenticator for approvals setting.
+  const approvalCopy = useCounterApprovalCopy();
   const maximum = trpc.pharmacySales.discountMaximum.useQuery({ branchId });
   const [kind, setKind] = useState<CounterHeldDiscount['kind']>('PERCENT');
   const [value, setValue] = useState('');
@@ -347,15 +350,13 @@ export function CounterDiscountEntry({
               ) : null}
               <CounterNote tone="warning">
                 <p id={`${id}-help`}>
-                  {toBill
-                    ? 'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their PIN when you apply it.'
-                    : 'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their PIN when you add the item.'}
+                  {toBill ? approvalCopy.discountApprovalBill : approvalCopy.discountApproval}
                 </p>
               </CounterNote>
               {approvers ? (
                 // DEV-977 phase 3 (Counter v2 A4): the supervisor block. It names who can approve
                 // (the existing approvers read); the approval itself is still asked for, with the
-                // approver's own PIN, in the counter's approval dialog, and only when the server
+                // approver's own code or PIN, in the counter's approval dialog, and only when the server
                 // says this member needs one. No PIN is typed here.
                 <section
                   aria-labelledby={`${id}-supervisor`}
@@ -372,7 +373,7 @@ export function CounterDiscountEntry({
                       <b className="font-semibold text-text-strong">
                         A manager or owner must approve a discount you cannot give on your own.
                       </b>{' '}
-                      They choose their name and enter their own staff PIN on this till{' '}
+                      {approvalCopy.discountSupervisorHow}{' '}
                       {toBill ? 'when you apply it to the bill' : 'when you add the item'}. The
                       approval and both names are saved with the sale.
                     </p>
@@ -388,8 +389,8 @@ export function CounterDiscountEntry({
                     </p>
                   ) : approvers.list.length === 0 ? (
                     <p role="status" className="text-text-muted">
-                      No manager or owner with an active staff PIN can approve here. A discount that
-                      needs approval cannot be given until one is set up.
+                      No manager or owner can approve a discount at this till yet. A discount that
+                      needs approval cannot be given until one is set up to approve.
                     </p>
                   ) : (
                     <div className="space-y-1">

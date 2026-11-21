@@ -1,5 +1,6 @@
 'use client';
 
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { z } from '@/lib/zod-csp';
 import { Button } from '@/components/ui/button';
@@ -253,6 +254,7 @@ export function ReturnForm({
   refundAuthorized = false,
   onDismiss,
 }: Props) {
+  const approvalCopy = useCounterApprovalCopy();
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
   // before enabling any mutation; the parent key isolates account and branch changes.
@@ -612,10 +614,7 @@ export function ReturnForm({
       aria-label="Controlled medicine return witness"
       className="space-y-3 rounded-md border border-border-subtle p-3"
     >
-      <p className="text-sm text-text-muted">
-        Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The
-        PIN is never saved on this device.
-      </p>
+      <p className="text-sm text-text-muted">{approvalCopy.witnessIntro}</p>
       <Label htmlFor="return-witness">Witnessing pharmacist</Label>
       <select
         id="return-witness"
@@ -654,7 +653,7 @@ export function ReturnForm({
           configure one.
         </p>
       ) : null}
-      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Label htmlFor="return-witness-pin">{approvalCopy.witnessLabel}</Label>
       <Input
         id="return-witness-pin"
         type="password"
@@ -671,7 +670,7 @@ export function ReturnForm({
 
   const managerPinField = (
     <div className="space-y-2">
-      <Label htmlFor="refund-manager-pin">Your manager or owner PIN</Label>
+      <Label htmlFor="refund-manager-pin">{approvalCopy.ownLabel}</Label>
       <Input
         id="refund-manager-pin"
         type="password"
@@ -685,8 +684,7 @@ export function ReturnForm({
         onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
       />
       <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
-        Required for every return and refund. If you set up an authenticator for approvals, enter
-        its 6-digit code instead. Neither is ever saved on this device.
+        {approvalCopy.ownHint}
       </p>
     </div>
   );

@@ -8,7 +8,7 @@ import { Check, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
 import { KhataLimitMeter } from './counter-khata-limit';
@@ -222,6 +222,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     },
     ref
   ) {
+    const approvalCopy = useCounterApprovalCopy();
     const [accounts, setAccounts] = useState<KhataAccount[]>([]);
     const [accountId, setAccountId] = useState('');
     const [khataLoading, setKhataLoading] = useState(false);
@@ -1357,7 +1358,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                               creates their own under Settings, Your PIN. <OwnPinLink />
                             </p>
                           ) : null}
-                          <Label htmlFor="khata-approver-pin">Approver PIN</Label>
+                          <Label htmlFor="khata-approver-pin">{approvalCopy.approverLabel}</Label>
                           <Input
                             id="khata-approver-pin"
                             type="password"
@@ -1373,7 +1374,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             className="h-11 rounded-sm"
                           />
                           <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
-                            {COUNTER_APPROVAL_CODE_HINT}
+                            {approvalCopy.hint}
                           </p>
                         </>
                       ) : (

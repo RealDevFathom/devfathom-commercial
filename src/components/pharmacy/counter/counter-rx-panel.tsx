@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Eyebrow } from '@/components/ui/eyebrow';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { CounterDuplicateSaltAcknowledge } from './counter-duplicate-salt-acknowledge';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
@@ -958,6 +958,8 @@ export function CounterControlledAuthorization({
    */
   inSheet?: boolean;
 }) {
+  // DEV-961: the pharmacist's approval follows the authenticator for approvals setting.
+  const approvalCopy = useCounterApprovalCopy();
   return (
     <section
       aria-label="Controlled medicine authorization"
@@ -976,10 +978,7 @@ export function CounterControlledAuthorization({
             </h4>
           </>
         )}
-        <p className="text-xs text-text-muted">
-          Patient address and a pharmacist PIN are required. Use a prescription, or record an
-          emergency supply. Online only.
-        </p>
+        <p className="text-xs text-text-muted">{approvalCopy.controlledIntro}</p>
       </div>
       <ControlledSteps
         steps={[
@@ -1135,7 +1134,7 @@ export function CounterControlledAuthorization({
             to configure one.
           </p>
         ) : null}
-        <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+        <Label htmlFor="controlled-pin">{approvalCopy.pharmacistLabel}</Label>
         <Input
           id="controlled-pin"
           type="password"
@@ -1149,12 +1148,9 @@ export function CounterControlledAuthorization({
           onChange={(event) => controlled.onChange('pin', event.target.value)}
         />
         <p id="controlled-pin-hint" className="text-xs text-text-muted">
-          {COUNTER_APPROVAL_CODE_HINT}
+          {approvalCopy.hint}
         </p>
-        <p className="text-xs text-text-muted">
-          Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared after
-          each attempt.
-        </p>
+        <p className="text-xs text-text-muted">{approvalCopy.pharmacistCleared}</p>
       </section>
     </section>
   );

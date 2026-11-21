@@ -51,7 +51,18 @@ describe('fresh day-reopen credentials', () => {
       },
       orderBy: { id: 'asc' },
     });
-    expect(db.auditLog.create).not.toHaveBeenCalled();
+    // DEV-961: each accepted approval writes the uniform approval row (method PIN), and
+    // nothing else: no FAILURE row.
+    expect(db.auditLog.create).toHaveBeenCalledTimes(2);
+    for (const [call] of db.auditLog.create.mock.calls)
+      expect(call).toEqual({
+        data: expect.objectContaining({
+          organizationId: 'tenant-a',
+          actorId: 'manager-a',
+          outcome: 'SUCCESS',
+          metadata: expect.objectContaining({ approvalMethod: 'PIN' }),
+        }),
+      });
   });
 
   it('persists a wrong-PIN strike and failure audit without storing the credential', async () => {

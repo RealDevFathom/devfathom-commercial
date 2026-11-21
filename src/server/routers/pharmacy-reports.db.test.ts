@@ -93,6 +93,8 @@ async function fixture(
             displayName: org,
             vertical: 'PHARMACY',
             status: 'ACTIVE',
+            // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+            requireApprovalAuthenticator: false,
           },
         });
         await seedDepartments(db, [org], ['LEADERSHIP']);

@@ -63,6 +63,12 @@ import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterCashShiftPanel } from './counter-cash-shift-panel';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
+import {
+  ApprovalSecretKindContext,
+  useCounterApprovalCopy,
+  type CounterApprovalCopy,
+} from './counter-approval-copy';
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -366,7 +372,8 @@ function controlledAuthMissing(
   patient: unknown,
   patientAddress: string,
   auth: typeof EMPTY_CONTROLLED_AUTH,
-  online: boolean
+  online: boolean,
+  copy: CounterApprovalCopy
 ): string[] {
   const missing: string[] = [];
   if (!patient) missing.push('the patient');
@@ -376,16 +383,28 @@ function controlledAuthMissing(
   if (auth.emergency && auth.prescriberName.trim().length === 0)
     missing.push("the prescriber's name");
   if (!auth.staffProfileId) missing.push('the approving pharmacist');
-  if (!/^\d{4,8}$/.test(auth.pin)) missing.push("the pharmacist's PIN");
+  if (!/^\d{4,8}$/.test(auth.pin)) missing.push(copy.controlledSecretNeeded);
   if (!online) missing.push('a connection');
   return missing;
 }
 
+/**
+ * DEV-977 phase 3: why this counter cannot take a controlled line's authorisation, as far as the
+ * client knows: without Pharmacy Safety the pharmacists' list is not read at all; a member the
+ * server refuses that list cannot dispense. Neither changes who may authorise.
+ */
+type ControlledBlock = 'NO_SAFETY_MODULE' | 'NOT_DISPENSER' | null;
+
 /** DEV-977 phase 3: the notice for a controlled line refused until it is authorised. */
-function controlledNotice(canAuthorise: boolean, online: boolean): string {
-  const needs =
-    'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber.';
-  if (!canAuthorise)
+function controlledNotice(
+  block: ControlledBlock,
+  online: boolean,
+  copy: CounterApprovalCopy
+): string {
+  const needs = copy.controlledNeeds;
+  if (block === 'NO_SAFETY_MODULE')
+    return `${needs} This counter cannot take that authorisation: it needs Pharmacy Safety, which is not switched on for this business. Ask the owner.`;
+  if (block === 'NOT_DISPENSER')
     return `${needs} Only a pharmacist can authorise it at this till: ask the pharmacist on duty.`;
   return online
     ? `${needs} Fill in the three steps to complete the authorization panel, then press Authorise line.`
@@ -615,23 +634,38 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
     );
   }
   return (
-    <ScopedPharmacyCounterConsole
-      {...props}
-      key={JSON.stringify([
-        user.organizationId,
-        user.id,
-        user.role,
-        user.status,
-        [...entitlements.enabledModules].sort(),
-      ])}
-      organizationId={user.organizationId}
-      accountId={user.id}
-      evidenceAuthorized={user.role === 'ADMIN'}
-      keymapPreviewAuthorized={user.role === 'ADMIN'}
-      safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
-      dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
-      accountEmail={user.email}
-    />
+    <CounterApprovalMode>
+      <ScopedPharmacyCounterConsole
+        {...props}
+        key={JSON.stringify([
+          user.organizationId,
+          user.id,
+          user.role,
+          user.status,
+          [...entitlements.enabledModules].sort(),
+        ])}
+        organizationId={user.organizationId}
+        accountId={user.id}
+        evidenceAuthorized={user.role === 'ADMIN'}
+        keymapPreviewAuthorized={user.role === 'ADMIN'}
+        safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
+        dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
+        accountEmail={user.email}
+      />
+    </CounterApprovalMode>
+  );
+}
+
+/**
+ * DEV-961: the counter's approval fields follow the owner's "Authenticator for approvals"
+ * setting: "Approval code" while it is on (the default, and until it is read), "Approver PIN"
+ * while the owner has it off. The server decides either way; this is the wording only.
+ */
+function CounterApprovalMode({ children }: { children: React.ReactNode }) {
+  return (
+    <ApprovalSecretKindContext.Provider value={useApprovalSecretKind()}>
+      {children}
+    </ApprovalSecretKindContext.Provider>
   );
 }
 
@@ -740,9 +774,14 @@ function ScopedPharmacyCounterConsole({
   // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
   // actor cannot dispense, so the controlled authorization panel is not offered (the server
   // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
-  const controlledAuthorisable =
-    safetyLicensed &&
-    (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code !== 'FORBIDDEN';
+  const controlledBlock: ControlledBlock = !safetyLicensed
+    ? 'NO_SAFETY_MODULE'
+    : (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code === 'FORBIDDEN'
+      ? 'NOT_DISPENSER'
+      : null;
+  const controlledAuthorisable = controlledBlock === null;
+  // DEV-961, DEV-977 phase 3: the Authorise sheet's wording follows the approvals setting.
+  const approvalCopy = useCounterApprovalCopy();
   // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
   // hand-off links to the substitution workspace (dispense or Pharmacy Safety).
   const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
@@ -870,6 +909,13 @@ function ScopedPharmacyCounterConsole({
   // scanned serialised pack of a controlled medicine waiting there. The pack is kept as scanned
   // (its payload, so the server pins its own lot) and nothing is on the bill until it is added.
   const [controlledOpen, setControlledOpen] = useState(false);
+  // DEV-977 phase 3 review: the typed pharmacist PIN or code never outlives the sheet. Every way
+  // the sheet closes (Close, Escape, the backdrop, "Find the patient", "Don't add it", or an add)
+  // clears it; the add itself clears it after every attempt.
+  const closeControlled = useCallback(() => {
+    setControlledOpen(false);
+    setControlledAuth((current) => (current.pin ? { ...current, pin: '' } : current));
+  }, []);
   // DEV-977 phase 3 review: the server's refusal of an "Authorise line", said inside the open
   // sheet (it is also the counter's notice, which the sheet covers). Never holds the PIN.
   const [controlledError, setControlledError] = useState<string | null>(null);
@@ -1613,7 +1659,13 @@ function ScopedPharmacyCounterConsole({
           },
         }
       : null;
-  const controlledMissing = controlledAuthMissing(patient, patientAddress, controlledAuth, online);
+  const controlledMissing = controlledAuthMissing(
+    patient,
+    patientAddress,
+    controlledAuth,
+    online,
+    approvalCopy
+  );
   // DEV-977 phase 3 review: after a refusal, focus stays in the sheet, on the (cleared) PIN when
   // it can take it, so the pharmacist can enter it again straight away.
   useEffect(() => {
@@ -2246,11 +2298,12 @@ function ScopedPharmacyCounterConsole({
         if (
           controlled &&
           !checkOff &&
-          controlledAuthMissing(patient, patientAddress, billAuth, navigator.onLine).length > 0
+          controlledAuthMissing(patient, patientAddress, billAuth, navigator.onLine, approvalCopy)
+            .length > 0
         ) {
           setNotice({
             tone: 'warning',
-            message: controlledNotice(controlledAuthorisable, navigator.onLine),
+            message: controlledNotice(controlledBlock, navigator.onLine, approvalCopy),
           });
           // DEV-1005: a one-step add (Enter, or a plain barcode) is staged as Shift+Enter stages
           // it, so the authorization panel this notice points to is shown and the line is added
@@ -2558,7 +2611,8 @@ function ScopedPharmacyCounterConsole({
       ensureSale,
       focusSearch,
       lotOverride,
-      controlledAuthorisable,
+      controlledBlock,
+      approvalCopy,
       openSale,
       patientId,
       preview,
@@ -5735,7 +5789,8 @@ function ScopedPharmacyCounterConsole({
         }
         open={controlledOpen}
         onOpenChange={(open) => {
-          setControlledOpen(open);
+          if (open) setControlledOpen(true);
+          else closeControlled();
           setControlledError(null);
           if (open || !pendingPack) return;
           // Closed without adding: the waiting pack is let go, and the cashier is told.
@@ -5758,7 +5813,7 @@ function ScopedPharmacyCounterConsole({
               >
                 {controlledMissing.length > 0
                   ? `Still needed: ${controlledMissing.join(', ')}.`
-                  : "Ready. The pharmacist's PIN is checked when the line is added."}
+                  : approvalCopy.controlledReady}
               </p>
               <Button
                 type="button"
@@ -5811,7 +5866,7 @@ function ScopedPharmacyCounterConsole({
                     className="mt-1 min-h-11"
                     onClick={() => {
                       returnToControlled.current = true;
-                      setControlledOpen(false);
+                      closeControlled();
                       setChecksOpen(true);
                     }}
                   >
@@ -5829,7 +5884,11 @@ function ScopedPharmacyCounterConsole({
           ) : controlledTarget ? (
             <CounterStateCard
               tone="warning"
-              heading="A pharmacist must authorise this line"
+              heading={
+                controlledBlock === 'NO_SAFETY_MODULE'
+                  ? 'This line cannot be authorised at this counter'
+                  : 'A pharmacist must authorise this line'
+              }
               actions={
                 <Button
                   type="button"
@@ -5838,7 +5897,7 @@ function ScopedPharmacyCounterConsole({
                   onClick={() => {
                     setPendingPack(null);
                     if (activeRow?.restriction.controlled) setActiveRow(null);
-                    setControlledOpen(false);
+                    closeControlled();
                     setNotice({
                       tone: 'warning',
                       message: `${controlledTarget.displayName} was not added.`,
@@ -5850,9 +5909,9 @@ function ScopedPharmacyCounterConsole({
               }
             >
               <p>
-                Controlled medicines need the patient&apos;s address, a prescription or an emergency
-                supply, and an independent pharmacist&apos;s PIN. Ask the pharmacist on duty to add
-                it at this till.
+                {controlledBlock === 'NO_SAFETY_MODULE'
+                  ? 'The controlled-medicine authorisation needs Pharmacy Safety, which is not switched on for this business, so it cannot be completed at this counter. Ask the owner.'
+                  : approvalCopy.controlledPharmacistOnly}
               </p>
             </CounterStateCard>
           ) : null}

@@ -194,6 +194,7 @@ export async function verifyControlledPurchaseWitness(
       credentialHash: credential.credentialHash,
       secret: input.pin,
       action: 'pharmacy.goodsReceiptControlledWitness',
+      approverRight: 'pharmacy:dispense',
       requestedById: scope.actorId,
       now,
     }))

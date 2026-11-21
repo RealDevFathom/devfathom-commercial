@@ -65,9 +65,15 @@ export function actorMayRefund(
 }
 
 /**
- * Re-authenticates the signed-in manager or owner with their own staff PIN.
- * Returns (never throws) a refusal so the caller's transaction commits the
- * lockout strike.
+ * Re-authenticates the signed-in person with their own staff PIN (the manager or owner
+ * approving a refund, return, reversal or day reopen, the pharmacist signing their own line,
+ * the cashier redeeming a voucher). Returns (never throws) a refusal so the caller's
+ * transaction commits the lockout strike.
+ *
+ * DEV-961: this is always the person confirming their own action (`purpose: 'OWN_ACTION'`).
+ * Someone who holds an approver right (every manager and owner these routes admit) confirms
+ * the way they approve: their authenticator code while the owner's setting is on, their
+ * permanent PIN while it is off. Someone who holds none (a cashier) keeps their own PIN.
  */
 export async function verifyRefundPin(
   db: ScopedDb,
@@ -101,6 +107,8 @@ export async function verifyRefundPin(
       credentialHash: credential.credentialHash,
       secret: pin,
       action: input.action ?? 'pharmacy.refund',
+      approverRight: 'pharmacy:manage',
+      purpose: 'OWN_ACTION',
       requestedById: actorId,
       now,
     }))
