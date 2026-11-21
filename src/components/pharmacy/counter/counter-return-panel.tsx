@@ -135,6 +135,8 @@ type Props = {
   businessDate: () => Date;
   /** DEV-647: managers and owners only. The server enforces the same rule. */
   refundAuthorized?: boolean;
+  /** DEV-977 phase 3 (Counter v2 C6): closes the returns sheet from the no-permission card. */
+  onDismiss?: () => void;
 };
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
@@ -181,7 +183,7 @@ function ChoiceGroup<T extends string>({
   );
 }
 
-export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
+export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized' | 'onDismiss'>) {
   const [open, setOpen] = useState(false);
   // DEV-647 / DEV-621: returns and refunds stay with managers and owners.
   const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
@@ -222,6 +224,7 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
                   key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
                   {...props}
                   refundAuthorized={refundAuthorized}
+                  onDismiss={() => setOpen(false)}
                 />
               )}
             </div>
@@ -248,6 +251,7 @@ export function ReturnForm({
   deviceId,
   businessDate,
   refundAuthorized = false,
+  onDismiss,
 }: Props) {
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
@@ -871,6 +875,7 @@ export function ReturnForm({
         <CounterNoPermission
           heading="Ask a manager or owner to record this return"
           who="Managers and the owner"
+          onDismiss={onDismiss}
         >
           <p role="note">
             Returns and refunds need a manager or owner. Ask one to record this return and refund it
