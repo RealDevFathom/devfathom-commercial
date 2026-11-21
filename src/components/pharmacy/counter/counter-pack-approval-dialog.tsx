@@ -13,7 +13,7 @@ import {
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 
 type Approver = { id: string; name: string; self: boolean };
 
@@ -34,6 +34,7 @@ export function CounterPackApprovalDialog({
   onCancel: () => void;
   onConfirm: (approval: CounterApprovalPin) => void;
 }) {
+  const approvalCopy = useCounterApprovalCopy();
   const [rows, setRows] = useState<Approver[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
@@ -123,7 +124,7 @@ export function CounterPackApprovalDialog({
                 under Settings, Your PIN. <OwnPinLink />
               </p>
             ) : null}
-            <Label htmlFor="pack-approver-pin">Approver PIN</Label>
+            <Label htmlFor="pack-approver-pin">{approvalCopy.approverLabel}</Label>
             <Input
               id="pack-approver-pin"
               type="password"
@@ -137,7 +138,7 @@ export function CounterPackApprovalDialog({
               onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
             />
             <p id="pack-approver-pin-hint" className="text-sm text-text-muted">
-              {COUNTER_APPROVAL_CODE_HINT}
+              {approvalCopy.hint}
             </p>
           </div>
           <DialogFooter>

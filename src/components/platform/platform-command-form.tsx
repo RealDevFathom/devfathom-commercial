@@ -207,6 +207,7 @@ export function PlatformCommandForm({
     const requiresReason =
       [
         'organization.user.password',
+        'organization.user.approvalauthenticator.reset',
         'organization.scim.token',
         'organization.scim.revoke',
         'organization.transition',

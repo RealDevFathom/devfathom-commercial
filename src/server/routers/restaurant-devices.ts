@@ -34,6 +34,7 @@ import {
   enrollPrintBridgeWithinCommercialLimits,
 } from '@/lib/restaurant/commercial-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import {
   assertActorEligibleForBranch,
   assertAuthorizedBranch,
@@ -44,7 +45,7 @@ import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
-const coAuthorizationApprovalCapability = 'coauth:approve';
+const coAuthorizationApprovalCapability = 'coauth:approve' satisfies RestaurantApproverRight;
 
 async function assertApproverCanCoAuthorize(
   db: ScopedDb,
@@ -52,12 +53,7 @@ async function assertApproverCanCoAuthorize(
   branchId: string
 ) {
   if (
-    !(await staffHasCapability(
-      db,
-      staffProfileId,
-      branchId,
-      coAuthorizationApprovalCapability
-    ))
+    !(await staffHasCapability(db, staffProfileId, branchId, coAuthorizationApprovalCapability))
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -553,11 +549,7 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
-      await assertApproverCanCoAuthorize(
-        ctx.db,
-        input.approvingStaffProfileId,
-        device.branchId
-      );
+      await assertApproverCanCoAuthorize(ctx.db, input.approvingStaffProfileId, device.branchId);
       const now = new Date();
       const auth = await authenticateOperator(ctx.db, {
         staffProfileId: input.approvingStaffProfileId,
@@ -566,6 +558,7 @@ export const restaurantDevicesRouter = router({
         now,
         approval: {
           action: 'restaurantDevices.revoke',
+          approverRight: coAuthorizationApprovalCapability,
           requestedByStaffProfileId: actingStaffProfileId,
         },
       });
@@ -667,11 +660,7 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
-      await assertApproverCanCoAuthorize(
-        ctx.db,
-        input.approvingStaffProfileId,
-        device.branchId
-      );
+      await assertApproverCanCoAuthorize(ctx.db, input.approvingStaffProfileId, device.branchId);
       const auth = await authenticateOperator(ctx.db, {
         staffProfileId: input.approvingStaffProfileId,
         type: input.approvingType,
@@ -679,6 +668,7 @@ export const restaurantDevicesRouter = router({
         now: new Date(),
         approval: {
           action: 'restaurantDevices.rotate',
+          approverRight: coAuthorizationApprovalCapability,
           requestedByStaffProfileId: actingStaffProfileId,
         },
       });
