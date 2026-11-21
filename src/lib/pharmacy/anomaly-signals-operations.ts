@@ -54,6 +54,9 @@ type StaffVoidRow = {
   branchId: string;
   userId: string;
   voidEvents: number;
+  /** DEV-1004: of `voidEvents`, the bills whose line changes took value off them overall. */
+  lineVoidBills: number;
+  lineVoidNetMinor: number;
   completedSales: number;
   occurredAt: Date;
 };
@@ -147,25 +150,59 @@ export async function readPharmacyAnomalyFacts(
             AND NOT EXISTS (SELECT 1 FROM "pharmacy_sale_returns" sr WHERE sr."organizationId"=r."organizationId" AND sr."branchId"=r."branchId" AND sr."originalSaleId"=r."saleId")
           GROUP BY r."branchId", r."actorId" ORDER BY MAX(r."createdAt") DESC LIMIT 200`);
 
+  // DEV-1004: since DEV-977B a bill line lowered at the counter is taken off onto its own void
+  // record, so every reduction (3 to 1, and 1 back to 3) wrote a void. A bill whose lines were
+  // changed or removed now counts once, and only when those changes took value off it overall:
+  // the net of every line taken off (its value) less every line put back in its place.
+  // Whole-bill voids count one each, as before.
   const staffVoid =
     filters.supplierId || filters.ingredientId || filters.batchId
       ? []
       : await db.$queryRaw<StaffVoidRow[]>(Prisma.sql`
-          WITH staff_activity AS (
-            SELECT e."branchId", e."actorId" AS "userId",
-                   COUNT(*) FILTER (WHERE e."kind"='VOIDED')::int AS "voidEvents",
-                   0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
+          WITH window_events AS (
+            SELECT e."organizationId", e."branchId", e."actorId", e."kind", e."payload", e."occurredAt"
             FROM "pharmacy_sale_events" e
             WHERE e."branchId" IN (${branches}) AND e."occurredAt">=${events.from} AND e."occurredAt"<${events.to}
+          ),
+          line_bills AS (
+            SELECT e."branchId", e."actorId" AS "userId", e."payload"->>'fromSaleId' AS "billId",
+                   SUM((moved."grossMinor"-moved."discountMinor")
+                       - COALESCE(replacement."grossMinor"-replacement."discountMinor", 0))::int AS "netMinor",
+                   MAX(e."occurredAt") AS "occurredAt"
+            FROM window_events e
+            JOIN "pharmacy_sale_lines" moved
+              ON moved."organizationId"=e."organizationId" AND moved."id"=e."payload"->>'saleLineId'
+            LEFT JOIN "pharmacy_sale_lines" replacement
+              ON e."payload"->>'cause'='LINE_CHANGED' AND replacement."organizationId"=e."organizationId"
+             AND replacement."idempotencyKey"=e."payload"->>'lineChangeKey'
+            WHERE e."kind"='CREATED' AND (e."payload"->>'lineChangeKey') IS NOT NULL
+            GROUP BY e."branchId", e."actorId", e."payload"->>'fromSaleId'
+          ),
+          staff_activity AS (
+            SELECT e."branchId", e."actorId" AS "userId",
+                   COUNT(*) FILTER (WHERE e."kind"='VOIDED' AND (e."payload"->>'fromSaleId') IS NULL)::int AS "voidEvents",
+                   0::int AS "lineVoidBills", 0::int AS "lineVoidNetMinor",
+                   0::int AS "completedSales", MAX(e."occurredAt") AS "occurredAt"
+            FROM window_events e
             GROUP BY e."branchId", e."actorId"
             UNION ALL
-            SELECT s."branchId", s."createdByUserId", 0::int, COUNT(*)::int, MAX(s."completedAt")
+            SELECT b."branchId", b."userId",
+                   COUNT(*) FILTER (WHERE b."netMinor">0)::int,
+                   COUNT(*) FILTER (WHERE b."netMinor">0)::int,
+                   COALESCE(SUM(b."netMinor") FILTER (WHERE b."netMinor">0), 0)::int,
+                   0::int, MAX(b."occurredAt")
+            FROM line_bills b
+            GROUP BY b."branchId", b."userId"
+            UNION ALL
+            SELECT s."branchId", s."createdByUserId", 0::int, 0::int, 0::int, COUNT(*)::int, MAX(s."completedAt")
             FROM "pharmacy_sales" s
             WHERE s."branchId" IN (${branches}) AND s."status"='COMPLETED'
               AND s."businessDate">=${window.from} AND s."businessDate"<${window.to}
             GROUP BY s."branchId", s."createdByUserId"
           )
           SELECT "branchId", "userId", SUM("voidEvents")::int AS "voidEvents",
+                 SUM("lineVoidBills")::int AS "lineVoidBills",
+                 SUM("lineVoidNetMinor")::int AS "lineVoidNetMinor",
                  SUM("completedSales")::int AS "completedSales", MAX("occurredAt") AS "occurredAt"
           FROM staff_activity GROUP BY "branchId", "userId"
           ORDER BY MAX("occurredAt") DESC LIMIT 200`);

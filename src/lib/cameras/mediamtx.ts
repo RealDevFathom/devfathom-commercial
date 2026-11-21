@@ -48,7 +48,12 @@ export class CameraTransportError extends Error {
 
 const MAX_MANIFEST_BYTES = 256 * 1024;
 const MAX_SEGMENT_BYTES = 16 * 1024 * 1024;
-const DEADLINE_MS = 10_000;
+/**
+ * One deadline per read (DEV-1004): every request a read makes (the playlist, the relay's
+ * session step, a renewal and the retry) shares it, so a slow relay cannot stretch one read to
+ * several times this.
+ */
+export const CAMERA_READ_DEADLINE_MS = 10_000;
 // MediaMTX's ordinary HLS/fMP4 files are flat. Refuse URL syntax, escapes,
 // directories and query strings rather than interpreting attacker-controlled URLs.
 const RESOURCE = /^[A-Za-z0-9_-][A-Za-z0-9_-]*\.(m3u8|ts|mp4|m4s)$/;
@@ -288,9 +293,12 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
     binding: Binding,
     pathAndQuery: string,
     maximum: number,
+    deadline: number,
     session?: string
   ): Promise<Upstream> {
     const target = new URL(`${binding.path}/${pathAndQuery}`, binding.baseUrl);
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return Promise.reject(new CameraTransportError('gateway-unreachable'));
     return new Promise<Upstream>((resolve, reject) => {
       const fail = (code: CameraTransportFailure) => reject(new CameraTransportError(code));
       const req = request(
@@ -343,7 +351,7 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
       );
       const timer = setTimeout(
         () => req.destroy(new CameraTransportError('gateway-unreachable')),
-        DEADLINE_MS
+        remaining
       );
       req.on('error', () => fail('gateway-unreachable'));
       req.on('close', () => clearTimeout(timer));
@@ -368,12 +376,12 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
    * The only redirect ever followed is the relay's own same-path `?cookieCheck=1`
    * step, compared as an exact string: never another host, port, scheme or path.
    */
-  async function open(binding: Binding) {
-    let res = await get(binding, 'index.m3u8', MAX_MANIFEST_BYTES);
+  async function open(binding: Binding, deadline: number) {
+    let res = await get(binding, 'index.m3u8', MAX_MANIFEST_BYTES, deadline);
     if (res.status === 302 || res.status === 303 || res.status === 307) {
       if (res.location !== `/${binding.path}/index.m3u8?${COOKIE_CHECK}`)
         throw new CameraTransportError('relay-unsupported');
-      res = await get(binding, `index.m3u8?${COOKIE_CHECK}`, MAX_MANIFEST_BYTES);
+      res = await get(binding, `index.m3u8?${COOKIE_CHECK}`, MAX_MANIFEST_BYTES, deadline);
       if (res.status >= 300 && res.status < 400)
         throw new CameraTransportError('relay-unsupported');
     }
@@ -387,10 +395,10 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
   }
 
   /** One renewal per binding at a time; concurrent reads share its result. */
-  function renew(binding: Binding) {
+  function renew(binding: Binding, deadline: number) {
     let pending = renewing.get(binding);
     if (!pending) {
-      pending = open(binding)
+      pending = open(binding, deadline)
         .then((result) => result.secret)
         .finally(() => renewing.delete(binding));
       renewing.set(binding, pending);
@@ -398,17 +406,22 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
     return pending;
   }
 
-  async function fetchResource(binding: Binding, resource: string, maximum: number) {
-    if (resource === 'index.m3u8') return (await open(binding)).bytes;
+  async function fetchResource(
+    binding: Binding,
+    resource: string,
+    maximum: number,
+    deadline: number
+  ) {
+    if (resource === 'index.m3u8') return (await open(binding, deadline)).bytes;
     const session = sessions.get(binding);
-    let res = await get(binding, resource, maximum, session);
+    let res = await get(binding, resource, maximum, deadline, session);
     if (res.status === 401) {
       // The relay ended the session (idle, restart) or none was open yet: open a
       // fresh one and retry once. A relay without sessions answers 401 only for a
       // refused login, and that refusal stands.
-      const renewed = await renew(binding);
+      const renewed = await renew(binding, deadline);
       if (!renewed) refuse(res.status);
-      res = await get(binding, resource, maximum, renewed);
+      res = await get(binding, resource, maximum, deadline, renewed);
       if (res.status === 401) throw new CameraTransportError('relay-unsupported');
     }
     if (res.status !== 200) refuse(res.status);
@@ -434,9 +447,10 @@ export function createMediaMtxTransport(raw: string, request = httpsRequest) {
     if (active >= 16) throw new CameraTransportError('gateway-unreachable');
     const manifest = resource.endsWith('.m3u8');
     const maximum = manifest ? MAX_MANIFEST_BYTES : MAX_SEGMENT_BYTES;
+    const deadline = Date.now() + CAMERA_READ_DEADLINE_MS;
     active++;
     try {
-      const bytes = await fetchResource(binding, resource, maximum);
+      const bytes = await fetchResource(binding, resource, maximum, deadline);
       return {
         bytes,
         manifest,

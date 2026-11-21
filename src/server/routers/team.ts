@@ -76,7 +76,9 @@ const titleCase = (s: string) => (s === 'HR' ? 'HR' : s.charAt(0) + s.slice(1).t
  * DEV-974 × DEV-959B: in a pharmacy, an email change made by someone else issues the member's
  * invitation again, which the access rules check as giving them everything they hold. When
  * those rules refuse an administrator, say plainly what happened instead of naming a sub-role.
- * The owner's PIN request (PRECONDITION_FAILED) and every other refusal pass through as they are.
+ * The owner's PIN request (PRECONDITION_FAILED) and every other refusal pass through as they are,
+ * and so does every refusal of a call that also changes the role or status (DEV-1004): the
+ * refusal may be about that change, so its own words are kept.
  */
 async function withPharmacyEmailRefusal<T>(active: boolean, run: () => Promise<T>): Promise<T> {
   try {
@@ -1004,6 +1006,9 @@ export const teamRouter = router({
       // it, and a member changing their own proves it is them with their password
       // (checked before the transaction: bcrypt must not pin a pooled connection).
       let emailMayChange = false;
+      // DEV-1004: whether this call also changes the member's role or status, so a refusal of
+      // that change is reported as it is and not as an email refusal.
+      let roleOrStatusChanging = false;
       if (input.email !== undefined) {
         if (ctx.support || ctx.session.user.isSupportSession) {
           throw new TRPCError({
@@ -1013,9 +1018,13 @@ export const teamRouter = router({
         }
         const current = await ctx.db.user.findUnique({
           where: { id },
-          select: { email: true },
+          select: { email: true, role: true, status: true },
         });
         emailMayChange = !!current && current.email !== input.email;
+        roleOrStatusChanging =
+          !!current &&
+          ((input.role !== undefined && input.role !== current.role) ||
+            (input.status !== undefined && input.status !== current.status));
         if (id === actorId && emailMayChange) {
           if (!currentPassword) {
             throw new TRPCError({
@@ -1069,7 +1078,7 @@ export const teamRouter = router({
       );
       let issuedAt: Date | undefined;
       const { before, updated, emailChange } = await withPharmacyEmailRefusal(
-        reissuingInvitation && isPharmacyContext(ctx),
+        reissuingInvitation && !roleOrStatusChanging && isPharmacyContext(ctx),
         () =>
           withAdminRosterLock(ctx.db, organizationId, rosterChange, async (tx) =>
             guardMemberEdit(

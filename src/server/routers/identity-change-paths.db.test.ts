@@ -503,6 +503,49 @@ describe.skipIf(!databaseUrl)('DEV-974 identity-change paths against PostgreSQL'
     ]);
   });
 
+  it('SCIM groups: outside a pharmacy a racing owner edit is serialised with the write (DEV-1004)', async () => {
+    const staffRole = `${organizationId}_locked_role`;
+    const ownerRole = `${organizationId}_owner_role`;
+    await client.query(
+      `INSERT INTO organization_roles (id, "organizationId", key, name, "updatedAt")
+       VALUES ($1, $2, 'locked', 'Locked', now())`,
+      [staffRole, organizationId]
+    );
+    // The owner's edit holds the organisation row lock, as the team screen's role change does.
+    const owner = new pg.Client({ connectionString: databaseUrl });
+    await owner.connect();
+    let open = false;
+    try {
+      await owner.query('BEGIN');
+      open = true;
+      await owner.query("SELECT set_config('app.is_platform_admin', 'true', true)");
+      await owner.query('SELECT id FROM organizations WHERE id = $1 FOR UPDATE', [organizationId]);
+      // The directory moves the member into another group meanwhile.
+      const pending = scimGroup(staffRole, {
+        schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+        Operations: [{ op: 'add', path: 'members', value: [{ value: ids().staff }] }],
+      });
+      await new Promise((resolve) => setTimeout(resolve, 750));
+      // The owner makes the member an owner and commits.
+      await owner.query('UPDATE users SET "organizationRoleId" = $1 WHERE id = $2', [
+        ownerRole,
+        ids().staff,
+      ]);
+      await owner.query('COMMIT');
+      open = false;
+      // The directory's write ran after the owner's edit and judged the member as they now are.
+      const response = await pending;
+      expect(response.status).toBe(403);
+    } finally {
+      if (open) await owner.query('ROLLBACK').catch(() => {});
+      await owner.end();
+    }
+    expect(
+      (await client.query('SELECT "organizationRoleId" FROM users WHERE id = $1', [ids().staff]))
+        .rows[0]
+    ).toEqual({ organizationRoleId: ownerRole });
+  });
+
   it('single sign-on: an unconfirmed changed email cannot sign in through the identity provider', async () => {
     await asAdmin((caller) =>
       caller.team.adminUpdateMember({ id: ids().staff, email: 'staff.sso@test.invalid' })

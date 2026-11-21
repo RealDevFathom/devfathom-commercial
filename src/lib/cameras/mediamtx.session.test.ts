@@ -11,7 +11,12 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CameraTransportError, cameraVideoCodec, createMediaMtxTransport } from './mediamtx';
+import {
+  CAMERA_READ_DEADLINE_MS,
+  CameraTransportError,
+  cameraVideoCodec,
+  createMediaMtxTransport,
+} from './mediamtx';
 
 const BASE = 'https://camera-gateway.example.internal/';
 const READER = 'dedicated-hls-reader';
@@ -528,5 +533,82 @@ describe('connection check and codec', () => {
     ['BANDWIDTH=1', 'unknown'],
   ])('reads %s as %s', (attributes, codec) => {
     expect(cameraVideoCodec(`#EXTM3U\n#EXT-X-STREAM-INF:${attributes}\nv.m3u8\n`)).toBe(codec);
+  });
+});
+
+describe('DEV-1004: one deadline per read', () => {
+  /** A relay that answers every request after `delayMs`, with the v1.18+ session step. */
+  function slowRelay(delayMs: number) {
+    const paths: string[] = [];
+    const request = vi.fn(
+      (url: URL, _options: Record<string, unknown>, callback: (res: EventEmitter) => void) => {
+        paths.push(url.pathname + url.search);
+        const req = new EventEmitter() as EventEmitter & {
+          end: () => void;
+          destroy: (error?: Error) => void;
+        };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        req.destroy = (error?: Error) => {
+          clearTimeout(timer);
+          if (error) req.emit('error', error);
+          req.emit('close');
+        };
+        req.end = () => {
+          timer = setTimeout(() => {
+            const res = new EventEmitter() as EventEmitter & {
+              statusCode: number;
+              headers: Record<string, string | string[]>;
+              destroy: () => void;
+            };
+            const first = url.search === '';
+            res.statusCode = first ? 302 : 200;
+            res.headers = first
+              ? { location: '/pharmacy-counter-1/index.m3u8?cookieCheck=1' }
+              : { 'set-cookie': [`hlsSession=${SECRET_A}; HttpOnly; Secure`] };
+            res.destroy = () => {};
+            callback(res);
+            if (!first) res.emit('data', Buffer.from(MASTER));
+            res.emit('end');
+            req.emit('close');
+          }, delayMs);
+        };
+        return req;
+      }
+    );
+    return { request, paths };
+  }
+
+  it('refuses a read whose requests together pass the deadline, though each one is under it', async () => {
+    vi.useFakeTimers();
+    try {
+      // Each answer takes 60% of the deadline: the session step's second request ends past it.
+      const { request, paths } = slowRelay(CAMERA_READ_DEADLINE_MS * 0.6);
+      const outcome = transportWith(request)
+        .read(scope())
+        .then(
+          () => 'read',
+          (error: unknown) => (error as CameraTransportError).code
+        );
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS + 1);
+      await expect(outcome).resolves.toBe('gateway-unreachable');
+      expect(paths).toEqual([
+        '/pharmacy-counter-1/index.m3u8',
+        '/pharmacy-counter-1/index.m3u8?cookieCheck=1',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still reads within the deadline when the relay is quick enough', async () => {
+    vi.useFakeTimers();
+    try {
+      const { request } = slowRelay(CAMERA_READ_DEADLINE_MS * 0.4);
+      const outcome = transportWith(request).read(scope());
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS);
+      await expect(outcome).resolves.toMatchObject({ manifest: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

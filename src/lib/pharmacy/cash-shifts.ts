@@ -233,15 +233,12 @@ async function readShiftFigures(db: ScopedDb, scope: LedgerScope, shift: ShiftRo
     db.pharmacyDrawerMovement.findMany({ where, select: { kind: true, amountMinor: true } }),
     // DEV-977B: the bill lines changed or removed in this shift; each void names the one open
     // shift the change happened in (sales.ts), so it is counted here and in no other shift.
-    db.pharmacySaleEvent.findMany({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        kind: 'VOIDED',
-        payload: { path: ['shiftId'], equals: shift.id },
-      },
-      select: { payload: true },
-    }),
+    // DEV-1004: written as the expression the index on a void's shift reads (migration
+    // 20261118127000), so the report never scans every sale event of the branch.
+    db.$queryRaw<{ payload: Prisma.JsonValue }[]>(Prisma.sql`
+      SELECT "payload" FROM "pharmacy_sale_events"
+       WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+         AND "kind" = 'VOIDED' AND ("payload"->>'shiftId') = ${shift.id}`),
   ]);
   return computeCashShiftFigures({
     openingFloatMinor: shift.openingFloatMinor,

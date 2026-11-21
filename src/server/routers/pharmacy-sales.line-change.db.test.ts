@@ -980,6 +980,46 @@ describeIfDatabase('DEV-977B change and remove a bill line', () => {
     ]);
   });
 
+  it('counts a bill in the staff-void signal once, by the net value its changes took off (DEV-1004)', async () => {
+    const { readPharmacyAnomalyFacts } = await import('@/lib/pharmacy/anomaly-signals-operations');
+    const today = workspaceToday('UTC');
+    const cashierVoids = async () => {
+      const { facts } = await withTenantDb(ids.org, (db) =>
+        readPharmacyAnomalyFacts(db, { branchIds: [ids.branch], from: today, to: today })
+      );
+      const row = facts.staffVoid.find((fact) => fact.userId === ids.cashierB);
+      return {
+        voidEvents: row?.voidEvents ?? 0,
+        lineVoidBills: row?.lineVoidBills ?? 0,
+        lineVoidNetMinor: row?.lineVoidNetMinor ?? 0,
+      };
+    };
+    const otc = await oneLot('Antacid void signal');
+    const before = await cashierVoids();
+    // 3 strips lowered to 1 and raised back to 3: nothing came off the bill overall.
+    const resized = await bill(ids.cashierB, [(id) => strip(otc, id, 3)]);
+    const lowered = await act(ids.cashierB, (api) =>
+      api.changeLine(change({ saleId: resized.saleId, saleLineId: resized.lineIds[0]! }, otc, 1))
+    );
+    await act(ids.cashierB, (api) =>
+      api.changeLine(change({ saleId: resized.saleId, saleLineId: lowered.line.id }, otc, 3))
+    );
+    expect(await cashierVoids()).toEqual(before);
+    // A line genuinely removed from another bill still counts, with its value (one strip).
+    const removed = await bill(ids.cashierB, [
+      (id) => strip(otc, id, 1),
+      (id) => strip(otc, id, 2),
+    ]);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove({ saleId: removed.saleId, saleLineId: removed.lineIds[0]! }))
+    );
+    expect(await cashierVoids()).toEqual({
+      voidEvents: before.voidEvents + 1,
+      lineVoidBills: before.lineVoidBills + 1,
+      lineVoidNetMinor: before.lineVoidNetMinor + 2000,
+    });
+  });
+
   it('totals after any sequence of changes and removals equal a fresh bill of the same lines', async () => {
     // One lot, at an MRP that does not divide evenly into tablets, so every loose price is
     // rounded: a fresh bill of the same lines then allocates and rounds exactly the same way.
@@ -1170,6 +1210,49 @@ describeIfDatabase('DEV-977B concurrent line changes', () => {
         expect(result.status === 'rejected' ? String(result.reason) : 'ok').toBe('ok');
     }
     await expectStockMatchesBills(otc.medicineId, await received(otc.medicineId));
+  }, 120_000);
+
+  it('a stock move racing a change is refused in plain terms, never with a database error (DEV-1004)', async () => {
+    const { PharmacyInventoryError } = await import('@/lib/pharmacy/inventory');
+    const shelf = await withTenantDb(ids.org, (tx) =>
+      tx.pharmacyStockLocation.create({
+        data: { branchId: ids.branch, code: `SHELF-${suffix}`, name: 'Shelf', kind: 'STORE' },
+      })
+    );
+    const scope = { organizationId: ids.org, branchId: ids.branch, actorId: ids.manager };
+    for (let round = 0; round < 4; round += 1) {
+      // Every unit of the lot is loose (stockedItem breaks the packs); the move asks for one
+      // whole strip and five tablets while a bill line grows into the same lot.
+      const item = await oneLot(`Antacid move ${round}`, 30);
+      const { saleId, lineIds } = await bill(ids.cashier, [(id) => strip(item, id, 1)]);
+      const move = () =>
+        withTenantDb(ids.org, (db) =>
+          ledger.transferStock(db, scope, {
+            inventoryLotId: item.lots[0]!,
+            fromStockLocationId: locationId,
+            toStockLocationId: shelf.id,
+            units: 15,
+            at: new Date(),
+            idempotencyKeyPrefix: key(),
+          })
+        );
+      const grow = () =>
+        act(ids.cashier, (api) =>
+          api.changeLine(change({ saleId, saleLineId: lineIds[0]! }, item, 2))
+        );
+      const results = await Promise.allSettled(round % 2 ? [grow(), move()] : [move(), grow()]);
+      const moved = results[round % 2 ? 1 : 0]!;
+      if (moved.status === 'rejected') {
+        expect(moved.reason).toBeInstanceOf(PharmacyInventoryError);
+        expect(['INVALID_ARRANGEMENT', 'INSUFFICIENT_STOCK']).toContain(
+          (moved.reason as InstanceType<typeof PharmacyInventoryError>).reason
+        );
+      }
+      const grown = results[round % 2 ? 0 : 1]!;
+      if (grown.status === 'rejected')
+        expect(String(grown.reason)).not.toMatch(/Database error|violates|constraint/i);
+      await expectStockMatchesBills(item.medicineId, await received(item.medicineId));
+    }
   }, 120_000);
 
   // Last: it closes the branch's business day for the rest of this file.

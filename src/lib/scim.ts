@@ -103,16 +103,56 @@ export async function withScimAuth(
       { timeout: 60_000 }
     );
   } catch (error) {
-    if (error instanceof AccessChangeError) return scimError(403, error.message);
+    if (error instanceof AccessChangeError) {
+      // DEV-1004: the refused request rolled back, its event with it. Keep the FAILED event in a
+      // transaction of its own, as every other refused SCIM request keeps one.
+      await withTenantDb(credential.organizationId, (db) =>
+        recordScimEvent(
+          { organizationId: credential.organizationId, tokenId: credential.id, db },
+          request,
+          {
+            ...scimRequestResource(request),
+            status: 'FAILED',
+            error: error.message,
+          }
+        )
+      );
+      return scimError(403, error.message);
+    }
     throw error;
   }
 }
 
+const SCIM_OPERATIONS: Record<string, string> = {
+  POST: 'CREATE',
+  PUT: 'REPLACE',
+  PATCH: 'PATCH',
+  DELETE: 'DELETE',
+};
+
+/** The operation and resource a SCIM request names, as the routes record them. */
+export function scimRequestResource(request: Request) {
+  const [, collection, id] =
+    /\/scim\/v2\/(Users|Groups)(?:\/([^/?#]+))?\/?$/.exec(new URL(request.url).pathname) ?? [];
+  const resourceType = collection === 'Groups' ? 'Group' : 'User';
+  const resourceId = id ? decodeURIComponent(id).slice(0, 200) : null;
+  return {
+    operation: SCIM_OPERATIONS[request.method] ?? request.method.slice(0, 20),
+    resourceType,
+    payload: resourceId
+      ? resourceType === 'Group'
+        ? { groupId: resourceId }
+        : { userId: resourceId }
+      : undefined,
+  };
+}
+
 /**
  * DEV-959B: in a pharmacy, a SCIM write that changes people's roles or status runs inside the
- * access guard. SCIM has no member and no fresh approval behind it, so it may only take
- * access away: it never gives a weighty sub-role, never makes an administrator or an owner,
- * and never leaves the organization without an owner.
+ * access guard, which locks the organisation row; elsewhere it takes the same lock (DEV-1004).
+ * SCIM has no member and no fresh approval behind it, so in a pharmacy it may only take access
+ * away: it never gives a weighty sub-role, never makes an administrator or an owner, and never
+ * leaves the organization without an owner.
  */
 export async function scimAccessChange<T>(
   ctx: ScimContext,
@@ -120,7 +160,14 @@ export async function scimAccessChange<T>(
   action: string,
   write: () => Promise<{ targetIds: string[]; value: T }>
 ): Promise<T> {
-  if (!(await isPharmacyOrganization(ctx.db, ctx.organizationId))) return (await write()).value;
+  if (!(await isPharmacyOrganization(ctx.db, ctx.organizationId))) {
+    // DEV-1004: in every other business type the write still takes the organisation lock the
+    // team and organization admin screens take for a role or status change, so a racing edit
+    // by the owner or an administrator is serialised with it rather than read before it.
+    await ctx.db
+      .$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${ctx.organizationId} FOR UPDATE`;
+    return (await write()).value;
+  }
   const { value } = await guardPharmacyAccessChanges(
     ctx.db,
     {

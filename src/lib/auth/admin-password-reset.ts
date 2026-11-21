@@ -48,14 +48,20 @@ export const ROLE_RANK: Record<string, number> = { EMPLOYEE: 1, HR: 2, ADMIN: 3 
 
 export type ResetParty = Parameters<typeof hasAllCapabilityAccess>[0] & { role: string };
 
-/** The live member fields every administrative identity-change guard reads. */
+/**
+ * The live member fields every administrative identity-change guard reads. The override filter
+ * is a getter (DEV-1004): it takes the current time on every read, so an override that expired
+ * after this module loaded is never counted.
+ */
 export const RESET_PARTY_SELECT = {
   role: true,
   status: true,
   organizationRole: { select: { key: true, isSystem: true, permissions: true } },
-  permissionOverrides: {
-    where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-    select: { capability: true, effect: true },
+  get permissionOverrides() {
+    return {
+      where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+      select: { capability: true, effect: true },
+    };
   },
 };
 

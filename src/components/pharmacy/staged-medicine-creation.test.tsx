@@ -248,6 +248,13 @@ describe('DEV-912 staged medicine creation panel', () => {
     expect(
       screen.getByText(/1 rows have an old code or generic name that was not added/)
     ).toBeVisible();
+    // DEV-1004: the review lists those rows.
+    expect(
+      screen.getByRole('link', { name: 'Show the rows whose codes or barcodes were not added' })
+    ).toHaveAttribute(
+      'href',
+      '/pharmacy/medicines?branchId=branch_1&sourceId=source_1&batchId=batch_1&filter=codes-not-added'
+    );
   });
 
   it('DEV-1002: stops and does not continue when many rows were refused for one reason', async () => {
