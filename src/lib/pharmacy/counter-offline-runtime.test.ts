@@ -726,6 +726,21 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     });
   });
 
+  it.each([
+    [403, 'medicine_not_offline_otc'],
+    [403, 'invalid_pack'],
+    [403, 'invalid_snapshot'],
+    [401, 'INVALID_COMMAND_SIGNATURE'],
+  ] as const)(
+    'retains a refused receipt for manager review after %i %s',
+    async (status, serverMessage) => {
+      const counter = await readyCounter(createMemoryDriver());
+      await counter.enqueue(cashSale(1), MATRIX);
+      await counter.replay(async () => ({ status, serverMessage }), replaySigner);
+      expect(counter.snapshot().queue?.commands[0]).toMatchObject({ status: 'QUARANTINED' });
+    }
+  );
+
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);

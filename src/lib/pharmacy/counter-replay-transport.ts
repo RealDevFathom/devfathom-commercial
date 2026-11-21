@@ -1,7 +1,11 @@
+import {
+  classifyReplayOutcome,
+  type TerminalReplayOutcome,
+} from '@/lib/retail-terminal/replay-outcome';
 import type { CounterReplayRequest } from './counter-command-queue';
 import type { CounterReplayResponse } from './counter-offline-runtime';
 
-export function counterConflictMessage(code?: string): string {
+function counterConflictMessage(code?: string): string {
   switch (code) {
     case 'DAY_CLOSED':
       return 'The shop day for this sale is closed. Ask a manager to check the receipt and cash.';
@@ -13,12 +17,43 @@ export function counterConflictMessage(code?: string): string {
     case 'QUOTA_EXHAUSTED':
     case 'INSUFFICIENT_STOCK':
       return 'The stock set aside for this sale is no longer available.';
+    case 'medicine_not_offline_otc':
+      return 'This medicine cannot be sold offline. Ask a manager to review the receipt and cash.';
+    case 'invalid_pack':
+      return 'The server could not verify the pack sold on this receipt.';
+    case 'INVALID_COMMAND_SIGNATURE':
+    case 'invalid_snapshot':
     case 'offline_chain_broken':
     case 'INVALID_RECEIPT_LEASE':
       return 'The server could not verify the sealed sale or its receipt number.';
     default:
       return 'The server refused this sale. Ask a manager to review the receipt and cash.';
   }
+}
+
+export function classifyCounterReplay(response: CounterReplayResponse): TerminalReplayOutcome {
+  const { status, serverMessage } = response;
+  // These refusals are about the sealed receipt. Signing in again cannot change it.
+  if (
+    (status === 403 &&
+      (serverMessage === 'invalid_snapshot' ||
+        serverMessage === 'medicine_not_offline_otc' ||
+        serverMessage === 'invalid_pack')) ||
+    (status === 401 && serverMessage === 'INVALID_COMMAND_SIGNATURE')
+  ) {
+    return {
+      action: 'QUARANTINE',
+      reason: 'REJECTED',
+      message: counterConflictMessage(serverMessage),
+    };
+  }
+  const outcome = classifyReplayOutcome(
+    status === 401 && serverMessage === 'device_revoked' ? { ...response, status: 403 } : response
+  );
+  if (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE') {
+    outcome.message = counterConflictMessage(serverMessage);
+  }
+  return outcome;
 }
 
 /** An HTTP success without a booking or an audited rejection cannot settle a local sale. */

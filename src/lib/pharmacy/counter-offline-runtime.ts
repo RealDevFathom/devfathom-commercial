@@ -39,8 +39,7 @@ import type {
   TerminalStorageDriver,
   TerminalStoreDatabase,
 } from '@/lib/retail-terminal/local-store';
-import { counterConflictMessage } from './counter-replay-transport';
-import { classifyReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
+import { classifyCounterReplay } from './counter-replay-transport';
 
 import {
   applyCounterReplayOutcome,
@@ -930,13 +929,7 @@ export class PharmacyCounterRuntime {
       } catch {
         response = { status: 0 };
       }
-      const outcome = classifyReplayOutcome(
-        response.status === 401 && response.serverMessage === 'device_revoked'
-          ? { ...response, status: 403 }
-          : response
-      );
-      if (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE')
-        outcome.message = counterConflictMessage(response.serverMessage);
+      const outcome = classifyCounterReplay(response);
       // Apply the outcome to the queue as it is NOW — a sale enqueued while the
       // request was in flight must survive this whole-document write.
       const settled = await this.exclusive(async (): Promise<ReplayResult | null> => {
