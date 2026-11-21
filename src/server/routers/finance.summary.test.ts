@@ -269,28 +269,37 @@ it('bounds date-only transaction searches and new charges on the Karachi clock',
   });
 });
 
-describe.each(['America/New_York', 'Asia/Karachi', 'UTC'])(
+describe.each(['America/New_York', 'Asia/Karachi', 'UTC'] as const)(
   'recurring expense cycles in %s',
   (zone) => {
-    it.each(['legacy first', 'legacy month end', 'local month end'] as const)(
-      'posts each of twelve months once and lists the same next occurrence for %s',
+    it.each([
+      'legacy first',
+      'legacy 31st catch-up',
+      'legacy 31st successive runs',
+      'local first at 00:30',
+    ] as const)(
+      'preserves the UTC develop schedule or local wall time over 2026 for %s',
       async (schedule) => {
-        const monthEnds = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-        const expected = monthEnds.map((last, i) => {
-          const month = String(i + 1).padStart(2, '0');
-          const day = schedule === 'legacy first' ? '01' : String(last);
-          const label = `2026-${month}-${day}`;
-          if (schedule !== 'local month end') return new Date(label + 'T00:00:00Z');
-          // In 2026 New York month ends observe daylight time from March through October.
-          const offset =
-            zone === 'America/New_York'
-              ? i >= 2 && i <= 9
-                ? '-04:00'
-                : '-05:00'
-              : zone === 'Asia/Karachi'
-                ? '+05:00'
-                : 'Z';
-          return new Date(label + 'T00:30:00' + offset);
+        // Pinned from the UTC develop router. In a single catch-up its anchor stays
+        // at 31, but successive calls use the newly persisted date as their anchor.
+        const monthLabels = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
+        let labels = monthLabels.map((month) => month + '-01');
+        if (schedule === 'legacy 31st catch-up') {
+          labels = ['01-31', '03-03', '05-01', '07-01', '08-31', '10-01', '12-01'];
+        } else if (schedule === 'legacy 31st successive runs') {
+          labels = ['01-31', ...monthLabels.slice(2).map((month) => month + '-03')];
+        }
+        const expected = labels.map((label) => {
+          const date = '2026-' + label;
+          if (schedule !== 'local first at 00:30') return new Date(date + 'T00:00:00Z');
+          // At 00:30 on the first, New York observes daylight time April–November.
+          const month = Number(label.slice(0, 2));
+          const offsets = {
+            'America/New_York': month >= 4 && month <= 11 ? '-04:00' : '-05:00',
+            'Asia/Karachi': '+05:00',
+            UTC: 'Z',
+          };
+          return new Date(date + 'T00:30:00' + offsets[zone]);
         });
         const expense = {
           id: 'r',
@@ -327,15 +336,22 @@ describe.each(['America/New_York', 'Asia/Karachi', 'UTC'])(
         vi.useFakeTimers({ toFake: ['Date'] });
         try {
           for (const due of expected) {
-            vi.setSystemTime(due);
+            // At local midday a legacy label is still due today in all three zones.
+            vi.setSystemTime(
+              schedule === 'local first at 00:30' ? due : new Date(due.getTime() + 12 * 3_600_000)
+            );
             expect((await router.getRecurringExpenses())[0]?.nextDueDate).toEqual(due);
             expect((await assistant.listRecurringExpenses.execute({}))[0]?.nextDueDate).toEqual(
               due
             );
+            if (schedule === 'legacy 31st successive runs') {
+              expect((await router.postDueRecurringExpenses()).posted).toBe(1);
+              expect((await router.postDueRecurringExpenses()).posted).toBe(0);
+            }
           }
-          const end = expected[11]!;
-          vi.setSystemTime(new Date(end.getTime() + 60_000));
-          expect((await router.postDueRecurringExpenses()).posted).toBe(12);
+          vi.setSystemTime(new Date('2026-12-31T12:00:00Z'));
+          const remaining = schedule === 'legacy 31st successive runs' ? 0 : expected.length;
+          expect((await router.postDueRecurringExpenses()).posted).toBe(remaining);
           expect(posted).toEqual(expected);
           expect((await router.postDueRecurringExpenses()).posted).toBe(0);
           expect(posted).toEqual(expected);

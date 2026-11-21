@@ -15,12 +15,9 @@ export function recurringExpenseSchedule(firstDue: Date, interval: string, zone?
   return (due: Date) => {
     const seconds = due.toISOString().slice(16);
     const wall = new Date(workspaceMinuteInput(due, scheduleZone) + seconds);
-    // Start at day one before changing the month so January 31 cannot overflow February.
-    wall.setUTCMonth(wall.getUTCMonth() + step, 1);
-    const lastDay = new Date(
-      Date.UTC(wall.getUTCFullYear(), wall.getUTCMonth() + 1, 0)
-    ).getUTCDate();
-    wall.setUTCDate(Math.min(anchorDay, lastDay));
+    // Retain develop's month overflow and its anchor for this posting run.
+    wall.setUTCDate(anchorDay);
+    wall.setUTCMonth(wall.getUTCMonth() + step);
     const next = new Date(workspaceInstantFromInput(wall.toISOString().slice(0, 19), scheduleZone));
     next.setUTCMilliseconds(due.getUTCMilliseconds());
     return next;
