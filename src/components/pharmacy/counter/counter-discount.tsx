@@ -453,17 +453,14 @@ export function CounterDiscountEntry({
               <CounterNote tone="warning">
                 <p id={`${id}-help`}>
                   {toLine
-                    ? 'The server checks the discount against the price and cost of the selected line.'
+                    ? approvalCopy.discountApprovalLine
                     : toBill
                       ? approvalCopy.discountApprovalBill
                       : approvalCopy.discountApproval}
                 </p>
               </CounterNote>
               {approvers ? (
-                // DEV-977 phase 3 (Counter v2 A4): the supervisor block. It names who can approve
-                // (the existing approvers read); the approval itself is still asked for, with the
-                // approver's own code or PIN, in the counter's approval dialog, and only when the server
-                // says this member needs one. No PIN is typed here.
+                // Existing lines take approval in this sheet. The other targets open their own approval dialog.
                 <section
                   aria-labelledby={`${id}-supervisor`}
                   className="space-y-2.5 border-t border-border-subtle pt-4"

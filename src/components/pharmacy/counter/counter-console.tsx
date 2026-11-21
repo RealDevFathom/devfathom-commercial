@@ -1530,6 +1530,7 @@ function ScopedPharmacyCounterConsole({
     ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
+  const demandSaleId = currentBill && cart.status === 'OPEN' ? cart.saleId : undefined;
   const currentBillClosed = billClosed(cart, saleId);
   useEffect(() => {
     if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
@@ -3669,7 +3670,7 @@ function ScopedPharmacyCounterConsole({
     try {
       const demand = await captureDemand.mutateAsync({
         branchId,
-        ...(saleId ? { saleId } : {}),
+        ...(demandSaleId ? { saleId: demandSaleId } : {}),
         ...(deviceId ? { terminalId: deviceId } : {}),
         requestedQty: Math.max(requestedCanonicalUnits ?? quantity, capturedUnits),
         ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
@@ -3710,7 +3711,7 @@ function ScopedPharmacyCounterConsole({
     focusSearch,
     query,
     quantity,
-    saleId,
+    demandSaleId,
     saleUnit,
     selectedOption,
     requestedCanonicalUnits,
@@ -4389,6 +4390,7 @@ function ScopedPharmacyCounterConsole({
           <CounterDemandSheet
             key={branchId}
             branchId={branchId}
+            saleId={demandSaleId}
             query={activeRow?.displayName ?? query}
             medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
             customer={customerQuery.data?.customer ?? null}

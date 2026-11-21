@@ -2502,7 +2502,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.returnLines': {
-    gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN AND pharmacy:manage AND own approval code; controlled line needs pharmacy:dispense + witness approval code',
+    gate: 'requireCounterReceiptAccess default as returnLine/returnAndRefund (receipt, dispensing or counter capability family; DENY wins), assigned branch or ADMIN AND pharmacy:manage AND own approval code; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + witness approval code',
     lines: [
       'run-branches/refund-sales-take-returns',
       'take-payment/open-hold-resume-void',

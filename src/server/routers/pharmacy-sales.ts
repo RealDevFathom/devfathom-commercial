@@ -288,6 +288,7 @@ import {
   setDemandOutcome,
   settleLostSales,
   updateLostSalesSettings,
+  MAX_COUNTER_DEMAND_QUANTITY,
 } from '@/lib/pharmacy/lost-sales';
 import {
   adminProcedure,
@@ -2877,6 +2878,12 @@ export const pharmacySalesRouter = router({
       });
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const approval = await authorizeCounterApproval(
+          ctx.db,
+          scope,
+          'DISCOUNT',
+          input.discountApproval
+        );
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await requirePharmacyTodayOpenForTrading(db, scope);
@@ -2888,16 +2895,8 @@ export const pharmacySalesRouter = router({
             idempotencyKey: input.requestId,
             actorIsManager: await actorMayRefund(db, ctx.session!.user),
             cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
-            approve: async () => {
-              const approval = await authorizeCounterApproval(
-                db,
-                scope,
-                'DISCOUNT',
-                input.discountApproval
-              );
-              await confirmCounterApproval(db, scope, 'DISCOUNT', approval);
-              return approval;
-            },
+            approval,
+            confirmApproval: () => confirmCounterApproval(db, scope, 'DISCOUNT', approval),
           });
         });
       } catch (error) {
@@ -4095,7 +4094,7 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true, targetType: 'PharmacySale', targetId: input.saleId });
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
           throw new TRPCError({ code: 'FORBIDDEN', message: RETURN_FORBIDDEN });
         const { managerPin, ...request } = input;
@@ -4353,10 +4352,11 @@ export const pharmacySalesRouter = router({
       z
         .object({
           branchId,
+          saleId: z.string().min(1).optional(),
           requestId: z.uuid(),
           requestedText: z.string().trim().min(1).max(250),
           requestedMedicineId: z.string().min(1).optional(),
-          quantity: z.number().int().positive().max(2147483647),
+          quantity: z.number().int().positive().max(MAX_COUNTER_DEMAND_QUANTITY),
           reason: z.enum([
             'STOCKOUT',
             'NOT_CARRIED',
@@ -4420,7 +4420,10 @@ export const pharmacySalesRouter = router({
         const { branchId: branch, ...demand } = input;
         // DEV-817: the counter's gate, before any demand row is written.
         const scope = await requireCounterReceiptAccess(ctx, branch, true);
-        return redactDemandContact(await captureDemand(ctx.db, scope, demand));
+        const event = demand.saleId
+          ? await ctx.db.$transaction((tx) => captureDemand(txDb(tx), scope, demand))
+          : await captureDemand(ctx.db, scope, demand);
+        return redactDemandContact(event);
       } catch (error) {
         fail(error);
       }
@@ -5160,18 +5163,16 @@ export const pharmacySalesRouter = router({
         });
         const matched = Boolean(
           scan.status === 'VERIFIED' &&
-          code?.batch &&
-          barcode &&
-          (serial || code.serial
-            ? serial?.serialNumber === code.serial && serial?.gtin === code.gtin
-            : true) &&
+          code &&
+          barcode?.packLevelId === line.packLevelId &&
+          (!serial || (serial.serialNumber === code.serial && serial.gtin === code.gtin)) &&
           line.allocations.some(
             (a) =>
               a.lot.receivedAt &&
-              (!barcode.packLevelId || a.lot.packLevelId === barcode.packLevelId) &&
+              a.lot.packLevelId === barcode.packLevelId &&
               (!serial?.inventoryLotId || a.lot.id === serial.inventoryLotId) &&
               a.lot.batch.state === 'ACTIVE' &&
-              a.lot.batch.batchNumber === code.batch &&
+              (!code.batch || a.lot.batch.batchNumber === code.batch) &&
               a.lot.batch.medicineId === line.medicineId &&
               (!code.expiry ||
                 a.lot.batch.expiresAt?.toISOString().slice(2, 10).replaceAll('-', '') ===

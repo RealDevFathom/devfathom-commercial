@@ -25,6 +25,7 @@ import {
   notifyCapture,
   resolveVisit,
   serverUnitPriceMinor,
+  MAX_COUNTER_DEMAND_QUANTITY,
 } from './lost-sales';
 import type { LostSaleOutcome } from './lost-sales';
 import {
@@ -1401,7 +1402,8 @@ export async function discountBillLine(
   scope: LedgerScope,
   input: SaleLineChangeRequest & {
     discount: BillDiscountRequest;
-    approve: () => Promise<{ approvedByUserId: string; approvalPolicy: string }>;
+    approval: { approvedByUserId: string; approvalPolicy: string };
+    confirmApproval: () => Promise<void>;
   }
 ) {
   const request = { saleLineId: input.saleLineId, discount: input.discount };
@@ -1465,7 +1467,8 @@ export async function discountBillLine(
   }
   const share = plan.shares[0];
   if (!share || share.discountMinor <= 0) throw new PharmacySaleError('INVALID_QUANTITY');
-  const approval = await input.approve();
+  await input.confirmApproval();
+  const approval = input.approval;
   validateDiscount({
     regulated: line.medicine.rx || line.medicine.restricted || line.medicine.controlled,
     discountMinor: share.discountMinor,
@@ -2571,6 +2574,31 @@ export async function captureDemand(
   } catch {
     throw new PharmacySaleError('CONSENT_REQUIRED');
   }
+  // Both counter entry points capture the same unmet request for a bill and medicine.
+  // The bill row serializes the first write, including concurrent calls from different tills.
+  if (input.saleId && (input.requestedMedicineId || input.requestedText?.trim())) {
+    const [bill] = await db.$queryRaw<
+      { id: string }[]
+    >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+    if (!bill) throw new PharmacySaleError('NOT_FOUND');
+    const existing = await db.unfulfilledDemandEvent.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: bill.id,
+        requestedMedicineId: input.requestedMedicineId ?? null,
+        ...(!input.requestedMedicineId && {
+          requestedText: { equals: input.requestedText!.trim(), mode: 'insensitive' as const },
+        }),
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    if (existing) {
+      if (existing.quantity !== input.quantity || existing.saleUnit !== input.saleUnit)
+        throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+      return existing;
+    }
+  }
   const outcome = input.outcome ?? 'UNKNOWN';
   // DEV-81: visit, price and loss are derived here, never taken from the client.
   const { visitId, visitType } = await resolveVisit(db, scope, {
@@ -2629,6 +2657,7 @@ export async function recordCounterDemand(
   scope: LedgerScope,
   input: {
     requestId: string;
+    saleId?: string;
     requestedText: string;
     requestedMedicineId?: string;
     quantity: number;
@@ -2637,6 +2666,12 @@ export async function recordCounterDemand(
     followUp?: { customerId: string; channel: 'SMS' | 'WHATSAPP'; reserveOnArrival: boolean };
   }
 ) {
+  if (
+    !Number.isSafeInteger(input.quantity) ||
+    input.quantity < 1 ||
+    input.quantity > MAX_COUNTER_DEMAND_QUANTITY
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
   const { requestId, ...request } = input;
   const digest = (value: unknown) =>
     createHash('sha256').update(canonicalJson(value)).digest('hex');
@@ -2660,10 +2695,11 @@ export async function recordCounterDemand(
     }));
   if (input.requestedMedicineId && !medicine) throw new PharmacySaleError('NOT_FOUND');
   if (input.followUp && !medicine) throw new PharmacySaleError('INVALID_STATE');
-  await captureDemand(
+  const demand = await captureDemand(
     db,
     scope,
     {
+      saleId: input.saleId,
       requestedText: input.requestedText,
       requestedMedicineId: input.requestedMedicineId,
       saleUnit: 'UNIT',
@@ -2682,15 +2718,28 @@ export async function recordCounterDemand(
     });
     if (!customer) throw new PharmacySaleError('NOT_FOUND');
     await activateRestockBranch(db, scope);
+    const prior = await db.pharmacyRestockInterest.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        demandEventId: demand.id,
+        patientId: customer.patientId,
+      },
+    });
+    if (prior) {
+      if (prior.channel !== channel || prior.reserveOnArrival !== reserveOnArrival)
+        throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+      return { id: demand.id };
+    }
     await addRestockInterest(db, scope, {
-      demandEventId: id,
+      demandEventId: demand.id,
       quantityUnits: input.quantity,
       patientId: customer.patientId,
       channel,
       reserveOnArrival,
     });
   }
-  return { id };
+  return { id: demand.id };
 }
 
 export async function recoverDemandWithAlternate(

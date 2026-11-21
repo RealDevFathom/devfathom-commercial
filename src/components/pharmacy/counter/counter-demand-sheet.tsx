@@ -7,6 +7,7 @@ import { Dialog, DialogPortal, DialogTrigger } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SelectField } from '@/components/ui/select-field';
+import { MAX_COUNTER_DEMAND_QUANTITY } from '@/lib/pharmacy/lost-sales';
 import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -27,6 +28,7 @@ const reasons = {
 
 type Props = {
   branchId: string;
+  saleId?: string;
   query: string;
   medicines: { medicineId: string; displayName: string }[];
   customer: { id: string; displayName: string } | null;
@@ -65,7 +67,7 @@ export function CounterDemandSheet(props: Props) {
     </Dialog>
   );
 }
-function DemandForm({ branchId, query, medicines, customer, disabled, onSaved }: Props) {
+function DemandForm({ branchId, saleId, query, medicines, customer, disabled, onSaved }: Props) {
   const [text, setText] = useState(query);
   const [quantity, setQuantity] = useState('1');
   const [reason, setReason] = useState<keyof typeof reasons>('STOCKOUT');
@@ -88,6 +90,7 @@ function DemandForm({ branchId, query, medicines, customer, disabled, onSaved }:
         if (disabled || save.isPending) return;
         const input = {
           branchId,
+          saleId,
           requestedText: text.trim(),
           requestedMedicineId: medicineId || undefined,
           quantity: Number(quantity),
@@ -162,7 +165,7 @@ function DemandForm({ branchId, query, medicines, customer, disabled, onSaved }:
           required
           type="number"
           min={1}
-          max={2147483647}
+          max={MAX_COUNTER_DEMAND_QUANTITY}
           step={1}
           value={quantity}
           onChange={(e) => setQuantity(e.target.value)}

@@ -37,6 +37,7 @@ export type CounterApprovalCopy = {
   /** The discount sheet: who approves a discount the cashier may not give alone, and how. */
   discountApproval: string;
   /** DEV-977 phase 3: the same, when the discount sheet applies to the whole bill. */
+  discountApprovalLine: string;
   discountApprovalBill: string;
   /** DEV-977 phase 3: the supervisor block's "how", before "when you add the item" (or apply). */
   discountSupervisorHow: string;
@@ -64,6 +65,8 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
       'Controlled medicine. A different pharmacist must witness this return with the current code from their authenticator app (a pharmacist with no login enters their PIN). Nothing is saved on this device.',
     discountApproval:
       'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their approval code when you add the item.',
+    discountApprovalLine:
+      'The server checks this line’s price and cost. If approval is required, a manager or owner enters their current approval code here.',
     discountApprovalBill:
       'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their approval code when you apply it.',
     discountSupervisorHow:
@@ -91,6 +94,8 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
       'Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The PIN is never saved on this device.',
     discountApproval:
       'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their PIN when you add the item.',
+    discountApprovalLine:
+      'The server checks this line’s price and cost. If approval is required, a manager or owner enters their staff PIN here.',
     discountApprovalBill:
       'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their PIN when you apply it.',
     discountSupervisorHow: 'They choose their name and enter their own staff PIN on this till',

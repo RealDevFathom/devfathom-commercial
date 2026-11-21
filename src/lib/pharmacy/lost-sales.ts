@@ -20,6 +20,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { priceFromLot } from './medicine';
 import type { LedgerScope } from './stock-ledger';
 
+export const MAX_COUNTER_DEMAND_QUANTITY = 10_000;
+
 export const LOST_SALE_OUTCOMES = [
   'SUBSTITUTE_TAKEN',
   'WILL_RETURN',
