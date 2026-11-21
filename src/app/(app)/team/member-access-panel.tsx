@@ -1,6 +1,9 @@
 'use client';
 
-import { useOwnApprovalLabel } from '@/components/pharmacy/own-approval-copy';
+import {
+  useApprovalSecretKind,
+  useOwnApprovalLabel,
+} from '@/components/pharmacy/own-approval-copy';
 
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { ShieldAlert } from 'lucide-react';
@@ -107,7 +110,7 @@ function PinConfirm({
   onConfirm: (pin: string) => Promise<MemberAccessOutcome>;
   onCancel: () => void;
 }) {
-  const approvalLabel = useOwnApprovalLabel();
+  const needsCode = useApprovalSecretKind() === 'CODE';
   const id = useId();
   const [error, setError] = useState<string | null>(null);
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -130,14 +133,14 @@ function PinConfirm({
       </p>
       <div className="flex flex-wrap items-end gap-2">
         <label className="grid gap-1.5 text-sm">
-          {approvalLabel}
+          {needsCode ? 'Your approval code' : 'Your PIN'}
           <Input
             name="pin"
             type="password"
             inputMode="numeric"
-            autoComplete="off"
+            autoComplete={needsCode ? 'one-time-code' : 'off'}
             required
-            maxLength={8}
+            maxLength={needsCode ? 6 : 8}
             autoFocus
             aria-invalid={error ? true : undefined}
             aria-describedby={error ? `${id}-error` : undefined}
@@ -164,6 +167,7 @@ function SubRoleRow({
   subRole,
   locked,
   weightyLine,
+  roleNote,
   personal,
   editor,
   onChanged,
@@ -171,6 +175,7 @@ function SubRoleRow({
   subRole: SubRole;
   locked: string | null;
   weightyLine?: string;
+  roleNote?: string;
   personal?: 'ALLOW' | 'DENY';
   editor?: Pick<MemberAccessEditor, 'pending' | 'setSubRole'>;
   onChanged: (notice: Notice) => void;
@@ -201,7 +206,13 @@ function SubRoleRow({
         disabled={!editable || editor?.pending}
         onCheckedChange={(checked) => toggle(checked)}
         aria-labelledby={`${id}-label`}
-        aria-describedby={`${id}-description`}
+        aria-describedby={[
+          `${id}-description`,
+          roleNote && `${id}-role-note`,
+          editor && locked && `${id}-locked`,
+        ]
+          .filter(Boolean)
+          .join(' ')}
       />
       <div className="min-w-0 flex-1 space-y-0.5">
         <p id={`${id}-label`} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
@@ -227,7 +238,16 @@ function SubRoleRow({
             <li key={line}>{line}</li>
           ))}
         </ul>
-        {editor && locked ? <p className="text-xs text-text-muted">{locked}</p> : null}
+        {roleNote && (
+          <p id={`${id}-role-note`} className="text-xs text-text-muted">
+            {roleNote}
+          </p>
+        )}
+        {editor && locked ? (
+          <p id={`${id}-locked`} className="text-xs text-text-muted">
+            {locked}
+          </p>
+        ) : null}
         {confirming && editor && weightyLine ? (
           <PinConfirm
             subRole={subRole}
@@ -514,6 +534,7 @@ export function MemberAccessButton({ userId, name }: { userId: string; name: str
 export function SubRoleGroups({
   groups,
   lockedNoteFor,
+  roleNotes,
   weighty,
   personal,
   editor,
@@ -521,6 +542,7 @@ export function SubRoleGroups({
 }: {
   groups: MemberAccess['groups'];
   lockedNoteFor: (subRole: SubRole) => string | null;
+  roleNotes?: Record<string, string>;
   weighty?: Readonly<Record<string, string>>;
   personal?: Ticking['personal'];
   editor?: Pick<MemberAccessEditor, 'pending' | 'setSubRole'>;
@@ -542,6 +564,7 @@ export function SubRoleGroups({
                 key={subRole.key}
                 subRole={subRole}
                 locked={lockedNoteFor(subRole)}
+                roleNote={roleNotes?.[subRole.key]}
                 weightyLine={weighty?.[subRole.key]}
                 personal={personal?.[subRole.key]}
                 editor={editor}

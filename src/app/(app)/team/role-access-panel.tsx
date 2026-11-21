@@ -62,6 +62,12 @@ function RoleAccess({ roleId }: { roleId: string }) {
         Changes apply to everyone who holds it now or receives it later. Individual exceptions and
         other access checks still apply.
       </p>
+      {data.isSystem && (
+        <p className="text-sm text-text-muted">
+          On a ready-made role, the two accounts ticks grant access only to workspace
+          administrators.
+        </p>
+      )}
       {data.refusal && <p className="text-sm text-text-muted">{data.refusal}</p>}
       {notice && (
         <p
@@ -74,6 +80,7 @@ function RoleAccess({ roleId }: { roleId: string }) {
       <SubRoleGroups
         groups={data.groups}
         weighty={data.weighty}
+        roleNotes={data.roleNotes}
         lockedNoteFor={(item) => data.locked[item.key]}
         editor={data.refusal ? undefined : { pending: mutation.isPending, setSubRole }}
         onChanged={setNotice}

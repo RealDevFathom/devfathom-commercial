@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
+import { isPharmacyFinanceAction } from '@/lib/abac/pharmacy-finance-actions';
 import { PHARMACY_SUB_ROLES } from '@/lib/abac/pharmacy-sub-roles';
 import { isWeightyPharmacySubRole } from '@/lib/abac/pharmacy-sub-role-weight';
 import type { TRPCContext } from '@/server/trpc';
@@ -35,7 +36,8 @@ const orgA = id('a');
 const orgB = id('b');
 // A pharmacy with exactly one owner, for the paths that could leave it without one.
 const orgC = id('c');
-const ORGS = [orgA, orgB, orgC];
+const orgD = id('role_roundtrips');
+const ORGS = [orgA, orgB, orgC, orgD];
 const PIN = '2468';
 
 type Member = {
@@ -53,6 +55,12 @@ const MEMBERS: Member[] = [
   { key: 'cashier', org: orgA, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'cashier2', org: orgA, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'pharmacist', org: orgA, role: 'EMPLOYEE', template: 'pharmacist' },
+  { key: 'roleowner', org: orgD, role: 'ADMIN', template: 'owner', pin: true },
+  { key: 'roundpharmacist', org: orgD, role: 'EMPLOYEE', template: 'pharmacist' },
+  { key: 'roundfinance', org: orgD, role: 'ADMIN', template: 'pharmacist' },
+  { key: 'roundcustom', org: orgD, role: 'EMPLOYEE', template: 'roundcustom' },
+  { key: 'financeb1', org: orgB, role: 'ADMIN', template: 'auditor' },
+  { key: 'financeb2', org: orgB, role: 'ADMIN', template: 'auditor' },
   { key: 'cashierb1', org: orgB, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'cashierb2', org: orgB, role: 'EMPLOYEE', template: 'cashier' },
   { key: 'ownerb', org: orgB, role: 'ADMIN', template: 'owner', pin: true },
@@ -128,7 +136,10 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         { id: id(who), role: m.role, department: 'Pharmacy', status: 'ACTIVE' },
         action as never,
         undefined,
-        { db: createTenantDb(m.org, id(who)) as never }
+        {
+          db: createTenantDb(m.org, id(who)) as never,
+          ownerOnlyFallback: isPharmacyFinanceAction(action),
+        }
       );
     }
 
@@ -186,6 +197,10 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
           [`${roleId}_0`, org, roleId, capability]
         );
       }
+      await c.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,'roundcustom','Custom role',false,now())`,
+        [`${orgD}_role_roundcustom`, orgD]
+      );
       for (const m of MEMBERS) {
         await c.query(
           `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,role,status,"updatedAt") VALUES ($1,$2,$3,$1,$1,'Pharmacy','Staff',$4,'ACTIVE',now())`,
@@ -286,31 +301,26 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
     const cashierRoleB = `${orgB}_role_cashier`;
     describe.each(PHARMACY_SUB_ROLES)('role-wide $label', (subRole) => {
       const action = subRole.actions[0];
-      const overrideId = id(`owner_tick_${subRole.key}`);
+      const roleId = isPharmacyFinanceAction(action) ? `${orgB}_role_auditor` : cashierRoleB;
       let original: string | undefined;
       beforeAll(async () => {
         const [rule] = await rows(
           'SELECT effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
-          [cashierRoleB, action]
+          [roleId, action]
         );
         original = rule?.effect;
-        // Clinical grants are exact, even for the owner who edits this fixture role.
-        await rows(
-          `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,$4,'ALLOW','fixture',now())`,
-          [overrideId, orgB, id('ownerb'), action]
-        );
       });
       afterAll(async () => {
-        await rows('DELETE FROM user_permission_overrides WHERE id=$1', [overrideId]);
         if (original) {
           await rows(
-            'UPDATE organization_role_permissions SET effect=$3 WHERE "organizationRoleId"=$1 AND capability=$2',
-            [cashierRoleB, action, original]
+            `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT ("organizationRoleId",capability) DO UPDATE SET effect=EXCLUDED.effect`,
+            [id(`restore_${subRole.key}`), orgB, roleId, action, original]
           );
         } else {
           await rows(
             'DELETE FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
-            [cashierRoleB, action]
+            [roleId, action]
           );
         }
       });
@@ -321,18 +331,20 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
           await rows(
             `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,$5)
                     ON CONFLICT ("organizationRoleId",capability) DO UPDATE SET effect=EXCLUDED.effect`,
-            [id(`role_tick_${subRole.key}`), orgB, cashierRoleB, action, ticked ? 'DENY' : 'ALLOW']
+            [id(`role_tick_${subRole.key}`), orgB, roleId, action, ticked ? 'DENY' : 'ALLOW']
           );
-          const holders = ['cashierb1', 'cashierb2'];
+          const holders = isPharmacyFinanceAction(action)
+            ? ['financeb1', 'financeb2']
+            : ['cashierb1', 'cashierb2'];
           for (const who of holders) expect(await allowed(who, action)).toBe(!ticked);
           const owner = callers.admin('ownerb');
           await owner.setRoleSubRole({
-            roleId: cashierRoleB,
+            roleId,
             subRoleKey: subRole.key,
             pin: isWeightyPharmacySubRole(subRole.key) ? PIN : undefined,
             ticked,
           });
-          const view = await owner.roleAccess({ roleId: cashierRoleB });
+          const view = await owner.roleAccess({ roleId });
           expect(
             view.groups.flatMap((group) => group.subRoles).find((item) => item.key === subRole.key)
               ?.state
@@ -349,6 +361,146 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       );
     });
 
+    it('edits all twenty pharmacy sub-roles as the default owner without personal grants', async () => {
+      expect(PHARMACY_SUB_ROLES).toHaveLength(20);
+      const { decideFromRules } = await import('@/lib/abac/capabilities');
+      const impliedPairs = PHARMACY_SUB_ROLES.flatMap((parent) =>
+        PHARMACY_SUB_ROLES.filter(
+          (child) =>
+            child !== parent &&
+            child.actions.some(
+              (action) =>
+                decideFromRules(
+                  parent.actions.map((capability) => ({ capability, effect: 'ALLOW' })),
+                  action
+                ) === true
+            )
+        ).map((child) => [parent.key, child.key])
+      );
+      expect(impliedPairs).toEqual([['dispense-prescriptions', 'record-prescriptions']]);
+      expect(await overrides('roleowner')).toEqual([]);
+      expect(await allowed('roleowner', 'pharmacy:catalogue-review')).toBe(false);
+    });
+
+    describe.each(['pharmacist', 'roundcustom'])('default owner editing the %s role', (roleKey) => {
+      it.each(PHARMACY_SUB_ROLES)(
+        'unticks and restores $label on the server',
+        async (subRole) => {
+          const action = subRole.actions[0];
+          const system = roleKey === 'pharmacist';
+          const holder = system
+            ? isPharmacyFinanceAction(action)
+              ? 'roundfinance'
+              : 'roundpharmacist'
+            : 'roundcustom';
+          const owner = callers.admin('roleowner');
+          const roleId = `${orgD}_role_${roleKey}`;
+          const tick = (ticked: boolean) =>
+            owner.setRoleSubRole({
+              roleId,
+              subRoleKey: subRole.key,
+              ticked,
+              pin: isWeightyPharmacySubRole(subRole.key) ? PIN : undefined,
+            });
+          // Test the narrower prescription tick independently of the dispensing grant that implies it.
+          if (action === 'pharmacy:prescriptions') {
+            const dispense = (ticked: boolean) =>
+              owner.setRoleSubRole({
+                roleId,
+                subRoleKey: 'dispense-prescriptions',
+                ticked,
+                pin: PIN,
+              });
+            await dispense(true);
+            const reason = 'Included with Dispense prescriptions. Untick that first.';
+            expect((await owner.roleAccess({ roleId })).locked[subRole.key]).toBe(reason);
+            await expect(tick(false)).rejects.toMatchObject({ code: 'FORBIDDEN', message: reason });
+            expect(await allowed(holder, action)).toBe(true);
+            await dispense(false);
+            expect((await owner.roleAccess({ roleId })).locked[subRole.key]).toBeNull();
+            expect(await allowed(holder, action)).toBe(false);
+          }
+          await tick(true);
+          expect(await allowed(holder, action)).toBe(true);
+          await tick(false);
+          expect(await allowed(holder, action)).toBe(false);
+          await tick(true);
+          expect(await allowed(holder, action)).toBe(true);
+          if (system && isPharmacyFinanceAction(action)) {
+            expect(await allowed('roundpharmacist', action)).toBe(false);
+          }
+        },
+        20_000
+      );
+    });
+
+    it.each([false, true])(
+      'preserves the personal grant according to wildcard coverage (%s)',
+      async (wildcard) => {
+        const action = 'sop:verify';
+        const subRoleKey = PHARMACY_SUB_ROLES.find((subRole) => subRole.actions[0] === action)!.key;
+        const roleId = `${orgD}_role_roundcustom`;
+        const owner = callers.admin('roleowner');
+        const tick = (ticked: boolean) =>
+          owner.setRoleSubRole({ roleId, subRoleKey, ticked, pin: PIN });
+        const exact = () =>
+          rows(
+            'SELECT effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 AND capability=$2',
+            [roleId, action]
+          );
+        await rows(
+          `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,$4,'ALLOW','fixture',now()) ON CONFLICT ("userId",capability) DO NOTHING`,
+          [id('roundpersonal'), orgD, id('roundcustom'), action]
+        );
+        if (wildcard)
+          await rows(
+            `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'sop:*','ALLOW')`,
+            [id('roundwildcard'), orgD, roleId]
+          );
+        await tick(true);
+        await tick(false);
+        expect(await exact()).toEqual(wildcard ? [{ effect: 'DENY' }] : []);
+        expect(await allowed('roundcustom', action)).toBe(!wildcard);
+        const note = (await owner.roleAccess({ roleId })).roleNotes[subRoleKey];
+        if (wildcard) expect(note).toMatch(/cannot receive.*individually/i);
+        else expect(note).toBeUndefined();
+        await tick(true);
+        expect(await exact()).toEqual(wildcard ? [] : [{ effect: 'ALLOW' }]);
+        expect(await allowed('roundcustom', action)).toBe(true);
+      }
+    );
+
+    it.each([
+      [false, 'PIN'],
+      [true, 'approval code'],
+    ] as const)(
+      'names the required secret for empty roles in approval mode %s',
+      async (required, label) => {
+        await rows('UPDATE organizations SET "requireApprovalAuthenticator"=$1 WHERE id=$2', [
+          required,
+          orgD,
+        ]);
+        try {
+          const args = {
+            roleId: `${orgD}_role_inventory`,
+            subRoleKey: 'read-finance-accounts',
+            ticked: true,
+          };
+          await expect(callers.admin('roleowner').setRoleSubRole(args)).rejects.toMatchObject({
+            code: 'PRECONDITION_FAILED',
+            message: expect.stringContaining(`your ${label}`),
+          });
+          await expect(
+            callers.admin('roleowner').setRoleSubRole({ ...args, pin: '000000' })
+          ).rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining(label) });
+        } finally {
+          await rows('UPDATE organizations SET "requireApprovalAuthenticator"=false WHERE id=$1', [
+            orgD,
+          ]);
+        }
+      }
+    );
+
     it('refuses role-wide edits from another tenant, a non-owner or an owner changing their own access', async () => {
       const owner = callers.admin('ownerb');
       const args = { roleId: `${orgB}_role_inventory`, subRoleKey: 'receive-stock', ticked: true };
@@ -361,7 +513,12 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
           .setRoleSubRole({ ...args, roleId: `${orgA}_role_inventory`, pin: PIN })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(
-        owner.setRoleSubRole({ ...args, subRoleKey: 'review-catalogue', pin: PIN })
+        callers.admin('manager').setRoleSubRole({
+          ...args,
+          roleId: `${orgA}_role_inventory`,
+          subRoleKey: 'review-catalogue',
+          pin: PIN,
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(
         owner.setRoleSubRole({ ...args, roleId: `${orgB}_role_owner`, ticked: false, pin: PIN })
