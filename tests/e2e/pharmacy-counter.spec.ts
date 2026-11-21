@@ -1862,7 +1862,7 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
   await expect(sheet).toBeVisible({ timeout: 15_000 });
   await expect(sheet).toContainText('Controlled medicine · online only');
-  await expect(page.getByRole('table', { name: 'Cart lines' })).not.toContainText(controlled.name);
+  await expect(billLine(page, controlled.name)).toHaveCount(0);
   const authorise = sheet.getByRole('button', { name: 'Authorise line' });
   await expect(authorise).toBeDisabled();
   await expect(sheet).toContainText(/Still needed: the patient/);
@@ -1968,7 +1968,7 @@ test('Counter v2 — a scanned serialised pack of a controlled medicine waits, a
     sheet.getByRole('region', { name: 'Controlled medicine authorization' })
   ).toBeVisible();
   await expect(page.getByRole('region', { name: 'Next line' })).toHaveCount(0);
-  await expect(page.getByRole('table', { name: 'Cart lines' })).toHaveCount(0);
+  await expect(billLine(page, controlled.name)).toHaveCount(0);
   const authorise = sheet.getByRole('button', { name: 'Authorise line' });
   await expect(authorise).toBeDisabled();
   await qaShots(page, 'controlled-pack-waiting', {
@@ -1986,7 +1986,7 @@ test('Counter v2 — a scanned serialised pack of a controlled medicine waits, a
       )
     )
   ).toBeVisible();
-  await expect(page.getByRole('table', { name: 'Cart lines' })).toHaveCount(0);
+  await expect(billLine(page, controlled.name)).toHaveCount(0);
 });
 
 test('Counter v2 — the discount sheet: whole bill or next item, and who can approve', async ({
