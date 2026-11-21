@@ -585,12 +585,6 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         sites: { 'src/lib/pharmacy/refund-authorization.ts': 2 },
       },
       {
-        id: 'map-provider-refunds',
-        action: 'pharmacy:manage',
-        text: 'With finance write access, change the provider refund liability account using a fresh approval code. Another eligible approver changes your own mapping when one is available.',
-        sites: {},
-      },
-      {
         id: 'settle-cardmachine-payments-under',
         text: 'With Take payment, settle card-machine payments under review with their authenticator code (or PIN, if the owner turned the authenticator off)',
         sites: { 'src/lib/pharmacy/card-terminal/review-approvers.ts': 2 },

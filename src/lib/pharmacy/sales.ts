@@ -1,3 +1,4 @@
+import { reversedTenderRefundIds } from './card-terminal/provider-refunds';
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { Prisma } from '@/generated/prisma/client';
@@ -1583,12 +1584,19 @@ export async function changeSaleStatus(
         type: true,
         provider: true,
         amountMinor: true,
-        refunds: { select: { amountMinor: true } },
+        refunds: { select: { id: true, amountMinor: true } },
       },
     });
+    const reversed = await reversedTenderRefundIds(
+      db,
+      scope,
+      tenders.filter((t) => t.type === 'CARD').flatMap((t) => t.refunds)
+    );
     const unrefunded = (tender: (typeof tenders)[number]) =>
       tender.amountMinor -
-      tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0);
+      tender.refunds
+        .filter((r) => !reversed.has(r.id))
+        .reduce((refunded, refund) => refunded + refund.amountMinor, 0);
     const unrefundedMinor = tenders.reduce((total, tender) => total + unrefunded(tender), 0);
     // DEV-743: a card-terminal charge cannot be refunded here (it goes back through the
     // provider), so the void names that instead of sending the cashier to a refund that refuses.
@@ -1773,13 +1781,20 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       netMinor: line.grossMinor - line.discountMinor,
     };
   });
+  const reversed = await reversedTenderRefundIds(
+    db,
+    scope,
+    sale.tenders.filter((t) => t.type === 'CARD').flatMap((t) => t.refunds)
+  );
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
     // DEV-863: a prepaid wallet tender is restored to the customer's balance, never paid in cash.
     prepaid: tender.provider === PREPAID_PROVIDER,
     amountMinor: tender.amountMinor,
-    refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
+    refundedMinor: tender.refunds
+      .filter((r) => !reversed.has(r.id))
+      .reduce((n, row) => n + row.amountMinor, 0),
     refunds: tender.refunds.map((row) => ({
       id: row.id,
       amountMinor: row.amountMinor,

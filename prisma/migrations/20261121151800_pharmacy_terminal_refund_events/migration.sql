@@ -1,12 +1,9 @@
 BEGIN;
+SET LOCAL lock_timeout = '10s';
 
 ALTER TYPE "FinanceAccountCode" ADD VALUE IF NOT EXISTS 'CARD_REFUNDS_PAYABLE';
 ALTER TYPE "FinanceSourceKind" ADD VALUE IF NOT EXISTS 'PHARMACY_TERMINAL_REFUND';
 
-ALTER TABLE organizations
-  ADD COLUMN IF NOT EXISTS "terminalRefundMappingActorId" TEXT,
-  ADD COLUMN IF NOT EXISTS "terminalRefundAccount" "FinanceAccountCode",
-  ADD COLUMN IF NOT EXISTS "usesCustomFinanceChart" boolean NOT NULL DEFAULT false;
 ALTER TABLE pharmacy_card_terminal_attempts
   ADD COLUMN IF NOT EXISTS "approvedAmountMinor" integer CHECK ("approvedAmountMinor" > 0 AND ("approvedAmountMinor" IS NULL OR "providerRef" IS NOT NULL));
 CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_card_terminal_attempts_organizationId_branchId_id_key"
@@ -29,6 +26,11 @@ CREATE TABLE IF NOT EXISTS pharmacy_terminal_refund_events (
   "organizationId" text NOT NULL, "branchId" text NOT NULL, "attemptId" text NOT NULL,
   "refundId" text, "previousId" text UNIQUE, kind text NOT NULL CHECK (kind IN ('OWED','DECLINED','SETTLED')),
   "amountMinor" integer NOT NULL CHECK ("amountMinor">0),
+  "remainingMinor" integer NOT NULL CHECK ("remainingMinor" >= 0),
+  "settledOn" date, "selfApproved" boolean NOT NULL DEFAULT false,
+  CHECK ((kind = 'SETTLED') = ("settledOn" IS NOT NULL)),
+  CHECK (kind <> 'OWED' OR "remainingMinor" = "amountMinor"),
+  CHECK (kind <> 'DECLINED' OR "remainingMinor" = 0),
   "actorId" text NOT NULL, reason text NOT NULL CHECK (length(trim(reason)) BETWEEN 3 AND 200),
   "slipRef" text NOT NULL CHECK ("slipRef" ~ '^[A-Za-z0-9._:/-]{1,64}$'),
   "roleIdentity" text, "roleRules" text[] NOT NULL, "secondApproverId" text CHECK ("secondApproverId" <> "actorId"),
@@ -71,8 +73,23 @@ BEGIN
     SELECT 1 FROM pharmacy_refunds r JOIN pharmacy_card_terminal_attempts a ON
       a."organizationId" = r."organizationId" AND a."branchId" = r."branchId" AND a."tenderId" = r."originalTenderId"
     WHERE r.id = NEW."refundId" AND r."organizationId" = NEW."organizationId" AND r."branchId" = NEW."branchId"
-      AND a.id = NEW."attemptId" AND r."amountMinor" = NEW."amountMinor"
+      AND a.id = NEW."attemptId" AND (NEW.kind = 'SETTLED' OR r."amountMinor" = NEW."amountMinor")
   ) THEN RAISE EXCEPTION 'refund does not belong to this terminal payment'; END IF;
+  IF NEW."refundId" IS NOT NULL AND NEW.kind = 'DECLINED' AND NOT EXISTS (
+    SELECT 1 FROM pharmacy_terminal_refund_events root JOIN finance_journal_entries undo
+      ON undo."organizationId" = root."organizationId" AND undo."reversesEntryId" = root."journalId"
+    WHERE root.id=NEW."previousId" AND root."refundId"=NEW."refundId" AND root.kind='OWED'
+      AND root."previousId" IS NULL AND root."branchId"=NEW."branchId" AND undo.id=NEW."journalId"
+  ) THEN RAISE EXCEPTION 'tender refund correction requires the linked journal reversal'; END IF;
+  IF NEW.kind = 'SETTLED' AND NOT EXISTS (
+    SELECT 1 FROM pharmacy_terminal_refund_events e WHERE e.id = NEW."previousId"
+    AND e.kind IN ('OWED','SETTLED') AND e."remainingMinor" = NEW."remainingMinor"::bigint + NEW."amountMinor"
+  ) THEN RAISE EXCEPTION 'settlement exceeds or disagrees with the remaining obligation'; END IF;
+  IF NEW."journalId" IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM finance_journal_lines l WHERE l."organizationId"=NEW."organizationId"
+    AND l."entryId"=NEW."journalId" AND l."accountCode"::text='CARD_REFUNDS_PAYABLE'
+    AND l.side::text = CASE WHEN NEW.kind='OWED' THEN 'CREDIT' ELSE 'DEBIT' END
+  ) THEN RAISE EXCEPTION 'use the dedicated provider refund liability'; END IF;
   IF NEW."journalId" IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM finance_journal_entries j
     JOIN finance_journal_lines l ON l."organizationId" = j."organizationId" AND l."entryId" = j.id
@@ -87,5 +104,23 @@ BEGIN
 END $$;
 CREATE OR REPLACE TRIGGER terminal_refund_source_guard BEFORE INSERT ON pharmacy_terminal_refund_events
   FOR EACH ROW EXECUTE FUNCTION pharmacy_terminal_refund_source_guard();
+
+-- Keep the original tender lock and cap. Only a linked, posted cancellation
+-- releases its reserved amount. The original refund and posting remain intact.
+CREATE OR REPLACE FUNCTION pharmacy_guard_refund_total() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE tendered integer; refunded bigint;
+BEGIN
+  SELECT "amountMinor" INTO tendered FROM pharmacy_tenders
+    WHERE "organizationId"=NEW."organizationId" AND id=NEW."originalTenderId" FOR UPDATE;
+  SELECT COALESCE(SUM(r."amountMinor"),0) INTO refunded FROM pharmacy_refunds r
+    WHERE r."organizationId"=NEW."organizationId" AND r."originalTenderId"=NEW."originalTenderId"
+      AND NOT EXISTS (SELECT 1 FROM pharmacy_terminal_refund_events e WHERE
+        e."organizationId"=r."organizationId" AND e."branchId"=r."branchId" AND e."refundId"=r.id
+        AND e.kind='DECLINED' AND e."journalId" IS NOT NULL AND e."previousId" IS NOT NULL);
+  IF tendered IS NULL OR refunded+NEW."amountMinor">tendered THEN
+    RAISE EXCEPTION 'REFUND_EXCEEDS_TENDER' USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $$;
 
 COMMIT;

@@ -186,28 +186,32 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/take-payment-branches-by'],
   },
   'pharmacyCardTerminal.providerRefunds': {
-    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage',
+    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage + finance:read',
     lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
   },
   'pharmacyCardTerminal.reviewHistory': {
-    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage',
+    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage + finance:read',
     lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
   },
   'pharmacyCardTerminal.recordRefundAction': {
-    gate: 'protectedProcedure + requireCounterReceiptAccess + pharmacy:manage + fresh approval code, second-person approval and role comparison for corrections',
-    lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
+    gate: 'pharmacyAccountMutation (admin:access + finance:manage) + requireCounterReceiptAccess + pharmacy:manage + fresh approval code, second-person approval and role comparison for corrections',
+    lines: [
+      'manage-finance-accounts/manage-transactions',
+      'take-payment/settle-card-reviews',
+      'run-branches/settle-cardmachine-payments-under',
+    ],
   },
   'organizationAdmin.pharmacySettings.refundMapping': {
     gate: 'protectedProcedure + pharmacy-core + pharmacy-finance + finance:read for a live owner or explicitly granted reader',
     none: 'Finance readers and owners with finance access can view the account.',
   },
-  'organizationAdmin.pharmacySettings.setRefundMapping': {
-    gate: 'adminProcedure + live owner or explicit finance grant + authorizeGeneralJournal + authorizeReversal (management, fresh approval code and maker-checker)',
-    lines: ['run-branches/map-provider-refunds'],
-  },
   'pharmacyCardTerminal.resolveReview': {
-    gate: 'requireCounterReceiptAccess(pharmacy:counter) AND actorMayRefund (pharmacy:manage) + own fresh approval code; not own charge unless no other reviewer',
-    lines: ['take-payment/settle-card-reviews', 'run-branches/settle-cardmachine-payments-under'],
+    gate: 'pharmacyAccountMutation (admin:access + finance:manage) + requireCounterReceiptAccess(pharmacy:counter) AND actorMayRefund (pharmacy:manage) + own fresh approval code; not own charge unless no other reviewer',
+    lines: [
+      'manage-finance-accounts/manage-transactions',
+      'take-payment/settle-card-reviews',
+      'run-branches/settle-cardmachine-payments-under',
+    ],
   },
   'pharmacyDispensing.counterSignStatus': {
     gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (else empty)",
@@ -2468,8 +2472,9 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'any signed-in member (only reports whether they may refund)',
   },
   'pharmacySales.refundTender': {
-    gate: "requireCounterReceiptAccess (pharmacy:counter or pharmacy:dispense; khata-credit tenders need khataScope write = pharmacy:counter) AND actorMayRefund (pharmacy:manage) AND the actor's own approval code",
+    gate: "requireCounterReceiptAccess (pharmacy:counter or pharmacy:dispense; khata-credit tenders need khataScope write = pharmacy:counter) AND actorMayRefund (pharmacy:manage) AND the actor's own approval code; integrated terminal liabilities also require pharmacyAccountMutation (admin:access + finance:manage)",
     lines: [
+      'manage-finance-accounts/manage-transactions',
       'run-branches/refund-sales-take-returns',
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',
@@ -2493,8 +2498,9 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySales.returnAndRefund': {
-    gate: "requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) AND pharmacy:manage AND own approval code; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + a witnessing pharmacist's approval code",
+    gate: "requireCounterReceiptAccess default (pharmacy:counter or pharmacy:dispense) AND pharmacy:manage AND own approval code; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + a witnessing pharmacist's approval code; integrated terminal liabilities also require pharmacyAccountMutation (admin:access + finance:manage)",
     lines: [
+      'manage-finance-accounts/manage-transactions',
       'run-branches/refund-sales-take-returns',
       'take-payment/open-hold-resume-void',
       'dispense-prescriptions/use-counter-without-counter',

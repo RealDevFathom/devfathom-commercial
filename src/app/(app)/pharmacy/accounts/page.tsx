@@ -79,6 +79,11 @@ const ACCOUNTS_SECTIONS: ReadonlyArray<{ title: string; links: readonly Accounts
     title: 'Payables, cheques and tax',
     links: [
       {
+        href: '/pharmacy/accounts/provider-refunds',
+        title: 'Card provider refunds',
+        detail: 'Refunds owed, provider settlements and linked corrections.',
+      },
+      {
         href: '/pharmacy/accounts/ap-aging',
         title: 'Supplier expense invoice aging',
         detail: 'Outstanding supplier expense invoices by due date.',

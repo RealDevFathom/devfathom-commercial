@@ -332,6 +332,14 @@ beforeAll(async () => {
     await db.userPermissionOverride.create({
       data: { userId: actorId, capability: 'pharmacy:manage', effect: 'ALLOW', reason: 'DEV-743' },
     });
+    await db.userPermissionOverride.create({
+      data: {
+        userId: actorId,
+        capability: 'finance:manage',
+        effect: 'ALLOW',
+        reason: 'Book the terminal review in accounts',
+      },
+    });
     // The owner's own approval PIN: this workspace has no second manager (solo owner).
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     const profile = await db.restaurantStaffProfile.create({
@@ -1025,7 +1033,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
           role: 'EMPLOYEE',
         },
       });
-      for (const capability of ['pharmacy:counter', 'pharmacy:manage'])
+      for (const capability of ['pharmacy:counter', 'pharmacy:manage', 'admin:access'])
         await db.userPermissionOverride.create({
           data: { userId: managerId, capability, effect: 'ALLOW', reason: 'DEV-743' },
         });
@@ -1069,6 +1077,30 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       )
     ).toEqual([]);
 
+    await expect(
+      withTenantDb(
+        organizationId,
+        (db) =>
+          counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
+            ...resolution,
+            managerPin: secondManagerPin,
+          }),
+        { userId: managerId }
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await attemptsFor(saleId)).toEqual([
+      expect.objectContaining({ status: 'MANUAL_REVIEW' }),
+    ]);
+    await tenant((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: managerId,
+          capability: 'finance:manage',
+          effect: 'ALLOW',
+          reason: 'Post terminal review obligations',
+        },
+      })
+    );
     // The other manager resolves it with their own PIN.
     await expect(
       withTenantDb(

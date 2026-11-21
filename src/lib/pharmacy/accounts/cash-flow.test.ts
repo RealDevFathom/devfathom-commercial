@@ -31,6 +31,15 @@ const credit = (accountCode: string, amountMinor: bigint) => ({
 describe('classified cash-flow policy', () => {
   it.each([
     [
+      'provider refund settlement',
+      evidence('PHARMACY_TERMINAL_REFUND', null, [
+        debit('CARD_REFUNDS_PAYABLE', BigInt(301)),
+        credit('BANK', BigInt(301)),
+      ]),
+      'OPERATING',
+      -BigInt(301),
+    ],
+    [
       'cash sale/collection',
       evidence('PHARMACY_TENDER', null, [
         debit('CASH', BigInt(500)),

@@ -113,6 +113,7 @@ function fixture(
       ),
     },
     pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]) },
+    pharmacyCardTerminalAttempt: { count: vi.fn().mockResolvedValue(1) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CASH' }) },
     // DEV-501: the recorded return's priced rows: PKR 6.00 gross less PKR 1.00 discount.
     pharmacySaleReturnLine: {
@@ -162,8 +163,16 @@ beforeEach(() => {
 
 describe('DEV-647 refunds need a manager or owner PIN', () => {
   it('allows booking a provider obligation when the stored tender is a card and the manager reauthenticates', async () => {
-    const f = fixture(ROLES.manager!);
-    f.db.pharmacyTender.findFirst.mockResolvedValue({ type: 'CARD' });
+    const f = fixture([
+      ...ROLES.manager!,
+      { capability: 'finance:manage', effect: 'ALLOW' },
+      { capability: 'admin:access', effect: 'ALLOW' },
+    ]);
+    f.db.pharmacyTender.findFirst.mockResolvedValue({
+      id: 'tender-a',
+      type: 'CARD',
+      provider: 'FAKE_TERMINAL',
+    });
     await f.caller.refundTender({ ...settlement, managerPin: PIN });
     expect(refundPharmacyTender).toHaveBeenCalledExactlyOnceWith(
       f.db,
@@ -177,6 +186,18 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
     );
   });
 
+  it('refuses booking a confirmed terminal refund without finance management', async () => {
+    const f = fixture(ROLES.manager!);
+    f.db.pharmacyTender.findFirst.mockResolvedValue({
+      id: 'tender-a',
+      type: 'CARD',
+      provider: 'FAKE_TERMINAL',
+    });
+    await expect(f.caller.refundTender({ ...settlement, managerPin: PIN })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(refundPharmacyTender).not.toHaveBeenCalled();
+  });
   it.each(['cashier', 'pharmacist'])('refuses a %s before any PIN or money work', async (role) => {
     const f = fixture(ROLES[role]!);
     await expect(f.caller.refundTender({ ...settlement, managerPin: PIN })).rejects.toMatchObject({

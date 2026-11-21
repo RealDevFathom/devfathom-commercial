@@ -100,7 +100,23 @@ const app = router({ pharmacyCardTerminal: pharmacyCardTerminalRouter });
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
 const businessDate = new Date('2026-11-18T00:00:00.000Z');
 
+const managerMembership = async () => ({
+  role: 'ADMIN',
+  status: 'ACTIVE',
+  organizationRole: {
+    isSystem: false,
+    key: 'review-manager',
+    permissions: [
+      { capability: 'admin:access', effect: 'ALLOW' },
+      { capability: 'finance:manage', effect: 'ALLOW' },
+    ],
+  },
+  permissionOverrides: [],
+});
 const requestDb = {
+  user: {
+    findUnique: vi.fn(managerMembership),
+  },
   pharmacyTerminalRefundEvent: {
     findFirst: vi.fn(async () => ({ actorId: scope.actorId, attemptId: 'reviewed' })),
   },
@@ -114,14 +130,25 @@ const requestDb = {
   $transaction: vi.fn(async (fn: (tx: unknown) => unknown) => fn(requestDb)),
 };
 
-function caller() {
+function caller(accountsManager = false) {
   const db = requestDb;
   const context = {
     db,
-    entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'], modules: [] },
+    entitlements: {
+      organizationId: 'org-a',
+      enabledModules: accountsManager
+        ? ['pharmacy-counter', 'pharmacy-finance']
+        : ['pharmacy-counter'],
+      modules: [],
+    },
     session: {
       expires: 'later',
-      user: { id: 'user-a', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-a' },
+      user: {
+        id: 'user-a',
+        role: accountsManager ? 'ADMIN' : 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+      },
     },
     organization: { id: 'org-a', vertical: 'PHARMACY' },
     support: null,
@@ -582,11 +609,40 @@ describe('provider refund correction approval', () => {
     expect(requestDb.pharmacyTerminalRefundEvent.findFirst).not.toHaveBeenCalled();
     expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
   });
+  it('refuses a finance reader without manage access before obtaining either approval', async () => {
+    refundAuth.actorMayRefund.mockResolvedValue(true);
+    const reader = {
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: {
+        isSystem: false,
+        key: 'read-only',
+        permissions: [
+          { capability: 'finance:read', effect: 'ALLOW' },
+          { capability: 'admin:access', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    };
+    requestDb.user.findUnique.mockResolvedValue(reader);
+    try {
+      await expect(caller(true).recordRefundAction(edit)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(requestDb.pharmacyTerminalRefundEvent.findFirst).not.toHaveBeenCalled();
+      expect(refundAuth.authenticateRefundPin).not.toHaveBeenCalled();
+    } finally {
+      requestDb.user.findUnique.mockReset();
+      requestDb.user.findUnique.mockImplementation(managerMembership);
+    }
+  });
   it('requires another eligible reviewer and that reviewer’s own verified PIN, even for the original manager', async () => {
     refundAuth.actorMayRefund.mockResolvedValue(true);
-    await expect(caller().recordRefundAction(edit)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller(true).recordRefundAction(edit)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
     await expect(
-      caller().recordRefundAction({
+      caller(true).recordRefundAction({
         ...edit,
         secondApproval: { userId: scope.actorId, managerPin: '9876' },
       })
@@ -596,7 +652,7 @@ describe('provider refund correction approval', () => {
       .mockResolvedValueOnce({ verified: true })
       .mockResolvedValueOnce({ blocked: 'PIN refused' });
     expect(
-      await caller().recordRefundAction({
+      await caller(true).recordRefundAction({
         ...edit,
         secondApproval: { userId: 'manager-b', managerPin: '9876' },
       })

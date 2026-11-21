@@ -461,6 +461,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/inventory', 'pharmacy-inventory'],
   ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
   ['/pharmacy/accounts/general-journal', 'pharmacy-finance'],
+  ['/pharmacy/accounts/provider-refunds', 'pharmacy-finance'],
   ['/pharmacy/accounts/ap-aging', 'pharmacy-finance'],
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],

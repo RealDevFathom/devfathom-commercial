@@ -1,5 +1,10 @@
+import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
+import { pharmacyAccountMutation } from '@/server/pharmacy-finance-gate';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
+import { requirePharmacyFinance, canManagePharmacyAccounts } from '@/lib/pharmacy/finance-access';
 import {
-  outstandingProviderRefunds,
+  providerRefundAccounts,
   changeProviderRefund,
   loadOriginalReview,
 } from '@/lib/pharmacy/card-terminal/provider-refunds';
@@ -177,24 +182,56 @@ async function requireReviewer(ctx: TRPCContext, branch: string) {
   return scope;
 }
 
+async function requireRefundAccountsAccess(ctx: TRPCContext, branch: string) {
+  if (!hasModule(ctx.entitlements, 'pharmacy-finance'))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy finance access is required to manage card provider refunds.',
+    });
+  return requireReviewer(ctx, branch);
+}
+
 export const pharmacyCardTerminalRouter = router({
   providerRefunds: protectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await requireReviewer(ctx, input.branchId);
-      const booked = await outstandingProviderRefunds(ctx.db as ScopedDb, scope);
+      const scope = await requireRefundAccountsAccess(ctx, input.branchId);
+      await requirePharmacyFinance(ctx);
+      const records = await providerRefundAccounts(ctx.db as ScopedDb, scope);
       const historical = await ctx.db.$queryRaw<
-        { id: string; attemptId: string; amountMinor: number | null }[]
+        {
+          id: string;
+          attemptId: string;
+          attemptKey: string;
+          status: string;
+          createdAt: Date;
+          originalActorId: string;
+          amountMinor: number | null;
+        }[]
       >`
-      SELECT 'review:'||a.id AS id,a.id AS "attemptId",COALESCE(a."approvedAmountMinor", CASE WHEN a."reviewReason" IS DISTINCT FROM 'Terminal approved a different amount' THEN a."amountMinor" END) AS "amountMinor"
-      FROM pharmacy_card_terminal_attempts a WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a.status='REVERSED'
+      SELECT 'review:'||a.id AS id,a.id AS "attemptId",a."attemptKey",a.status,a."resolvedAt" AS "createdAt",a."resolvedById" AS "originalActorId",COALESCE(a."approvedAmountMinor", CASE WHEN a."reviewReason" IS DISTINCT FROM 'Terminal approved a different amount' THEN a."amountMinor" END) AS "amountMinor"
+      FROM pharmacy_card_terminal_attempts a WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a.status IN ('REVERSED','DECLINED') AND a."resolvedById" IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM pharmacy_terminal_refund_events e WHERE e."attemptId"=a.id)`;
-      return { booked, historical };
+      return {
+        booked: records.filter((row) => row.remainingMinor > 0),
+        records,
+        historical,
+        actorId: scope.actorId,
+        peers: await otherCardTerminalReviewers(ctx.db as ScopedDb, scope),
+        owner: await actorIsPharmacyOwner(ctx.db, scope.organizationId, scope.actorId),
+        canWrite:
+          (await canManagePharmacyAccounts(ctx)) &&
+          (await can(subjectFromSession(ctx.session.user), 'admin:access', undefined, {
+            db: ctx.db,
+            source: 'TRPC',
+          })),
+      };
     }),
   reviewHistory: protectedProcedure
     .input(z.object({ branchId, attemptKey }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await requireReviewer(ctx, input.branchId);
+      const scope = await requireRefundAccountsAccess(ctx, input.branchId);
+      await requirePharmacyFinance(ctx);
       const where = { organizationId: scope.organizationId, branchId: scope.branchId };
       const attempt = await ctx.db.pharmacyCardTerminalAttempt.findFirstOrThrow({
         where: { ...where, attemptKey: input.attemptKey },
@@ -218,6 +255,11 @@ export const pharmacyCardTerminalRouter = router({
           reason: true,
           actorId: true,
           secondApproverId: true,
+          journalId: true,
+          slipRef: true,
+          settledOn: true,
+          remainingMinor: true,
+          selfApproved: true,
         },
       });
       return {
@@ -226,7 +268,7 @@ export const pharmacyCardTerminalRouter = router({
         events,
       };
     }),
-  recordRefundAction: protectedProcedure
+  recordRefundAction: pharmacyAccountMutation
     .input(
       z
         .object({
@@ -237,6 +279,9 @@ export const pharmacyCardTerminalRouter = router({
           resolutionReason: z.string().trim().min(3).max(200),
           slipRef: z.string().trim().min(1).max(64),
           managerPin: z.string().regex(/^\d{4,8}$/),
+          declareSelfApproval: z.literal(true).optional(),
+          settlementAmountMinor: z.number().int().positive().max(2147483647).optional(),
+          settledOn: z.string().date().optional(),
           secondApproval: z
             .object({
               userId: z.string().min(1).max(128),
@@ -249,7 +294,7 @@ export const pharmacyCardTerminalRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await requireReviewer(ctx, input.branchId);
+      const scope = await requireRefundAccountsAccess(ctx, input.branchId);
       const db = ctx.db as ScopedDb;
       const action = 'pharmacyCardTerminal.recordRefundAction';
       const pinArgs = {
@@ -271,9 +316,26 @@ export const pharmacyCardTerminalRouter = router({
         where: { organizationId: scope.organizationId, branchId: scope.branchId, id: attemptId },
       });
       if (!attempt) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (input.kind === 'SETTLED' && (!input.settlementAmountMinor || !input.settledOn))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Enter the settlement amount and date.',
+        });
+      const originalActorId = previous?.refundId
+        ? (
+            await db.pharmacyTerminalRefundEvent.findFirstOrThrow({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                id: 'refund:' + previous.refundId,
+              },
+              select: { actorId: true },
+            })
+          ).actorId
+        : attempt.resolvedById;
       const needsPeer =
         (input.kind === 'DECLINED' || input.kind === 'OWED') &&
-        (previous?.actorId === scope.actorId || attempt.resolvedById === scope.actorId);
+        (previous?.actorId === scope.actorId || originalActorId === scope.actorId);
       if (attempt.actorId === scope.actorId || needsPeer || input.secondApproval) {
         const others = await otherCardTerminalReviewers(db, scope);
         if (attempt.actorId === scope.actorId && others.length)
@@ -283,11 +345,18 @@ export const pharmacyCardTerminalRouter = router({
           });
         if (
           (needsPeer || input.secondApproval) &&
-          !others.some((p) => p.id === input.secondApproval?.userId)
+          !others.some((p) => p.id === input.secondApproval?.userId) &&
+          !(
+            needsPeer &&
+            !input.secondApproval &&
+            input.declareSelfApproval &&
+            others.length === 0 &&
+            (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))
+          )
         )
           throw new TRPCError({
             code: 'FORBIDDEN',
-            message: 'A different reviewer must approve your correction with their own PIN.',
+            message: 'Independent approval is required. A sole owner must declare self-approval.',
           });
       }
       const pin = await authenticateRefundPin({
@@ -307,7 +376,7 @@ export const pharmacyCardTerminalRouter = router({
       }
       return ctx.db.$transaction(async (tx) => {
         const db = tx as ScopedDb;
-        await requireReviewer({ ...ctx, db }, scope.branchId);
+        await requireRefundAccountsAccess({ ...ctx, db }, scope.branchId);
         if (input.kind === 'BOOK_HISTORICAL') {
           if (input.previousId !== 'review:' + attempt.id || attempt.status !== 'REVERSED')
             throw new TRPCError({
@@ -337,12 +406,18 @@ export const pharmacyCardTerminalRouter = router({
           {
             previousId: input.previousId,
             kind: input.kind,
+            settledOn: input.settledOn,
+            settlementAmountMinor: input.settlementAmountMinor,
             verifiedAmountMinor: input.verifiedAmountMinor,
             commandKey: input.commandKey,
             slipRef: input.slipRef,
             reason: input.resolutionReason,
           },
-          { pinVerified: true, secondApproverId: input.secondApproval?.userId }
+          {
+            pinVerified: true,
+            secondApproverId: input.secondApproval?.userId,
+            declareSelfApproval: input.declareSelfApproval,
+          }
         );
         return {
           id: event.id,
@@ -424,7 +499,7 @@ export const pharmacyCardTerminalRouter = router({
         fail(error);
       }
     }),
-  resolveReview: protectedProcedure
+  resolveReview: pharmacyAccountMutation
     .input(
       z
         .object({

@@ -1,10 +1,10 @@
 import 'server-only';
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import { randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import type { FinanceAccountCode, PharmacyTerminalRefundEvent } from '@/generated/prisma/client';
 import { postJournalEntry, reverseJournalEntry } from '@/lib/finance/journal';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { isBalanceSheetLiability } from '../accounts/balance-sheet';
 import { actorIsPharmacyOwner } from '../procurement-access';
 import type { LedgerScope } from '../stock-ledger';
 import { assertNoCardholderData } from './cardholder-data';
@@ -18,6 +18,8 @@ type Change = {
   commandKey: string;
   kind: 'DECLINED' | 'OWED' | 'SETTLED';
   verifiedAmountMinor?: number;
+  settlementAmountMinor?: number;
+  settledOn?: string;
   reason: string;
   slipRef: string;
 };
@@ -57,7 +59,7 @@ async function book(
       event.kind === 'OWED'
         ? 'Refund owed through card provider'
         : 'Refund settled by card provider',
-    occurredAt: event.createdAt,
+    occurredAt: event.settledOn ?? event.createdAt,
     idempotencyKey: 'terminal-refund:' + event.id,
     branchId: scope.branchId,
     lines: [
@@ -69,22 +71,9 @@ async function book(
 }
 
 async function bookOwed(db: ScopedDb, scope: Scope, event: Event) {
-  const settings = await db.organization.findUniqueOrThrow({
-    where: { id: scope.organizationId },
-    select: { terminalRefundAccount: true, usesCustomFinanceChart: true },
-  });
-  const liability =
-    settings.terminalRefundAccount ??
-    (settings.usesCustomFinanceChart ? null : 'CARD_REFUNDS_PAYABLE');
-  if (!liability || !isBalanceSheetLiability(liability) || liability === 'MANUAL_NONTRADE_ACCRUAL')
-    throw new TRPCError({
-      code: 'PRECONDITION_FAILED',
-      message:
-        'Set the provider refund liability account in Pharmacy settings before booking this refund.',
-    });
   // A reviewed charge never became a tender. A returned sale already reversed its revenue
   // into sales clearing. Only a confirmed provider settlement credits the bank.
-  return book(db, scope, event, event.refundId ? 'SALES_CLEARING' : 'BANK', liability);
+  return book(db, scope, event, event.refundId ? 'SALES_CLEARING' : 'BANK', 'CARD_REFUNDS_PAYABLE');
 }
 
 // Snapshot the installed role. Distinct custom roles are comparable only when the
@@ -107,18 +96,29 @@ async function reviewAuthority(db: ScopedDb, scope: Scope, actorId: string) {
   };
 }
 
-function mayCorrectRole(actor: Awaited<ReturnType<typeof reviewAuthority>>, original: Event) {
+type Authority = Pick<Event, 'ownerAuthority' | 'roleIdentity' | 'roleRules'>;
+function includesGrant(rules: string[], grant: string) {
+  return (
+    rules.includes(grant) ||
+    rules.some(
+      (rule) => rule.startsWith('ALLOW:') && capabilityMatches(rule.slice(6), grant.slice(6))
+    )
+  );
+}
+export function mayCorrectRole(actor: Authority, original: Authority) {
   if (actor.ownerAuthority) return true;
   if (original.ownerAuthority || !original.roleIdentity) return false;
   if (actor.roleIdentity === original.roleIdentity) return true;
-  const grants = original.roleRules.filter((r) => r.startsWith('ALLOW:'));
+  const grants = original.roleRules.filter((rule) => rule.startsWith('ALLOW:'));
   return (
     grants.length > 0 &&
-    grants.every((r) => actor.roleRules.includes(r)) &&
-    actor.roleRules.some((r) => r.startsWith('ALLOW:') && !original.roleRules.includes(r)) &&
+    grants.every((grant) => includesGrant(actor.roleRules, grant)) &&
+    actor.roleRules.some(
+      (grant) => grant.startsWith('ALLOW:') && !includesGrant(original.roleRules, grant)
+    ) &&
     actor.roleRules
-      .filter((r) => r.startsWith('DENY:'))
-      .every((r) => original.roleRules.includes(r))
+      .filter((rule) => rule.startsWith('DENY:'))
+      .every((rule) => original.roleRules.includes(rule))
   );
 }
 
@@ -184,6 +184,9 @@ export async function recordTerminalRefundRoot(
     previousId: null,
     kind: charged ? 'OWED' : 'DECLINED',
     amountMinor,
+    remainingMinor: charged ? amountMinor : 0,
+    settledOn: null,
+    selfApproved: false,
     actorId,
     reason,
     slipRef,
@@ -201,20 +204,57 @@ export async function recordTerminalRefundRoot(
   return db.pharmacyTerminalRefundEvent.create({ data: event });
 }
 
-export function outstandingProviderRefunds(db: ScopedDb, scope: Scope) {
-  return db.$queryRaw<Pick<Event, 'id' | 'attemptId' | 'refundId' | 'amountMinor' | 'createdAt'>[]>`
-    SELECT e.id,e."attemptId",e."refundId",e."amountMinor",e."createdAt"
+export function providerRefundAccounts(db: ScopedDb, scope: Scope) {
+  return db.$queryRaw<
+    (Pick<
+      Event,
+      | 'id'
+      | 'attemptId'
+      | 'refundId'
+      | 'amountMinor'
+      | 'remainingMinor'
+      | 'kind'
+      | 'actorId'
+      | 'terminalConfirmed'
+    > & { createdAt: Date; attemptKey: string; originalActorId: string; chargeActorId: string })[]
+  >`
+    SELECT e.id,e."attemptId",e."refundId",e."amountMinor",e."remainingMinor",e.kind,e."actorId",e."terminalConfirmed",
+      CASE WHEN root."refundId" IS NULL THEN COALESCE(a."resolvedAt", root."createdAt") ELSE root."createdAt" END AS "createdAt", root."actorId" AS "originalActorId",a."attemptKey",a."actorId" AS "chargeActorId"
     FROM pharmacy_terminal_refund_events e
-    WHERE e."organizationId"=${scope.organizationId} AND e."branchId"=${scope.branchId} AND e.kind='OWED'
+    JOIN pharmacy_card_terminal_attempts a ON a.id=e."attemptId" AND a."organizationId"=e."organizationId" AND a."branchId"=e."branchId"
+    JOIN pharmacy_terminal_refund_events root ON root."attemptId"=e."attemptId" AND root."refundId" IS NOT DISTINCT FROM e."refundId" AND root."previousId" IS NULL
+    WHERE e."organizationId"=${scope.organizationId} AND e."branchId"=${scope.branchId}
     AND NOT EXISTS (SELECT 1 FROM pharmacy_terminal_refund_events n WHERE n."previousId"=e.id)
-    ORDER BY e."createdAt",e.id`;
+    ORDER BY (e."remainingMinor">0) DESC, root."createdAt",e.id`;
+}
+
+export async function outstandingProviderRefunds(db: ScopedDb, scope: Scope) {
+  return (await providerRefundAccounts(db, scope)).filter((row) => row.remainingMinor > 0);
+}
+
+export async function reversedTenderRefundIds(
+  db: ScopedDb,
+  scope: Scope,
+  refunds: { id: string }[]
+) {
+  if (!refunds.length) return new Set<string>();
+  const events = await db.pharmacyTerminalRefundEvent.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      kind: 'DECLINED',
+      refundId: { in: refunds.map((r) => r.id) },
+    },
+    select: { refundId: true },
+  });
+  return new Set(events.map((e) => e.refundId));
 }
 
 export async function changeProviderRefund(
   db: ScopedDb,
   scope: Scope,
   input: Change,
-  approval: { pinVerified: boolean; secondApproverId?: string }
+  approval: { pinVerified: boolean; secondApproverId?: string; declareSelfApproval?: boolean }
 ) {
   if (!approval.pinVerified) throw new TRPCError({ code: 'FORBIDDEN' });
   checkEvidence(input.reason, input.slipRef);
@@ -235,41 +275,67 @@ export async function changeProviderRefund(
       code: 'FORBIDDEN',
       message: 'Another manager or owner must review this payment.',
     });
-  if (input.kind === 'DECLINED' && previous.refundId)
-    throw new TRPCError({ code: 'CONFLICT', message: 'A tender refund is not a review decision.' });
+  if (previous.refundId && input.kind === 'DECLINED') {
+    const sale = await db.$queryRaw<
+      { status: string }[]
+    >`SELECT status FROM pharmacy_sales WHERE id=${attempt.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+    if (sale[0]?.status === 'VOID')
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'A voided bill requires its terminal payment to remain refunded.',
+      });
+  }
+  let selfApproved = false;
   const authority = await reviewAuthority(db, scope, scope.actorId);
   if (input.kind !== 'SETTLED') {
     const original = await db.pharmacyTerminalRefundEvent.findUniqueOrThrow({
-      where: { id: 'review:' + attempt.id },
+      where: { id: previous.refundId ? 'refund:' + previous.refundId : 'review:' + attempt.id },
     });
     if (!mayCorrectRole(authority, original) || !mayCorrectRole(authority, previous))
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'This correction requires the same or higher review authority.',
       });
-    if (
-      (scope.actorId === previous.actorId || scope.actorId === original.actorId) &&
-      (!approval.secondApproverId ||
-        !(await otherCardTerminalReviewers(db, scope)).some(
-          (other) => other.id === approval.secondApproverId
-        ))
-    )
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'A different reviewer must approve your correction with their own PIN.',
-      });
+    if (scope.actorId === previous.actorId || scope.actorId === original.actorId) {
+      const peers = await otherCardTerminalReviewers(db, scope);
+      selfApproved =
+        authority.ownerAuthority &&
+        peers.length === 0 &&
+        approval.declareSelfApproval === true &&
+        !approval.secondApproverId;
+      if (!selfApproved && !peers.some((peer) => peer.id === approval.secondApproverId))
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message:
+            'Independent approval is required. A sole owner must explicitly sign off with their own approval code.',
+        });
+    }
   }
-  const amountMinor = input.verifiedAmountMinor ?? previous.amountMinor;
+  const settling = input.kind === 'SETTLED';
+  const amountMinor = settling
+    ? (input.settlementAmountMinor ?? previous.remainingMinor)
+    : (input.verifiedAmountMinor ?? previous.amountMinor);
+  const settledOn = settling
+    ? new Date((input.settledOn ?? new Date().toISOString().slice(0, 10)) + 'T00:00:00Z')
+    : null;
+  if (
+    settledOn &&
+    (!Number.isFinite(settledOn.getTime()) ||
+      (input.settledOn && settledOn.toISOString().slice(0, 10) !== input.settledOn))
+  )
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter a valid settlement date.' });
   if (
     !Number.isSafeInteger(amountMinor) ||
     amountMinor <= 0 ||
     amountMinor > 2147483647 ||
-    (amountMinor !== previous.amountMinor &&
-      (input.kind !== 'OWED' || previous.journalId || attempt.approvedAmountMinor != null))
+    (settling
+      ? amountMinor > previous.remainingMinor
+      : amountMinor !== previous.amountMinor &&
+        (input.kind !== 'OWED' || previous.journalId || attempt.approvedAmountMinor != null))
   )
     throw new TRPCError({
       code: 'CONFLICT',
-      message: 'The amount must match the recorded obligation.',
+      message: 'The amount exceeds or conflicts with the recorded obligation.',
     });
   const commandKey = 'action:' + input.commandKey;
   const replay = await db.pharmacyTerminalRefundEvent.findFirst({
@@ -281,6 +347,9 @@ export async function changeProviderRefund(
     replay.actorId === scope.actorId &&
     replay.kind === input.kind &&
     replay.amountMinor === amountMinor &&
+    (!input.settledOn || replay.settledOn?.getTime() === settledOn?.getTime()) &&
+    replay.secondApproverId === (approval.secondApproverId ?? null) &&
+    replay.selfApproved === selfApproved &&
     replay.reason === input.reason &&
     replay.slipRef === input.slipRef
   )
@@ -294,9 +363,11 @@ export async function changeProviderRefund(
       message: 'This command or decision already has a result.',
     });
   if (
-    previous.kind === 'SETTLED' ||
-    (input.kind === 'OWED' ? previous.kind !== 'DECLINED' : previous.kind !== 'OWED') ||
-    (input.kind === 'DECLINED' && (previous.refundId || previous.terminalConfirmed))
+    settling
+      ? previous.remainingMinor <= 0
+      : input.kind === 'OWED'
+        ? previous.kind !== 'DECLINED' || !!previous.refundId
+        : previous.kind !== 'OWED' || (!previous.refundId && previous.terminalConfirmed)
   )
     throw new TRPCError({
       code: 'CONFLICT',
@@ -333,6 +404,13 @@ export async function changeProviderRefund(
     ...previous,
     id: randomUUID(),
     amountMinor,
+    remainingMinor: settling
+      ? previous.remainingMinor - amountMinor
+      : input.kind === 'OWED'
+        ? amountMinor
+        : 0,
+    settledOn,
+    selfApproved,
     previousId: previous.id,
     kind: input.kind,
     journalId: null,
@@ -345,10 +423,7 @@ export async function changeProviderRefund(
     createdAt: new Date(),
   };
   if (input.kind === 'SETTLED') {
-    const liability = await db.financeJournalLine.findFirstOrThrow({
-      where: { organizationId: scope.organizationId, entryId: previous.journalId!, side: 'CREDIT' },
-    });
-    event.journalId = await book(db, scope, event, liability.accountCode, 'BANK');
+    event.journalId = await book(db, scope, event, 'CARD_REFUNDS_PAYABLE', 'BANK');
   } else if (previous.journalId) {
     const entry = await reverseJournalEntry(db, scope, {
       entryId: previous.journalId,
@@ -379,7 +454,8 @@ export async function changeProviderRefund(
         reason: input.reason,
         secondApproverId: event.secondApproverId,
         pinVerified: true,
-        soloOwner: attempt.actorId === scope.actorId,
+        soloOwner: selfApproved,
+        selfApproved,
       },
     },
   });

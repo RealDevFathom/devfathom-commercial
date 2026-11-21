@@ -1,4 +1,7 @@
-import { recordTerminalRefundRoot } from './card-terminal/provider-refunds';
+import {
+  recordTerminalRefundRoot,
+  reversedTenderRefundIds,
+} from './card-terminal/provider-refunds';
 import { pricePrepaidSale } from './prepaid-discount';
 import { assertPrepaidPin, movePrepaid, PREPAID_PROVIDER } from './prepaid-tiers';
 import { requestCounterEvidence } from './counter-evidence';
@@ -1034,9 +1037,14 @@ export async function refundPharmacyTender(
   const terminalRefund = !input.adapter && (await anyCardTerminalTender(db, scope, [tender]));
   if (terminalRefund && (!options.recordProviderRefundOwed || input.manualCashFallback))
     throw new PharmacySettlementError('CARD_TERMINAL_REFUND_VIA_PROVIDER');
+  const reversed = terminalRefund
+    ? await reversedTenderRefundIds(db, scope, tender.refunds)
+    : new Set<string>();
   assertRefundWithinTender(
     tender.amountMinor,
-    tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
+    tender.refunds
+      .filter((row) => !reversed.has(row.id))
+      .reduce((sum, row) => sum + row.amountMinor, 0),
     input.amountMinor
   );
   // Returned-value cap (F13 c62a34f3 + bbb71a5d, reconciled with the tip's failed-delivery flow):
@@ -1056,7 +1064,7 @@ export async function refundPharmacyTender(
     },
     include: {
       lines: { include: { returnLines: true, unidentifiedReturnHolds: true } },
-      refunds: true,
+      refunds: { include: { originalTender: { select: { type: true } } } },
     },
   });
   const unsettledExempt =
@@ -1082,9 +1090,18 @@ export async function refundPharmacyTender(
           ),
         0
       ) ?? 0;
+    const cancelled = await reversedTenderRefundIds(
+      db,
+      scope,
+      sale?.refunds.filter((row) => row.originalTender?.type === 'CARD') ?? []
+    );
     if (
       !sale ||
-      sale.refunds.reduce((sum, row) => sum + row.amountMinor, 0) + input.amountMinor > returnValue
+      sale.refunds
+        .filter((row) => !cancelled.has(row.id))
+        .reduce((sum, row) => sum + row.amountMinor, 0) +
+        input.amountMinor >
+        returnValue
     )
       throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   }
@@ -1707,10 +1724,16 @@ export async function cutPharmacyDailyClose(
       select: { id: true, type: true, amountMinor: true, confirmedById: true },
     }),
   ]);
+  const reversedRefunds = await reversedTenderRefundIds(
+    db,
+    scope,
+    refunds.filter((row) => row.originalTender?.type === 'CARD')
+  );
+  const effectiveRefunds = refunds.filter((row) => !reversedRefunds.has(row.id));
   const aggregate = computePharmacyClose({
     tenders,
     sales: sales.map((sale) => ({ id: sale.id, totalMinor: saleTotalMinor(sale.lines) })),
-    refunds: refunds.map((refund) => ({ id: refund.id, amountMinor: refund.amountMinor })),
+    refunds: effectiveRefunds.map((refund) => ({ id: refund.id, amountMinor: refund.amountMinor })),
     drawers: drawers.map((drawer) => ({
       id: drawer.id,
       expectedMinor: foldExpectedCash(
@@ -1738,7 +1761,7 @@ export async function cutPharmacyDailyClose(
         ...aggregate,
         tenderTotals: aggregateTenderTotals(
           tenders,
-          refunds,
+          effectiveRefunds,
           await manualConfirmerNames(db, scope.organizationId, tenders)
         ),
         isFinal,

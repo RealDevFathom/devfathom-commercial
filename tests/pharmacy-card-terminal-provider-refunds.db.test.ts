@@ -3,7 +3,6 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
-import type { TRPCContext } from '@/server/trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('server-only', () => ({}));
@@ -17,14 +16,12 @@ const key = 'test-review-' + suffix;
 let run: <T>(fn: (db: ScopedDb) => Promise<T>) => Promise<T>;
 
 async function loadRefundModules() {
-  const [store, service, refunds, settlement, sales, settings, credentials] = await Promise.all([
+  const [store, service, refunds, settlement, sales] = await Promise.all([
     import('@/lib/pharmacy/card-terminal/store'),
     import('@/lib/pharmacy/card-terminal/service'),
     import('@/lib/pharmacy/card-terminal/provider-refunds'),
     import('@/lib/pharmacy/settlement'),
     import('@/lib/pharmacy/sales'),
-    import('@/server/routers/organization-pharmacy-settings'),
-    import('@/lib/restaurant/operator-credentials'),
   ]);
   return {
     prismaCardTerminalAttemptStore: store.prismaCardTerminalAttemptStore,
@@ -33,8 +30,6 @@ async function loadRefundModules() {
     outstandingProviderRefunds: refunds.outstandingProviderRefunds,
     refundPharmacyTender: settlement.refundPharmacyTender,
     changeSaleStatus: sales.changeSaleStatus,
-    settings: settings.organizationPharmacySettingsRouter,
-    hashPin: credentials.hashOperatorCredential,
   };
 }
 
@@ -209,17 +204,13 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     ]);
     expect(history.every((e) => e.reason.length > 0)).toBe(true);
   });
-  it('refuses an unmapped custom chart, then books one partial tender refund without paying cash', async () => {
+  it('books to the fixed provider liability, reverses a mistaken tender obligation and caps settlement', async () => {
     const { refundPharmacyTender, changeProviderRefund, changeSaleStatus } = modules;
     const saleId = 'partial-' + suffix;
     const tenderId = 'tender-' + suffix;
     const attemptId = 'attempt-' + suffix;
     const businessDate = new Date('2026-11-18T00:00:00Z');
     await run(async (db) => {
-      await db.organization.update({
-        where: { id: organizationId },
-        data: { usesCustomFinanceChart: true },
-      });
       await db.pharmacySale.create({
         data: { id: saleId, organizationId, branchId, createdByUserId: scope.actorId },
       });
@@ -284,16 +275,6 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
           { recordProviderRefundOwed: true }
         )
       );
-    await expect(book()).rejects.toThrow(/Set the provider refund liability account/);
-    expect(
-      await run((db) => db.pharmacyRefund.count({ where: { originalTenderId: tenderId } }))
-    ).toBe(0);
-    await run((db) =>
-      db.organization.update({
-        where: { id: organizationId },
-        data: { terminalRefundAccount: 'ACCOUNTS_PAYABLE' },
-      })
-    );
     expect(await book()).toMatchObject({ providerRefundOwed: true, replayed: false });
     expect(await book()).toMatchObject({ providerRefundOwed: true, replayed: true });
     await expect(book(701, 'over-refund')).rejects.toMatchObject({
@@ -313,20 +294,66 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
       );
     expect(await legs(event!.journalId!)).toEqual([
       { side: 'DEBIT', amountMinor: 301, accountCode: 'SALES_CLEARING' },
-      { side: 'CREDIT', amountMinor: 301, accountCode: 'ACCOUNTS_PAYABLE' },
+      { side: 'CREDIT', amountMinor: 301, accountCode: 'CARD_REFUNDS_PAYABLE' },
     ]);
-    await run((db) =>
-      db.organization.update({
-        where: { id: organizationId },
-        data: { terminalRefundAccount: 'CARD_REFUNDS_PAYABLE' },
+    const act = (
+      previousId: string,
+      kind: 'OWED' | 'DECLINED' | 'SETTLED',
+      commandKey: string,
+      amount?: number
+    ) =>
+      run((db) =>
+        changeProviderRefund(
+          db,
+          { ...scope, actorId: 'peer' + suffix },
+          {
+            previousId,
+            kind,
+            commandKey,
+            settlementAmountMinor: amount,
+            settledOn: kind === 'SETTLED' ? '2026-11-19' : undefined,
+            reason: 'Provider statement checked',
+            slipRef: 'REF-' + suffix,
+          },
+          { pinVerified: true }
+        )
+      );
+    const mistake = await act(event!.id, 'DECLINED', 'mistaken-tender');
+    expect(mistake.previousId).toBe(event!.id);
+    expect(await legs(mistake.journalId!)).toEqual([
+      { side: 'DEBIT', amountMinor: 301, accountCode: 'CARD_REFUNDS_PAYABLE' },
+      { side: 'CREDIT', amountMinor: 301, accountCode: 'SALES_CLEARING' },
+    ]);
+    await book(301, 'new-valid-obligation');
+    const renewed = await run((db) =>
+      db.pharmacyTerminalRefundEvent.findFirstOrThrow({
+        where: { attemptId, kind: 'OWED', id: { not: event!.id } },
       })
     );
+    await expect(act(renewed.id, 'SETTLED', 'too-high', 302)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
+    const part = await act(renewed.id, 'SETTLED', 'partial', 101);
+    expect(part).toMatchObject({
+      amountMinor: 101,
+      remainingMinor: 200,
+      settledOn: new Date('2026-11-19'),
+    });
+    expect((await act(renewed.id, 'SETTLED', 'partial', 101)).id).toBe(part.id);
+    expect(
+      await run((db) =>
+        db.financeJournalEntry.findUniqueOrThrow({ where: { id: part.journalId! } })
+      )
+    ).toMatchObject({ occurredAt: new Date('2026-11-19') });
+    await expect(act(renewed.id, 'SETTLED', 'partial', 102)).rejects.toMatchObject({
+      code: 'CONFLICT',
+    });
     const settlement = await run((db) =>
       changeProviderRefund(
         db,
         { ...scope, actorId: 'peer' + suffix },
         {
-          previousId: event!.id,
+          previousId: part.id,
           kind: 'SETTLED',
           commandKey: 'pay-partial',
           reason: 'Confirmed on statement',
@@ -336,8 +363,8 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
       )
     );
     expect(await legs(settlement.journalId!)).toEqual([
-      { side: 'DEBIT', amountMinor: 301, accountCode: 'ACCOUNTS_PAYABLE' },
-      { side: 'CREDIT', amountMinor: 301, accountCode: 'BANK' },
+      { side: 'DEBIT', amountMinor: 200, accountCode: 'CARD_REFUNDS_PAYABLE' },
+      { side: 'CREDIT', amountMinor: 200, accountCode: 'BANK' },
     ]);
     expect(await run((db) => db.pharmacyDrawerMovement.count({ where: { organizationId } }))).toBe(
       0
@@ -465,101 +492,173 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     ).toMatchObject({ status: 'DECLINED', resolvedById: originalActor });
   });
 
-  it('lets a finance reader view the mapping and records who, when, and both accounts on an approved write', async () => {
-    const id = 'bookkeeper_' + suffix;
-    const pin = '3762';
-    const credentialHash = await modules.hashPin('PIN', pin);
+  it('requires a verified declared sole owner or independent approval for a self-correction and audits both', async () => {
+    const ownerId = 'peer' + suffix;
+    const reviewerId = scope.actorId;
+    const attemptId = 'self-review-' + suffix;
     await run(async (db) => {
-      await db.organization.update({
-        where: { id: organizationId },
+      const ownerRole = await db.organizationRole.upsert({
+        where: { organizationId_key: { organizationId, key: 'owner' } },
+        create: { key: 'owner', name: 'Owner', isSystem: true, organizationId },
+        update: {},
+      });
+      await db.user.update({ where: { id: ownerId }, data: { organizationRoleId: ownerRole.id } });
+      await db.pharmacyCardTerminalAttempt.create({
         data: {
-          requireApprovalAuthenticator: false,
-          usesCustomFinanceChart: false,
-          terminalRefundAccount: null,
+          id: attemptId,
+          organizationId,
+          branchId,
+          saleId: key,
+          actorId: 'cashier',
+          deviceId: 'device',
+          terminalId: 'terminal',
+          provider: 'FAKE_TERMINAL',
+          attemptKey: attemptId,
+          amountMinor: 751,
+          currency: 'PKR',
+          businessDate: new Date(),
         },
       });
-      await db.user.create({
+      await db.pharmacyCardTerminalAttempt.update({
+        where: { id: attemptId },
+        data: { status: 'SENT', sentAt: new Date() },
+      });
+      await db.pharmacyCardTerminalAttempt.update({
+        where: { id: attemptId },
+        data: { status: 'MANUAL_REVIEW', reviewReason: 'Unconfirmed receipt' },
+      });
+    });
+    await modules.resolveCardTerminalReview(
+      { store: modules.prismaCardTerminalAttemptStore(run) },
+      { ...scope, actorId: ownerId },
+      { attemptKey: attemptId, outcome: 'DECLINED', reason: 'No charge found', slipRef: attemptId },
+      { pinVerified: true }
+    );
+    const change = (
+      previousId: string,
+      kind: 'OWED' | 'DECLINED',
+      approval: { pinVerified: boolean; declareSelfApproval?: boolean; secondApproverId?: string },
+      reason = 'Checked statement discrepancy'
+    ) =>
+      run((db) =>
+        modules.changeProviderRefund(
+          db,
+          { ...scope, actorId: ownerId },
+          { kind, previousId, commandKey: kind + previousId, reason, slipRef: attemptId },
+          approval
+        )
+      );
+    const root = 'review:' + attemptId;
+    await expect(change(root, 'OWED', { pinVerified: true })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      change(root, 'OWED', { pinVerified: false, declareSelfApproval: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      change(root, 'OWED', { pinVerified: true, declareSelfApproval: true }, '')
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const self = await change(root, 'OWED', { pinVerified: true, declareSelfApproval: true });
+    expect(self).toMatchObject({
+      previousId: root,
+      ownerAuthority: true,
+      selfApproved: true,
+      secondApproverId: null,
+    });
+    expect(
+      await run((db) => db.auditLog.findFirstOrThrow({ where: { targetId: self.id } }))
+    ).toMatchObject({
+      actorId: ownerId,
+      metadata: expect.objectContaining({
+        selfApproved: true,
+        soloOwner: true,
+        reason: 'Checked statement discrepancy',
+      }),
+    });
+    await run(async (db) => {
+      await db.user.update({ where: { id: reviewerId }, data: { role: 'ADMIN' } });
+      await db.userPermissionOverride.create({
         data: {
-          id,
-          organizationId,
-          name: 'Bookkeeper',
-          email: id + '@example.test',
-          department: 'Pharmacy',
-          title: 'Bookkeeper',
-          role: 'ADMIN',
+          userId: reviewerId,
+          capability: 'pharmacy:manage',
+          effect: 'ALLOW',
+          reason: 'Independent synthetic reviewer',
         },
       });
       await db.userPermissionOverride.create({
         data: {
-          userId: id,
-          capability: 'finance:read',
+          userId: reviewerId,
+          capability: 'pharmacy:counter',
           effect: 'ALLOW',
-          reason: 'Refund settings fixture',
+          reason: 'Independent branch review',
         },
       });
       const profile = await db.restaurantStaffProfile.create({
-        data: { userId: id, displayName: 'Bookkeeper' },
+        data: { userId: reviewerId, displayName: 'Independent reviewer' },
       });
+      const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
       await db.restaurantOperatorCredential.create({
-        data: { staffProfileId: profile.id, type: 'PIN', credentialHash },
+        data: {
+          staffProfileId: profile.id,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', '3762'),
+        },
       });
     });
-    const caller = (db: ScopedDb) =>
-      modules.settings.createCaller({
-        db,
-        session: { user: { id, role: 'ADMIN', status: 'ACTIVE', organizationId } },
-        organization: { id: organizationId },
-        entitlements: {
-          organizationId,
-          vertical: 'PHARMACY',
-          enabledModules: ['pharmacy-core', 'pharmacy-finance'],
-        },
-        requestMeta: { ip: null, userAgent: null },
-        audit: { detail: {} },
-      } as unknown as TRPCContext);
-    const input = { usesCustomFinanceChart: true, account: 'ACCOUNTS_PAYABLE' as const, pin };
-    await expect(run((db) => caller(db).refundMapping())).resolves.toMatchObject({
-      canEdit: false,
-      terminalRefundAccount: null,
+    await expect(
+      change(self.id, 'DECLINED', { pinVerified: true, declareSelfApproval: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      change(self.id, 'DECLINED', { pinVerified: true, secondApproverId: ownerId })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const peer = await change(self.id, 'DECLINED', {
+      pinVerified: true,
+      secondApproverId: reviewerId,
     });
-    await expect(run((db) => caller(db).setRefundMapping(input))).rejects.toMatchObject({
-      code: 'FORBIDDEN',
+    expect(peer).toMatchObject({
+      selfApproved: false,
+      secondApproverId: reviewerId,
+      previousId: self.id,
     });
-    await run((db) =>
-      db.userPermissionOverride.create({
-        data: {
-          userId: id,
-          capability: 'pharmacy:manage',
-          effect: 'ALLOW',
-          reason: 'Grant mapping management',
-        },
+    expect(
+      await run((db) => db.auditLog.findFirstOrThrow({ where: { targetId: peer.id } }))
+    ).toMatchObject({
+      actorId: ownerId,
+      metadata: expect.objectContaining({ selfApproved: false, secondApproverId: reviewerId }),
+    });
+  });
+
+  it('refuses a different payable at the database boundary', async () => {
+    const root = await run((db) =>
+      db.pharmacyTerminalRefundEvent.findFirstOrThrow({
+        where: { organizationId, kind: 'OWED', previousId: null },
       })
     );
-    const started = new Date();
-    await expect(run((db) => caller(db).setRefundMapping(input))).resolves.toEqual({ saved: true });
-    const rows = await run((db) =>
-      db.auditLog.findMany({
-        where: { organizationId, action: 'pharmacy.providerRefundMappingChanged' },
+    await expect(
+      run(async (db) => {
+        const id = 'invalid-liability-' + suffix;
+        const { postJournalEntry } = await import('@/lib/finance/journal');
+        const entry = await postJournalEntry(db, scope, {
+          sourceKind: 'PHARMACY_TERMINAL_REFUND',
+          sourceId: id,
+          description: 'Invalid account fixture',
+          occurredAt: new Date(),
+          idempotencyKey: id,
+          branchId,
+          lines: [
+            { branchId, accountCode: 'BANK', side: 'DEBIT', amountMinor: root.amountMinor },
+            {
+              branchId,
+              accountCode: 'ACCOUNTS_PAYABLE',
+              side: 'CREDIT',
+              amountMinor: root.amountMinor,
+            },
+          ],
+        });
+        await db.pharmacyTerminalRefundEvent.create({
+          data: { ...root, id, previousId: root.id, commandKey: id, journalId: entry.id },
+        });
       })
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({
-      actorId: id,
-      targetId: organizationId,
-      changes: { account: { before: 'CARD_REFUNDS_PAYABLE', after: 'ACCOUNTS_PAYABLE' } },
-      outcome: 'SUCCESS',
-    });
-    expect(rows[0].createdAt.getTime()).toBeGreaterThanOrEqual(started.getTime());
-    expect(rows[0].createdAt.getTime()).toBeLessThanOrEqual(Date.now());
-    const setting = await run((db) =>
-      db.organization.findUniqueOrThrow({
-        where: { id: organizationId },
-        select: { terminalRefundAccount: true, terminalRefundMappingActorId: true },
-      })
-    );
-    expect(setting).toEqual({
-      terminalRefundAccount: 'ACCOUNTS_PAYABLE',
-      terminalRefundMappingActorId: id,
-    });
+    ).rejects.toThrow(/provider refund liability/);
   });
 });
