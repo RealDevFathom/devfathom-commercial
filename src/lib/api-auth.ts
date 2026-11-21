@@ -161,11 +161,16 @@ export function hasScope(ctx: ApiContext, required: string): boolean {
 }
 
 /** Secondary data in an admin-only response needs its own scope and live module. */
-export function canIncludeAdminResource(ctx: ApiContext, domain: 'clients' | 'finance'): boolean {
+export function canIncludeAdminResource(
+  ctx: ApiContext,
+  scope: `${'clients' | 'finance'}:read`
+): boolean {
+  const moduleKey = moduleForApiScope(scope);
   return (
     ctx.userRole === 'ADMIN' &&
-    hasScope(ctx, `${domain}:read`) &&
-    hasModule(ctx.entitlements, domain)
+    hasScope(ctx, scope) &&
+    moduleKey !== null &&
+    hasModule(ctx.entitlements, moduleKey)
   );
 }
 

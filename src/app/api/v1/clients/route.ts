@@ -15,7 +15,7 @@ export const GET = withApiAuth('clients:read', async (ctx, request) => {
   const url = new URL(request.url);
   const limitParam = url.searchParams.get('limit');
   const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
-  const includeFinance = canIncludeAdminResource(ctx, 'finance');
+  const includeFinance = canIncludeAdminResource(ctx, 'finance:read');
   const clients = await ctx.db.client.findMany({
     take: limit,
     include: {

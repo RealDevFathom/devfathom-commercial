@@ -10,7 +10,7 @@ export const GET = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     const { id } = await ctx.params;
-    const includeFinance = canIncludeAdminResource(authCtx, 'finance');
+    const includeFinance = canIncludeAdminResource(authCtx, 'finance:read');
     const client = await authCtx.db.client.findUnique({
       where: { id },
       include: {

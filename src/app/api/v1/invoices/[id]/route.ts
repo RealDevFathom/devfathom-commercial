@@ -17,7 +17,7 @@ export const GET = withApiAuth(
     const invoice = await authCtx.db.invoice.findUnique({
       where: { id },
       include: {
-        client: canIncludeAdminResource(authCtx, 'clients')
+        client: canIncludeAdminResource(authCtx, 'clients:read')
           ? { include: { contacts: true } }
           : { select: { id: true, name: true } },
         project: { select: { id: true, name: true } },
