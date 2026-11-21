@@ -182,7 +182,7 @@ async function requireReviewer(ctx: TRPCContext, branch: string) {
   return scope;
 }
 
-async function requireMappingAccess(ctx: TRPCContext) {
+export async function requireProviderRefundMappingAccess(ctx: TRPCContext) {
   const org = ctx.organization?.id;
   const user = ctx.session?.user;
   if (
@@ -216,7 +216,7 @@ async function requireMappingAccess(ctx: TRPCContext) {
 
 export const pharmacyCardTerminalRouter = router({
   refundMapping: protectedProcedure.query(async ({ ctx }) => {
-    const organizationId = await requireMappingAccess(ctx);
+    const organizationId = await requireProviderRefundMappingAccess(ctx);
     return ctx.db.organization.findUniqueOrThrow({
       where: { id: organizationId },
       select: { terminalRefundAccount: true, usesCustomFinanceChart: true },
@@ -232,7 +232,7 @@ export const pharmacyCardTerminalRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const organizationId = await requireMappingAccess(ctx);
+      const organizationId = await requireProviderRefundMappingAccess(ctx);
       if (
         input.account &&
         (!isBalanceSheetLiability(input.account) || input.account === 'MANUAL_NONTRADE_ACCRUAL')

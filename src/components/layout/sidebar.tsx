@@ -508,13 +508,6 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
-  {
-    label: 'Provider refund account',
-    href: '/pharmacy/settings/provider-refunds',
-    icon: Landmark,
-    group: 'Pharmacy',
-    module: 'pharmacy-core',
-  },
   // DEV-931: every pharmacy member creates or changes their own approval PIN here.
   {
     label: 'Your PIN',
@@ -639,7 +632,13 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Firm',
   },
-  { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
+  {
+    label: 'Settings',
+    href: '/settings',
+    icon: Settings,
+    group: 'Firm',
+    activePrefixes: ['/pharmacy/settings/provider-refunds'],
+  },
 ];
 
 const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];
@@ -737,7 +736,6 @@ const PHARMACY_MENUS: readonly PharmacyMenu[] = [
       '/pharmacy',
       '/pharmacy/regulatory',
       '/pharmacy/settings/branches',
-      '/pharmacy/settings/provider-refunds',
       '/pharmacy/settings/printers',
       '/pharmacy/settings/counters',
       '/pharmacy/settings/pin',

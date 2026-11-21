@@ -115,7 +115,9 @@ export function WorkspaceNotificationsSection() {
   return vertical === 'PHARMACY' ? null : <NotificationsSection />;
 }
 
-export function SettingsContent() {
+export function SettingsContent({
+  providerRefundSettings,
+}: { providerRefundSettings?: React.ReactNode } = {}) {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
 
@@ -128,6 +130,7 @@ export function SettingsContent() {
       />
 
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+        {providerRefundSettings}
         {/* Profile */}
         <ProfileSection />
 
