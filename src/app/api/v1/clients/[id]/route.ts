@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { withApiAuth, hasScope } from '@/lib/api-auth';
+import { withApiAuth, canIncludeAdminResource } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 
 export const GET = withApiAuth(
@@ -10,10 +10,7 @@ export const GET = withApiAuth(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
     const { id } = await ctx.params;
-    // REST-01: a clients:read token must NOT carry finance data. Only embed
-    // invoices when the token ALSO holds finance:read — otherwise the finance
-    // admin double-gate is bypassed via the client object.
-    const includeFinance = hasScope(authCtx, 'finance:read');
+    const includeFinance = canIncludeAdminResource(authCtx, 'finance');
     const client = await authCtx.db.client.findUnique({
       where: { id },
       include: {

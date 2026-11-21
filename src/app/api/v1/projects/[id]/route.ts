@@ -9,7 +9,7 @@ export const GET = withApiAuth(
     const project = await authCtx.db.project.findUnique({
       where: { id },
       include: {
-        client: true,
+        client: { select: { id: true, name: true } },
         members: { include: { user: { select: { id: true, name: true, email: true } } } },
         boards: {
           include: {

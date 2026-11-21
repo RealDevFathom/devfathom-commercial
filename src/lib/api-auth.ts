@@ -142,6 +142,15 @@ export function hasScope(ctx: ApiContext, required: string): boolean {
   return false;
 }
 
+/** Secondary data in an admin-only response needs its own scope and live module. */
+export function canIncludeAdminResource(ctx: ApiContext, domain: 'clients' | 'finance'): boolean {
+  return (
+    ctx.userRole === 'ADMIN' &&
+    hasScope(ctx, `${domain}:read`) &&
+    hasModule(ctx.entitlements, domain)
+  );
+}
+
 /**
  * Wrap a route handler with authentication and scope checking.
  */

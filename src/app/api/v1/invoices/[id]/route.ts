@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { withApiAuth } from '@/lib/api-auth';
+import { withApiAuth, canIncludeAdminResource } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
 import {
@@ -17,7 +17,9 @@ export const GET = withApiAuth(
     const invoice = await authCtx.db.invoice.findUnique({
       where: { id },
       include: {
-        client: { include: { contacts: true } },
+        client: canIncludeAdminResource(authCtx, 'clients')
+          ? { include: { contacts: true } }
+          : { select: { id: true, name: true } },
         project: { select: { id: true, name: true } },
       },
     });
