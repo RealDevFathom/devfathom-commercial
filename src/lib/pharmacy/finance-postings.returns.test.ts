@@ -140,7 +140,7 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
       organizationId: 'org',
       idempotencyKey: 'finance:PHARMACY_UNIDENTIFIED_RETURN_HOLD:hold',
     },
-    include: { lines: true },
+    include: { lines: { orderBy: { id: 'asc' } } },
   });
   const postingCalls = vi.mocked(postJournalEntry).mock.calls.length;
   db.financeJournalEntry.findFirst.mockResolvedValue(posted);

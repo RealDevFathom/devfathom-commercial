@@ -1,3 +1,4 @@
+import { changesPharmacyFinanceRules } from '@/lib/abac/pharmacy-sub-roles';
 import 'server-only';
 
 import { hash } from 'bcryptjs';
@@ -19,6 +20,7 @@ import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activa
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { verifyTotp } from '@/lib/totp';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { revokeOperatorSessions } from '@/lib/platform/capabilities';
 import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
@@ -3073,6 +3075,7 @@ async function runCommand(
       const existing = roleId
         ? await db.organizationRole.findFirst({
             where: { id: roleId, organizationId: input.organizationId },
+            include: { permissions: true },
           })
         : null;
       if (roleId && !existing) {
@@ -3080,6 +3083,15 @@ async function runCommand(
       }
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
+      }
+      if (
+        changesPharmacyFinanceRules(existing?.permissions ?? [], permissions, 'increase') &&
+        (await isPharmacyOrganization(db, input.organizationId))
+      ) {
+        throw new PlatformSecurityError(
+          'Only the workspace owner can grant pharmacy finance role permissions.',
+          403
+        );
       }
       const holders = async () =>
         roleId
@@ -4488,8 +4500,24 @@ async function runCommand(
       if (!before || !['FAILED', 'CANCELLED'].includes(before.status)) {
         throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
       }
-      const saved = await db.platformJob.update({
-        where: { id: input.id },
+      const needsPurgeRequester = before.type === 'PURGE_DATA' && !before.requestedById;
+      if (needsPurgeRequester) {
+        assertPlatformCapability(actor, capabilityFor('organization.transition'));
+      }
+      const reason = needsPurgeRequester
+        ? z.object({ reason: sensitiveReason }).parse(payload).reason
+        : undefined;
+      const previousPayload = before.payload;
+      const payloadFields =
+        previousPayload && typeof previousPayload === 'object' && !Array.isArray(previousPayload)
+          ? previousPayload
+          : {};
+      const [saved] = await db.platformJob.updateManyAndReturn({
+        where: {
+          id: input.id,
+          status: before.status,
+          ...(needsPurgeRequester ? { requestedById: before.requestedById } : {}),
+        },
         data: {
           status: 'QUEUED',
           attempts: 0,
@@ -4498,14 +4526,19 @@ async function runCommand(
           scheduledAt: new Date(),
           startedAt: null,
           finishedAt: null,
+          ...(reason ? { requestedById: actor.id, payload: { ...payloadFields, reason } } : {}),
         },
       });
+      if (!saved) {
+        throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
+      }
       return {
         targetType: 'PlatformJob',
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
-        audit: jobAudit(saved),
+        ...(reason ? { auditBefore: { status: before.status, requestedById: null } } : {}),
+        audit: reason ? { ...jobAudit(saved), reason } : jobAudit(saved),
       };
     }
     case 'job.cancel': {
@@ -4592,14 +4625,18 @@ async function runCommand(
               passwordHash: passwordHash!,
             },
           });
-      if (
-        !input.active ||
-        (existingOperator && (input.role !== existingOperator.role || input.password))
-      ) {
-        await db.platformSession.updateMany({
-          where: { platformUserId: saved.id, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+      const revocationReasons = [
+        !input.active && 'Operator disabled',
+        existingOperator && input.role !== existingOperator.role && 'Operator role changed',
+        existingOperator && input.password && 'Operator password changed',
+        existingOperator &&
+          input.mfaRequired &&
+          !existingOperator.mfaRequired &&
+          !existingOperator.mfaEnabledAt &&
+          'Operator MFA required',
+      ].filter(Boolean);
+      if (revocationReasons.length > 0) {
+        await revokeOperatorSessions(db, saved.id, revocationReasons.join('; '), actor.id);
       }
       const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');
       return { targetType: 'PlatformUser', targetId: saved.id, data: safe, audit: safe };
@@ -4621,10 +4658,7 @@ async function runCommand(
           encryptedTotpSecret: null,
         },
       });
-      await db.platformSession.updateMany({
-        where: { platformUserId: input.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      await revokeOperatorSessions(db, saved.id, `Operator MFA reset: ${input.reason}`, actor.id);
       return {
         targetType: 'PlatformUser',
         targetId: saved.id,

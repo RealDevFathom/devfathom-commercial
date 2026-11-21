@@ -17,6 +17,11 @@ export function useApprovalSecretKind(): ApprovalSecretKind {
   return approvalSecretKind(mode?.data?.required);
 }
 
+/** The owner's field on a weighty access change. */
+export function useOwnApprovalLabel() {
+  return useApprovalSecretKind() === 'CODE' ? 'Your approval code' : 'Your PIN';
+}
+
 export type OwnerSelfApprovalCopy = {
   /** Catalogue queue: the field for the owner's own approval of an edit. */
   catalogueLabel: string;

@@ -25,6 +25,7 @@ export const ALL_ACTIONS = [
   'team:setRole', // change a member's role (privilege escalation — admin only)
   'leave:approve', // approve/decline leave requests
   'finance:read', // view finance & invoices
+  'finance:manage', // change pharmacy accounts, with a live grant or the active system Owner
   'resignation:request', // submit your own resignation
   'resignation:readAll', // see the company-wide resignation queue
   'resignation:review', // approve/decline a resignation (resource: { userId, status, targetRole })
@@ -142,6 +143,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],
   'hr:access': [isHrOrAdmin],
+  'finance:manage': [], // Only a persisted grant or the active system Owner can change pharmacy accounts.
   'finance:read': [isAdmin], // HR does NOT get finance
   'team:view': [isActiveMember],
   'team:setRole': [isAdmin], // only admins may grant/revoke roles
