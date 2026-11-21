@@ -25,9 +25,11 @@ import {
   WEBHOOK_PROCESS_JOB_TYPE,
   processInboundWebhookHandler,
   recordInboundWebhook,
-  verifyWebhookSignatureStub,
+  MAX_PENDING_WEBHOOK_JOBS,
   webhookProcessJobKey,
 } from '@/lib/restaurant/webhook-inbox';
+
+import { verifyWebhookSignatureStub } from '../../../tests/fixtures/legacy-webhook-signature';
 
 type Row = Record<string, unknown>;
 
@@ -96,6 +98,8 @@ function createFakeDb() {
 
   const db = {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+    $queryRaw: vi.fn().mockResolvedValue([{ id: 'cfg' }]),
+    restaurantJob: { count: vi.fn().mockResolvedValue(0) },
     restaurantWebhookInbox,
   };
 
@@ -144,7 +148,7 @@ describe('recordInboundWebhook', () => {
         externalEventId: 'evt_1',
         eventType: 'charge.succeeded',
         payload: { amount: 100 },
-        signature: 'sig_abc',
+        verificationStatus: 'VERIFIED',
       },
       T0
     );
@@ -167,14 +171,14 @@ describe('recordInboundWebhook', () => {
     const { db, inbox } = createFakeDb();
     const first = await recordInboundWebhook(
       db,
-      { source: 'twilio', externalEventId: 'evt_9', payload: {} },
+      { source: 'twilio', externalEventId: 'evt_9', verificationStatus: 'VERIFIED', payload: {} },
       T0
     );
     mocks.enqueue.mockClear();
 
     const second = await recordInboundWebhook(
       db,
-      { source: 'twilio', externalEventId: 'evt_9', payload: {} },
+      { source: 'twilio', externalEventId: 'evt_9', verificationStatus: 'VERIFIED', payload: {} },
       T0
     );
 
@@ -183,6 +187,30 @@ describe('recordInboundWebhook', () => {
     expect(second.enqueuedJobId).toBeNull();
     expect(inbox.size).toBe(1);
     expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('admits only new work below the tenant cap and still acknowledges a signed duplicate at capacity', async () => {
+    const { db, inbox } = createFakeDb();
+    const input = {
+      source: 'cards',
+      externalEventId: 'first',
+      payload: {},
+      verificationStatus: 'VERIFIED' as const,
+    };
+    const count = vi.mocked(db.restaurantJob.count);
+    count
+      .mockResolvedValueOnce(MAX_PENDING_WEBHOOK_JOBS - 1)
+      .mockResolvedValue(MAX_PENDING_WEBHOOK_JOBS);
+    const first = await recordInboundWebhook(db, input);
+    expect((await recordInboundWebhook(db, input)).inbox.id).toBe(first.inbox.id);
+    await expect(
+      recordInboundWebhook(db, { ...input, externalEventId: 'second' })
+    ).rejects.toMatchObject({ status: 429 });
+    expect(count).toHaveBeenCalledWith({
+      where: { type: 'webhook.process', status: { in: ['QUEUED', 'RUNNING'] } },
+    });
+    expect(inbox.size).toBe(1);
+    expect(mocks.enqueue).toHaveBeenCalledOnce();
   });
 
   it('resolves a lost create race (unique violation) to the existing row', async () => {
@@ -212,7 +240,12 @@ describe('recordInboundWebhook', () => {
 
     const result = await recordInboundWebhook(
       db,
-      { source: 'stripe', externalEventId: 'evt_race', payload: {} },
+      {
+        source: 'stripe',
+        externalEventId: 'evt_race',
+        verificationStatus: 'VERIFIED',
+        payload: {},
+      },
       T0
     );
 
@@ -259,12 +292,21 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
     'processes the signed terminal event exactly once after a %s envelope',
     async (_label, spoof) => {
       const { db, inbox } = createFakeDb();
-      const squatter = await recordInboundWebhook(
-        db,
-        { source: 'card-provider', externalEventId: 'evt_target', payload: { x: 1 }, ...spoof },
-        T0
-      );
-      expect(squatter.deduplicated).toBe(false);
+      // Existing installations can contain a row and job written by the retired stub.
+      const legacy = await db.restaurantWebhookInbox.create({
+        data: {
+          source: 'card-provider',
+          externalEventId: 'evt_target',
+          payload: { x: 1 },
+          eventType: 'eventType' in spoof ? spoof.eventType : null,
+          verificationStatus: verifyWebhookSignatureStub({
+            source: 'card-provider',
+            signature: spoof.signature,
+          }),
+        },
+      });
+      const legacyJob = await mocks.enqueue(db, { payload: { inboxId: legacy.id } });
+      expect(legacyJob.deduplicated).toBe(false);
       mocks.recordAudit.mockClear();
 
       const signed = await recordInboundWebhook(db, signedTerminal, T0);
@@ -273,7 +315,7 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
         expect.objectContaining({
           action: 'restaurant.webhook.unauthenticated_row_replaced',
           targetType: 'RestaurantWebhookInbox',
-          targetId: squatter.inbox.id,
+          targetId: legacy.id,
           metadata: expect.objectContaining({
             source: 'card-provider',
             externalEventId: 'evt_target',
@@ -283,7 +325,7 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
       );
       expect(signed.deduplicated).toBe(false);
       expect(signed.enqueuedJobId).toBe('job_2');
-      expect(signed.inbox.id).not.toBe(squatter.inbox.id);
+      expect(signed.inbox.id).not.toBe(legacy.id);
       expect(signed.inbox).toMatchObject({ verificationStatus: 'VERIFIED', status: 'PENDING' });
       expect(inbox.size).toBe(1);
       expect(inbox.get(signed.inbox.id)).toMatchObject({
@@ -292,7 +334,7 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
       });
 
       // Drain both queued jobs: the squatter's job finds its row gone and no-ops.
-      await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: squatter.inbox.id }) });
+      await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: legacy.id }) });
       await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: signed.inbox.id }) });
       await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: signed.inbox.id }) });
 
@@ -311,20 +353,16 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
     const signed = await recordInboundWebhook(db, signedTerminal, T0);
     mocks.enqueue.mockClear();
 
-    const spoof = await recordInboundWebhook(
-      db,
-      {
-        source: 'card-provider',
-        externalEventId: 'evt_target',
-        eventType: 'order.created',
-        payload: { x: 1 },
-        signature: 'forged',
-      },
-      T0
-    );
-
-    expect(spoof).toMatchObject({ deduplicated: true, enqueuedJobId: null });
-    expect(spoof.inbox.id).toBe(signed.inbox.id);
+    const unverified = {
+      ...signedTerminal,
+      eventType: 'order.created',
+      payload: { x: 1 },
+      verificationStatus: 'FAILED' as const,
+    };
+    await expect(recordInboundWebhook(db, unverified, T0)).rejects.toMatchObject({ status: 401 });
+    const replay = await recordInboundWebhook(db, signedTerminal, T0);
+    expect(replay).toMatchObject({ deduplicated: true, enqueuedJobId: null });
+    expect(replay.inbox.id).toBe(signed.inbox.id);
     expect(mocks.enqueue).not.toHaveBeenCalled();
     expect(inbox.size).toBe(1);
     expect(inbox.get(signed.inbox.id)).toMatchObject({

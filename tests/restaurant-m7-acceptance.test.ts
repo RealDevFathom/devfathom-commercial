@@ -1,4 +1,5 @@
 /** WHA-88 — independent M7 API/contract acceptance against real PostgreSQL. */
+import { verifyWebhookSignatureStub } from './fixtures/legacy-webhook-signature';
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -595,39 +596,78 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     });
   }, 60_000);
 
-  it('deduplicates webhooks and records explicit STUB signature states', async () => {
+  it('deduplicates verified webhooks and enforces provider and pending-work limits per tenant', async () => {
     const input = {
       source: 'wha88-provider',
       externalEventId: `signed_${suffix}`,
       eventType: 'restaurant.acceptance',
       payload: { accepted: true },
-      signature: 'stub-signature',
+      verificationStatus: 'VERIFIED' as const,
     };
+    await deps.withTenantDb(orgId, async (tx) => {
+      const device = await tx.restaurantRegisteredDevice.create({
+        data: {
+          branchId: ids.branch,
+          name: 'Webhook fixture',
+          deviceSecretHash: randomBytes(32).toString('hex'),
+        },
+      });
+      await tx.restaurantTerminalProviderConfig.create({
+        data: {
+          source: input.source,
+          mode: 'WEBHOOK',
+          branchId: ids.branch,
+          deviceId: device.id,
+          externalTerminalId: 'acceptance',
+        },
+      });
+    });
+    for (const mode of ['DISABLED', 'SIMULATION'] as const) {
+      await deps.withTenantDb(orgId, async (tx) => {
+        await tx.restaurantTerminalProviderConfig.updateMany({
+          where: { source: input.source },
+          data: { mode },
+        });
+      });
+      await expect(
+        deps.webhookInbox.recordInboundWebhook(deps.createTenantDb(orgId), input, T0)
+      ).rejects.toMatchObject({ status: 404 });
+    }
+    await deps.withTenantDb(orgId, async (tx) => {
+      expect(await tx.restaurantWebhookInbox.count({ where: { source: input.source } })).toBe(0);
+      expect(await tx.restaurantJob.count({ where: { type: 'webhook.process' } })).toBe(0);
+      await tx.restaurantTerminalProviderConfig.updateMany({
+        where: { source: input.source },
+        data: { mode: 'WEBHOOK' },
+      });
+    });
     const first = await deps.withTenantDb(orgId, (tx) =>
       deps.webhookInbox.recordInboundWebhook(tx, input, T0)
     );
     const duplicate = await deps.withTenantDb(orgId, (tx) =>
       deps.webhookInbox.recordInboundWebhook(tx, input, T0)
     );
-    const unsigned = await deps.withTenantDb(orgId, (tx) =>
-      deps.webhookInbox.recordInboundWebhook(
-        tx,
-        {
-          ...input,
-          externalEventId: `unsigned_${suffix}`,
-          signature: null,
-        },
-        T0
+    const unsignedStatus = verifyWebhookSignatureStub({ source: input.source, signature: null });
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        deps.webhookInbox.recordInboundWebhook(
+          tx,
+          { ...input, externalEventId: `unsigned_${suffix}`, verificationStatus: unsignedStatus },
+          T0
+        )
       )
-    );
+    ).rejects.toMatchObject({ status: 401 });
     expect(first).toMatchObject({ deduplicated: false, inbox: { verificationStatus: 'VERIFIED' } });
     expect(duplicate).toMatchObject({
       deduplicated: true,
       enqueuedJobId: null,
       inbox: { id: first.inbox.id },
     });
-    expect(unsigned.inbox.verificationStatus).toBe('PENDING');
+    expect(unsignedStatus).toBe('PENDING');
     const counts = await deps.withTenantDb(orgId, async (tx) => ({
+      unsignedRows: await tx.restaurantWebhookInbox.count({
+        where: { externalEventId: `unsigned_${suffix}` },
+      }),
       signedRows: await tx.restaurantWebhookInbox.count({
         where: { source: input.source, externalEventId: input.externalEventId },
       }),
@@ -635,7 +675,38 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
         where: { idempotencyKey: `webhook.process:${first.inbox.id}` },
       }),
     }));
-    expect(counts).toEqual({ signedRows: 1, signedJobs: 1 });
+    expect(counts).toEqual({ signedRows: 1, signedJobs: 1, unsignedRows: 0 });
+    // Two separate tenant transactions compete for the final slot. Duplicate
+    // acknowledgements must remain available even when the backlog is full.
+    const pendingWhere = {
+      type: deps.webhookInbox.WEBHOOK_PROCESS_JOB_TYPE,
+      status: { in: ['QUEUED', 'RUNNING'] as ('QUEUED' | 'RUNNING')[] },
+    };
+    const limit = deps.webhookInbox.MAX_PENDING_WEBHOOK_JOBS;
+    await deps.withTenantDb(orgId, async (tx) => {
+      const pending = await tx.restaurantJob.count({ where: pendingWhere });
+      await tx.restaurantJob.createMany({
+        data: Array.from({ length: limit - pending - 1 }, () => ({
+          type: pendingWhere.type,
+          scheduledAt: new Date('2099-01-01'),
+          nextAttemptAt: new Date('2099-01-01'),
+        })),
+      });
+    });
+    const db = deps.createTenantDb(orgId);
+    const admissions = await Promise.allSettled(
+      ['race_a', 'race_b'].map((externalEventId) =>
+        deps.webhookInbox.recordInboundWebhook(db, { ...input, externalEventId }, T0)
+      )
+    );
+    expect(admissions.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    expect(admissions).toContainEqual({
+      status: 'rejected',
+      reason: expect.objectContaining({ status: 429 }),
+    });
+    expect(await db.restaurantJob.count({ where: pendingWhere })).toBe(limit);
+    expect(await db.restaurantWebhookInbox.count({ where: { source: input.source } })).toBe(2);
+    expect((await deps.webhookInbox.recordInboundWebhook(db, input, T0)).deduplicated).toBe(true);
   });
 
   it('freezes published templates, pins generated versions, and resolves both DST edges', async () => {

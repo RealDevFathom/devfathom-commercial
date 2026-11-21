@@ -1,3 +1,4 @@
+import { oversizedRequest } from '../../../../../../tests/fixtures/bounded-request';
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -12,7 +13,7 @@ const state = vi.hoisted(() => ({
   inbox: new Map<string, Record<string, unknown>>(),
   jobs: [] as Array<{ inboxId: string }>,
   seq: 0,
-  configured: false,
+  configured: true,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -77,10 +78,12 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       count: state.inbox.delete(where.id) ? 1 : 0,
     }),
   };
-  const restaurantTerminalProviderConfig = {
-    findFirst: async () => (state.configured ? { id: 'cfg_1' } : null),
+  const db: Record<string, unknown> = {
+    restaurantWebhookInbox,
+    $queryRaw: async (_query: TemplateStringsArray, source?: string) =>
+      state.configured && source === 'card-provider' ? [{ id: 'cfg_1' }] : [],
+    restaurantJob: { count: async () => state.jobs.length },
   };
-  const db: Record<string, unknown> = { restaurantWebhookInbox, restaurantTerminalProviderConfig };
   db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
   return { createTenantDb: () => db };
 });
@@ -150,7 +153,7 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     state.inbox.clear();
     state.jobs.length = 0;
     state.seq = 0;
-    state.configured = false;
+    state.configured = true;
     mocks.processTerminalEvent.mockReset();
   });
 
@@ -168,7 +171,9 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
         JSON.stringify({ externalEventId: EVENT_ID, eventType, payload: { probe: true } }),
         headers
       );
-      expect(spoof.status).toBe(202);
+      expect(spoof.status).toBe(401);
+      expect(state.inbox.size).toBe(0);
+      expect(state.jobs).toHaveLength(0);
 
       const signed = await postSignedTerminal();
       const body = await signed.json();
@@ -203,14 +208,33 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
       JSON.stringify({ externalEventId: EVENT_ID, eventType: 'order.created', payload: {} })
     );
 
-    expect(spoof.status).toBe(200);
-    await expect(spoof.json()).resolves.toMatchObject({ deduplicated: true, jobId: null });
+    expect(spoof.status).toBe(401);
+    const replay = await postSignedTerminal();
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({ deduplicated: true, jobId: null });
     expect(state.jobs).toHaveLength(1);
     await drainJobs();
     expect(mocks.processTerminalEvent).toHaveBeenCalledOnce();
     expect([...state.inbox.values()]).toEqual([
       expect.objectContaining({ eventType: 'terminal.approved', payload: TERMINAL_PAYLOAD }),
     ]);
+  });
+
+  it('refuses even a correctly signed terminal envelope for an unconfigured provider', async () => {
+    state.configured = false;
+    expect((await postSignedTerminal()).status).toBe(404);
+    expect(state.inbox.size).toBe(0);
+    expect(state.jobs).toHaveLength(0);
+  });
+
+  it('stops reading a chunked body at the limit', async () => {
+    const limit = 256 * 1024;
+    const { request, cancelled, bytesRead } = oversizedRequest(limit);
+    expect((await POST(request, { params: Promise.resolve({ source: SOURCE }) })).status).toBe(413);
+    expect(cancelled()).toBe(true);
+    expect(bytesRead()).toBeLessThanOrEqual(limit + 16_384);
+    expect(state.jobs).toHaveLength(0);
+    expect(state.inbox.size).toBe(0);
   });
 
   it('still rejects an unsigned terminal event before touching the inbox', async () => {
@@ -230,16 +254,41 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
   it.each([
     ['no signature headers', {}],
     ['a forged signature', { 'x-webhook-signature': 'forged' }],
-  ])('rejects a non-terminal envelope with %s for a configured payment source', async (_l, headers) => {
-    state.configured = true;
-    const response = await post(
-      JSON.stringify({ externalEventId: EVENT_ID, eventType: 'order.created', payload: {} }),
-      headers
-    );
+  ])(
+    'rejects a non-terminal envelope with %s for a configured payment source',
+    async (_l, headers) => {
+      state.configured = true;
+      const response = await post(
+        JSON.stringify({ externalEventId: EVENT_ID, eventType: 'order.created', payload: {} }),
+        headers
+      );
 
-    expect(response.status).toBe(401);
-    expect(state.inbox.size).toBe(0);
+      expect(response.status).toBe(401);
+      expect(state.inbox.size).toBe(0);
+      expect(state.jobs).toHaveLength(0);
+    }
+  );
+
+  it('checks the HMAC over all received bytes, including a UTF-8 BOM', async () => {
+    const text = JSON.stringify({
+      externalEventId: EVENT_ID,
+      eventType: 'order.created',
+      payload: { label: 'café' },
+    });
+    const raw = '\uFEFF' + text;
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const headersFor = (body: string) => ({
+      'x-webhook-timestamp': timestamp,
+      'x-webhook-signature': createHmac('sha256', SECRET)
+        .update(`${timestamp}.${SOURCE}.`)
+        .update(body)
+        .digest('hex'),
+    });
+    expect((await post(raw, headersFor(text))).status).toBe(401);
     expect(state.jobs).toHaveLength(0);
+    expect(state.inbox.size).toBe(0);
+    expect((await post(raw, headersFor(raw))).status).toBe(202);
+    expect(state.jobs).toHaveLength(1);
   });
 
   it('accepts a correctly signed non-terminal envelope for a configured payment source', async () => {
