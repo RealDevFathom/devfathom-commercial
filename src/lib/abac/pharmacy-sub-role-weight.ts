@@ -26,6 +26,10 @@ export const PHARMACY_WEIGHTY_SUB_ROLES: Readonly<Record<string, string>> = {
     'Adds suppliers, raises and submits purchase orders, and receives, posts and reverses deliveries at their branches.',
   'manage-stock':
     'Runs stock at their branches, including write-offs, releasing quarantine, transfers and receiving without a purchase order.',
+  'manage-finance-accounts':
+    'Changes supplier payments and reversals, journal entries, bank reconciliation, accounting periods and tax profiles.',
+  'read-finance-accounts':
+    'Sees supplier balances, payments, reversals, bank records and the general journal.',
   'financial-reports':
     'Sees sales, margin, cash, refund, payables, receivables and khata figures, and stock value at risk.',
 };

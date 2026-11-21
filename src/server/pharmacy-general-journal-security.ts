@@ -15,7 +15,7 @@
  * commit or roll back together.
  */
 import { TRPCError } from '@trpc/server';
-import { can, subjectFromSession } from '@/lib/abac';
+import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { hasModule } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { recordAudit } from './audit';
@@ -56,12 +56,7 @@ export async function authorizeGeneralJournal(
   if (!hasModule(ctx.entitlements, 'pharmacy-finance')) {
     forbidden('Pharmacy Finance access is required.');
   }
-  const allowed = await can(subjectFromSession(user), 'finance:read', undefined, {
-    db: ctx.db,
-    source: 'TRPC',
-    ip: ctx.requestMeta?.ip ?? null,
-  });
-  if (!allowed) forbidden('Finance permission is required.');
+  await requirePharmacyFinance(ctx);
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId, id: branchId, active: true },
     select: { id: true },
