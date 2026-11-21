@@ -767,7 +767,10 @@ export async function freshPharmacyFirstSale(
     await click(colleague.getByRole('link').filter({ hasText: orderReference }));
     await colleague.getByLabel('Decision note', { exact: true }).fill(data.receipt.approvalNote);
     await click(colleague.getByRole('button', { name: 'Approve', exact: true }));
+    // The mutation confirms the write before the current order view refreshes.
+    await click(colleague.getByRole('link', { name: 'View saved record', exact: true }));
     await click(colleague.getByRole('button', { name: 'Send to supplier', exact: true }));
+    await click(colleague.getByRole('link', { name: 'View saved record', exact: true }));
     await expect(
       colleague.getByRole('link', { name: 'Receive against this order', exact: true })
     ).toBeVisible();
