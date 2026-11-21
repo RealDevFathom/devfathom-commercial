@@ -48,7 +48,8 @@ import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay
 import { CounterDrawerOperator } from './counter-drawer-operator';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
-import { ApprovalSecretKindContext, approvalSecretKind } from './counter-approval-copy';
+import { ApprovalSecretKindContext } from './counter-approval-copy';
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -579,9 +580,8 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
  * while the owner has it off. The server decides either way; this is the wording only.
  */
 function CounterApprovalMode({ children }: { children: React.ReactNode }) {
-  const mode = trpc.approvalAuthenticator.mode.useQuery(undefined, { staleTime: 60_000 });
   return (
-    <ApprovalSecretKindContext.Provider value={approvalSecretKind(mode?.data?.required)}>
+    <ApprovalSecretKindContext.Provider value={useApprovalSecretKind()}>
       {children}
     </ApprovalSecretKindContext.Provider>
   );

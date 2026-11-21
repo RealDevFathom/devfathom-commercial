@@ -90,6 +90,22 @@ export type ApprovalSecretInput = {
 };
 
 /**
+ * DEV-961: what this organization's approvals take, for wording a prompt or a refusal only (the
+ * verifier decides): the current app code while "Authenticator for approvals" is on (the
+ * default, and when the organization cannot be read), the permanent PIN while it is off.
+ */
+export async function approvalSecretKindFor(
+  db: ScopedDb,
+  organizationId: string
+): Promise<'CODE' | 'PIN'> {
+  const organization = await db.organization.findFirst({
+    where: { id: organizationId },
+    select: { requireApprovalAuthenticator: true },
+  });
+  return organization?.requireApprovalAuthenticator === false ? 'PIN' : 'CODE';
+}
+
+/**
  * Check the approver's PIN or authenticator code. Returns how the approval was proven, or
  * null when it is refused. Never throws for a refusal, so the caller's transaction can
  * commit its lockout strike.

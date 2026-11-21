@@ -6,6 +6,7 @@ import { memo, useRef, useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
+import { useOwnerSelfApprovalCopy } from '@/components/pharmacy/own-approval-copy';
 
 import { MedicinePackSetup } from './medicine-pack-setup';
 
@@ -303,6 +304,8 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const publishing = usePendingKeys();
   const utils = trpc.useUtils();
   const [soloReviewPin, setSoloReviewPin] = useState('');
+  // DEV-961: the owner's own approval follows the "Authenticator for approvals" setting.
+  const ownApproval = useOwnerSelfApprovalCopy();
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -471,7 +474,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   return (
     <div className="space-y-6">
       <label className="block max-w-sm space-y-2 text-sm text-text-body">
-        <span>Solo owner PIN for reference self-approval</span>
+        <span>{ownApproval.referenceLabel}</span>
         <input
           className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
           type="password"

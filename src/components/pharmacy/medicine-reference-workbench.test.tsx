@@ -22,12 +22,14 @@ const mocks = vi.hoisted(() => ({
   runNow: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  approvalMode: { data: { required: true } as undefined | { required: boolean } },
 }));
 vi.mock('./medicine-pack-setup', () => ({ MedicinePackSetup: () => null }));
 vi.mock('@/lib/browser-uuid', () => ({ browserUuid: () => 'file-batch' }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => mocks.approvalMode } },
     useUtils: () => ({
       pharmacyMedicine: {
         referenceConnectorProposals: { invalidate: mocks.invalidateProposals },
@@ -62,6 +64,7 @@ import { MedicineReferenceWorkbench } from './medicine-reference-workbench';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.approvalMode.data = { required: true };
   mocks.proposals.data = [];
   mocks.proposals.isPending = false;
   mocks.proposals.error = null;
@@ -485,4 +488,20 @@ it('DEV-852: names an imported candidate’s missing strength and registration i
   expect(within(legacyCard!).queryByRole('alert')).not.toBeInTheDocument();
   expect(within(legacyCard!).getByRole('button', { name: 'Publish assertions' })).toBeEnabled();
   expect(regulatorCard).not.toHaveTextContent('not recorded');
+});
+
+it('asks the solo owner for what their own approval takes in this organization (DEV-961)', () => {
+  // On (the default): the current code from the owner's authenticator app.
+  const { unmount } = render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByLabelText('Your approval code for reference self-approval')).toHaveAttribute(
+    'type',
+    'password'
+  );
+  expect(screen.queryByLabelText('Solo owner PIN for reference self-approval')).toBeNull();
+  unmount();
+  // Off: the owner's permanent PIN.
+  mocks.approvalMode.data = { required: false };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByLabelText('Solo owner PIN for reference self-approval')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Your approval code for reference self-approval')).toBeNull();
 });
