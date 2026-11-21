@@ -20,6 +20,7 @@ vi.mock('@/lib/storage', async (importOriginal) => {
 import { StorageUnavailableError } from '@/lib/storage';
 import { GET } from './route';
 const db = {
+  user: { findUnique: vi.fn() },
   branchRegulatoryProfile: { findFirst: vi.fn() },
   restaurantSopEvidence: { findFirst: vi.fn() },
   restaurantBranchAssignment: { findUnique: vi.fn() },
@@ -233,11 +234,47 @@ describe('private attachment delivery', () => {
       expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
     });
 
-    it('keeps the admin exception', async () => {
+    it('refuses the same evidence link when an administrator loses the branch', async () => {
       mocks.actor.mockResolvedValue(actor('ADMIN'));
+      mocks.granted = new Set(['sop:manage']);
+      const name = 'pharmacy-sop-proof.png';
+      expect((await read(name)).status).toBe(200);
+      mocks.getUpload.mockClear();
       db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRole: null,
+        permissionOverrides: [],
+      });
+      expect((await read(name)).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('allows the installed workspace owner with sop:manage at an unassigned branch', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      mocks.granted = new Set(['sop:manage']);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+        permissionOverrides: [],
+      });
       expect((await read('pharmacy-sop-proof.png')).status).toBe(200);
-      expect(db.pharmacySopSite.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacySopSite.findFirst).toHaveBeenCalledOnce();
+    });
+
+    it('refuses an unassigned administrator before storage', async () => {
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      mocks.granted = new Set(['sop:manage']);
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      expect((await read('pharmacy-sop-proof.png')).status).toBe(404);
+      expect(db.pharmacySopSite.findFirst).toHaveBeenCalledExactlyOnceWith({
+        where: { organizationId: 'org_a', sopBranchId: 'sop_branch_p' },
+        select: { pharmacyBranchId: true },
+      });
+      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
   });
 
