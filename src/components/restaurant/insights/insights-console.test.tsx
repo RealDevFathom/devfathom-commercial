@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -215,7 +216,10 @@ function renderConsole(enabled = true) {
 }
 
 function setBranch(value = 'branch_1') {
-  fireEvent.change(screen.getByLabelText('Branch'), { target: { value } });
+  fireEvent.change(
+    selectFieldControl(screen.getByRole('combobox', { name: 'Branch', exact: true })),
+    { target: { value } }
+  );
 }
 
 describe('InsightsConsole', () => {
