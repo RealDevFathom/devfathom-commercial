@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   pass: null as null | Record<string, unknown>,
   registrations: [] as { pass: { serialNumber: string; contentRevision: number } }[],
   existingRegistration: false,
+  rateLimit: vi.fn(() => ({ ok: true, retryAfter: 0, remaining: 1 })),
 }));
 
 const tenantDb = vi.hoisted(() => ({
@@ -31,7 +32,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 
 vi.mock('@/lib/rate-limit', () => ({
   clientIp: () => '127.0.0.1',
-  rateLimit: () => ({ ok: true, retryAfter: 0, remaining: 1 }),
+  rateLimit: state.rateLimit,
 }));
 
 import {
@@ -184,5 +185,16 @@ it('keeps the empty acknowledgement for an interrupted Apple log', async () => {
   } as RequestInit);
   const response = await acceptAppleLogs(request);
   expect(response.status).toBe(200);
+  expect(await response.text()).toBe('');
+});
+
+it('uses the Apple IP limit before consuming a log', async () => {
+  state.rateLimit.mockReturnValueOnce({ ok: false, retryAfter: 19, remaining: 0 });
+  const { request, bytesRead } = oversizedRequest(64_000);
+  const response = await acceptAppleLogs(request);
+  expect(state.rateLimit).toHaveBeenCalledWith('wallet-apple:ip:127.0.0.1', 120, 60_000);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('Retry-After')).toBe('19');
+  expect(bytesRead()).toBe(0);
   expect(await response.text()).toBe('');
 });

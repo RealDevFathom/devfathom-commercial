@@ -26,10 +26,9 @@ import {
   processInboundWebhookHandler,
   recordInboundWebhook,
   MAX_PENDING_WEBHOOK_JOBS,
+  verifyWebhookSignatureStub,
   webhookProcessJobKey,
 } from '@/lib/restaurant/webhook-inbox';
-
-import { verifyWebhookSignatureStub } from '../../../tests/fixtures/legacy-webhook-signature';
 
 type Row = Record<string, unknown>;
 
@@ -131,10 +130,12 @@ beforeEach(() => {
 });
 
 describe('verifyWebhookSignatureStub', () => {
-  it('records VERIFIED for a signed envelope and PENDING for an unsigned one', () => {
-    expect(verifyWebhookSignatureStub({ source: 'stripe', signature: 'sig_abc' })).toBe('VERIFIED');
-    expect(verifyWebhookSignatureStub({ source: 'stripe', signature: null })).toBe('PENDING');
-    expect(verifyWebhookSignatureStub({ source: 'stripe', signature: '   ' })).toBe('PENDING');
+  it('always returns UNVERIFIED, including when a signature header is present', () => {
+    expect(verifyWebhookSignatureStub({ source: 'stripe', signature: 'sig_abc' })).toBe(
+      'UNVERIFIED'
+    );
+    expect(verifyWebhookSignatureStub({ source: 'stripe', signature: null })).toBe('UNVERIFIED');
+    expect(verifyWebhookSignatureStub({ source: 'stripe', signature: '   ' })).toBe('UNVERIFIED');
   });
 });
 
@@ -284,11 +285,14 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
   });
 
   it.each([
-    ['unsigned, no event type', { signature: null }],
-    ['unsigned, non-terminal type', { eventType: 'order.created', signature: null }],
-    // The stub records VERIFIED for any non-empty header: still unauthenticated.
-    ['stub-signed, non-terminal type', { eventType: 'order.created', signature: 'forged' }],
-  ])(
+    ['unsigned, no event type', { eventType: null, verificationStatus: 'PENDING' }],
+    ['unsigned, non-terminal type', { eventType: 'order.created', verificationStatus: 'PENDING' }],
+    // Legacy versions could write VERIFIED for a non-empty header.
+    [
+      'stub-signed, non-terminal type',
+      { eventType: 'order.created', verificationStatus: 'VERIFIED' },
+    ],
+  ] as const)(
     'processes the signed terminal event exactly once after a %s envelope',
     async (_label, spoof) => {
       const { db, inbox } = createFakeDb();
@@ -298,11 +302,8 @@ describe('recordInboundWebhook — unauthenticated envelopes cannot reserve a si
           source: 'card-provider',
           externalEventId: 'evt_target',
           payload: { x: 1 },
-          eventType: 'eventType' in spoof ? spoof.eventType : null,
-          verificationStatus: verifyWebhookSignatureStub({
-            source: 'card-provider',
-            signature: spoof.signature,
-          }),
+          eventType: spoof.eventType,
+          verificationStatus: spoof.verificationStatus,
         },
       });
       const legacyJob = await mocks.enqueue(db, { payload: { inboxId: legacy.id } });

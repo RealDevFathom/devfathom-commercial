@@ -1,5 +1,4 @@
 /** WHA-88 — independent M7 API/contract acceptance against real PostgreSQL. */
-import { verifyWebhookSignatureStub } from './fixtures/legacy-webhook-signature';
 import { randomBytes } from 'node:crypto';
 
 import { beforeAll, describe, expect, it, vi } from 'vitest';
@@ -647,7 +646,10 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
     const duplicate = await deps.withTenantDb(orgId, (tx) =>
       deps.webhookInbox.recordInboundWebhook(tx, input, T0)
     );
-    const unsignedStatus = verifyWebhookSignatureStub({ source: input.source, signature: null });
+    const unsignedStatus = deps.webhookInbox.verifyWebhookSignatureStub({
+      source: input.source,
+      signature: null,
+    });
     await expect(
       deps.withTenantDb(orgId, (tx) =>
         deps.webhookInbox.recordInboundWebhook(
@@ -663,7 +665,7 @@ describeIfDatabase('WHA-88 M7 independent acceptance (real PostgreSQL + API)', (
       enqueuedJobId: null,
       inbox: { id: first.inbox.id },
     });
-    expect(unsignedStatus).toBe('PENDING');
+    expect(unsignedStatus).toBe('UNVERIFIED');
     const counts = await deps.withTenantDb(orgId, async (tx) => ({
       unsignedRows: await tx.restaurantWebhookInbox.count({
         where: { externalEventId: `unsigned_${suffix}` },

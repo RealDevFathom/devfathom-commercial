@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
+import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { createLiveKitWebhookVerifier } from '@/server/meetings/provider/livekit';
 import {
   recordAndApplyProviderEvent,
@@ -10,11 +12,15 @@ const MAX_BODY_BYTES = 256 * 1024;
 const REJECTION = { error: 'Invalid webhook.' };
 
 export async function POST(request: Request) {
-  const declaredLength = Number(request.headers.get('content-length') ?? 0);
-  if (declaredLength > MAX_BODY_BYTES) return NextResponse.json(REJECTION, { status: 400 });
-
-  const rawBody = new Uint8Array(await request.arrayBuffer());
-  if (rawBody.byteLength > MAX_BODY_BYTES) return NextResponse.json(REJECTION, { status: 400 });
+  const gate = await rateLimit(`meetings-livekit:ip:${clientIp(request)}`, 120, 60_000);
+  if (!gate.ok) {
+    return NextResponse.json(
+      { error: 'Too many requests' },
+      { status: 429, headers: { 'Retry-After': String(gate.retryAfter) } }
+    );
+  }
+  const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
+  if (rawBody === null) return NextResponse.json(REJECTION, { status: 400 });
 
   const apiKey = process.env.LIVEKIT_API_KEY;
   const apiSecret = process.env.LIVEKIT_API_SECRET;

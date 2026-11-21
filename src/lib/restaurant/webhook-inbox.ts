@@ -69,7 +69,7 @@ export type RecordInboundWebhookInput = {
   externalEventId: string;
   eventType?: string | null;
   payload: Prisma.InputJsonValue;
-  verificationStatus: RestaurantWebhookVerificationStatus;
+  verificationStatus: RestaurantWebhookVerificationStatus | 'UNVERIFIED';
 };
 
 export type RecordInboundWebhookResult = {
@@ -91,6 +91,15 @@ const INBOX_SELECT = {
   verificationStatus: true,
   receivedAt: true,
 } as const;
+
+/**
+ * Providers without a cryptographic verifier have no proof of origin.
+ * UNVERIFIED is an admission result only and never enters the inbox.
+ */
+export const verifyWebhookSignatureStub: (input: {
+  source: string;
+  signature: string | null;
+}) => 'UNVERIFIED' = () => 'UNVERIFIED';
 
 export const MAX_PENDING_WEBHOOK_JOBS = 1000;
 
@@ -170,7 +179,7 @@ export async function recordInboundWebhook(
     throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
   }
   // Preserve promotion of legacy rows when a verified terminal event arrives.
-  const authenticated = isAuthenticatedTerminal(input.eventType, input.verificationStatus);
+  const authenticated = isAuthenticatedTerminal(input.eventType, verificationStatus);
   // An authenticated event deduplicates only against another authenticated row.
   const isDuplicate = (existing: ExistingInbox) =>
     !authenticated || isAuthenticatedTerminal(existing.eventType, existing.verificationStatus);
