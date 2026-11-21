@@ -11,6 +11,8 @@ if (testDatabaseUrl) process.env.DATABASE_URL = testDatabaseUrl;
 
 const suffix = randomUUID();
 const retryAt = new Date('2098-01-01');
+const priorReason = 'Original scheduling reason from the legacy job.';
+const retryReason = 'Confirmed retention schedule and authorized the retry.';
 const actor: PlatformIdentity = {
   id: `retry-admin-${suffix}`,
   name: 'Retry administrator',
@@ -31,13 +33,21 @@ async function failedJob(
 ) {
   return withPlatformDb((db) =>
     db.platformJob.create({
-      data: { type, organizationId, requestedById, status: 'FAILED', attempts: 3, error: 'Failed' },
+      data: {
+        type,
+        organizationId,
+        requestedById,
+        status: 'FAILED',
+        attempts: 3,
+        error: 'Failed',
+        payload: { reason: priorReason, reference: 'fixture' },
+      },
     })
   );
 }
 
-const retry = (id: string, identity = actor) =>
-  executePlatformCommand(identity, 'job.retry', { id }, request);
+const retry = (id: string, identity = actor, reason?: string) =>
+  executePlatformCommand(identity, 'job.retry', { id, reason }, request);
 
 const readJob = (id: string) =>
   withPlatformDb((db) => db.platformJob.findUniqueOrThrow({ where: { id } }));
@@ -78,13 +88,14 @@ describeIfDatabase('DEV-805 platform purge retries', () => {
     });
     const job = await failedJob('PURGE_DATA', null, organizationId);
 
-    await retry(job.id);
+    await retry(job.id, actor, `  ${retryReason}  `);
 
     expect(await readJob(job.id)).toMatchObject({
       status: 'QUEUED',
       attempts: 0,
       requestedById: actor.id,
       scheduledAt: retryAt,
+      payload: { reason: retryReason, reference: 'fixture' },
     });
     await withPlatformDb(async (db) => {
       expect(
@@ -95,7 +106,9 @@ describeIfDatabase('DEV-805 platform purge retries', () => {
         actorPlatformUserId: actor.id,
         organizationId,
         success: true,
-        after: { requestedById: actor.id },
+        reason: retryReason,
+        before: { status: 'FAILED', requestedById: null },
+        after: { status: 'QUEUED', requestedById: actor.id, reason: retryReason },
       });
       expect(
         await db.organization.findUniqueOrThrow({ where: { id: organizationId } })
@@ -106,6 +119,23 @@ describeIfDatabase('DEV-805 platform purge retries', () => {
       expect(await db.auditLog.findUniqueOrThrow({ where: { id: original.id } })).toEqual(original);
     });
   });
+
+  it.each([undefined, '  too short  ', 'x'.repeat(501)])(
+    'refuses a missing or invalid reason before adopting a legacy purge (%s)',
+    async (reason) => {
+      const job = await failedJob('PURGE_DATA', null);
+
+      await expect(retry(job.id, actor, reason)).rejects.toMatchObject({
+        issues: expect.arrayContaining([expect.objectContaining({ path: ['reason'] })]),
+      });
+      expect(await readJob(job.id)).toMatchObject({
+        status: 'FAILED',
+        attempts: 3,
+        requestedById: null,
+        payload: { reason: priorReason, reference: 'fixture' },
+      });
+    }
+  );
 
   it('requires lifecycle security permission when supplying a missing purge requester', async () => {
     const job = await failedJob('PURGE_DATA', null);
@@ -126,6 +156,7 @@ describeIfDatabase('DEV-805 platform purge retries', () => {
     expect(await readJob(purge.id)).toMatchObject({
       status: 'QUEUED',
       requestedById: purge.requestedById,
+      payload: { reason: priorReason, reference: 'fixture' },
     });
     expect(await readJob(unrelated.id)).toMatchObject({ status: 'QUEUED', requestedById: null });
   });

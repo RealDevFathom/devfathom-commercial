@@ -4429,6 +4429,14 @@ async function runCommand(
       if (needsPurgeRequester) {
         assertPlatformCapability(actor, capabilityFor('organization.transition'));
       }
+      const reason = needsPurgeRequester
+        ? z.object({ reason: sensitiveReason }).parse(payload).reason
+        : undefined;
+      const previousPayload = before.payload;
+      const payloadFields =
+        previousPayload && typeof previousPayload === 'object' && !Array.isArray(previousPayload)
+          ? previousPayload
+          : {};
       const [saved] = await db.platformJob.updateManyAndReturn({
         where: {
           id: input.id,
@@ -4443,7 +4451,7 @@ async function runCommand(
           scheduledAt: new Date(),
           startedAt: null,
           finishedAt: null,
-          ...(needsPurgeRequester ? { requestedById: actor.id } : {}),
+          ...(reason ? { requestedById: actor.id, payload: { ...payloadFields, reason } } : {}),
         },
       });
       if (!saved) {
@@ -4454,7 +4462,8 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
-        audit: jobAudit(saved),
+        ...(reason ? { auditBefore: { status: before.status, requestedById: null } } : {}),
+        audit: reason ? { ...jobAudit(saved), reason } : jobAudit(saved),
       };
     }
     case 'job.cancel': {
