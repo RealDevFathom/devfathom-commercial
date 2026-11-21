@@ -2093,6 +2093,9 @@ export async function returnSaleLine(
     },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
+  // A controlled classification added after group preflight requires a fresh inspection.
+  if (group && line.medicine.controlled && !group.witness)
+    throw new PharmacySaleError('INVALID_STATE');
   const witness = line.medicine.controlled
     ? (group?.witness ??
       (await controlledSaleRestorationWitness(db, scope, input.controlledWitness)))

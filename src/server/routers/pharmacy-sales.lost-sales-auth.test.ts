@@ -424,3 +424,54 @@ describe('DEV-845 captureSafeRestockArrival never returns the destination phone'
     expect(JSON.stringify(result)).not.toContain(PHONE);
   });
 });
+
+describe('Counter v2 server features require a counter grant', () => {
+  const input = {
+    branchId: 'branch-a',
+    saleId: 'sale-1',
+    saleLineId: 'line-1',
+    requestId: '10000000-0000-4000-8000-000000000001',
+  };
+  const calls: Array<(c: Caller) => Promise<unknown>> = [
+    (c) =>
+      c.checkBillLinePack({
+        branchId: input.branchId,
+        saleId: input.saleId,
+        saleLineId: input.saleLineId,
+        payload: 'test-pack',
+      }),
+    (c) => c.discountBillLine({ ...input, discount: { kind: 'AMOUNT', minor: 1 } }),
+    (c) =>
+      c.returnLines({
+        branchId: input.branchId,
+        saleId: input.saleId,
+        requestId: input.requestId,
+        reason: 'Test',
+        managerPin: '1234',
+        lines: ['line-1', 'line-2'].map((saleLineId) => ({
+          saleLineId,
+          canonicalUnits: 1,
+          disposition: 'QUARANTINE',
+          integrityDecision: 'Held for inspection',
+        })),
+      }),
+    (c) =>
+      c.recordCounterDemand({
+        branchId: input.branchId,
+        requestId: input.requestId,
+        reason: 'NOT_CARRIED',
+        requestedText: 'Synthetic',
+        quantity: 1,
+      }),
+  ];
+  it.each(calls)(
+    'refuses a receipt-only operator before opening the write transaction',
+    async (call) => {
+      const { caller, db } = fixture([{ capability: 'pharmacy:receipt', effect: 'ALLOW' }], {
+        assigned: ['branch-a'],
+      });
+      await expect(call(caller())).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+});

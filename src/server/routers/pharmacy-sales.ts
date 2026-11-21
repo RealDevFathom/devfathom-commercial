@@ -5162,14 +5162,14 @@ export const pharmacySalesRouter = router({
           scan.status === 'VERIFIED' &&
           code?.batch &&
           barcode &&
-          (!barcode.packLevelId ||
-            line.allocations.some((a) => a.lot.packLevelId === barcode.packLevelId)) &&
           (serial || code.serial
             ? serial?.serialNumber === code.serial && serial?.gtin === code.gtin
             : true) &&
           line.allocations.some(
             (a) =>
               a.lot.receivedAt &&
+              (!barcode.packLevelId || a.lot.packLevelId === barcode.packLevelId) &&
+              (!serial?.inventoryLotId || a.lot.id === serial.inventoryLotId) &&
               a.lot.batch.state === 'ACTIVE' &&
               a.lot.batch.batchNumber === code.batch &&
               a.lot.batch.medicineId === line.medicineId &&
