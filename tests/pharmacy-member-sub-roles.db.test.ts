@@ -1553,14 +1553,12 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       } as unknown as TRPCContext;
       const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
       await expect(
-        organizationAdminRouter
-          .createCaller(support)
-          .setRoleSubRole({
-            roleId: `${orgA}_role_cashier`,
-            subRoleKey: 'manage-stock',
-            ticked: true,
-            pin: '0000',
-          })
+        organizationAdminRouter.createCaller(support).setRoleSubRole({
+          roleId: `${orgA}_role_cashier`,
+          subRoleKey: 'manage-stock',
+          ticked: true,
+          pin: '0000',
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       const { teamRouter } = await import('@/server/routers/team');
       for (let attempt = 0; attempt < 3; attempt += 1) {
