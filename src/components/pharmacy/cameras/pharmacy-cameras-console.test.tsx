@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -180,13 +181,16 @@ describe('PharmacyCameraWizard callbacks', () => {
     const form = screen.getByRole('form', { name: 'Register a camera' });
     const source = within(form).getByRole('combobox', { name: /^Simulator source/ });
     expect(
-      within(source)
-        .getAllByRole('option')
+      within(selectFieldControl(source))
+        .getAllByRole('option', { hidden: true })
         .map((option) => (option as HTMLOptionElement).value)
     ).toEqual(['sim-camera-1', 'sim-counter-1', 'sim-fridge-1']);
-    fireEvent.change(within(form).getByRole('combobox', { name: 'Camera gateway' }), {
-      target: { value: 'gw_1' },
-    });
+    fireEvent.change(
+      selectFieldControl(within(form).getByRole('combobox', { name: 'Camera gateway' })),
+      {
+        target: { value: 'gw_1' },
+      }
+    );
     fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Till' } });
     fireEvent.change(within(form).getByLabelText('Username'), { target: { value: 'placeholder' } });
     fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'placeholder' } });
@@ -217,7 +221,7 @@ describe('PharmacyCamerasConsole presets', () => {
   it('blocks a cold-chain preset when the branch has no cold-chain zone', () => {
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Settings for Counter camera' });
-    fireEvent.change(within(form).getByRole('combobox', { name: /^Preset/ }), {
+    fireEvent.change(selectFieldControl(within(form).getByRole('combobox', { name: /^Preset/ })), {
       target: { value: 'COLD_CHAIN' },
     });
     expect(within(form).getByRole('status')).toHaveTextContent('No active cold-chain zone');
@@ -431,7 +435,14 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Register a configured camera' });
     fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Fridge' } });
-    fireEvent.change(within(form).getByLabelText('Camera gateway'), { target: { value: 'gw_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByLabelText('Camera gateway', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'gw_1' } }
+    );
     fireEvent.change(within(form).getByLabelText('Gateway stream path'), {
       target: { value: 'fridge-1' },
     });

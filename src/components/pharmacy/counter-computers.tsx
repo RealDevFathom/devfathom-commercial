@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useCallback, useRef, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -33,10 +35,7 @@ import { ed25519Supported } from '@/lib/pharmacy/counter-snapshot-verifier';
 import { trpc } from '@/lib/trpc';
 import { Switch } from '@/components/ui/switch';
 
-import {
-  browserCounterOfflineDeps,
-  useCounterEnrolment,
-} from './counter/use-counter-offline';
+import { browserCounterOfflineDeps, useCounterEnrolment } from './counter/use-counter-offline';
 
 const controlClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-body outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-60';
@@ -48,7 +47,8 @@ function errorText(error: unknown, fallback: string): string {
   if (code === 'FORBIDDEN')
     return 'Your account cannot manage the counters of this branch. Ask the owner to assign you to it.';
   if (code === 'CONFLICT') return 'This counter is revoked, so it cannot be changed any more.';
-  if (code === 'NOT_FOUND') return 'This counter no longer exists at this branch. Refresh the list.';
+  if (code === 'NOT_FOUND')
+    return 'This counter no longer exists at this branch. Refresh the list.';
   return fallback;
 }
 
@@ -178,7 +178,10 @@ function EnrolThisComputer({
     } catch (error) {
       setNotice({
         tone: 'alert',
-        text: errorText(error, 'This computer was not enrolled. Check the connection and try again.'),
+        text: errorText(
+          error,
+          'This computer was not enrolled. Check the connection and try again.'
+        ),
       });
     } finally {
       busy.current = false;
@@ -190,8 +193,8 @@ function EnrolThisComputer({
     <form className="space-y-4" onSubmit={submit}>
       <p className="max-w-prose text-sm text-text-muted">
         Enrol the computer you are using now as a counter of {branchName}. Its drawer, receipt
-        numbers and offline price list then belong to this counter. Enrol before the shift starts:
-        a drawer already open on this computer stays under its old name until it is closed.
+        numbers and offline price list then belong to this counter. Enrol before the shift starts: a
+        drawer already open on this computer stays under its old name until it is closed.
       </p>
       <div className="max-w-md">
         <Label htmlFor="counter-computer-name">Counter name</Label>
@@ -238,8 +241,8 @@ export function PrepareIntro({ settingAside }: { settingAside: boolean }) {
   if (!settingAside)
     return (
       <p className="max-w-prose text-sm text-text-muted" data-counter-prepare-intro="price-check">
-        Reserves a block of receipt numbers for this counter and stores the signed price list
-        on this computer, for the offline price check. No stock is set aside for a counter while
+        Reserves a block of receipt numbers for this counter and stores the signed price list on
+        this computer, for the offline price check. No stock is set aside for a counter while
         offline cash selling is off, so every unit stays available to online sales, transfers,
         supplier claims and write-offs. Prescription-only, controlled, restricted, high-alert and
         look-alike medicines are never listed offline.
@@ -251,11 +254,11 @@ export function PrepareIntro({ settingAside }: { settingAside: boolean }) {
       over-the-counter batch, the units this counter may sell while the connection is down
       (suggested: half the units on hand, at most 20). Other counters cannot be given the same
       units, and online sales at any counter, transfers to another branch, supplier claims and
-      write-offs cannot take them either: the server keeps them for this counter until it sells
-      them offline or is revoked. A recall, a quarantine or an expiry removal always goes ahead:
-      it hands the affected units back, and the counter stops selling that batch offline the
-      next time it connects. Prescription-only, controlled, restricted, high-alert and look-alike
-      medicines are never listed. Revoking the counter hands its earmarked units back.
+      write-offs cannot take them either: the server keeps them for this counter until it sells them
+      offline or is revoked. A recall, a quarantine or an expiry removal always goes ahead: it hands
+      the affected units back, and the counter stops selling that batch offline the next time it
+      connects. Prescription-only, controlled, restricted, high-alert and look-alike medicines are
+      never listed. Revoking the counter hands its earmarked units back.
     </p>
   );
 }
@@ -295,7 +298,10 @@ function PrepareThisComputer({
     setNotice(null);
     setReport(null);
     try {
-      const record = await readCounterEnrolment(indexedDbDeviceKeyBackend(), enrolment.organizationId);
+      const record = await readCounterEnrolment(
+        indexedDbDeviceKeyBackend(),
+        enrolment.organizationId
+      );
       if (!record || record.deviceId !== enrolment.deviceId) {
         setNotice({
           tone: 'alert',
@@ -363,8 +369,8 @@ function PrepareThisComputer({
         </div>
       ) : !settingAside ? null : lots.length === 0 ? (
         <p className="text-sm text-text-body">
-          No over-the-counter stock at {branchName} can be set aside for offline selling now. Receive
-          stock first, or check that medicines are marked saleable.
+          No over-the-counter stock at {branchName} can be set aside for offline selling now.
+          Receive stock first, or check that medicines are marked saleable.
         </p>
       ) : (
         <div className="max-h-[28rem] overflow-auto rounded-[var(--radius-sm)] border border-border-subtle">
@@ -502,9 +508,7 @@ function BranchCounters({
   const revoke = trpc.pharmacyOffline.revoke.useMutation({ retry: false });
   const enrolment = useCounterEnrolment(organizationId);
   const thisComputer = enrolment && enrolment.branchId === branchId ? enrolment : null;
-  const [confirming, setConfirming] = useState<{ id: string; unsent: number | null } | null>(
-    null
-  );
+  const [confirming, setConfirming] = useState<{ id: string; unsent: number | null } | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const busy = useRef(false);
   const refresh = useCallback(
@@ -588,7 +592,10 @@ function BranchCounters({
 
   const rows: CounterRow[] = counters.data ?? [];
   // Off unless the server says otherwise; the same read as the switch below.
-  const cashSelling = trpc.pharmacyOffline.offlineCashSelling.useQuery({ branchId }, { retry: false });
+  const cashSelling = trpc.pharmacyOffline.offlineCashSelling.useQuery(
+    { branchId },
+    { retry: false }
+  );
   const sellingOn = cashSelling.data?.enabled === true;
   const pending = rotate.isPending || revoke.isPending;
 
@@ -725,12 +732,11 @@ function BranchCounters({
                     className="min-h-11"
                     disabled={pending}
                     onClick={() =>
-                      void forgetThisComputer(thisComputer!, 'REMOVED').then(
-                        () =>
-                          setNotice({
-                            tone: 'status',
-                            text: 'This computer no longer holds the revoked counter. You can enrol it again. Any offline sale it never sent is kept on the counter page under Sales to reconcile.',
-                          })
+                      void forgetThisComputer(thisComputer!, 'REMOVED').then(() =>
+                        setNotice({
+                          tone: 'status',
+                          text: 'This computer no longer holds the revoked counter. You can enrol it again. Any offline sale it never sent is kept on the counter page under Sales to reconcile.',
+                        })
                       )
                     }
                   >
@@ -747,14 +753,14 @@ function BranchCounters({
         revoked here and enrolled again from that computer.
       </p>
       <p className="max-w-prose text-xs text-text-muted" data-counter-revoke-rule="">
-        Revoking from another computer: from that moment the server refuses everything the
-        revoked counter sends and its earmarked units go back to the branch. The next time it
-        reaches the server it deletes its price lists, receipt numbers, unfinished bills and
-        stored page, and it can never take another sale; once its signed price list ends (at
-        most 8 hours) it cannot sell offline even if it never reconnects. Offline sales it never
-        sent are not deleted: that computer keeps them, read-only, under Sales to reconcile on
-        the counter page, for a manager to export and record what was done with each one.
-        Sales it sent before the revoke stay booked.
+        Revoking from another computer: from that moment the server refuses everything the revoked
+        counter sends and its earmarked units go back to the branch. The next time it reaches the
+        server it deletes its price lists, receipt numbers, unfinished bills and stored page, and it
+        can never take another sale; once its signed price list ends (at most 8 hours) it cannot
+        sell offline even if it never reconnects. Offline sales it never sent are not deleted: that
+        computer keeps them, read-only, under Sales to reconcile on the counter page, for a manager
+        to export and record what was done with each one. Sales it sent before the revoke stay
+        booked.
       </p>
       <NoticeLine notice={notice} />
       <OfflineCashSellingSwitch branchId={branchId} />
@@ -808,7 +814,10 @@ function OfflineCashSellingSwitch({ branchId }: { branchId: string }) {
           label={enabled ? 'On' : 'Off'}
         />
       </div>
-      <p id={`offline-cash-selling-${branchId}-help`} className="max-w-prose text-xs text-text-muted">
+      <p
+        id={`offline-cash-selling-${branchId}-help`}
+        className="max-w-prose text-xs text-text-muted"
+      >
         {setting.data?.available === false || !setting.data
           ? 'Available when sending offline sales is ready. Until then a counter without a connection checks prices only, and every offline cash sale is refused.'
           : 'When on, a prepared counter takes cash sales while the connection is down.'}
@@ -852,8 +861,7 @@ function ReceiptNumberGaps({ branchId }: { branchId: string }) {
                     ? `No. ${gap.firstUnused}`
                     : `Nos. ${gap.firstUnused} to ${gap.lastUnused}`}
                 </span>{' '}
-                ({gap.unused} unused, block {gap.blockStart} to {gap.blockEnd}) ·{' '}
-                {gap.deviceName} ·{' '}
+                ({gap.unused} unused, block {gap.blockStart} to {gap.blockEnd}) · {gap.deviceName} ·{' '}
                 {gap.cause === 'REVOKED'
                   ? `counter revoked ${when(gap.since, 'unknown')}`
                   : `credential expired ${when(gap.since, 'unknown')}; unused unless a manager renews it`}
@@ -940,7 +948,7 @@ export function PharmacyCounterComputersConsole({
         <div className="space-y-6">
           <div className="max-w-md">
             <Label htmlFor="counter-computers-branch">Branch</Label>
-            <select
+            <StudioSelect
               id="counter-computers-branch"
               className={controlClass}
               value={branchId}
@@ -951,7 +959,7 @@ export function PharmacyCounterComputersConsole({
                   {option.name} ({option.code})
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           {enrolledHere ? (
             <div className="space-y-6">

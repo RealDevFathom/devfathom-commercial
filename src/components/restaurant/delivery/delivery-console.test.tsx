@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { toast } from 'sonner';
@@ -149,8 +150,8 @@ describe('DeliveryConsole', () => {
     disabled.unmount();
 
     renderConsole();
-    expect(screen.getByRole('option', { name: 'Downtown' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Ayesha Khan' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { hidden: true, name: 'Downtown' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { hidden: true, name: 'Ayesha Khan' })).toBeInTheDocument();
     expect(screen.queryByText('customer_1')).not.toBeInTheDocument();
     expect(mocks.customerCalls.at(-1)).toEqual({ input: { limit: 100 }, enabled: true });
     expect(screen.queryByRole('textbox', { name: /customer id/i })).not.toBeInTheDocument();
@@ -159,8 +160,22 @@ describe('DeliveryConsole', () => {
       input: { query: 'Ayesha', limit: 100 },
       enabled: true,
     });
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Customer', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'customer_1' } }
+    );
     expect(mocks.zoneCalls.at(-1)).toEqual({ input: { branchId: 'branch_1' }, enabled: true });
     expect(mocks.addressCalls.at(-1)).toEqual({
       input: { customerId: 'customer_1' },
@@ -170,7 +185,14 @@ describe('DeliveryConsole', () => {
 
   it('creates a branch-scoped zone with the exact router payload', () => {
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Add zone' }));
     const dialog = screen.getByRole('dialog', { name: 'Add delivery zone' });
     fireEvent.change(within(dialog).getByLabelText('Zone name'), {
@@ -198,7 +220,14 @@ describe('DeliveryConsole', () => {
 
   it('submits address PII only in the selected customer mutation payload', () => {
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Customer', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'customer_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Add address' }));
     const dialog = screen.getByRole('dialog', { name: 'Add saved address' });
     const fields: Record<string, string> = {
@@ -237,7 +266,14 @@ describe('DeliveryConsole', () => {
       active: false,
     });
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Reactivate' }));
     const dialog = screen.getByRole('dialog', { name: 'Confirm reactivation' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Reactivate' }));
@@ -262,7 +298,14 @@ describe('DeliveryConsole', () => {
       isDefault: false,
     });
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Customer', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'customer_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
 
     expect(mocks.setDefaultAddress).toHaveBeenCalledWith({
@@ -286,7 +329,14 @@ describe('DeliveryConsole', () => {
       isDefault: false,
     });
     const view = renderConsole();
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Customer', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'customer_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Make default' }));
     const completeRequest = mocks.mutationOptions.setDefaultAddress.onSuccess;
     mocks.pendingProcedure = 'setDefaultAddress';
@@ -330,7 +380,14 @@ describe('DeliveryConsole', () => {
       isDefault: true,
     });
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Customer'), { target: { value: 'customer_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Customer', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'customer_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
 
     expect(screen.getByRole('checkbox', { name: 'Use as default address' })).toBeDisabled();

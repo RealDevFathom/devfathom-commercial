@@ -1,3 +1,4 @@
+import { chooseSelectField } from './fixtures/select-field';
 import { readFile } from 'node:fs/promises';
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
@@ -330,7 +331,10 @@ async function applySeededBranchFilters(page: Page, origin: string) {
   await page.goto(new URL('/restaurant/reports', origin).href);
   await expect(page.getByRole('heading', { name: 'Reports', exact: true })).toBeVisible();
   const filters = reportFilters(page);
-  await filters.locator('select[name="branch"]').selectOption(fixture.branchId);
+  await chooseSelectField(
+    filters.getByRole('combobox', { name: 'Branch', exact: true }),
+    fixture.branchId
+  );
   const from = await filters.getByLabel('From date', { exact: true }).inputValue();
   const to = await filters.getByLabel('To date', { exact: true }).inputValue();
   await filters.getByRole('button', { name: 'Apply filters', exact: true }).click();

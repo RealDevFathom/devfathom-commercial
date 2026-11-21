@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 export type RestaurantStaffOption = {
   id: string;
   displayName: string;
@@ -49,7 +51,7 @@ export function RestaurantStaffSelect({
         : `Select ${label.toLowerCase()}`;
 
   return (
-    <select
+    <StudioSelect
       id={id}
       name={name}
       value={value}
@@ -72,6 +74,6 @@ export function RestaurantStaffSelect({
           {person.displayName} — {person.role}
         </option>
       ))}
-    </select>
+    </StudioSelect>
   );
 }

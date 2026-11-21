@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FollowUpReturn, FollowUpCredit } from '@/lib/pharmacy/supplier-credit-follow-up';
@@ -155,7 +156,13 @@ describe('supplier-credit Reports preparation', () => {
     expect(screen.getByText('PKR 25.00 allocated')).toBeVisible();
     expect(screen.getByText('PKR 50.01 unallocated')).toBeVisible();
     expect(screen.getByText(/works without Ask Fathom/)).toBeVisible();
-    expect(screen.getByLabelText('Branch')).toHaveValue('branch-1');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('branch-1');
     expect(screen.getByLabelText('From')).toHaveValue(filters.from);
     expect(screen.getByLabelText('To')).toHaveValue(filters.to);
     expect(screen.getByRole('button', { name: 'Prepare draft' }).closest('form')).toHaveAttribute(

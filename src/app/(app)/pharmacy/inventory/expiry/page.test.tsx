@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
@@ -150,7 +151,7 @@ it('DEV-660: opens an assigned branch instead of an unassigned one named in the 
   const view = render(await Page({ searchParams: Promise.resolve({ branch: 'branch_b' }) }));
 
   expect(mocks.lots).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch_a', withinDays: 90 });
-  expect(view.queryByRole('option', { name: /Other/ })).toBeNull();
+  expect(view.queryByRole('option', { hidden: true, name: /Other/ })).toBeNull();
 });
 
 it('DEV-58: says so when a report drill-through names a branch the board cannot show', async () => {
@@ -317,7 +318,7 @@ it('DEV-61 applies expiry filters immediately with replacement history and one-c
       searchParams: Promise.resolve({ branch: 'branch_a', within: '30', view: 'print' }),
     })
   );
-  fireEvent.change(screen.getByRole('combobox', { name: 'Expiring within' }), {
+  fireEvent.change(selectFieldControl(screen.getByRole('combobox', { name: 'Expiring within' })), {
     target: { value: '90' },
   });
   expect(mocks.replace).toHaveBeenCalledExactlyOnceWith(

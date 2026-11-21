@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import {
   useState,
   useCallback,
@@ -489,7 +491,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
           </div>
 
           {/* Priority filter */}
-          <select
+          <StudioSelect
             value={filterPriority}
             onChange={(e) => setFilterPriority(e.target.value)}
             className={cn(
@@ -504,10 +506,10 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
             <option value="HIGH">High</option>
             <option value="MEDIUM">Medium</option>
             <option value="LOW">Low</option>
-          </select>
+          </StudioSelect>
 
           {/* Assignee filter */}
-          <select
+          <StudioSelect
             value={filterAssignee}
             onChange={(e) => setFilterAssignee(e.target.value)}
             className={cn(
@@ -523,11 +525,11 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                 {a.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
 
           {/* Label filter */}
           {allLabels.length > 0 && (
-            <select
+            <StudioSelect
               value={filterLabel}
               onChange={(e) => setFilterLabel(e.target.value)}
               className={cn(
@@ -543,7 +545,7 @@ export function KanbanBoardContent({ projectId, boardId }: { projectId: string; 
                   {l.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           )}
 
           {/* Clear filters */}
