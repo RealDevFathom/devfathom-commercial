@@ -174,11 +174,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   },
   'organizationAdmin.pharmacySettings.refundMapping': {
     gate: 'protectedProcedure + pharmacy-core + live owner or active accountant with reports:financial',
-    none: 'Requires pharmacy-core + live owner or active accountant with reports:financial.',
+    lines: ['financial-reports/map-provider-refunds'],
   },
   'organizationAdmin.pharmacySettings.setRefundMapping': {
     gate: 'protectedProcedure + pharmacy-core + live owner or active accountant with reports:financial',
-    none: 'Requires pharmacy-core + live owner or active accountant with reports:financial.',
+    lines: ['financial-reports/map-provider-refunds'],
   },
   'pharmacyCardTerminal.resolveReview': {
     gate: 'requireCounterReceiptAccess(pharmacy:counter) AND actorMayRefund (pharmacy:manage) + own fresh approval code; not own charge unless no other reviewer',

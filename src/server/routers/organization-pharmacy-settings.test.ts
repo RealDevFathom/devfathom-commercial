@@ -56,6 +56,43 @@ describe('organization-wide provider refund mapping', () => {
       })
     );
   });
+  it('lets an active designated accountant with financial permission update the mapping', async () => {
+    owner.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    });
+    accountant.mockResolvedValue({ id: 'operator' });
+    const settings = application.createCaller(context()).organizationAdmin.pharmacySettings;
+    await expect(
+      settings.setRefundMapping({ usesCustomFinanceChart: true, account })
+    ).resolves.toEqual({ saved: true });
+    expect(accountant).toHaveBeenCalledWith({
+      where: {
+        id: 'operator',
+        organizationId: org,
+        status: 'ACTIVE',
+        organizationRole: { key: 'accountant' },
+      },
+      select: { id: true },
+    });
+  });
+
+  it('respects a financial permission denial even for the designated accountant', async () => {
+    owner.mockResolvedValue({
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationRole: { permissions: [{ capability: 'reports:financial', effect: 'ALLOW' }] },
+      permissionOverrides: [{ capability: 'reports:financial', effect: 'DENY' }],
+    });
+    accountant.mockResolvedValue({ id: 'operator' });
+    const settings = application.createCaller(context()).organizationAdmin.pharmacySettings;
+    await expect(
+      settings.setRefundMapping({ usesCustomFinanceChart: true, account })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(update).not.toHaveBeenCalled();
+  });
   it('audits a refusal for an administrator who is neither the owner nor the accountant', async () => {
     owner.mockResolvedValue(null);
     accountant.mockResolvedValue(null);

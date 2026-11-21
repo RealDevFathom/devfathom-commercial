@@ -1,14 +1,17 @@
-ALTER TYPE "FinanceAccountCode" ADD VALUE 'CARD_REFUNDS_PAYABLE';
-ALTER TYPE "FinanceSourceKind" ADD VALUE 'PHARMACY_TERMINAL_REFUND';
+BEGIN;
+
+ALTER TYPE "FinanceAccountCode" ADD VALUE IF NOT EXISTS 'CARD_REFUNDS_PAYABLE';
+ALTER TYPE "FinanceSourceKind" ADD VALUE IF NOT EXISTS 'PHARMACY_TERMINAL_REFUND';
 
 ALTER TABLE organizations
-  ADD COLUMN "terminalRefundAccount" "FinanceAccountCode",
-  ADD COLUMN "usesCustomFinanceChart" boolean NOT NULL DEFAULT false;
+  ADD COLUMN IF NOT EXISTS "terminalRefundAccount" "FinanceAccountCode",
+  ADD COLUMN IF NOT EXISTS "usesCustomFinanceChart" boolean NOT NULL DEFAULT false;
 ALTER TABLE pharmacy_card_terminal_attempts
-  ADD COLUMN "approvedAmountMinor" integer CHECK ("approvedAmountMinor" > 0 AND ("approvedAmountMinor" IS NULL OR "providerRef" IS NOT NULL)),
-  ADD UNIQUE ("organizationId","branchId",id);
+  ADD COLUMN IF NOT EXISTS "approvedAmountMinor" integer CHECK ("approvedAmountMinor" > 0 AND ("approvedAmountMinor" IS NULL OR "providerRef" IS NOT NULL));
+CREATE UNIQUE INDEX IF NOT EXISTS "pharmacy_card_terminal_attempts_organizationId_branchId_id_key"
+  ON pharmacy_card_terminal_attempts ("organizationId","branchId",id);
 
-CREATE FUNCTION pharmacy_terminal_approved_amount_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION pharmacy_terminal_approved_amount_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."approvedAmountMinor" IS DISTINCT FROM OLD."approvedAmountMinor" AND
     (OLD."approvedAmountMinor" IS NOT NULL OR OLD.status NOT IN ('SENT','UNKNOWN') OR
@@ -17,10 +20,10 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER terminal_approved_amount_guard BEFORE UPDATE ON pharmacy_card_terminal_attempts
+CREATE OR REPLACE TRIGGER terminal_approved_amount_guard BEFORE UPDATE ON pharmacy_card_terminal_attempts
 FOR EACH ROW EXECUTE FUNCTION pharmacy_terminal_approved_amount_guard();
 
-CREATE TABLE pharmacy_terminal_refund_events (
+CREATE TABLE IF NOT EXISTS pharmacy_terminal_refund_events (
   id text PRIMARY KEY,
   "organizationId" text NOT NULL, "branchId" text NOT NULL, "attemptId" text NOT NULL,
   "refundId" text, "previousId" text UNIQUE, kind text NOT NULL CHECK (kind IN ('OWED','DECLINED','SETTLED')),
@@ -40,28 +43,28 @@ CREATE TABLE pharmacy_terminal_refund_events (
   CHECK (kind = 'DECLINED' OR "journalId" IS NOT NULL),
   CHECK (kind <> 'SETTLED' OR "previousId" IS NOT NULL)
 );
-CREATE UNIQUE INDEX terminal_review_root ON pharmacy_terminal_refund_events ("attemptId")
+CREATE UNIQUE INDEX IF NOT EXISTS terminal_review_root ON pharmacy_terminal_refund_events ("attemptId")
   WHERE "previousId" IS NULL AND "refundId" IS NULL;
-CREATE UNIQUE INDEX terminal_refund_root ON pharmacy_terminal_refund_events ("refundId")
+CREATE UNIQUE INDEX IF NOT EXISTS terminal_refund_root ON pharmacy_terminal_refund_events ("refundId")
   WHERE "previousId" IS NULL AND "refundId" IS NOT NULL;
-CREATE INDEX terminal_refund_branch ON pharmacy_terminal_refund_events ("organizationId","branchId","attemptId");
+CREATE INDEX IF NOT EXISTS terminal_refund_branch ON pharmacy_terminal_refund_events ("organizationId","branchId","attemptId");
 ALTER TABLE pharmacy_terminal_refund_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pharmacy_terminal_refund_events FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS terminal_refund_scope ON pharmacy_terminal_refund_events;
 CREATE POLICY terminal_refund_scope ON pharmacy_terminal_refund_events USING (
   "organizationId"=NULLIF(current_setting('app.current_organization_id',true),'') AND
   (NULLIF(current_setting('app.current_branch_id',true),'') IS NULL OR "branchId"=current_setting('app.current_branch_id',true))
 );
-CREATE FUNCTION pharmacy_terminal_refund_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION pharmacy_terminal_refund_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'card terminal refund events are append-only' USING ERRCODE='55000';
 END $$;
-CREATE TRIGGER terminal_refund_immutable BEFORE UPDATE OR DELETE ON pharmacy_terminal_refund_events
+CREATE OR REPLACE TRIGGER terminal_refund_immutable BEFORE UPDATE OR DELETE ON pharmacy_terminal_refund_events
   FOR EACH ROW EXECUTE FUNCTION pharmacy_terminal_refund_immutable();
-
 
 -- An event must reference the same branch, tender and amount as its source refund.
 -- Posting and event are written in the same transaction, with the journal first.
-CREATE FUNCTION pharmacy_terminal_refund_source_guard() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION pharmacy_terminal_refund_source_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."refundId" IS NOT NULL AND NOT EXISTS (
     SELECT 1 FROM pharmacy_refunds r JOIN pharmacy_card_terminal_attempts a ON
@@ -81,5 +84,7 @@ BEGIN
   ) THEN RAISE EXCEPTION 'terminal refund must reference its balanced journal posting'; END IF;
   RETURN NEW;
 END $$;
-CREATE TRIGGER terminal_refund_source_guard BEFORE INSERT ON pharmacy_terminal_refund_events
+CREATE OR REPLACE TRIGGER terminal_refund_source_guard BEFORE INSERT ON pharmacy_terminal_refund_events
   FOR EACH ROW EXECUTE FUNCTION pharmacy_terminal_refund_source_guard();
+
+COMMIT;

@@ -888,6 +888,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['reports:financial'],
     allows: [
       {
+        id: 'map-provider-refunds',
+        text: 'As the accountant, choose the liability account for card refunds owed through the provider',
+        sites: { 'src/server/routers/organization-pharmacy-settings.ts': 1 },
+      },
+      {
         id: 'workspace-administrator-use-operational',
         text: 'As a workspace administrator with Use operational reports: view growth, marketing, branch comparison, anomaly and expiry-advice reports, and also change data there: save and delete seasonal windows, propose expiry returns, refresh, acknowledge and snooze anomalies, acknowledge pack-authentication flags and set the daily digest',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },

@@ -15,7 +15,27 @@ const scope = { organizationId, branchId, actorId: 'manager_' + suffix };
 const key = 'test-review-' + suffix;
 let run: <T>(fn: (db: ScopedDb) => Promise<T>) => Promise<T>;
 
+async function loadRefundModules() {
+  const [store, service, refunds, settlement, sales] = await Promise.all([
+    import('@/lib/pharmacy/card-terminal/store'),
+    import('@/lib/pharmacy/card-terminal/service'),
+    import('@/lib/pharmacy/card-terminal/provider-refunds'),
+    import('@/lib/pharmacy/settlement'),
+    import('@/lib/pharmacy/sales'),
+  ]);
+  return {
+    prismaCardTerminalAttemptStore: store.prismaCardTerminalAttemptStore,
+    resolveCardTerminalReview: service.resolveCardTerminalReview,
+    changeProviderRefund: refunds.changeProviderRefund,
+    outstandingProviderRefunds: refunds.outstandingProviderRefunds,
+    refundPharmacyTender: settlement.refundPharmacyTender,
+    changeSaleStatus: sales.changeSaleStatus,
+  };
+}
+
 describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
+  let modules: Awaited<ReturnType<typeof loadRefundModules>>;
+
   beforeAll(async () => {
     for (const url of [owner!, runtime!]) {
       assertDisposableRlsDatabase(url);
@@ -87,11 +107,17 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     run = (fn) => withTenantDb(organizationId, fn, { userId: scope.actorId });
   });
 
+  beforeAll(async () => {
+    modules = await loadRefundModules();
+  });
+
   it('links both corrections and settles the liability exactly once under concurrent submission', async () => {
-    const { prismaCardTerminalAttemptStore } = await import('@/lib/pharmacy/card-terminal/store');
-    const { resolveCardTerminalReview } = await import('@/lib/pharmacy/card-terminal/service');
-    const { changeProviderRefund, outstandingProviderRefunds } =
-      await import('@/lib/pharmacy/card-terminal/provider-refunds');
+    const {
+      prismaCardTerminalAttemptStore,
+      resolveCardTerminalReview,
+      changeProviderRefund,
+      outstandingProviderRefunds,
+    } = modules;
     const store = prismaCardTerminalAttemptStore(run);
     await resolveCardTerminalReview(
       { store },
@@ -179,8 +205,7 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     expect(history.every((e) => e.reason.length > 0)).toBe(true);
   });
   it('refuses an unmapped custom chart, then books one partial tender refund without paying cash', async () => {
-    const { refundPharmacyTender } = await import('@/lib/pharmacy/settlement');
-    const { changeProviderRefund } = await import('@/lib/pharmacy/card-terminal/provider-refunds');
+    const { refundPharmacyTender, changeProviderRefund, changeSaleStatus } = modules;
     const saleId = 'partial-' + suffix;
     const tenderId = 'tender-' + suffix;
     const attemptId = 'attempt-' + suffix;
@@ -312,7 +337,6 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     expect(await run((db) => db.pharmacyDrawerMovement.count({ where: { organizationId } }))).toBe(
       0
     );
-    const { changeSaleStatus } = await import('@/lib/pharmacy/sales');
     const voidBill = () =>
       run((db) =>
         changeSaleStatus(
@@ -332,9 +356,8 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     ).rejects.toThrow(/append-only/);
   });
   it('requires the original owner authority when correcting a no-charge decision after a role change', async () => {
-    const { resolveCardTerminalReview } = await import('@/lib/pharmacy/card-terminal/service');
-    const { prismaCardTerminalAttemptStore } = await import('@/lib/pharmacy/card-terminal/store');
-    const { changeProviderRefund } = await import('@/lib/pharmacy/card-terminal/provider-refunds');
+    const { resolveCardTerminalReview, prismaCardTerminalAttemptStore, changeProviderRefund } =
+      modules;
     const attemptId = 'declined-' + suffix;
     const originalActor = 'third' + suffix;
     const corrector = 'peer' + suffix;
