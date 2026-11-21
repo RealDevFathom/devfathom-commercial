@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import Link from 'next/link';
 import { ArrowUpRight, Search } from 'lucide-react';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -86,7 +87,7 @@ export default async function OrganizationsPage({
           <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
             Vertical
           </span>
-          <select
+          <StudioSelect
             name="vertical"
             defaultValue={vertical ?? ''}
             className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
@@ -97,13 +98,13 @@ export default async function OrganizationsPage({
                 {value.charAt(0) + value.slice(1).toLowerCase()}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <label className="grid gap-1.5">
           <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
             Lifecycle status
           </span>
-          <select
+          <StudioSelect
             name="status"
             defaultValue={status ?? ''}
             className="h-10 w-full border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
@@ -114,7 +115,7 @@ export default async function OrganizationsPage({
                 {value.replaceAll('_', ' ')}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
         <button className="h-10 rounded-control bg-primary px-4 text-xs font-semibold text-primary-foreground shadow-control-ink">
           Apply filters

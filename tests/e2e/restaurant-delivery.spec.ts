@@ -1,3 +1,4 @@
+import { chooseSelectField } from './fixtures/select-field';
 import { spawnSync } from 'node:child_process';
 
 import {
@@ -530,7 +531,10 @@ test('direct delivery authorization, COD/PREPAID handoff and fee reporting remai
     await expect(deliveryFeeSalesStat.locator('.stat-figure')).toHaveText('13.25');
     await expect(deliveryFeeRefundsStat.locator('.stat-figure')).toHaveText('0');
     await admin.goto(new URL('/restaurant/insights', adminOrigin).href);
-    await admin.getByLabel('Branch').selectOption(fixture.delivery.branchId);
+    await chooseSelectField(
+      admin.getByRole('combobox', { name: 'Branch', exact: true }),
+      fixture.delivery.branchId
+    );
     await admin.getByLabel('From date').fill(businessDate);
     await admin.getByLabel('To date').fill(businessDate);
     const financialReportsTable = admin.getByRole('region', {

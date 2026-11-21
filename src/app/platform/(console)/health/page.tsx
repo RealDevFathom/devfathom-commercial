@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import Link from 'next/link';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SectionCard } from '@/components/ui/section-card';
@@ -72,7 +73,7 @@ export default async function HealthPage({
         >
           <label className="space-y-2 text-sm font-semibold">
             Vertical
-            <select
+            <StudioSelect
               aria-label="Vertical"
               name="vertical"
               defaultValue={data.filters.vertical ?? ''}
@@ -82,11 +83,11 @@ export default async function HealthPage({
               <option value="AGENCY">Agency</option>
               <option value="PHARMACY">Pharmacy</option>
               <option value="RESTAURANT">Restaurant</option>
-            </select>
+            </StudioSelect>
           </label>
           <label className="space-y-2 text-sm font-semibold">
             Organization
-            <select
+            <StudioSelect
               name="organizationId"
               defaultValue={data.filters.organizationId ?? ''}
               className={control}
@@ -97,7 +98,7 @@ export default async function HealthPage({
                   {org.displayName}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" className="min-h-11">
             Apply filters

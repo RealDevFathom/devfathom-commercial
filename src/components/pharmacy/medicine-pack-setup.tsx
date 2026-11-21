@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useState } from 'react';
@@ -155,7 +157,7 @@ export function MedicinePackSetup() {
             <legend className="sr-only">Medicine and pack details</legend>
             <label className="space-y-2 text-sm text-text-body">
               <span>Medicine</span>
-              <select
+              <StudioSelect
                 className={control}
                 required
                 value={medicineId}
@@ -177,11 +179,11 @@ export function MedicinePackSetup() {
                     {item.manufacturer ? ` — ${item.manufacturer}` : ''}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="space-y-2 text-sm text-text-body">
               <span>Presentation</span>
-              <select
+              <StudioSelect
                 className={control}
                 required
                 value={presentationId}
@@ -197,11 +199,11 @@ export function MedicinePackSetup() {
                     {item.dosageForm} — {item.presentation}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="space-y-2 text-sm text-text-body">
               <span>Pack type</span>
-              <select
+              <StudioSelect
                 className={control}
                 required
                 value={level}
@@ -217,7 +219,7 @@ export function MedicinePackSetup() {
                     {item[0] + item.slice(1).toLowerCase()}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             <label className="space-y-2 text-sm text-text-body">
               <span>Individual units per pack</span>

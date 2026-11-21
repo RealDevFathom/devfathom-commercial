@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
@@ -148,7 +149,7 @@ const pages = [
 describe('Explicit Hotel settings property selection', () => {
   it.each(pages)('$name never selects a default', async ({ page }) => {
     render(await page({}));
-    expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
+    expect(selectFieldControl(screen.getByRole('combobox', { name: 'Property' }))).toHaveValue('');
     expect(h.select).not.toHaveBeenCalled();
     for (const read of reads) expect(read).not.toHaveBeenCalled();
   });
@@ -176,8 +177,8 @@ describe('Explicit Hotel settings property selection', () => {
     render(await MealPlansPage({}));
     expect(h.accessChoices).toHaveBeenCalledWith({ capability: 'hotel:rates' });
     expect(h.choices).not.toHaveBeenCalled();
-    expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
-    expect(screen.getByRole('option', { name: 'Two Hotel' })).toBeInTheDocument();
+    expect(selectFieldControl(screen.getByRole('combobox', { name: 'Property' }))).toHaveValue('');
+    expect(screen.getByRole('option', { hidden: true, name: 'Two Hotel' })).toBeInTheDocument();
   });
   it('mounts the meal-plans panel with the selection it was opened for', async () => {
     render(await MealPlansPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
@@ -255,9 +256,9 @@ describe('Explicit Hotel settings property selection', () => {
     });
     expect(h.choices).not.toHaveBeenCalled();
     expect(h.accessChoices).not.toHaveBeenCalled();
-    expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
-    expect(screen.getByRole('option', { name: 'One Hotel' })).toBeInTheDocument();
-    expect(screen.getByRole('option', { name: 'Two Hotel' })).toBeInTheDocument();
+    expect(selectFieldControl(screen.getByRole('combobox', { name: 'Property' }))).toHaveValue('');
+    expect(screen.getByRole('option', { hidden: true, name: 'One Hotel' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { hidden: true, name: 'Two Hotel' })).toBeInTheDocument();
   });
   it('mounts the guest-messages editor with the selection it was opened for', async () => {
     render(await JourneyPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));

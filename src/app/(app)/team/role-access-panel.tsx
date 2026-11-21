@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { SelectField } from '@/components/ui/select-field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { trpc } from '@/lib/trpc';
 import { SubRoleGroups, type MemberAccessEditor } from './member-access-panel';
@@ -101,10 +102,10 @@ function RolePicker() {
     <>
       <label className="grid gap-1.5 text-sm">
         Pharmacy role
-        <select
+        <SelectField
           value={roleId}
           onChange={(event) => setRoleId(event.target.value)}
-          className="min-h-11 w-full rounded-control border border-border-default bg-surface-card px-3 text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+          className="w-full rounded-control"
         >
           <option value="">Choose a role</option>
           {roles.data.map((role) => (
@@ -112,7 +113,7 @@ function RolePicker() {
               {role.name}
             </option>
           ))}
-        </select>
+        </SelectField>
       </label>
       {roleId && <RoleAccess key={roleId} roleId={roleId} />}
     </>

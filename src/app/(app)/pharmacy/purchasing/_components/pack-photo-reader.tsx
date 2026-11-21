@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { Camera, RotateCcw, X } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -611,7 +613,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                     >
                       Expiry precision
                     </label>
-                    <select
+                    <StudioSelect
                       form={formId}
                       className={CONTROL}
                       id={`${id}-precision`}
@@ -623,7 +625,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                       <option value="">Choose…</option>
                       <option value="MONTH">Month printed (e.g. 06/2027)</option>
                       <option value="DAY">Exact day printed</option>
-                    </select>
+                    </StudioSelect>
                   </div>
 
                   <div className="min-w-0 space-y-1">
@@ -673,7 +675,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                     >
                       Receive into (optional)
                     </label>
-                    <select
+                    <StudioSelect
                       form={formId}
                       className={CONTROL}
                       id={`${id}-shelf`}
@@ -689,7 +691,7 @@ export function PackPhotoReader(props: PackPhotoReaderProps) {
                           {location.label}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                     <p className="text-xs text-text-muted">
                       Changes this receipt line only. The branch and medicine defaults stay as they
                       are.

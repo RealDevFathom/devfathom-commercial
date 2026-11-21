@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useState } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -127,7 +129,7 @@ export function ReceiptDesigner() {
             >
               <label className="block space-y-2">
                 Branch
-                <select
+                <StudioSelect
                   className={control}
                   value={branchId}
                   disabled={disabled || !!dirty}
@@ -144,7 +146,7 @@ export function ReceiptDesigner() {
                       {row.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               {dirty && (
                 <p className="text-sm text-text-muted">
@@ -153,7 +155,7 @@ export function ReceiptDesigner() {
               )}
               <label className="block space-y-2">
                 Paper width
-                <select
+                <StudioSelect
                   className={control}
                   value={draft.paperWidth}
                   disabled={disabled}
@@ -163,7 +165,7 @@ export function ReceiptDesigner() {
                 >
                   <option value={58}>58 mm · 32 columns</option>
                   <option value={80}>80 mm · 48 columns</option>
-                </select>
+                </StudioSelect>
               </label>
               {(['businessText', 'headerText', 'footerText'] as const).map((field) => (
                 <div key={field} className="space-y-2">

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -102,7 +104,7 @@ function BranchPrinterForm({
       <form className="space-y-4" onSubmit={submit} aria-describedby="printer-paper-help">
         <div className="max-w-md">
           <Label htmlFor="printer-paper">Receipt printer and paper</Label>
-          <select
+          <StudioSelect
             id="printer-paper"
             className={controlClass}
             value={paper}
@@ -117,7 +119,7 @@ function BranchPrinterForm({
                 {option.label}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </div>
         <p id="printer-paper-help" className="max-w-prose text-sm text-text-muted">
           The counter opens receipts on this paper for {branchName}; a cashier can still change it
@@ -166,7 +168,7 @@ function BranchPrinterForm({
         <div className="flex flex-wrap items-end gap-3">
           <div>
             <Label htmlFor="printer-test-locale">Test language</Label>
-            <select
+            <StudioSelect
               id="printer-test-locale"
               className={controlClass}
               value={testLocale}
@@ -174,7 +176,7 @@ function BranchPrinterForm({
             >
               <option value="en">English</option>
               <option value="ur">اردو</option>
-            </select>
+            </StudioSelect>
           </div>
           <Button className="min-h-11" type="button" variant="outline" onClick={testPrint}>
             Print test page
@@ -250,7 +252,7 @@ export function PharmacyPrinterSettingsConsole({ canSave }: { canSave: boolean }
         <div className="space-y-6">
           <div className="max-w-md">
             <Label htmlFor="printer-branch">Branch</Label>
-            <select
+            <StudioSelect
               id="printer-branch"
               className={controlClass}
               value={branchId}
@@ -261,7 +263,7 @@ export function PharmacyPrinterSettingsConsole({ canSave }: { canSave: boolean }
                   {option.name} ({option.code})
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           {format.isLoading ? (
             <p className="text-sm text-text-muted" role="status">

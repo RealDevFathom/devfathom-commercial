@@ -14,6 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import { Input } from '@/components/ui/input';
+import { SelectField } from '@/components/ui/select-field';
 import { Skeleton } from '@/components/ui/skeleton';
 import { SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { trpc } from '@/lib/trpc';
@@ -286,7 +287,7 @@ function StartingRole({
     >
       <label htmlFor={`${id}-role`} className="grid gap-1.5 text-sm">
         Start from a ready-made role
-        <select
+        <SelectField
           id={`${id}-role`}
           value={roleKey}
           onChange={(event) => setRoleKey(event.target.value)}
@@ -299,7 +300,7 @@ function StartingRole({
               {role.name}
             </option>
           ))}
-        </select>
+        </SelectField>
       </label>
       <label className="grid gap-1.5 text-sm">
         Your PIN

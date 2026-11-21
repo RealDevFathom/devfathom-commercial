@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { ExternalLink, LoaderCircle } from 'lucide-react';
 import { toast } from 'sonner';
@@ -62,7 +64,7 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
           <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-primary-foreground">
             Access duration
           </span>
-          <select
+          <StudioSelect
             value={duration}
             onChange={(event) => setDuration(event.target.value)}
             className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-xs"
@@ -70,7 +72,7 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
             <option value="15">15 minutes</option>
             <option value="30">30 minutes</option>
             <option value="60">60 minutes</option>
-          </select>
+          </StudioSelect>
         </label>
         <button
           type="button"

@@ -1,5 +1,6 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { RoleAccessButton } from './role-access-panel';
 import { memo, useState, useMemo } from 'react';
 import Link from 'next/link';
@@ -657,7 +658,7 @@ export function AddMemberModal({
                     >
                       Department
                     </label>
-                    <select
+                    <StudioSelect
                       id="invite-department"
                       value={selectedDepartment ? department : ''}
                       disabled={
@@ -677,7 +678,7 @@ export function AddMemberModal({
                           {item.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                     <div
                       id="invite-department-status"
                       className="mt-2 text-sm text-text-muted"
@@ -736,7 +737,7 @@ export function AddMemberModal({
                   >
                     {templateBaseRoles === undefined ? copy.staffRoleLabel : 'Role'}
                   </label>
-                  <select
+                  <StudioSelect
                     id="invite-role-template"
                     aria-describedby="invite-role-template-help"
                     value={organizationRoleId}
@@ -750,7 +751,7 @@ export function AddMemberModal({
                         {item.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                   <p id="invite-role-template-help" className="mt-2 text-sm text-text-muted">
                     {roleQuery.isFetching
                       ? 'Loading staff roles…'

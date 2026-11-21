@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type ChangeEvent } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -332,7 +334,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
               {/* IMP-CLI-03: status selector */}
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Status</label>
-                <select
+                <StudioSelect
                   value={editStatus}
                   onChange={(e) =>
                     setEditStatus(e.target.value as 'ACTIVE' | 'INACTIVE' | 'PROSPECT')
@@ -342,7 +344,7 @@ export function ClientDetailContent({ clientId }: { clientId: string }) {
                   <option value="PROSPECT">Prospect</option>
                   <option value="ACTIVE">Active</option>
                   <option value="INACTIVE">Inactive</option>
-                </select>
+                </StudioSelect>
               </div>
               {/* IMP-CLI-03: logo upload */}
               <div>
@@ -1430,7 +1432,7 @@ function ClientContractsTab({
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Status</label>
-                <select
+                <StudioSelect
                   value={status}
                   onChange={(e) => setStatus(e.target.value as (typeof CONTRACT_STATUSES)[number])}
                   className={inputClass}
@@ -1440,19 +1442,19 @@ function ClientContractsTab({
                       {contractStatusConfig[s].label}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Value</label>
                 <div className="flex gap-2">
-                  <select
+                  <StudioSelect
                     value={currency}
                     onChange={(e) => setCurrency(e.target.value as 'USD' | 'PKR')}
                     className={cn(inputClass, 'w-20 shrink-0')}
                   >
                     <option value="USD">USD</option>
                     <option value="PKR">PKR</option>
-                  </select>
+                  </StudioSelect>
                   <input
                     type="number"
                     min="0"
@@ -1467,7 +1469,7 @@ function ClientContractsTab({
                 <label className="block text-xs font-medium text-foreground mb-1">
                   Linked Project
                 </label>
-                <select
+                <StudioSelect
                   value={projectId}
                   onChange={(e) => setProjectId(e.target.value)}
                   className={inputClass}
@@ -1478,7 +1480,7 @@ function ClientContractsTab({
                       {p.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Start Date</label>
@@ -1625,7 +1627,7 @@ function ClientContractsTab({
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-sm font-semibold text-foreground">{c.title}</p>
-                            <select
+                            <StudioSelect
                               value={c.status}
                               onChange={(e) =>
                                 setContractStatus.mutate({
@@ -1645,7 +1647,7 @@ function ClientContractsTab({
                                   {contractStatusConfig[s].label}
                                 </option>
                               ))}
-                            </select>
+                            </StudioSelect>
                             {/* IMP-CLI-04: expiry / renewal indicator. */}
                             {(() => {
                               const chip = contractExpiry(c.status, c.endDate);

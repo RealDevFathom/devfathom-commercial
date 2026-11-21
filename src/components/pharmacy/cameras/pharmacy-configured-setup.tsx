@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -39,7 +41,7 @@ function BranchSelect({
   return (
     <label className="text-sm font-medium text-text-strong">
       Branch
-      <select
+      <StudioSelect
         className={field}
         value={value}
         required
@@ -53,7 +55,7 @@ function BranchSelect({
             {branch.name}
           </option>
         ))}
-      </select>
+      </StudioSelect>
     </label>
   );
 }

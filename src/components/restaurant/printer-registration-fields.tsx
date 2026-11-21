@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useId, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -140,7 +142,7 @@ export function PrinterRegistrationFields({
             <label htmlFor={`${row.key}-width`} className="block text-sm">
               Printer {index + 1} paper width
             </label>
-            <select
+            <StudioSelect
               id={`${row.key}-width`}
               className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
               value={row.paperWidthMm}
@@ -150,7 +152,7 @@ export function PrinterRegistrationFields({
             >
               <option value="80">80 mm</option>
               <option value="58">58 mm</option>
-            </select>
+            </StudioSelect>
           </div>
         </div>
       ))}

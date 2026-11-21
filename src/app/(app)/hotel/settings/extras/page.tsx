@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
@@ -125,7 +126,7 @@ export default async function HotelExtrasSettingsPage({
                 <label htmlFor="extras-property" className="block text-sm font-semibold">
                   Property
                 </label>
-                <select
+                <StudioSelect
                   id="extras-property"
                   name="branchId"
                   defaultValue=""
@@ -140,7 +141,7 @@ export default async function HotelExtrasSettingsPage({
                       {property.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <button type="submit" className={buttonVariants({ className: 'min-h-11' })}>
                 Open catalog

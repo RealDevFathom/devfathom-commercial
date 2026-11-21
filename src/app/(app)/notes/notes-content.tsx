@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, useCallback, useEffect, memo } from 'react';
 import Link from 'next/link';
 import dynamic from 'next/dynamic';
@@ -558,17 +560,19 @@ function NoteDetail({ noteId }: { noteId: string }) {
 
           {isAuthor ? (
             <>
-              <select
-                value={note.visibility}
-                onChange={(e) =>
-                  updateNote.mutate({ id: noteId, visibility: e.target.value as Visibility })
-                }
-                className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground focus:border-primary focus:outline-none"
-              >
-                <option value="PRIVATE">Private</option>
-                <option value="SHARED">Shared</option>
-                <option value="TEAM">Team</option>
-              </select>
+              <span className="shrink-0">
+                <StudioSelect
+                  value={note.visibility}
+                  onChange={(e) =>
+                    updateNote.mutate({ id: noteId, visibility: e.target.value as Visibility })
+                  }
+                  className="rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs font-medium text-foreground focus:border-primary focus:outline-none"
+                >
+                  <option value="PRIVATE">Private</option>
+                  <option value="SHARED">Shared</option>
+                  <option value="TEAM">Team</option>
+                </StudioSelect>
+              </span>
               <button
                 onClick={() => setShowSharePanel((v) => !v)}
                 className={cn(
@@ -858,14 +862,14 @@ function SharePanel({
               <span className="flex-1 truncate text-sm font-medium text-foreground">
                 {s.user.name}
               </span>
-              <select
+              <StudioSelect
                 value={s.permission}
                 onChange={(e) => setPerm(s.user.id, e.target.value as 'VIEW' | 'EDIT')}
                 className="rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-foreground focus:border-primary focus:outline-none"
               >
                 <option value="VIEW">Can view</option>
                 <option value="EDIT">Can edit</option>
-              </select>
+              </StudioSelect>
               <button
                 onClick={() => removeUser(s.user.id)}
                 className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"

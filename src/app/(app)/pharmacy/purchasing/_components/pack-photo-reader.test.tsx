@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { selectFieldControl } from '@/lib/testing/select-field';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const h = vi.hoisted(() => ({ mutateAsync: vi.fn() }));
@@ -365,9 +366,11 @@ describe('PackPhotoReader review of uncertain reads', () => {
     const { lineValue } = harness();
     await openAndRead();
     const expiry = screen.getByLabelText('Printed expiry') as HTMLInputElement;
-    const precision = screen.getByLabelText('Expiry precision') as HTMLSelectElement;
+    const precision = screen.getByLabelText('Expiry precision', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    }) as HTMLSelectElement;
     expect(expiry.value).toBe('');
-    expect(precision.value).toBe('');
+    expect(selectFieldControl(precision).value).toBe('');
     expect(screen.getByText(/could be read as day-month or month-day/)).toBeInTheDocument();
     const first = screen.getByRole('radio', { name: '2028-04-03' }) as HTMLInputElement;
     const second = screen.getByRole('radio', { name: '2028-03-04' }) as HTMLInputElement;
@@ -383,7 +386,7 @@ describe('PackPhotoReader review of uncertain reads', () => {
 
     fireEvent.click(second);
     expect(expiry.value).toBe('2028-03-04');
-    expect(precision.value).toBe('DAY');
+    expect(selectFieldControl(precision).value).toBe('DAY');
     expect(second.checked).toBe(true);
     // Choosing a reading is an edit, so the earlier confirmation no longer counts.
     expect(confirmBox().checked).toBe(false);
@@ -404,8 +407,10 @@ describe('PackPhotoReader review of uncertain reads', () => {
     expect(screen.getByText(/expiry could not be read as one clear date/)).toBeInTheDocument();
     const batch = screen.getByLabelText('Batch number') as HTMLInputElement;
     const expiry = screen.getByLabelText('Printed expiry') as HTMLInputElement;
-    const precision = screen.getByLabelText('Expiry precision') as HTMLSelectElement;
-    expect([batch.value, expiry.value, precision.value]).toEqual(['', '', '']);
+    const precision = screen.getByLabelText('Expiry precision', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    }) as HTMLSelectElement;
+    expect([batch.value, expiry.value, selectFieldControl(precision).value]).toEqual(['', '', '']);
     expect(
       screen.getByText('Not readable on the photo. Type it from the pack.')
     ).toBeInTheDocument();
@@ -427,7 +432,7 @@ describe('PackPhotoReader review of uncertain reads', () => {
       screen.getByText(/Choose whether the pack prints a month or an exact day/)
     ).toBeInTheDocument();
 
-    fireEvent.change(precision, { target: { value: 'DAY' } });
+    fireEvent.change(selectFieldControl(precision), { target: { value: 'DAY' } });
     countConfirmApply('4');
     expect([
       lineValue('batchNumber'),
@@ -511,9 +516,16 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue } = harness({ locations: TWO_LOCATIONS });
     await openAndRead();
-    fireEvent.change(screen.getByLabelText('Receive into (optional)'), {
-      target: { value: 'loc-b' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receive into (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'loc-b' },
+      }
+    );
     countConfirmApply('7');
     expect(lineValue('stockLocation')).toBe('loc-b');
   });
@@ -526,9 +538,13 @@ describe('PackPhotoReader shelf choice', () => {
       target: { value: 'loc-b' },
     });
     await openAndRead();
-    expect((screen.getByLabelText('Receive into (optional)') as HTMLSelectElement).value).toBe(
-      'loc-b'
-    );
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Receive into (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        }) as HTMLSelectElement
+      ).value
+    ).toBe('loc-b');
     countConfirmApply('7');
     expect(lineValue('batchNumber')).toBe('SYN-B2741');
     expect(lineValue('stockLocation')).toBe('loc-b');
@@ -538,9 +554,13 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue, receipt } = harness({ locations: TWO_LOCATIONS });
     await openAndRead();
-    expect((screen.getByLabelText('Receive into (optional)') as HTMLSelectElement).value).toBe(
-      'loc-a'
-    );
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Receive into (optional)', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        }) as HTMLSelectElement
+      ).value
+    ).toBe('loc-a');
     fireEvent.change(receipt.elements.namedItem('stockLocation:pol-1') as HTMLSelectElement, {
       target: { value: 'loc-b' },
     });
@@ -553,12 +573,18 @@ describe('PackPhotoReader shelf choice', () => {
     h.mutateAsync.mockResolvedValue(PROPOSAL);
     const { lineValue } = harness({ locations: TWO_LOCATIONS });
     await openAndRead();
-    const shelf = screen.getByLabelText('Receive into (optional)');
-    fireEvent.change(shelf, { target: { value: 'loc-b' } });
-    fireEvent.change(shelf, { target: { value: '' } });
+    const shelf = screen.getByLabelText('Receive into (optional)', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    fireEvent.change(selectFieldControl(shelf), { target: { value: 'loc-b' } });
+    fireEvent.change(selectFieldControl(shelf), { target: { value: '' } });
     expect(
-      (screen.getByRole('option', { name: 'Keep the line’s location' }) as HTMLOptionElement)
-        .selected
+      (
+        within(selectFieldControl(shelf)).getByRole('option', {
+          hidden: true,
+          name: 'Keep the line’s location',
+        }) as HTMLOptionElement
+      ).selected
     ).toBe(true);
     countConfirmApply('7');
     expect(lineValue('batchNumber')).toBe('SYN-B2741');

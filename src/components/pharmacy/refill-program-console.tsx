@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -179,7 +181,7 @@ export function RefillProgramConsole() {
           </p>
           <div className="max-w-sm space-y-1.5">
             <Label htmlFor="refill-branch">Branch</Label>
-            <select
+            <StudioSelect
               id="refill-branch"
               className={SELECT_CLASS}
               value={branchId}
@@ -190,7 +192,7 @@ export function RefillProgramConsole() {
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
 
           {notice ? (
@@ -594,7 +596,7 @@ function NewSubscriptionForm({
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1.5">
             <Label htmlFor="refill-customer">Customer</Label>
-            <select
+            <StudioSelect
               id="refill-customer"
               className={SELECT_CLASS}
               value={customerId}
@@ -607,7 +609,7 @@ function NewSubscriptionForm({
                   {customer.phoneLast4 ? ` · ${customer.phoneLast4}` : ''}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="refill-item-search">Find item</Label>
@@ -621,7 +623,7 @@ function NewSubscriptionForm({
           </div>
           <div className="space-y-1.5 md:col-span-2">
             <Label htmlFor="refill-item">Item and pack</Label>
-            <select
+            <StudioSelect
               id="refill-item"
               className={SELECT_CLASS}
               value={itemKey}
@@ -644,7 +646,7 @@ function NewSubscriptionForm({
                   {row.prescriptionOnly ? ' · prescription only' : ''}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="refill-packs">Packs per cycle</Label>
@@ -697,7 +699,7 @@ function NewSubscriptionForm({
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="refill-fulfillment">Hand-over</Label>
-            <select
+            <StudioSelect
               id="refill-fulfillment"
               className={SELECT_CLASS}
               value={fulfillment}
@@ -705,11 +707,11 @@ function NewSubscriptionForm({
             >
               <option value="COLLECT">Customer collects</option>
               <option value="DELIVER">Staff delivers</option>
-            </select>
+            </StudioSelect>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="refill-payment">Payment</Label>
-            <select
+            <StudioSelect
               id="refill-payment"
               className={SELECT_CLASS}
               value={paymentMode}
@@ -717,7 +719,7 @@ function NewSubscriptionForm({
             >
               <option value="PREPAY">Prepay at the counter</option>
               <option value="KHATA">Khata</option>
-            </select>
+            </StudioSelect>
           </div>
         </div>
         {error ? (
@@ -852,7 +854,7 @@ function PharmacistSignOffDialog({
 
           <div className="grid gap-2">
             <Label htmlFor="refill-pharmacist">Signing pharmacist</Label>
-            <select
+            <StudioSelect
               id="refill-pharmacist"
               className={SELECT_CLASS}
               value={staffProfileId}
@@ -870,7 +872,7 @@ function PharmacistSignOffDialog({
                   {row.self ? `${row.name} (you)` : row.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
             {approversQuery.isSuccess && !approvers.length ? (
               <p role="status" className="text-sm text-text-muted">
                 No pharmacist has an active staff PIN. Ask your administrator to set one up.
