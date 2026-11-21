@@ -28,7 +28,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { financeCsvCell } from './finance-csv';
-import { format } from 'date-fns';
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { workspaceDateRange, workspaceToday, formatWorkspaceDate } from '@/lib/timezone';
 import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
 import { InvoiceManagePanel } from '@/components/finance/invoice-manage-panel';
@@ -208,6 +209,7 @@ function TransactionsTab({
 }) {
   const utils = trpc.useUtils();
   const [showAdd, setShowAdd] = useState(false);
+  const timeZone = useWorkspaceTimeZone();
   const [filter, setFilter] = useState<'ALL' | 'INCOME' | 'EXPENSE'>('ALL');
 
   const invalidateFinance = useCallback(() => {
@@ -233,7 +235,7 @@ function TransactionsTab({
       'Client',
     ];
     const rows = filtered.map((t) => [
-      format(new Date(t.date), 'yyyy-MM-dd'),
+      workspaceToday(timeZone, new Date(t.date)),
       t.type,
       Number(t.amount),
       t.currency,
@@ -246,10 +248,10 @@ function TransactionsTab({
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transactions-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    a.download = `transactions-${workspaceToday(timeZone)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [filtered]);
+  }, [filtered, timeZone]);
 
   return (
     <div className="space-y-4">
@@ -329,6 +331,7 @@ const TransactionRow = memo(function TransactionRow({
   onInvalidate: () => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const timeZone = useWorkspaceTimeZone();
   const [eDesc, setEDesc] = useState('');
   const [eAmount, setEAmount] = useState('');
   const [eDate, setEDate] = useState('');
@@ -405,7 +408,10 @@ const TransactionRow = memo(function TransactionRow({
                   id: t.id,
                   description: eDesc.trim(),
                   amount: parseFloat(eAmount),
-                  date: new Date(eDate),
+                  date:
+                    eDate === workspaceToday(timeZone, new Date(t.date))
+                      ? new Date(t.date)
+                      : workspaceDateRange(eDate, eDate, timeZone).from,
                   category: t.type === 'EXPENSE' && eCategory ? (eCategory as 'SALARIES') : null,
                 });
               }
@@ -444,7 +450,7 @@ const TransactionRow = memo(function TransactionRow({
         </p>
       </div>
       <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">
-        {format(new Date(t.date), 'MMM d, yyyy')}
+        {formatWorkspaceDate(t.date, timeZone)}
       </span>
       <span
         className={cn(
@@ -460,7 +466,7 @@ const TransactionRow = memo(function TransactionRow({
             onClick={() => {
               setEDesc(t.description);
               setEAmount(String(Number(t.amount)));
-              setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
+              setEDate(workspaceToday(timeZone, new Date(t.date)));
               setECategory(t.category || '');
               setIsEditing(true);
             }}
@@ -489,6 +495,7 @@ const MAX_MONEY = 9_999_999_999.99;
    Add Transaction Form
    ============================================ */
 function AddTransactionForm({ onClose }: { onClose: () => void }) {
+  const timeZone = useWorkspaceTimeZone();
   const utils = trpc.useUtils();
   const { data: projects } = trpc.projects.getAll.useQuery();
   const { data: clients } = trpc.clients.getAll.useQuery();
@@ -507,7 +514,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
   const [category, setCategory] = useState('');
   const [projectId, setProjectId] = useState('');
   const [clientId, setClientId] = useState('');
-  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [date, setDate] = useState(workspaceToday(timeZone));
 
   // Mirrors the Decimal(12,2) ceiling enforced server-side so we flag oversized
   // amounts inline instead of letting the request fail at the DB layer.
@@ -523,7 +530,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
       category: type === 'EXPENSE' && category ? (category as 'SALARIES') : undefined,
       projectId: projectId || undefined,
       clientId: clientId || undefined,
-      date: new Date(date),
+      date: workspaceDateRange(date, date, timeZone).from,
     });
   };
 
@@ -687,6 +694,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
    Recurring Expenses Tab
    ============================================ */
 function RecurringTab() {
+  const timeZone = useWorkspaceTimeZone();
   const utils = trpc.useUtils();
   // Query lives here so it only fires when the Recurring tab mounts.
   const { data, isLoading } = trpc.finance.getRecurringExpenses.useQuery();
@@ -732,7 +740,7 @@ function RecurringTab() {
       amount: parseFloat(amount),
       category: category as 'SUBSCRIPTIONS',
       interval,
-      nextDueDate: new Date(nextDueDate),
+      nextDueDate: workspaceDateRange(nextDueDate, nextDueDate, timeZone).from,
       vendorName: vendorName.trim() || undefined,
     });
   };
@@ -939,7 +947,7 @@ function RecurringTab() {
                         ${Number(exp.amount).toLocaleString()}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Next: {format(new Date(exp.nextDueDate), 'MMM d')}
+                        Next: {formatWorkspaceDate(exp.nextDueDate, timeZone)}
                       </p>
                     </div>
                     <button
@@ -1215,6 +1223,7 @@ function PaymentStat({
 }
 
 function PaymentLine({ p, onInvalidate }: { p: PaymentItem; onInvalidate: () => void }) {
+  const timeZone = useWorkspaceTimeZone();
   const deletePayment = trpc.finance.deletePayment.useMutation({ onSuccess: onInvalidate });
   return (
     <div className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2">
@@ -1231,7 +1240,7 @@ function PaymentLine({ p, onInvalidate }: { p: PaymentItem; onInvalidate: () => 
         {p.note && <p className="truncate text-xs text-muted-foreground">{p.note}</p>}
       </div>
       <span className="shrink-0 text-xs text-muted-foreground">
-        {format(new Date(p.paidAt), 'MMM d, yyyy')}
+        {formatWorkspaceDate(p.paidAt, timeZone)}
       </span>
       <button
         onClick={() => deletePayment.mutate({ id: p.id })}
@@ -1263,7 +1272,8 @@ function AddPaymentForm({
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('');
   const [note, setNote] = useState('');
-  const [paidAt, setPaidAt] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const timeZone = useWorkspaceTimeZone();
+  const [paidAt, setPaidAt] = useState(() => workspaceToday(timeZone));
 
   const addPayment = trpc.finance.addPayment.useMutation({
     onSuccess: () => {
@@ -1286,7 +1296,7 @@ function AddPaymentForm({
       amount: amountNum,
       method: method.trim() || undefined,
       note: note.trim() || undefined,
-      paidAt: paidAt ? new Date(paidAt) : undefined,
+      paidAt: paidAt ? workspaceDateRange(paidAt, paidAt, timeZone).from : undefined,
     });
   };
 

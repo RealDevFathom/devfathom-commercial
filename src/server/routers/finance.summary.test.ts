@@ -123,3 +123,33 @@ describe('finance.getFinancialSummary', () => {
     expect(summary.outstandingCount).toBe(1);
   });
 });
+
+it('bounds date-only transaction searches and new charges on the Karachi clock', async () => {
+  const findMany = vi.fn().mockResolvedValue([]);
+  const create = vi.fn(async ({ data }) => ({ ...data, id: 'recurring' }));
+  const tools = buildFinanceTools({
+    isAdmin: true,
+    ctx: { organizationId: 'org' },
+    audit: vi.fn(),
+    db: {
+      organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+      transaction: { findMany },
+      recurringExpense: { create },
+    },
+  } as unknown as AssistantHelpers) as unknown as Record<
+    'listTransactions' | 'createRecurringExpense',
+    { execute(input: Record<string, unknown>): Promise<unknown> }
+  >;
+  await tools.listTransactions.execute({ startDate: '2026-11-02', endDate: '2026-11-02' });
+  expect(findMany.mock.calls[0]?.[0].where.date.gte).toEqual(new Date('2026-11-01T19:00:00Z'));
+  await tools.createRecurringExpense.execute({
+    name: 'Subscription',
+    amount: 120,
+    category: 'SOFTWARE',
+    interval: 'monthly',
+    nextDueDate: '2026-11-02',
+  });
+  expect(create).toHaveBeenCalledWith({
+    data: expect.objectContaining({ nextDueDate: new Date('2026-11-01T19:00:00Z') }),
+  });
+});

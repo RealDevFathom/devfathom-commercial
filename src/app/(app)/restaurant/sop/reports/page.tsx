@@ -104,10 +104,18 @@ export default async function SopReportsPage({ searchParams }: { searchParams: S
   }
 
   const branch = branches.find((item) => item.id === queryValue(query.branch)) ?? branches[0];
+  const clock = await ctx.db.restaurantBranch.findFirst({
+    where: {
+      id: branch.id,
+      organizationId: ctx.organization?.id ?? user.organizationId,
+      active: true,
+    },
+    select: { timezone: true, businessDayCutoff: true },
+  });
   const today = resolveBusinessDate(
     new Date(),
-    workspaceTimezone(branch?.timezone ?? ctx.organization?.timezone),
-    branch?.businessDayCutoff
+    workspaceTimezone(clock?.timezone ?? ctx.organization?.timezone),
+    clock?.businessDayCutoff
   );
   const weekAgo = new Date(`${today}T00:00:00Z`);
   weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);

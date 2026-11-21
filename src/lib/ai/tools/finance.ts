@@ -80,6 +80,17 @@ const moneyLabel = (amount: number, currency: string) =>
  * Build the FINANCE tool set. Returns an EMPTY set for non-admins so the model
  * receives no finance tools at all; admins get the full read + write surface.
  */
+/** Interpret date-only tool inputs on the workspace clock. Timestamp inputs keep their instant. */
+function financeInputInstant(
+  value: string,
+  zone: string,
+  boundary: 'start' | 'inclusive-end' = 'start'
+) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date(value);
+  const { from, to } = workspaceDateRange(value, value, zone);
+  return boundary === 'start' ? from : new Date(to.getTime() - 1);
+}
+
 export function buildFinanceTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
   const tools: ToolSet = {};
@@ -123,15 +134,9 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       const today = now();
       const zone = await organizationZone();
       const start = startDate
-        ? /^\d{4}-\d{2}-\d{2}$/.test(startDate)
-          ? workspaceDateRange(startDate, startDate, zone).from
-          : new Date(startDate)
+        ? financeInputInstant(startDate, zone)
         : workspaceMonthRange(zone, today).from;
-      const end = endDate
-        ? /^\d{4}-\d{2}-\d{2}$/.test(endDate)
-          ? new Date(workspaceDateRange(endDate, endDate, zone).to.getTime() - 1)
-          : new Date(endDate)
-        : today;
+      const end = endDate ? financeInputInstant(endDate, zone, 'inclusive-end') : today;
 
       // FIN-02: group by currency — never report a USD + PKR sum as one number.
       const [incomeG, expenseG, paidG, outstandingG] = await Promise.all([
@@ -423,9 +428,10 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       if (type) where.type = type;
       if (category) where.category = category;
       if (startDate || endDate) {
+        const zone = await organizationZone();
         where.date = {
-          ...(startDate ? { gte: new Date(startDate) } : {}),
-          ...(endDate ? { lte: new Date(endDate) } : {}),
+          ...(startDate ? { gte: financeInputInstant(startDate, zone) } : {}),
+          ...(endDate ? { lte: financeInputInstant(endDate, zone, 'inclusive-end') } : {}),
         };
       }
       const transactions = await db.transaction.findMany({
@@ -945,7 +951,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           currency: currency ?? 'USD',
           category,
           interval,
-          nextDueDate: new Date(nextDueDate),
+          nextDueDate: financeInputInstant(nextDueDate, await organizationZone()),
           vendorName: vendorName ?? null,
         },
       });
