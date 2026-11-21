@@ -383,7 +383,7 @@ export async function freshPharmacyFirstSale(
     await choose(page.getByRole('combobox', { name: 'Role', exact: true }), 'Administrator');
     await expect(page.getByText('Access level: Admin.', { exact: false })).toBeVisible();
     // Team still labels the field "Your PIN"; the verifier uses the workspace's approval mode.
-    if (disposable) await page.getByLabel('Your PIN', { exact: true }).fill(await ownerApproval());
+    await page.locator('#invite-access-pin').fill(await ownerApproval());
     await click(page.getByRole('button', { name: 'Send Invite', exact: true }));
     const invitation = page
       .getByText('Invite link', { exact: true })
@@ -444,7 +444,7 @@ export async function freshPharmacyFirstSale(
       const tick = grantor.getByRole('checkbox', { name: new RegExp(`^${reviewLabel}`) });
       await click(tick);
       const confirmation = grantor.getByRole('form', { name: `Give ${reviewLabel}?` });
-      await confirmation.getByLabel('Your PIN', { exact: true }).fill(await grantorApproval());
+      await confirmation.locator('[name="pin"]').fill(await grantorApproval());
       const updated = grantor.waitForResponse(
         (result) =>
           new URL(result.url()).pathname === '/api/trpc/organizationAdmin.setMemberSubRole' &&
@@ -515,25 +515,6 @@ export async function freshPharmacyFirstSale(
       platform.locator('[data-slot="page-header"]').getByText('ONBOARDING', { exact: true })
     ).toBeVisible();
 
-    const grantStagingCatalogueReview = async () => {
-      const reviewGrant = formFor(platform, 'Set override');
-      await choose(reviewGrant.locator('[name="userId"]'), ownerEmail);
-      await fill(reviewGrant, {
-        capability: 'pharmacy:catalogue-review',
-        reason: data.authorizationRef,
-        expiresAt: new Date(Date.now() + 86400000).toISOString().slice(0, 16),
-      });
-      await choose(reviewGrant.locator('[name="effect"]'), 'ALLOW');
-      const updated = platform.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === '/api/platform/control' &&
-          response.request().method() === 'POST'
-      );
-      await click(reviewGrant.getByRole('button', { name: 'Set override', exact: true }));
-      return updated;
-    };
-    const stagingGrant = disposable ? null : await grantStagingCatalogueReview();
-
     await page.goto(new URL('/login', tenantOrigin).href);
     const signInOwner = async (password: string) => {
       await fill(page, { email: ownerEmail, password });
@@ -562,9 +543,7 @@ export async function freshPharmacyFirstSale(
     await page.goto(new URL('/login', tenantOrigin).href);
     await signInOwner(rotatedOwnerPassword);
     await expect(page).not.toHaveURL(/\/login/);
-    const ownerApproval = disposable
-      ? await enrollApprovalAuthenticator(page, rotatedOwnerPassword)
-      : async () => ownerPin;
+    const ownerApproval = await enrollApprovalAuthenticator(page, rotatedOwnerPassword);
     await setup(page);
     await expect(row(page, 'Commercial package').getByText('Done', { exact: true })).toBeVisible();
     await expect(
@@ -581,7 +560,7 @@ export async function freshPharmacyFirstSale(
     await noRawIdEntry(page);
     await savePin(page, rotatedOwnerPassword, ownerPin);
     // Wildcard ownership deliberately cannot confirm regulated reference changes.
-    const ownerUpdated = stagingGrant ?? (await grantCatalogueReviewOnTeam(ownerApproval));
+    const ownerUpdated = await grantCatalogueReviewOnTeam(ownerApproval);
     expect(ownerUpdated.status()).toBe(200);
     await setup(page);
     await expect(page.getByRole('heading', { name: 'Create your PIN', exact: true })).toHaveCount(
@@ -697,12 +676,7 @@ export async function freshPharmacyFirstSale(
     }
     // The solo owner reauthenticates to approve his own import.
     await page
-      .getByLabel(
-        disposable
-          ? 'Your approval code for reference self-approval'
-          : 'Solo owner PIN for reference self-approval',
-        { exact: true }
-      )
+      .getByLabel('Your approval code for reference self-approval', { exact: true })
       .fill(await ownerApproval());
     const confirmation = proposal.getByRole('button', {
       name: 'Confirm reference proposal',
@@ -802,7 +776,7 @@ export async function freshPharmacyFirstSale(
     await click(colleagueGrant.getByRole('button', { name: 'Set override', exact: true }));
     expect((await colleagueUpdated).status()).toBe(200);
     await signInAfterInvitation(colleague, colleagueEmail, colleaguePassword);
-    if (disposable) await enrollApprovalAuthenticator(colleague, colleaguePassword);
+    await enrollApprovalAuthenticator(colleague, colleaguePassword);
     await setup(colleague);
     await click(page.getByRole('button', { name: 'Done', exact: true }));
     await setup(page);
