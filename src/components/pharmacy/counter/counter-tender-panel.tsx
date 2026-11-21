@@ -2,8 +2,8 @@
 
 import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
-import { forwardRef, useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { Check } from 'lucide-react';
+import { forwardRef, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Check, TriangleAlert } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
+import { KhataLimitMeter } from './counter-khata-limit';
 import { CounterTenderDiscard, type CounterTenderDiscardInput } from './counter-tender-discard';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -38,6 +39,22 @@ import type { CounterCartTender } from '@/lib/pharmacy/counter';
  * Wallet and legacy Credit are no longer offered; they stay here so a restored
  * attempt of either type still renders and can be resolved.
  */
+/**
+ * DEV-977 phase 2B (Counter v2): the one-line note under each payment method card. Plain
+ * facts about how the method is taken today; none promises a check the counter does not make.
+ */
+const TENDER_NOTES: Record<string, string> = {
+  CASH: 'Change worked out',
+  CARD: 'On the shop’s terminal',
+  BANK_TRANSFER: 'Reference from the bank',
+  KHATA: 'Customer credit',
+  JAZZCASH: 'Manual · check it arrived',
+  EASYPAISA: 'Manual · check it arrived',
+  RAAST: 'Manual · check it arrived',
+  WALLET: 'Prepaid balance',
+  CREDIT: 'Earlier khata payment',
+};
+
 const TENDER_TYPES = [
   { value: 'CASH', label: 'Cash', requiresAdapter: false, offer: 'always' },
   { value: 'CARD', label: 'Card', requiresAdapter: false, offer: 'always' },
@@ -145,6 +162,11 @@ export type CounterTenderPanelProps = {
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
+  /**
+   * DEV-977 phase 2B: the counter's own controls for this payment (auto-print, back to the
+   * bill), drawn at the foot of the payment summary column as Counter v2 places them.
+   */
+  summaryExtra?: ReactNode;
 };
 
 /** DEV-290: a manager or owner the till may ask for an over-limit Khata PIN approval. */
@@ -196,6 +218,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       manualSettingsError = false,
       onReloadManualSettings,
       drawerOpen,
+      summaryExtra,
     },
     ref
   ) {
@@ -637,39 +660,54 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       const drawerNote = entry.value === 'CASH' && cashDrawerClosed;
       return (
         <div key={entry.value} className="min-w-0 space-y-1">
-          <Button
-            type="button"
-            size="touch"
-            variant={active ? 'secondary' : 'outline'}
-            className="w-full rounded-sm"
-            aria-pressed={active}
-            aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
-            disabled={!editable}
-            onClick={() => {
-              if (active) return;
-              // DEV-499: a wallet payer is usually the bill's patient. Offer that
-              // name and send focus to the first empty field, so a wallet payment
-              // is the provider button, then the transaction ID and Enter.
-              const payer = isManualTender(entry.value)
-                ? (khataSignupPatient?.displayName.trim() ?? '')
-                : '';
-              focusCaptureRef.current = isManualTender(entry.value)
-                ? payer
-                  ? 'reference'
-                  : 'payer'
-                : entry.value === 'BANK_TRANSFER'
-                  ? 'reference'
-                  : null;
-              setType(entry.value);
-              setProviderRef('');
-              setPayerName(payer);
-              setReferenceSkipped(false);
-              setApprovalCode('');
-            }}
-          >
-            {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
-            {entry.label}
-          </Button>
+          {/* Counter v2: a method card with its note. The note sits in the card but outside
+              the button, so the button's name stays the method alone. */}
+          <div className="relative">
+            <Button
+              type="button"
+              variant="outline"
+              data-counter-pay-method={entry.value}
+              className={`h-auto min-h-14 w-full items-start justify-start gap-2.5 rounded-sm px-3 pt-2.5 pb-6 text-start text-sm font-semibold shadow-none hover:translate-y-0 active:translate-y-0 max-sm:pb-2.5 max-sm:items-center ${active ? 'border-text-strong bg-surface-sunken ring-1 ring-text-strong ring-inset' : 'border-border-default bg-surface-card hover:border-border-strong'}`}
+              aria-pressed={active}
+              aria-describedby={drawerNote ? 'tender-cash-drawer' : undefined}
+              disabled={!editable}
+              onClick={() => {
+                if (active) return;
+                // DEV-499: a wallet payer is usually the bill's patient. Offer that
+                // name and send focus to the first empty field, so a wallet payment
+                // is the provider button, then the transaction ID and Enter.
+                const payer = isManualTender(entry.value)
+                  ? (khataSignupPatient?.displayName.trim() ?? '')
+                  : '';
+                focusCaptureRef.current = isManualTender(entry.value)
+                  ? payer
+                    ? 'reference'
+                    : 'payer'
+                  : entry.value === 'BANK_TRANSFER'
+                    ? 'reference'
+                    : null;
+                setType(entry.value);
+                setProviderRef('');
+                setPayerName(payer);
+                setReferenceSkipped(false);
+                setApprovalCode('');
+              }}
+            >
+              {active ? <Check data-icon="inline-start" aria-hidden="true" /> : null}
+              {entry.label}
+            </Button>
+            {drawerNote ? null : (
+              // Supplementary and visual only: the method's name and its one warning (a closed
+              // drawer) are what assistive technology announces.
+              <span
+                aria-hidden="true"
+                data-counter-pay-note=""
+                className="pointer-events-none absolute start-3 bottom-2 text-xs text-text-muted max-sm:hidden"
+              >
+                {TENDER_NOTES[entry.value]}
+              </span>
+            )}
+          </div>
           {drawerNote ? (
             <p id="tender-cash-drawer" className="text-xs text-destructive">
               {COUNTER_CASH_DRAWER_CLOSED_MESSAGE}
@@ -711,162 +749,326 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       <div
         ref={ref}
         tabIndex={-1}
-        className="min-w-0 space-y-5 focus-visible:outline-none"
+        className="grid min-w-0 gap-4 focus-visible:outline-none lg:grid-cols-[236px_minmax(0,1fr)_272px] lg:items-start"
         onKeyDown={takePaymentOnEnter}
       >
-        <div className="flex flex-wrap items-start justify-between gap-3 rounded-md border border-border-subtle bg-surface-sunken p-4">
-          <p className="space-y-2">
-            <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
-              {copy.tender.balance}
-            </span>
-            <span className="block text-3xl font-semibold tracking-tight tabular-nums text-text-strong">
-              {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
-                ? formatMinor(balanceMinor)
-                : 'Unavailable'}
-            </span>
-          </p>
-          <div className="flex flex-col items-end gap-2">
-            <span className="font-mono text-xs text-text-muted">PKR</span>
-            {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
-              <StatusPill status="settled" tone="success" label="Settled" />
+        {/* DEV-977 phase 2B (Counter v2, A2 and C4): methods, then the form, then the summary.
+            From 1024px three columns; below, the summary leads and the methods wrap. */}
+        <div data-counter-pay-methods="" className="min-w-0 lg:col-start-1 lg:row-start-1">
+          <div className="space-y-1.5">
+            <p
+              id="tender-type-label"
+              className="text-sm leading-none font-semibold text-text-strong select-none"
+            >
+              Payment method
+            </p>
+            <div
+              role="group"
+              aria-labelledby="tender-type-label"
+              className="grid grid-cols-2 items-start gap-2 sm:grid-cols-4 lg:grid-cols-1"
+            >
+              {offered.filter((entry) => entry.offer !== 'configured').map(renderTenderButton)}
+              {walletOptions.length ? (
+                <div
+                  role="group"
+                  aria-labelledby="tender-wallet-label"
+                  className="col-span-full space-y-1.5 border-t border-border-subtle pt-2"
+                >
+                  <p id="tender-wallet-label" className="text-xs font-medium text-text-muted">
+                    Wallet
+                  </p>
+                  <div className="grid grid-cols-2 items-start gap-2 sm:grid-cols-4 lg:grid-cols-1">
+                    {walletOptions.map(renderTenderButton)}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+            {manualSettingsError && !manual ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <p role="alert" className="text-sm text-text-muted">
+                  Wallet merchant details could not be loaded, so JazzCash, Easypaisa and Raast are
+                  hidden.
+                </p>
+                {onReloadManualSettings ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 rounded-sm"
+                    disabled={takingPayment || manualSettingsLoading}
+                    onClick={onReloadManualSettings}
+                  >
+                    Reload merchant details
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+            {selected.requiresAdapter && !prepaidWallet ? (
+              <p className="text-sm text-text-muted">
+                A payment provider must be connected before you can use this method. Ask your
+                manager if it is unavailable.
+              </p>
             ) : null}
           </div>
         </div>
-
-        <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
-
-        {tenders.length > 0 ? (
-          <ol aria-label={copy.tender.payments} className="space-y-2">
-            {tenders.map((tender, index) => (
-              <li
-                key={tender.tenderId}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-sm border border-border-subtle bg-surface-card px-3 py-2 text-sm"
+        <div data-counter-pay-form="" className="min-w-0 space-y-5 lg:col-start-2 lg:row-start-1">
+          {/* Counter v2 A7: a payment whose outcome is not known locks the panel until it is
+              checked or a manager discards it. One status line in either case, so its live
+              region is never remounted. */}
+          <section
+            aria-labelledby={onCheckOutcome ? 'tender-unknown-heading' : undefined}
+            data-counter-pay-unknown={onCheckOutcome ? '' : undefined}
+            className={onCheckOutcome ? 'space-y-3 rounded-md bg-warning/10 p-4' : 'space-y-3'}
+          >
+            {onCheckOutcome ? (
+              <h3
+                id="tender-unknown-heading"
+                className="flex items-center gap-2 text-base font-semibold text-text-strong"
               >
-                <span className="text-text-body">
-                  {index + 1}.{' '}
-                  {tender.type === 'CREDIT' || tender.type === 'KHATA'
-                    ? 'Khata'
-                    : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
-                      tender.type)}{' '}
-                  · Recorded
-                </span>
-                <span className="font-mono tabular-nums text-text-strong">
-                  {formatMinor(tender.amountMinor)}
-                </span>
-              </li>
-            ))}
-          </ol>
-        ) : null}
-
-        <p
-          ref={statusRef}
-          tabIndex={-1}
-          id="tender-status"
-          role="status"
-          aria-live="polite"
-          className="text-sm leading-relaxed text-text-body focus-visible:outline-ring"
-        >
-          {takingPayment
-            ? queued
-              ? 'Offline — this payment will be sent when the connection returns. Keep this bill open and do not take the money again.'
-              : 'Taking payment… Keep this bill open.'
-            : checkingOutcome
-              ? 'Checking payment outcome… No payment is being sent.'
-              : (displayedOutcome?.message ??
-                (state === 'idle'
-                  ? 'Open a bill before taking payment.'
-                  : state === 'loading'
-                    ? 'Checking the bill balance…'
-                    : state === 'stale'
-                      ? 'Refresh this bill to verify the balance before taking payment.'
-                      : state === 'error'
-                        ? 'The bill balance could not be verified. Retry the bill read before taking payment.'
-                        : state === 'unavailable'
-                          ? 'This bill is not available for payment.'
-                          : ''))}
-        </p>
-        {onCheckOutcome ? (
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-11 rounded-sm"
-            disabled={checkingOutcome || takingPayment}
-            aria-describedby="tender-status tender-error"
-            onClick={() => void checkOutcome()}
-          >
-            {checkingOutcome ? 'Checking payment outcome…' : 'Check payment outcome'}
-          </Button>
-        ) : null}
-        {onCheckOutcome && onDiscardAttempt && loadDiscardApprovers ? (
-          <CounterTenderDiscard
-            disabled={checkingOutcome || takingPayment}
-            loadApprovers={loadDiscardApprovers}
-            onDiscard={async (input) => {
-              const result = await onDiscardAttempt(input);
-              if (result.status !== 'unknown') {
-                setOutcome(result);
-                setAmount('');
-                setCashReceived(null);
-                statusRef.current?.focus();
-              }
-              return result;
-            }}
-          />
-        ) : null}
-        {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
-          <Button type="button" variant="outline" className="min-h-11 rounded-sm" onClick={onRetry}>
-            Refresh bill
-          </Button>
-        ) : null}
-
-        {blocked ? (
-          <div
-            id="tender-blocked"
-            role="alert"
-            className="space-y-2 rounded-md border border-destructive/20 bg-destructive/10 p-4 text-sm text-text-body"
-          >
-            <StatusPill status="blocked" tone="danger" label="Payment locked" />
-            <p>
-              This bill carries an unresolved safety block. Resolve it in the prescription panel
-              before taking payment.
+                <TriangleAlert aria-hidden="true" className="size-4.5 text-warning" />
+                Payment not confirmed
+              </h3>
+            ) : null}
+            <p
+              ref={statusRef}
+              tabIndex={-1}
+              id="tender-status"
+              role="status"
+              aria-live="polite"
+              className="text-sm leading-relaxed text-text-body focus-visible:outline-ring"
+            >
+              {takingPayment
+                ? queued
+                  ? 'Offline — this payment will be sent when the connection returns. Keep this bill open and do not take the money again.'
+                  : 'Taking payment… Keep this bill open.'
+                : checkingOutcome
+                  ? 'Checking payment outcome… No payment is being sent.'
+                  : (displayedOutcome?.message ??
+                    (state === 'idle'
+                      ? 'Open a bill before taking payment.'
+                      : state === 'loading'
+                        ? 'Checking the bill balance…'
+                        : state === 'stale'
+                          ? 'Refresh this bill to verify the balance before taking payment.'
+                          : state === 'error'
+                            ? 'The bill balance could not be verified. Retry the bill read before taking payment.'
+                            : state === 'unavailable'
+                              ? 'This bill is not available for payment.'
+                              : ''))}
             </p>
-          </div>
-        ) : null}
-
-        <div className="space-y-1.5">
-          <p id="tender-type-label" className="text-sm leading-none font-medium select-none">
-            Payment method
-          </p>
-          <div
-            role="group"
-            aria-labelledby="tender-type-label"
-            className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3"
-          >
-            {offered.filter((entry) => entry.offer !== 'configured').map(renderTenderButton)}
-            {walletOptions.length ? (
-              <div
-                role="group"
-                aria-labelledby="tender-wallet-label"
-                className="col-span-full space-y-1.5 border-t border-border-subtle pt-2"
+            {onCheckOutcome ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 rounded-sm"
+                disabled={checkingOutcome || takingPayment}
+                aria-describedby="tender-status tender-error"
+                onClick={() => void checkOutcome()}
               >
-                <p id="tender-wallet-label" className="text-xs font-medium text-text-muted">
-                  Wallet
-                </p>
-                <div className="grid grid-cols-2 items-start gap-2 sm:grid-cols-3">
-                  {walletOptions.map(renderTenderButton)}
-                </div>
-              </div>
+                {checkingOutcome ? 'Checking payment outcome…' : 'Check payment outcome'}
+              </Button>
+            ) : null}
+            {onCheckOutcome && onDiscardAttempt && loadDiscardApprovers ? (
+              <CounterTenderDiscard
+                disabled={checkingOutcome || takingPayment}
+                loadApprovers={loadDiscardApprovers}
+                onDiscard={async (input) => {
+                  const result = await onDiscardAttempt(input);
+                  if (result.status !== 'unknown') {
+                    setOutcome(result);
+                    setAmount('');
+                    setCashReceived(null);
+                    statusRef.current?.focus();
+                  }
+                  return result;
+                }}
+              />
+            ) : null}
+          </section>
+          {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 rounded-sm"
+              onClick={onRetry}
+            >
+              Refresh bill
+            </Button>
+          ) : null}
+
+          {blocked ? (
+            <div
+              id="tender-blocked"
+              role="alert"
+              className="space-y-2 rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-text-body"
+            >
+              <StatusPill status="blocked" tone="danger" label="Payment locked" />
+              <p>
+                This bill carries an unresolved safety block. Resolve it in the prescription panel
+                before taking payment.
+              </p>
+            </div>
+          ) : null}
+
+          {prepaidWallet && (
+            <div className="space-y-1.5">
+              <p className="text-sm">
+                Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}. Pay the rest with another
+                tender.
+              </p>
+              <Label htmlFor="tender-prepaid-pin">Customer’s prepaid PIN</Label>
+              <Input
+                id="tender-prepaid-pin"
+                type="password"
+                inputMode="numeric"
+                autoComplete="off"
+                maxLength={8}
+                value={prepaidPin}
+                onChange={(event) => setPrepaidPin(event.target.value.replace(/\D/g, ''))}
+                disabled={!editable}
+                className="h-11"
+              />
+              <p className="text-sm text-text-muted">The customer types their PIN themselves.</p>
+            </div>
+          )}
+          <div className="space-y-1.5">
+            <Label htmlFor="tender-amount">Amount</Label>
+            <Input
+              id="tender-amount"
+              inputMode="decimal"
+              autoComplete="off"
+              placeholder={
+                balanceKnown
+                  ? formatMinor(
+                      prepaidWallet ? Math.min(balanceMinor, prepaidBalanceMinor) : balanceMinor
+                    )
+                  : undefined
+              }
+              value={amount}
+              disabled={!editable}
+              aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
+              aria-describedby="tender-status tender-error tender-amount-help tender-amount-error"
+              onChange={(event) => setAmount(event.target.value)}
+              className="h-11 rounded-sm font-mono tabular-nums"
+            />
+            <p id="tender-amount-help" className="text-sm text-text-muted">
+              Leave blank to pay the balance due. Enter a smaller amount to split payment across
+              payment methods.
+            </p>
+            {state === 'ready' && amount.trim() !== '' && !amountValid ? (
+              <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
+                {amountError}
+              </p>
+            ) : null}
+            {editable && amountValid && amountMinor! < balanceMinor! ? (
+              <p className="text-sm text-text-body" aria-live="polite">
+                {tenders.length > 0 ? `${copy.tender.nextPayment} ${tenders.length + 1}. ` : ''}
+                {copy.tender.remaining}{' '}
+                <span className="font-mono tabular-nums text-text-strong">
+                  {formatMinor(balanceMinor! - amountMinor!)}
+                </span>
+              </p>
             ) : null}
           </div>
-          {manualSettingsError && !manual ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <p role="alert" className="text-sm text-text-muted">
-                Wallet merchant details could not be loaded, so JazzCash, Easypaisa and Raast are
-                hidden.
+
+          {cashMemo ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="tender-buyer-name">Buyer name (cash memo, optional)</Label>
+              <Input
+                id="tender-buyer-name"
+                autoComplete="off"
+                maxLength={200}
+                value={buyerName}
+                aria-invalid={buyerInvalid}
+                disabled={!editable}
+                aria-describedby="tender-buyer-name-help"
+                onChange={(event) => setBuyerDraft(event.target.value)}
+                className="h-11 rounded-sm"
+              />
+              <p id="tender-buyer-name-help" className="text-sm text-text-muted">
+                Printed on the Sindh cash memo. Optional for walk-ins.
               </p>
+            </div>
+          ) : null}
+
+          {bankTransfer ? (
+            <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
+              <Input
+                id="bank-transfer-reference"
+                ref={providerRefInput}
+                className="min-h-11 font-mono"
+                autoComplete="off"
+                value={providerRef}
+                maxLength={BANK_TRANSFER_REFERENCE_MAX_LENGTH}
+                required
+                disabled={!editable}
+                aria-invalid={providerRef !== '' && !transferCapture?.success}
+                aria-describedby="bank-transfer-help"
+                onChange={(event) => setProviderRef(event.target.value)}
+              />
+              <p id="bank-transfer-help" className="text-sm text-text-muted">
+                Enter the reference shown by the bank after confirming the transfer was received.
+                You are recorded as the person who confirmed this payment.
+              </p>
+            </div>
+          ) : null}
+
+          {manualCard ? (
+            <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              <p className="text-sm text-text-muted">
+                Take the card on the shop’s terminal first. Enter the details from the approved
+                slip; you are recorded as the person who confirmed this payment. Take JazzCash,
+                Easypaisa or Raast under Wallet, not Card.
+              </p>
+              <Label htmlFor="manual-card-reference">
+                Card last 4 digits or terminal reference
+              </Label>
+              <Input
+                id="manual-card-reference"
+                className="min-h-11 font-mono"
+                autoComplete="off"
+                value={providerRef}
+                maxLength={24}
+                disabled={!editable}
+                aria-invalid={providerRef !== '' && !MANUAL_CARD_REFERENCE.test(providerRef.trim())}
+                aria-describedby="manual-card-help"
+                onChange={(event) => setProviderRef(event.target.value)}
+              />
+              <Label htmlFor="manual-card-approval">Approval code</Label>
+              <Input
+                id="manual-card-approval"
+                className="min-h-11 font-mono"
+                autoComplete="off"
+                value={approvalCode}
+                maxLength={12}
+                disabled={!editable}
+                aria-invalid={
+                  approvalCode !== '' && !MANUAL_CARD_APPROVAL_CODE.test(approvalCode.trim())
+                }
+                aria-describedby="manual-card-help"
+                onChange={(event) => setApprovalCode(event.target.value)}
+              />
+              <p id="manual-card-help" className="text-sm text-text-muted">
+                Letters and digits only: 4–24 for the reference, 2–12 for the approval code. Never
+                enter the full card number.
+              </p>
+            </div>
+          ) : null}
+
+          {manual ? (
+            <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
+              {manualSettingsError ? (
+                <p role="alert">Merchant details could not be loaded.</p>
+              ) : null}
+              {!manualSettingsLoading && !manualSettingsError && !merchant ? (
+                <p role="alert">
+                  {type} is not enabled at this branch. Ask an administrator to enable it in
+                  Finance.
+                </p>
+              ) : null}
               {onReloadManualSettings ? (
                 <Button
-                  type="button"
                   variant="outline"
                   className="min-h-11 rounded-sm"
                   disabled={takingPayment || manualSettingsLoading}
@@ -875,599 +1077,498 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   Reload merchant details
                 </Button>
               ) : null}
-            </div>
-          ) : null}
-          {selected.requiresAdapter && !prepaidWallet ? (
-            <p className="text-sm text-text-muted">
-              A payment provider must be connected before you can use this method. Ask your manager
-              if it is unavailable.
-            </p>
-          ) : null}
-        </div>
-
-        {prepaidWallet && (
-          <div className="space-y-1.5">
-            <p className="text-sm">
-              Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}. Pay the rest with another
-              tender.
-            </p>
-            <Label htmlFor="tender-prepaid-pin">Customer’s prepaid PIN</Label>
-            <Input
-              id="tender-prepaid-pin"
-              type="password"
-              inputMode="numeric"
-              autoComplete="off"
-              maxLength={8}
-              value={prepaidPin}
-              onChange={(event) => setPrepaidPin(event.target.value.replace(/\D/g, ''))}
-              disabled={!editable}
-              className="h-11"
-            />
-            <p className="text-sm text-text-muted">The customer types their PIN themselves.</p>
-          </div>
-        )}
-        <div className="space-y-1.5">
-          <Label htmlFor="tender-amount">Amount</Label>
-          <Input
-            id="tender-amount"
-            inputMode="decimal"
-            autoComplete="off"
-            placeholder={
-              balanceKnown
-                ? formatMinor(
-                    prepaidWallet ? Math.min(balanceMinor, prepaidBalanceMinor) : balanceMinor
-                  )
-                : undefined
-            }
-            value={amount}
-            disabled={!editable}
-            aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
-            aria-describedby="tender-status tender-error tender-amount-help tender-amount-error"
-            onChange={(event) => setAmount(event.target.value)}
-            className="h-11 rounded-sm font-mono tabular-nums"
-          />
-          <p id="tender-amount-help" className="text-sm text-text-muted">
-            Leave blank to pay the balance due. Enter a smaller amount to split payment across
-            payment methods.
-          </p>
-          {state === 'ready' && amount.trim() !== '' && !amountValid ? (
-            <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
-              {amountError}
-            </p>
-          ) : null}
-          {editable && amountValid && amountMinor! < balanceMinor! ? (
-            <p className="text-sm text-text-body" aria-live="polite">
-              {tenders.length > 0 ? `${copy.tender.nextPayment} ${tenders.length + 1}. ` : ''}
-              {copy.tender.remaining}{' '}
-              <span className="font-mono tabular-nums text-text-strong">
-                {formatMinor(balanceMinor! - amountMinor!)}
-              </span>
-            </p>
-          ) : null}
-        </div>
-
-        {cashMemo ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="tender-buyer-name">Buyer name (cash memo, optional)</Label>
-            <Input
-              id="tender-buyer-name"
-              autoComplete="off"
-              maxLength={200}
-              value={buyerName}
-              aria-invalid={buyerInvalid}
-              disabled={!editable}
-              aria-describedby="tender-buyer-name-help"
-              onChange={(event) => setBuyerDraft(event.target.value)}
-              className="h-11 rounded-sm"
-            />
-            <p id="tender-buyer-name-help" className="text-sm text-text-muted">
-              Printed on the Sindh cash memo. Optional for walk-ins.
-            </p>
-          </div>
-        ) : null}
-
-        {bankTransfer ? (
-          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-            <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
-            <Input
-              id="bank-transfer-reference"
-              ref={providerRefInput}
-              className="min-h-11 font-mono"
-              autoComplete="off"
-              value={providerRef}
-              maxLength={BANK_TRANSFER_REFERENCE_MAX_LENGTH}
-              required
-              disabled={!editable}
-              aria-invalid={providerRef !== '' && !transferCapture?.success}
-              aria-describedby="bank-transfer-help"
-              onChange={(event) => setProviderRef(event.target.value)}
-            />
-            <p id="bank-transfer-help" className="text-sm text-text-muted">
-              Enter the reference shown by the bank after confirming the transfer was received. You
-              are recorded as the person who confirmed this payment.
-            </p>
-          </div>
-        ) : null}
-
-        {manualCard ? (
-          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-            <p className="text-sm text-text-muted">
-              Take the card on the shop’s terminal first. Enter the details from the approved slip;
-              you are recorded as the person who confirmed this payment. Take JazzCash, Easypaisa or
-              Raast under Wallet, not Card.
-            </p>
-            <Label htmlFor="manual-card-reference">Card last 4 digits or terminal reference</Label>
-            <Input
-              id="manual-card-reference"
-              className="min-h-11 font-mono"
-              autoComplete="off"
-              value={providerRef}
-              maxLength={24}
-              disabled={!editable}
-              aria-invalid={providerRef !== '' && !MANUAL_CARD_REFERENCE.test(providerRef.trim())}
-              aria-describedby="manual-card-help"
-              onChange={(event) => setProviderRef(event.target.value)}
-            />
-            <Label htmlFor="manual-card-approval">Approval code</Label>
-            <Input
-              id="manual-card-approval"
-              className="min-h-11 font-mono"
-              autoComplete="off"
-              value={approvalCode}
-              maxLength={12}
-              disabled={!editable}
-              aria-invalid={
-                approvalCode !== '' && !MANUAL_CARD_APPROVAL_CODE.test(approvalCode.trim())
-              }
-              aria-describedby="manual-card-help"
-              onChange={(event) => setApprovalCode(event.target.value)}
-            />
-            <p id="manual-card-help" className="text-sm text-text-muted">
-              Letters and digits only: 4–24 for the reference, 2–12 for the approval code. Never
-              enter the full card number.
-            </p>
-          </div>
-        ) : null}
-
-        {manual ? (
-          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-            {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
-            {manualSettingsError ? <p role="alert">Merchant details could not be loaded.</p> : null}
-            {!manualSettingsLoading && !manualSettingsError && !merchant ? (
-              <p role="alert">
-                {type} is not enabled at this branch. Ask an administrator to enable it in Finance.
-              </p>
-            ) : null}
-            {onReloadManualSettings ? (
-              <Button
-                variant="outline"
-                className="min-h-11 rounded-sm"
-                disabled={takingPayment || manualSettingsLoading}
-                onClick={onReloadManualSettings}
-              >
-                Reload merchant details
-              </Button>
-            ) : null}
-            {merchant ? (
-              <>
-                <p className="font-mono text-lg tabular-nums">
-                  {amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}
-                </p>
-                {merchant.destination ? (
-                  <p className="break-all text-sm text-text-strong">{merchant.destination}</p>
-                ) : null}
-                {merchant.qrImageDataUrl ? (
-                  <>
-                    {/* Static embedded raster; no remote image requests or proxy. */}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={merchant.qrImageDataUrl}
-                      alt={`${type} merchant QR`}
-                      className="h-56 w-full rounded-sm bg-surface-card object-contain"
-                    />
-                  </>
-                ) : null}
-                <p className="text-sm text-text-muted">
-                  Confirm receipt in the merchant bank or wallet account before taking payment; you
-                  are recorded as the person who confirmed it.
-                  {merchant.qrImageDataUrl
-                    ? ' This QR is static; the payer enters the amount shown.'
-                    : ''}
-                </p>
-                <Label htmlFor="manual-payer-name">Payer’s name</Label>
-                <Input
-                  ref={payerNameRef}
-                  id="manual-payer-name"
-                  className="min-h-11"
-                  value={payerName}
-                  maxLength={100}
-                  disabled={!editable}
-                  onChange={(event) => setPayerName(event.target.value)}
-                />
-                <Label htmlFor="manual-provider-reference">Transaction ID (last 4–6 digits)</Label>
-                <Input
-                  ref={providerRefInput}
-                  id="manual-provider-reference"
-                  className="min-h-11"
-                  inputMode="numeric"
-                  value={providerRef}
-                  maxLength={6}
-                  disabled={!editable || referenceSkipped}
-                  aria-invalid={
-                    !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
-                  }
-                  aria-describedby="manual-reference-help"
-                  onChange={(event) => setProviderRef(event.target.value)}
-                />
-                <p id="manual-reference-help" className="text-sm text-text-muted">
-                  {referenceSkipped
-                    ? 'Reference explicitly skipped under branch policy.'
-                    : 'Enter 4–6 digits from the payer’s transaction ID.'}
-                </p>
-                {merchant.allowReferenceSkip ? (
-                  <Label className="flex min-h-11 items-center gap-2">
-                    <input
-                      type="checkbox"
-                      checked={referenceSkipped}
-                      disabled={!editable}
-                      onChange={(event) => {
-                        setReferenceSkipped(event.target.checked);
-                        setProviderRef('');
-                      }}
-                    />{' '}
-                    Skip reference under branch policy
-                  </Label>
-                ) : null}
-              </>
-            ) : null}
-          </div>
-        ) : null}
-
-        {isKhata ? (
-          <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-            <Label htmlFor="khata-account">Family Khata account</Label>
-            <select
-              id="khata-account"
-              className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-              value={accountId}
-              disabled={!editable || khataLoading}
-              onChange={(event) => {
-                setAccountId(event.target.value);
-                setOwnerOverride(false);
-              }}
-            >
-              <option value="">Choose family account</option>
-              {accounts.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.displayName}
-                </option>
-              ))}
-            </select>
-            {khataLoading ? <p role="status">Loading Khata ledger…</p> : null}
-            {khataError ? <p role="alert">{khataError}</p> : null}
-            {!khataLoading && !khataError && !accounts.length ? (
-              signUpKhata ? (
-                <div className="space-y-3">
-                  <p className="text-sm text-text-body">
-                    No Khata account on this bill. Sign the customer up to open one.
+              {merchant ? (
+                <>
+                  <p className="font-mono text-lg tabular-nums">
+                    {amountMinor === null ? 'Enter amount' : `PKR ${formatMinor(amountMinor)}`}
                   </p>
-                  {signupPatient ? (
-                    <p className="text-sm text-text-strong">Payer: {signupPatient.displayName}</p>
-                  ) : (
+                  {merchant.destination ? (
+                    <p className="break-all text-sm text-text-strong">{merchant.destination}</p>
+                  ) : null}
+                  {merchant.qrImageDataUrl ? (
                     <>
-                      <Label htmlFor="khata-signup-name">Customer name</Label>
-                      <Input
-                        id="khata-signup-name"
-                        className="h-11 rounded-sm"
-                        autoComplete="off"
-                        value={signupName}
-                        maxLength={200}
-                        disabled={!editable || signupPending}
-                        onChange={(event) => {
-                          setSignupName(event.target.value);
-                          setSignupConsent(false);
-                        }}
-                      />
-                      <Label htmlFor="khata-signup-phone">Phone</Label>
-                      <Input
-                        id="khata-signup-phone"
-                        className="h-11 rounded-sm"
-                        type="tel"
-                        inputMode="tel"
-                        autoComplete="off"
-                        value={signupPhone}
-                        maxLength={20}
-                        disabled={!editable || signupPending}
-                        onChange={(event) => {
-                          setSignupPhone(event.target.value);
-                          setSignupConsent(false);
-                        }}
+                      {/* Static embedded raster; no remote image requests or proxy. */}
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={merchant.qrImageDataUrl}
+                        alt={`${type} merchant QR`}
+                        className="h-56 w-full rounded-sm bg-surface-card object-contain"
                       />
                     </>
-                  )}
+                  ) : null}
+                  <p className="text-sm text-text-muted">
+                    Confirm receipt in the merchant bank or wallet account before taking payment;
+                    you are recorded as the person who confirmed it.
+                    {merchant.qrImageDataUrl
+                      ? ' This QR is static; the payer enters the amount shown.'
+                      : ''}
+                  </p>
+                  <Label htmlFor="manual-payer-name">Payer’s name</Label>
+                  <Input
+                    ref={payerNameRef}
+                    id="manual-payer-name"
+                    className="min-h-11"
+                    value={payerName}
+                    maxLength={100}
+                    disabled={!editable}
+                    onChange={(event) => setPayerName(event.target.value)}
+                  />
+                  <Label htmlFor="manual-provider-reference">
+                    Transaction ID (last 4–6 digits)
+                  </Label>
+                  <Input
+                    ref={providerRefInput}
+                    id="manual-provider-reference"
+                    className="min-h-11"
+                    inputMode="numeric"
+                    value={providerRef}
+                    maxLength={6}
+                    disabled={!editable || referenceSkipped}
+                    aria-invalid={
+                      !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
+                    }
+                    aria-describedby="manual-reference-help"
+                    onChange={(event) => setProviderRef(event.target.value)}
+                  />
+                  <p id="manual-reference-help" className="text-sm text-text-muted">
+                    {referenceSkipped
+                      ? 'Reference explicitly skipped under branch policy.'
+                      : 'Enter 4–6 digits from the payer’s transaction ID.'}
+                  </p>
+                  {merchant.allowReferenceSkip ? (
+                    <Label className="flex min-h-11 items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={referenceSkipped}
+                        disabled={!editable}
+                        onChange={(event) => {
+                          setReferenceSkipped(event.target.checked);
+                          setProviderRef('');
+                        }}
+                      />{' '}
+                      Skip reference under branch policy
+                    </Label>
+                  ) : null}
+                </>
+              ) : null}
+            </div>
+          ) : null}
+
+          {isKhata ? (
+            <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              <Label htmlFor="khata-account">Family Khata account</Label>
+              <select
+                id="khata-account"
+                className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                value={accountId}
+                disabled={!editable || khataLoading}
+                onChange={(event) => {
+                  setAccountId(event.target.value);
+                  setOwnerOverride(false);
+                }}
+              >
+                <option value="">Choose family account</option>
+                {accounts.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.displayName}
+                  </option>
+                ))}
+              </select>
+              {khataLoading ? <p role="status">Loading Khata ledger…</p> : null}
+              {khataError ? <p role="alert">{khataError}</p> : null}
+              {!khataLoading && !khataError && !accounts.length ? (
+                signUpKhata ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-text-body">
+                      No Khata account on this bill. Sign the customer up to open one.
+                    </p>
+                    {signupPatient ? (
+                      <p className="text-sm text-text-strong">Payer: {signupPatient.displayName}</p>
+                    ) : (
+                      <>
+                        <Label htmlFor="khata-signup-name">Customer name</Label>
+                        <Input
+                          id="khata-signup-name"
+                          className="h-11 rounded-sm"
+                          autoComplete="off"
+                          value={signupName}
+                          maxLength={200}
+                          disabled={!editable || signupPending}
+                          onChange={(event) => {
+                            setSignupName(event.target.value);
+                            setSignupConsent(false);
+                          }}
+                        />
+                        <Label htmlFor="khata-signup-phone">Phone</Label>
+                        <Input
+                          id="khata-signup-phone"
+                          className="h-11 rounded-sm"
+                          type="tel"
+                          inputMode="tel"
+                          autoComplete="off"
+                          value={signupPhone}
+                          maxLength={20}
+                          disabled={!editable || signupPending}
+                          onChange={(event) => {
+                            setSignupPhone(event.target.value);
+                            setSignupConsent(false);
+                          }}
+                        />
+                      </>
+                    )}
+                    <Label className="flex min-h-11 items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={signupConsent}
+                        disabled={!editable || signupPending}
+                        onChange={(event) => setSignupConsent(event.target.checked)}
+                      />
+                      Customer consents to a Khata account and loyalty record
+                    </Label>
+                    <p className="text-sm text-text-muted">
+                      The credit limit starts at {formatMinor(0)}. An owner must authorize any
+                      higher limit.
+                    </p>
+                    {signupError ? (
+                      <p role="alert" className="text-sm text-destructive">
+                        {signupError}
+                      </p>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="min-h-11 rounded-sm"
+                      disabled={!signupReady}
+                      onClick={() => void submitKhataSignup()}
+                    >
+                      {signupPending ? 'Opening Khata…' : 'Open Khata account'}
+                    </Button>
+                  </div>
+                ) : (
+                  <p>Link a customer with an active family account before using Khata.</p>
+                )
+              ) : null}
+              {account ? (
+                <div
+                  data-counter-khata-limit=""
+                  className="space-y-2.5 rounded-sm border border-border-subtle bg-surface-card p-3.5"
+                >
+                  <p className="text-sm text-text-body">
+                    Due on this bill’s business date. Ledger balance{' '}
+                    {formatMinor(account.balanceMinor)} · Limit{' '}
+                    {formatMinor(account.creditLimitMinor)}
+                  </p>
+                  {/* Counter v2 B1: the limit, what is used and what is left, read from the same
+                      two ledger figures. A picture only: the server still decides the limit. */}
+                  <KhataLimitMeter
+                    balanceMinor={account.balanceMinor}
+                    limitMinor={account.creditLimitMinor}
+                    chargeMinor={amountMinor}
+                  />
+                </div>
+              ) : null}
+              {overLimit ? (
+                <>
+                  <p
+                    role="alert"
+                    className="flex items-start gap-2.5 rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-destructive"
+                  >
+                    <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+                    This charge exceeds the family credit limit. A manager or owner must give a
+                    reason and approve raising the limit to{' '}
+                    {formatMinor(account!.balanceMinor + amountMinor!)}.
+                  </p>
                   <Label className="flex min-h-11 items-center gap-2">
                     <input
                       type="checkbox"
-                      checked={signupConsent}
-                      disabled={!editable || signupPending}
-                      onChange={(event) => setSignupConsent(event.target.checked)}
-                    />
-                    Customer consents to a Khata account and loyalty record
-                  </Label>
-                  <p className="text-sm text-text-muted">
-                    The credit limit starts at {formatMinor(0)}. An owner must authorize any higher
-                    limit.
-                  </p>
-                  {signupError ? (
-                    <p role="alert" className="text-sm text-destructive">
-                      {signupError}
-                    </p>
-                  ) : null}
-                  <Button
-                    type="button"
-                    variant="outline"
-                    className="min-h-11 rounded-sm"
-                    disabled={!signupReady}
-                    onClick={() => void submitKhataSignup()}
-                  >
-                    {signupPending ? 'Opening Khata…' : 'Open Khata account'}
-                  </Button>
-                </div>
-              ) : (
-                <p>Link a customer with an active family account before using Khata.</p>
-              )
-            ) : null}
-            {account ? (
-              <p className="text-sm text-text-body">
-                Due on this bill’s business date. Ledger balance {formatMinor(account.balanceMinor)}{' '}
-                · Limit {formatMinor(account.creditLimitMinor)}
-              </p>
-            ) : null}
-            {overLimit ? (
-              <>
-                <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. A manager or owner must give a reason
-                  and approve raising the limit to{' '}
-                  {formatMinor(account!.balanceMinor + amountMinor!)}.
-                </p>
-                <Label className="flex min-h-11 items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={ownerOverride}
-                    disabled={!editable}
-                    onChange={(event) => setOwnerOverride(event.target.checked)}
-                  />
-                  Owner or manager: authorize limit increase
-                </Label>
-                {ownerOverride ? (
-                  <>
-                    <Label htmlFor="khata-override-reason">Reason for exceeding the limit</Label>
-                    <Textarea
-                      id="khata-override-reason"
-                      required
-                      maxLength={500}
-                      value={overrideReason}
+                      checked={ownerOverride}
                       disabled={!editable}
-                      onChange={(event) => setOverrideReason(event.target.value)}
-                      className="min-h-11 rounded-sm"
+                      onChange={(event) => setOwnerOverride(event.target.checked)}
                     />
-                    <fieldset className="space-y-2">
-                      <legend className="text-sm font-medium text-text-strong">Approval</legend>
-                      <Label className="flex min-h-11 items-center gap-2">
-                        <input
-                          type="radio"
-                          name="khata-approval-method"
-                          checked={approvalMethod === 'PIN'}
-                          disabled={!editable}
-                          onChange={() => setApprovalMethod('PIN')}
-                        />
-                        Manager or owner PIN at this till
-                      </Label>
-                      {reauthenticateOwner ? (
+                    Owner or manager: authorize limit increase
+                  </Label>
+                  {ownerOverride ? (
+                    <>
+                      <Label htmlFor="khata-override-reason">Reason for exceeding the limit</Label>
+                      <Textarea
+                        id="khata-override-reason"
+                        required
+                        maxLength={500}
+                        value={overrideReason}
+                        disabled={!editable}
+                        onChange={(event) => setOverrideReason(event.target.value)}
+                        className="min-h-11 rounded-sm"
+                      />
+                      <fieldset className="space-y-2">
+                        <legend className="text-sm font-medium text-text-strong">Approval</legend>
                         <Label className="flex min-h-11 items-center gap-2">
                           <input
                             type="radio"
                             name="khata-approval-method"
-                            checked={approvalMethod === 'PASSWORD'}
+                            checked={approvalMethod === 'PIN'}
                             disabled={!editable}
-                            onChange={() => setApprovalMethod('PASSWORD')}
+                            onChange={() => setApprovalMethod('PIN')}
                           />
-                          I am the only owner or manager: re-enter my password
+                          Manager or owner PIN at this till
                         </Label>
-                      ) : null}
-                    </fieldset>
-                    {approvalMethod === 'PIN' ? (
-                      <>
-                        <Label htmlFor="khata-approver">Approving manager or owner</Label>
-                        <select
-                          id="khata-approver"
-                          className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-                          disabled={!editable || approvers === null || approversError}
-                          value={approverId}
-                          onChange={(event) => {
-                            setApproverId(event.target.value);
-                            setApproverPin('');
-                          }}
-                        >
-                          <option value="">Select manager or owner</option>
-                          {(approvers ?? []).map((approver) => (
-                            <option key={approver.id} value={approver.id}>
-                              {approver.self ? `${approver.name} (you)` : approver.name}
-                            </option>
-                          ))}
-                        </select>
-                        {approversError ? (
-                          <p role="alert" className="text-sm text-destructive">
-                            Approvers could not be loaded. Untick and tick the approval box to
-                            retry.
-                          </p>
-                        ) : approvers === null ? (
-                          <p role="status">Loading approvers…</p>
-                        ) : approvers.length === 0 ? (
-                          <p role="status">
-                            No manager or owner has an active staff PIN. A manager or owner creates
-                            their own under Settings, Your PIN. <OwnPinLink />
-                          </p>
+                        {reauthenticateOwner ? (
+                          <Label className="flex min-h-11 items-center gap-2">
+                            <input
+                              type="radio"
+                              name="khata-approval-method"
+                              checked={approvalMethod === 'PASSWORD'}
+                              disabled={!editable}
+                              onChange={() => setApprovalMethod('PASSWORD')}
+                            />
+                            I am the only owner or manager: re-enter my password
+                          </Label>
                         ) : null}
-                        <Label htmlFor="khata-approver-pin">Approver PIN</Label>
-                        <Input
-                          id="khata-approver-pin"
-                          type="password"
-                          inputMode="numeric"
-                          autoComplete="off"
-                          maxLength={8}
-                          aria-describedby="khata-approver-pin-hint"
-                          value={approverPin}
-                          disabled={!editable || !approverId}
-                          onChange={(event) =>
-                            setApproverPin(event.target.value.replace(/\D/g, ''))
-                          }
-                          className="h-11 rounded-sm"
-                        />
-                        <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
-                          {COUNTER_APPROVAL_CODE_HINT}
-                        </p>
-                      </>
-                    ) : (
-                      <>
-                        <Label htmlFor="khata-password">Your password (current account)</Label>
-                        <Input
-                          id="khata-password"
-                          type="password"
-                          autoComplete="current-password"
-                          value={password}
-                          disabled={!editable}
-                          onChange={(event) => setPassword(event.target.value)}
-                          className="h-11 rounded-sm"
-                        />
-                        <Label htmlFor="khata-totp">
-                          Authentication or recovery code (if enabled)
-                        </Label>
-                        <Input
-                          id="khata-totp"
-                          autoComplete="one-time-code"
-                          value={totp}
-                          disabled={!editable}
-                          onChange={(event) => setTotp(event.target.value)}
-                          className="h-11 rounded-sm"
-                        />
-                      </>
-                    )}
-                  </>
-                ) : null}
-              </>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-11 rounded-sm"
-              disabled={
-                !account || statementPending || takingPayment || unknown || !printKhataStatement
-              }
-              onClick={async () => {
-                if (!account || !printKhataStatement) return;
-                setStatementPending(true);
-                try {
-                  await printKhataStatement(account.id);
-                  setKhataError('');
-                } catch {
-                  setKhataError(
-                    'Statement unavailable. Allow pop-ups and retry after refreshing the bill.'
-                  );
-                } finally {
-                  setStatementPending(false);
+                      </fieldset>
+                      {approvalMethod === 'PIN' ? (
+                        <>
+                          <Label htmlFor="khata-approver">Approving manager or owner</Label>
+                          <select
+                            id="khata-approver"
+                            className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                            disabled={!editable || approvers === null || approversError}
+                            value={approverId}
+                            onChange={(event) => {
+                              setApproverId(event.target.value);
+                              setApproverPin('');
+                            }}
+                          >
+                            <option value="">Select manager or owner</option>
+                            {(approvers ?? []).map((approver) => (
+                              <option key={approver.id} value={approver.id}>
+                                {approver.self ? `${approver.name} (you)` : approver.name}
+                              </option>
+                            ))}
+                          </select>
+                          {approversError ? (
+                            <p role="alert" className="text-sm text-destructive">
+                              Approvers could not be loaded. Untick and tick the approval box to
+                              retry.
+                            </p>
+                          ) : approvers === null ? (
+                            <p role="status">Loading approvers…</p>
+                          ) : approvers.length === 0 ? (
+                            <p role="status">
+                              No manager or owner has an active staff PIN. A manager or owner
+                              creates their own under Settings, Your PIN. <OwnPinLink />
+                            </p>
+                          ) : null}
+                          <Label htmlFor="khata-approver-pin">Approver PIN</Label>
+                          <Input
+                            id="khata-approver-pin"
+                            type="password"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            maxLength={8}
+                            aria-describedby="khata-approver-pin-hint"
+                            value={approverPin}
+                            disabled={!editable || !approverId}
+                            onChange={(event) =>
+                              setApproverPin(event.target.value.replace(/\D/g, ''))
+                            }
+                            className="h-11 rounded-sm"
+                          />
+                          <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
+                            {COUNTER_APPROVAL_CODE_HINT}
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <Label htmlFor="khata-password">Your password (current account)</Label>
+                          <Input
+                            id="khata-password"
+                            type="password"
+                            autoComplete="current-password"
+                            value={password}
+                            disabled={!editable}
+                            onChange={(event) => setPassword(event.target.value)}
+                            className="h-11 rounded-sm"
+                          />
+                          <Label htmlFor="khata-totp">
+                            Authentication or recovery code (if enabled)
+                          </Label>
+                          <Input
+                            id="khata-totp"
+                            autoComplete="one-time-code"
+                            value={totp}
+                            disabled={!editable}
+                            onChange={(event) => setTotp(event.target.value)}
+                            className="h-11 rounded-sm"
+                          />
+                        </>
+                      )}
+                    </>
+                  ) : null}
+                </>
+              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 rounded-sm"
+                disabled={
+                  !account || statementPending || takingPayment || unknown || !printKhataStatement
                 }
-              }}
-            >
-              {statementPending ? 'Loading statement…' : 'Print Khata statement'}
-            </Button>
-          </div>
-        ) : null}
-
-        {type === 'CASH' ? (
-          <div className="space-y-1.5">
-            <Label htmlFor="tender-cash-received">Cash received</Label>
-            <Input
-              id="tender-cash-received"
-              inputMode="decimal"
-              autoComplete="off"
-              value={cashText}
-              disabled={!editable}
-              aria-invalid={cashShort || cashInvalid || undefined}
-              aria-describedby="tender-status tender-error tender-cash-error"
-              onChange={(event) => setCashReceived(event.target.value)}
-              className="h-11 rounded-sm font-mono tabular-nums"
-            />
-            <div role="group" aria-label="Quick cash" className="grid grid-cols-4 gap-2">
-              {quickCash.map((option) => (
-                <Button
-                  key={option.label}
-                  type="button"
-                  variant="outline"
-                  className="min-h-11 rounded-sm font-mono tabular-nums"
-                  disabled={
-                    !editable ||
-                    !amountValid ||
-                    option.minor === null ||
-                    option.minor < amountMinor!
+                onClick={async () => {
+                  if (!account || !printKhataStatement) return;
+                  setStatementPending(true);
+                  try {
+                    await printKhataStatement(account.id);
+                    setKhataError('');
+                  } catch {
+                    setKhataError(
+                      'Statement unavailable. Allow pop-ups and retry after refreshing the bill.'
+                    );
+                  } finally {
+                    setStatementPending(false);
                   }
-                  onClick={() => setCashReceived(formatMinor(option.minor!))}
-                >
-                  {option.label}
-                </Button>
-              ))}
-            </div>
-            {cashInvalid ? (
-              <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                {cashError}
-              </p>
-            ) : cashShort ? (
-              <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
-                {copy.tender.cashShort}
-              </p>
-            ) : changeMinor !== null ? (
-              <p
-                className="flex flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-sunken px-4 py-3 text-sm text-text-body"
-                aria-live="polite"
+                }}
               >
-                <span>Change</span>
-                <span className="font-mono text-2xl font-semibold tabular-nums text-text-strong">
-                  {formatMinor(changeMinor)}
-                </span>
-              </p>
-            ) : null}
-          </div>
-        ) : null}
+                {statementPending ? 'Loading statement…' : 'Print Khata statement'}
+              </Button>
+            </div>
+          ) : null}
 
-        <p
-          id="tender-error"
-          className="text-sm text-destructive empty:hidden"
-          role={error ? 'alert' : undefined}
-        >
-          {error}
-        </p>
+          {type === 'CASH' ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="tender-cash-received">Cash received</Label>
+              <Input
+                id="tender-cash-received"
+                inputMode="decimal"
+                autoComplete="off"
+                value={cashText}
+                disabled={!editable}
+                aria-invalid={cashShort || cashInvalid || undefined}
+                aria-describedby="tender-status tender-error tender-cash-error"
+                onChange={(event) => setCashReceived(event.target.value)}
+                className="h-11 rounded-sm font-mono tabular-nums"
+              />
+              <div role="group" aria-label="Quick cash" className="flex flex-wrap gap-2">
+                {quickCash.map((option) => (
+                  <Button
+                    key={option.label}
+                    type="button"
+                    variant="outline"
+                    className="min-h-11 rounded-full px-3.5 font-semibold tabular-nums shadow-none hover:translate-y-0 active:translate-y-0"
+                    disabled={
+                      !editable ||
+                      !amountValid ||
+                      option.minor === null ||
+                      option.minor < amountMinor!
+                    }
+                    onClick={() => setCashReceived(formatMinor(option.minor!))}
+                  >
+                    {option.label}
+                  </Button>
+                ))}
+              </div>
+              {cashInvalid ? (
+                <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
+                  {cashError}
+                </p>
+              ) : cashShort ? (
+                <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
+                  {copy.tender.cashShort}
+                </p>
+              ) : changeMinor !== null ? (
+                <p
+                  data-counter-change=""
+                  className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 rounded-md bg-success/10 px-4 py-3.5 text-sm font-semibold text-success"
+                  aria-live="polite"
+                >
+                  <span>Change</span>
+                  <span className="text-[32px] leading-tight font-semibold tracking-[-0.02em] tabular-nums">
+                    {formatMinor(changeMinor)}
+                  </span>
+                </p>
+              ) : null}
+            </div>
+          ) : null}
 
-        {disabledReason ? (
-          <p id="tender-disabled-reason" className="text-sm text-text-muted">
-            {disabledReason}
+          <p
+            id="tender-error"
+            className="text-sm text-destructive empty:hidden"
+            role={error ? 'alert' : undefined}
+          >
+            {error}
           </p>
-        ) : null}
-        <Button
-          type="button"
-          className="min-h-12 w-full rounded-sm"
-          disabled={!submittable}
-          aria-describedby={[
-            'tender-status tender-error',
-            blocked ? 'tender-blocked' : '',
-            type === 'CASH' && cashDrawerClosed ? 'tender-cash-drawer' : '',
-            disabledReason ? 'tender-disabled-reason' : '',
-          ]
-            .filter(Boolean)
-            .join(' ')}
-          onClick={() => void submitTender()}
+
+          {disabledReason ? (
+            <p id="tender-disabled-reason" className="text-sm text-text-muted">
+              {disabledReason}
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            className="min-h-12 w-full rounded-sm"
+            disabled={!submittable}
+            aria-describedby={[
+              'tender-status tender-error',
+              blocked ? 'tender-blocked' : '',
+              type === 'CASH' && cashDrawerClosed ? 'tender-cash-drawer' : '',
+              disabledReason ? 'tender-disabled-reason' : '',
+            ]
+              .filter(Boolean)
+              .join(' ')}
+            onClick={() => void submitTender()}
+          >
+            {takingPayment ? 'Taking payment…' : 'Take payment'}
+          </Button>
+        </div>
+        <section
+          aria-label="Payment summary"
+          data-counter-pay-summary=""
+          className="grid min-w-0 gap-3 rounded-md bg-surface-sunken p-4 max-lg:order-first lg:col-start-3 lg:row-start-1"
         >
-          {takingPayment ? 'Taking payment…' : 'Take payment'}
-        </Button>
+          {tenders.length > 0 ? (
+            <ol aria-label={copy.tender.payments} className="grid gap-1.5">
+              {tenders.map((tender, index) => (
+                <li
+                  key={tender.tenderId}
+                  className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-card px-3 py-2 text-[13px]"
+                >
+                  <span className="text-text-body">
+                    {index + 1}.{' '}
+                    {tender.type === 'CREDIT' || tender.type === 'KHATA'
+                      ? 'Khata'
+                      : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
+                        tender.type)}{' '}
+                    · Recorded
+                  </span>
+                  <span className="font-mono tabular-nums text-text-strong">
+                    {formatMinor(tender.amountMinor)}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <p className="space-y-2">
+              <span className="block font-mono text-xs tracking-wide text-text-muted uppercase">
+                {copy.tender.balance}
+              </span>
+              <span className="block text-[28px] leading-tight font-semibold tracking-[-0.02em] tabular-nums text-text-strong lg:text-[34px]">
+                {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
+                  ? formatMinor(balanceMinor)
+                  : 'Unavailable'}
+              </span>
+            </p>
+            <div className="flex flex-col items-end gap-2">
+              <span className="font-mono text-xs text-text-muted">PKR</span>
+              {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
+                <StatusPill status="settled" tone="success" label="Settled" />
+              ) : null}
+            </div>
+          </div>
+
+          <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
+
+          {summaryExtra}
+        </section>
       </div>
     );
   }

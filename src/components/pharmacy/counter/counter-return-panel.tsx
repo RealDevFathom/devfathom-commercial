@@ -5,7 +5,14 @@ import { z } from '@/lib/zod-csp';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogDescription, DialogPortal } from '@/components/ui/dialog';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
+import {
+  COUNTER_SHEET_BACKDROP,
+  CounterNoPermission,
+  CounterSheetHeader,
+  counterSheetClassName,
+} from './counter-sheet';
 import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -185,22 +192,41 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
         {title}
       </Button>
+      {/* DEV-977 phase 2B (Counter v2 B3): the returns sheet, a 760px dialog from 1024px and
+          a bottom sheet below. The form, its rules and its PIN approvals are unchanged. */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {refundAuthorized
-              ? 'Scan or find the receipt, choose the returned line, then confirm the return and its refund together.'
-              : 'Find the original receipt. A manager or owner records returns and refunds with their PIN.'}
-          </DialogDescription>
-          {open && (
-            <ReturnForm
-              key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
-              {...props}
-              refundAuthorized={refundAuthorized}
+        <DialogPortal>
+          <DialogPrimitive.Backdrop className={`fixed inset-0 z-50 ${COUNTER_SHEET_BACKDROP}`} />
+          <DialogPrimitive.Popup
+            data-counter-sheet="returns"
+            className={counterSheetClassName(
+              'dialog',
+              // Portalled: the sheet carries the pharmacy scope (12px metadata floor) itself.
+              'pharmacy-workspace lg:w-[min(47.5rem,calc(100vw-4rem))] [&_[data-slot=button]]:rounded-[var(--radius-sm)]'
+            )}
+          >
+            <CounterSheetHeader
+              eyebrow="Returns and refunds"
+              title={title}
+              subtitle={
+                <DialogDescription render={<span />}>
+                  {refundAuthorized
+                    ? 'Scan or find the receipt, choose the returned line, then confirm the return and its refund together.'
+                    : 'Find the original receipt. A manager or owner records returns and refunds with their PIN.'}
+                </DialogDescription>
+              }
             />
-          )}
-        </DialogContent>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4.5 text-sm">
+              {open && (
+                <ReturnForm
+                  key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
+                  {...props}
+                  refundAuthorized={refundAuthorized}
+                />
+              )}
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
       </Dialog>
     </>
   );
@@ -840,10 +866,17 @@ export function ReturnForm({
         </p>
       )}
       {data && !refundAuthorized && (
-        <p role="note" className="text-sm text-text-muted">
-          Returns and refunds need a manager or owner. Ask one to record this return and refund it
-          with their PIN.
-        </p>
+        // Counter v2 C6: what this needs and who can do it. The server refuses a return from a
+        // member without refund access whatever this card says.
+        <CounterNoPermission
+          heading="Ask a manager or owner to record this return"
+          who="Managers and the owner"
+        >
+          <p role="note">
+            Returns and refunds need a manager or owner. Ask one to record this return and refund it
+            with their PIN.
+          </p>
+        </CounterNoPermission>
       )}
       {data && (
         <>
