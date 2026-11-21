@@ -5211,6 +5211,33 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     mocks.controlledProps.mock.lastCall![0].controlled.onChange('prescriptionLineId', 'rx-line-b');
   }
 
+  it('uses the selected patient’s saved address after a manual address is cleared', async () => {
+    controlledScanSetup();
+    mocks.queries.counterPatientPanel = patientPanel('patient-b');
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.rxPanelProps.mock.lastCall![0].onSelectPatient('patient-b'));
+    act(stageControlledMedicine);
+    act(authorize);
+
+    const currentFields = () => mocks.controlledProps.mock.lastCall![0].controlled;
+    act(() => currentFields().onChange('patientAddress', '12 Synthetic Road'));
+    expect(currentFields().patientAddress).toBe('12 Synthetic Road');
+    act(() => currentFields().onChange('patientAddress', ''));
+    expect(currentFields().patientAddress).toBeNull();
+
+    scan();
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          controlledAuthorization: expect.objectContaining({
+            patientId: 'patient-b',
+            patientAddress: { useAddressOnFile: true },
+          }),
+        })
+      )
+    );
+  });
+
   it('keeps a patient picked for the next customer after the bill was paid', async () => {
     controlledScanSetup();
     mocks.queries.counterCart!.data = settled();

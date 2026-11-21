@@ -1648,7 +1648,7 @@ function ScopedPharmacyCounterConsole({
             // A field being corrected is a new attempt: the last refusal no longer applies.
             setControlledError(null);
             if (field === 'patientAddress') {
-              setPatientAddressDraft(typeof value === 'string' ? value : '');
+              if (typeof value === 'string') setPatientAddressDraft(value === '' ? null : value);
               return;
             }
             closedBillPatient.current?.editedAuth.add(field);

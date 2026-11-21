@@ -1,5 +1,6 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Request } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -2038,6 +2039,102 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
   });
+});
+
+test('DEV-1011 — an approved controlled sale records the saved address without sending it to the browser', async ({
+  page,
+}) => {
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const patientId = randomUUID();
+  const patientName = `Synthetic Patient ${patientId.slice(0, 8)}`;
+  const savedAddress = `24 Synthetic Sentinel Street ${patientId}`;
+  const { organizationId, branchId, adminId, pharmacistId, medicines } = PHARMACY_E2E;
+  const controlled = medicines.controlled;
+  await db.connect();
+  try {
+    await db.query(
+      "SELECT set_config('app.current_organization_id', $1, false), set_config('app.current_branch_id', $2, false)",
+      [organizationId, branchId]
+    );
+    await db.query(
+      `WITH patient AS (
+         INSERT INTO pharmacy_patients (id, "organizationId", "displayName", cnic, address, "updatedAt")
+         VALUES ($1, $2, $3, '0000000000001', $4, now()) RETURNING id
+       )
+       INSERT INTO pharmacy_patient_consents
+         (id, "organizationId", "patientId", purpose, channel, version, granted, "recordedByUserId")
+       SELECT $1 || '-consent', $2, id, 'DISPENSING', 'IN_PERSON', 1, true, $5 FROM patient`,
+      [patientId, organizationId, patientName, savedAddress, adminId]
+    );
+
+    await openCounter(page);
+    await openDrawer(page);
+    const requests: Request[] = [];
+    const observe = (request: Request) => requests.push(request);
+    page.on('request', observe);
+    await search(page, 'Fathomadol');
+    await stageFirstResult(page, controlled.name);
+    await page.keyboard.press('F6');
+    const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
+    await pressControl(sheet.getByRole('button', { name: 'Find the patient' }));
+    const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
+    const find = checks.getByLabel('Find patient');
+    await find.fill(patientName);
+    await find.press('Enter');
+    await pressControl(checks.getByRole('button', { name: new RegExp(patientName) }));
+    await pressControl(checks.getByRole('button', { name: /^Authorise Fathomadol/ }));
+    const address = sheet.getByLabel('Patient address');
+    await address.fill('92 Temporary Test Road');
+    await address.fill('');
+    await expect(address).toHaveAttribute('placeholder', 'Use the address on file');
+    await tickWithSpace(sheet.getByLabel('Emergency supply, no prescription'));
+    await sheet.getByLabel('Prescriber name').fill('Synthetic E2E Prescriber');
+    await sheet.getByRole('combobox', { name: 'Approving pharmacist' }).selectOption({
+      label: PHARMACY_E2E.pharmacistName,
+    });
+    await sheet.getByLabel(/^(Pharmacist PIN|Approval code)$/).fill(PHARMACY_E2E.pharmacistPin);
+    await pressControl(sheet.getByRole('button', { name: 'Authorise line' }));
+    await expect(page.getByText(`1 × ${controlled.name} added.`)).toBeVisible({ timeout: 15_000 });
+    await expect(billLine(page, controlled.name)).toContainText('Controlled');
+    page.off('request', observe);
+
+    const procedures = new Set<string>();
+    for (const request of requests) {
+      const response = await request.response();
+      if (!response) continue; // A cancelled request delivered no response.
+      const path = new URL(response.url()).pathname;
+      expect((await response.body()).includes(savedAddress), path).toBe(false);
+      if (response.ok() && path.startsWith('/api/trpc/')) {
+        for (const procedure of path.slice('/api/trpc/'.length).split(','))
+          procedures.add(procedure);
+      }
+    }
+    expect([...procedures]).toEqual(
+      expect.arrayContaining([
+        'pharmacyPrescriptions.counterPatients',
+        'pharmacyPrescriptions.counterPatientPanel',
+        'pharmacySales.addLine',
+        'pharmacySales.counterCart',
+      ])
+    );
+
+    const entry = await db.query(
+      `SELECT "patientAddress", "recordedByUserId", "witnessedByUserId"
+       FROM pharmacy_controlled_register_entries
+       WHERE "organizationId"=$1 AND "branchId"=$2 AND "patientId"=$3 AND "medicineId"=$4 AND "entryKind"='SALE'`,
+      [organizationId, branchId, patientId, controlled.id]
+    );
+    expect(entry.rows).toEqual([
+      {
+        patientAddress: savedAddress,
+        recordedByUserId: adminId,
+        witnessedByUserId: pharmacistId,
+      },
+    ]);
+  } finally {
+    await db.end();
+  }
 });
 
 test('Counter v2 — the discount sheet: whole bill or next item, and who can approve', async ({
