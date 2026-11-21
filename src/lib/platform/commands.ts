@@ -4425,8 +4425,16 @@ async function runCommand(
       if (!before || !['FAILED', 'CANCELLED'].includes(before.status)) {
         throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
       }
-      const saved = await db.platformJob.update({
-        where: { id: input.id },
+      const needsPurgeRequester = before.type === 'PURGE_DATA' && !before.requestedById;
+      if (needsPurgeRequester) {
+        assertPlatformCapability(actor, capabilityFor('organization.transition'));
+      }
+      const [saved] = await db.platformJob.updateManyAndReturn({
+        where: {
+          id: input.id,
+          status: before.status,
+          ...(needsPurgeRequester ? { requestedById: before.requestedById } : {}),
+        },
         data: {
           status: 'QUEUED',
           attempts: 0,
@@ -4435,8 +4443,12 @@ async function runCommand(
           scheduledAt: new Date(),
           startedAt: null,
           finishedAt: null,
+          ...(needsPurgeRequester ? { requestedById: actor.id } : {}),
         },
       });
+      if (!saved) {
+        throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
+      }
       return {
         targetType: 'PlatformJob',
         targetId: saved.id,
