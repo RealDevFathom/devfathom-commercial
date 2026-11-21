@@ -166,6 +166,25 @@ describeDb('FIN-02 bookkeeper acceptance', () => {
 });
 
 describeDb('accounting period boundaries', () => {
+  it('closes up to the following approved 05:00 start, including 00:30 Karachi', async () => {
+    await inTenant(async (db) => {
+      const following = await deps.bookkeeping.closeAccountingPeriod(db, scope, {
+        startsAt: new Date('2017-06-01T00:00Z'),
+        endsAt: new Date('2017-07-01T00:00Z'),
+      });
+      const previous = await deps.bookkeeping.closeAccountingPeriod(
+        db,
+        scope,
+        { startsAt: '2017-05-01', endsAt: '2017-06-01' },
+        'Asia/Karachi'
+      );
+      expect(previous.endsAt).toEqual(following.startsAt);
+      expect(previous.endsAt.getTime()).toBeGreaterThan(
+        new Date('2017-06-01T00:30:00+05:00').getTime()
+      );
+      expect(previous.startsAt).toEqual(new Date('2017-04-30T19:00Z'));
+    });
+  });
   it('closes a new Karachi period at midnight and keeps the previous approved end', async () => {
     await inTenant(async (db) => {
       const old = await deps.bookkeeping.closeAccountingPeriod(db, scope, {
@@ -261,6 +280,71 @@ describeDb('FIN-04 tax profile versioning', () => {
       });
     }
   );
+
+  it('publishes up to the following legacy start and charges the earlier profile at 00:30 Karachi', async () => {
+    await inTenant(async (db) => {
+      const zone = 'Asia/Karachi';
+      const branch = await db.pharmacyBranch.create({
+        data: {
+          organizationId,
+          name: 'Predecessor',
+          code: 'predecessor',
+          city: 'Karachi',
+          provinceCode: 'SD',
+          addressLine: 'Fixture',
+        },
+      });
+      const cutoverScope = { ...scope, branchId: branch.id };
+      const common = {
+        name: 'Predecessor fixture',
+        approvalReference: 'Approved',
+        rules: [
+          {
+            productClass: 'MEDICINE' as const,
+            pctHsCode: '3004',
+            priceMode: 'INCLUSIVE' as const,
+            rate: '0.10',
+          },
+        ],
+      };
+      const following = await deps.tax.publishPharmacyTaxProfile(
+        db,
+        cutoverScope,
+        {
+          ...common,
+          effectiveFrom: new Date('2017-06-01T00:00Z'),
+          effectiveTo: new Date('2017-07-01T00:00Z'),
+          idempotencyKey: 'legacy-following',
+        },
+        zone
+      );
+      const previous = await deps.tax.publishPharmacyTaxProfile(
+        db,
+        cutoverScope,
+        {
+          ...common,
+          effectiveFrom: '2017-05-01',
+          effectiveTo: '2017-06-01',
+          idempotencyKey: 'new-predecessor',
+        },
+        zone
+      );
+      expect(previous.effectiveTo).toEqual(following.effectiveFrom);
+      for (const [at, id] of [
+        ['2017-06-01T00:30:00+05:00', previous.id],
+        ['2017-06-01T05:00:00+05:00', following.id],
+      ] as const) {
+        const tax = await deps.tax.calculatePharmacyTax(db, {
+          ...cutoverScope,
+          at: new Date(at),
+          productClass: 'MEDICINE',
+          pctHsCode: '3004',
+          consideration: '110.00',
+        });
+        expect(tax.profileVersionId).toBe(id);
+      }
+    });
+  });
 
   it('selects effective approved versions and applies shared inclusive rounding', async () => {
     await inTenant(async (db) => {

@@ -38,13 +38,15 @@ export async function publishPharmacyTaxProfile(
     typeof input.effectiveFrom === 'string'
       ? calendarStart(input.effectiveFrom)
       : input.effectiveFrom;
-  const effectiveTo =
+  let effectiveTo =
     typeof input.effectiveTo === 'string' ? calendarStart(input.effectiveTo) : input.effectiveTo;
   if (
     !input.name.trim() ||
     !input.approvalReference.trim() ||
     input.rules.length === 0 ||
-    (effectiveTo && effectiveFrom >= effectiveTo)
+    (typeof input.effectiveFrom === typeof input.effectiveTo &&
+      effectiveTo &&
+      effectiveFrom >= effectiveTo)
   )
     throw new PharmacyTaxProfileError('INVALID');
   await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${scope.organizationId}:${scope.branchId}:pharmacy-tax`}, 0))`;
@@ -66,8 +68,20 @@ export async function publishPharmacyTaxProfile(
       select: { effectiveTo: true },
     });
     if (previous?.effectiveTo) effectiveFrom = previous.effectiveTo;
-    if (effectiveTo && effectiveFrom >= effectiveTo) throw new PharmacyTaxProfileError('INVALID');
   }
+  if (typeof input.effectiveTo === 'string') {
+    const following = await db.pharmacyTaxProfileVersion.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date(input.effectiveTo),
+      },
+      select: { effectiveFrom: true },
+    });
+    if (following) effectiveTo = following.effectiveFrom;
+  }
+  if (effectiveTo && effectiveFrom >= effectiveTo) throw new PharmacyTaxProfileError('INVALID');
   const overlap = await db.pharmacyTaxProfileVersion.findFirst({
     where: {
       organizationId: scope.organizationId,

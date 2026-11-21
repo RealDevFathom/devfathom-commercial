@@ -288,7 +288,7 @@ export async function closeAccountingPeriod(
   const start = (value: string | Date) =>
     typeof value === 'string' ? pharmacyCalendarDayRange(value, value, timeZone).from : value;
   let startsAt = start(input.startsAt);
-  const endsAt = start(input.endsAt);
+  let endsAt = start(input.endsAt);
   await lockPharmacyLedgerScope(db, scope);
   if (typeof input.startsAt === 'string') {
     const previous = await db.pharmacyAccountingPeriod.findFirst({
@@ -301,6 +301,18 @@ export async function closeAccountingPeriod(
       select: { endsAt: true },
     });
     if (previous) startsAt = previous.endsAt;
+  }
+  if (typeof input.endsAt === 'string') {
+    const following = await db.pharmacyAccountingPeriod.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'CLOSED',
+        startsAt: new Date(input.endsAt),
+      },
+      select: { startsAt: true },
+    });
+    if (following) endsAt = following.startsAt;
   }
   if (startsAt >= endsAt) throw new PharmacyBookkeepingError('INVALID_STATE');
   return db.pharmacyAccountingPeriod.create({
