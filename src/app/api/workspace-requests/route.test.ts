@@ -7,6 +7,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 vi.mock('@/lib/rate-limit', () => ({ rateLimit: mocks.gate }));
 vi.mock('@/server/audit', () => ({ ipFromHeaders: () => '127.0.0.1' }));
+import { syntheticLicencePdf } from '@/lib/workspace-requests/licence-test-fixtures';
 import { POST } from './route';
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,16 +84,18 @@ it('requires a real supported document and persists its bytes privately', async 
       )
     ).status
   ).toBe(400);
+  const pdf = syntheticLicencePdf();
   const response = await POST(
     request(
       pharmacy,
       undefined,
-      new File(['%PDF-1.7\nEvidence'], 'licence.pdf', { type: 'application/pdf' })
+      new File([Uint8Array.from(pdf)], 'sender-chosen.png', { type: 'application/pdf' })
     )
   );
   expect(response.status).toBe(201);
   const document = JSON.parse(mocks.create.mock.calls[0][0].data.notes).document;
-  expect(Buffer.from(document.base64, 'base64').toString()).toBe('%PDF-1.7\nEvidence');
+  expect(Buffer.from(document.base64, 'base64')).toEqual(pdf);
+  expect(document).toMatchObject({ name: 'licence.pdf', type: 'application/pdf' });
 });
 it('bounds actual request bytes, including requests without a content length', async () => {
   const req = new Request('https://app.example.test/api/workspace-requests', {

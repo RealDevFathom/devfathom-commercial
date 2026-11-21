@@ -5,7 +5,9 @@ vi.mock('@/lib/platform/auth', () => ({ getPlatformSession: m.actor, canPlatform
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: (run: (db: unknown) => unknown) => run({ platformLead: { findUnique: m.find } }),
 }));
+import { syntheticLicencePdf } from '@/lib/workspace-requests/licence-test-fixtures';
 import { GET } from './route';
+const pdf = syntheticLicencePdf();
 const params = { params: Promise.resolve({ id: 'lead' }) };
 beforeEach(() => {
   vi.clearAllMocks();
@@ -17,8 +19,8 @@ beforeEach(() => {
       details: { companyName: 'Pharmacy' },
       document: {
         type: 'application/pdf',
-        name: 'licence.pdf',
-        base64: Buffer.from('%PDF-evidence').toString('base64'),
+        name: 'legacy-sender-filename.jpg',
+        base64: pdf.toString('base64'),
       },
     }),
   });
@@ -54,9 +56,12 @@ it('delivers private evidence as an attachment and omits bytes from details JSON
     new Request('https://admin.example.test/api/platform/workspace-requests/lead?document=1'),
     params
   );
-  expect(await doc.text()).toBe('%PDF-evidence');
+  expect(Buffer.from(await doc.arrayBuffer())).toEqual(pdf);
   expect(doc.headers.get('content-disposition')).toContain('attachment');
   expect(doc.headers.get('cache-control')).toContain('no-store');
+  expect(doc.headers.get('content-disposition')).toBe('attachment; filename="licence.pdf"');
+  expect(doc.headers.get('content-type')).toBe('application/pdf');
+  expect(doc.headers.get('x-content-type-options')).toBe('nosniff');
 });
 it('does not reinterpret ordinary lead notes as workspace intake', async () => {
   m.find.mockResolvedValue({ source: 'Direct', notes: '{}' });
@@ -68,4 +73,21 @@ it('does not reinterpret ordinary lead notes as workspace intake', async () => {
       )
     ).status
   ).toBe(404);
+});
+
+it('withholds malformed legacy evidence while preserving its request details', async () => {
+  m.find.mockResolvedValue({
+    source: 'workspace-request:pharmacy',
+    notes: JSON.stringify({
+      details: { companyName: 'Pharmacy' },
+      document: {
+        type: 'application/pdf',
+        name: 'legacy.pdf',
+        base64: Buffer.from('%PDF-1.7\nEvidence').toString('base64'),
+      },
+    }),
+  });
+  const base = 'https://admin.example.test/api/platform/workspace-requests/lead';
+  expect((await GET(new Request(base + '?document=1'), params)).status).toBe(404);
+  expect((await GET(new Request(base), params)).status).toBe(200);
 });

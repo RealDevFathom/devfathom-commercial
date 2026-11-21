@@ -5,6 +5,7 @@ import {
   PlatformCommandForm,
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
+import { buttonVariants } from '@/components/ui/button';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 
@@ -221,12 +222,25 @@ export default async function CrmPage() {
                               Download request details
                             </a>
                             {lead.source === 'workspace-request:pharmacy' && (
-                              <a
-                                className="underline underline-offset-4"
-                                href={`/api/platform/workspace-requests/${lead.id}?document=1`}
-                              >
-                                Download licence copy
-                              </a>
+                              <div>
+                                <p
+                                  id={`licence-warning-${lead.id}`}
+                                  className="text-xs text-warning"
+                                >
+                                  Untrusted file from the public.
+                                </p>
+                                <a
+                                  aria-describedby={`licence-warning-${lead.id}`}
+                                  className={buttonVariants({
+                                    variant: 'link',
+                                    className: 'px-0 text-xs text-foreground underline',
+                                  })}
+                                  href={`/api/platform/workspace-requests/${lead.id}?document=1`}
+                                  download
+                                >
+                                  Download licence copy
+                                </a>
+                              </div>
                             )}
                           </div>
                         )}
