@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { deflateSync } from 'node:zlib';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -136,6 +137,68 @@ describe('DEV-692 DRAP recall PDF fallback', () => {
     const [row] = parseDrapRecallPdfText('Reg. No. 012345 Batch No. AB12', 'One');
     expect(row).toMatchObject({ registrationNumber: '012345', batchNumbers: ['AB12'] });
     expect(row).not.toHaveProperty('batchNumbersUnresolved');
+  });
+});
+
+// Only the PDF stream region is needed by this best-effort reader.
+function syntheticStream(size: number, level = 0) {
+  const text = 'BT (Synthetic notice) Tj ET';
+  const content = Buffer.alloc(size, 32);
+  content.write(text);
+  return Buffer.concat([
+    Buffer.from('<< /Filter /FlateDecode >>\nstream\n'),
+    deflateSync(content, { level }),
+    Buffer.from('\nendstream\n'),
+  ]);
+}
+
+describe('DRAP PDF decode budgets', () => {
+  const MiB = 1024 * 1024;
+
+  it('accepts a stream at the output limit and rejects the next byte', () => {
+    expect(extractPdfText(syntheticStream(2 * MiB))).toContain('Synthetic notice');
+    expect(() => extractPdfText(syntheticStream(2 * MiB + 1))).toThrow('decoded stream budget');
+  });
+
+  it('applies the total decoded limit across streams without returning partial text', () => {
+    const stream = syntheticStream(2 * MiB);
+    const atLimit = Buffer.concat(Array.from({ length: 4 }, () => stream));
+    expect(extractPdfText(atLimit).match(/Synthetic notice/g)).toHaveLength(4);
+    expect(() => extractPdfText(Buffer.concat([atLimit, syntheticStream(32)]))).toThrow(
+      'decoded stream budget'
+    );
+  });
+
+  it('counts skipped streams against the limit', () => {
+    const skipped = Buffer.from('<< /Subtype /Image >>\nstream\nimage\nendstream\n');
+    const prefix = Buffer.concat(Array.from({ length: 499 }, () => skipped));
+    expect(extractPdfText(Buffer.concat([prefix, syntheticStream(32)]))).toContain(
+      'Synthetic notice'
+    );
+    expect(() => extractPdfText(Buffer.concat([skipped, prefix, syntheticStream(32)]))).toThrow(
+      'too many streams'
+    );
+  });
+
+  it('allows modest highly compressible streams and rejects abnormal expansion above that floor', () => {
+    const floor = 64 * 1024;
+    expect(extractPdfText(syntheticStream(floor, 9))).toContain('Synthetic notice');
+    expect(() => extractPdfText(syntheticStream(floor + 1, 9))).toThrow('permitted ratio');
+  });
+
+  it('discards decoded text when another Flate stream cannot be read', () => {
+    const unreadable = Buffer.from('<< /Filter /FlateDecode >>\nstream\nIncomplete\nendstream\n');
+    expect(() => extractPdfText(Buffer.concat([syntheticStream(32), unreadable]))).toThrow(
+      'unreadable compressed stream'
+    );
+  });
+
+  it('rejects input above the PDF byte limit', () => {
+    const atLimit = Buffer.alloc(10 * MiB);
+    const stream = syntheticStream(32);
+    stream.copy(atLimit);
+    expect(extractPdfText(atLimit)).toContain('Synthetic notice');
+    expect(() => extractPdfText(Buffer.concat([atLimit, Buffer.alloc(1)]))).toThrow('size limit');
   });
 });
 
