@@ -229,6 +229,8 @@ vi.mock('@/lib/trpc', async () => {
         'handoverDrawer',
         // DEV-929: the owner's maximum discount, shown where the cashier gives one.
         'discountMaximum',
+        // DEV-977 phase 3: who can approve, named in the discount sheet's supervisor block.
+        'discountApprovers',
         // DEV-956: the owner's whole-bill discount switch, and giving one.
         'billDiscountSetting',
         'applyBillDiscount',
@@ -567,6 +569,8 @@ beforeEach(() => {
   mocks.queries.discountMaximum = query({ maxDiscountBps: 10_000, canChange: false });
   // DEV-956: the whole-bill discount is off unless a test switches it on.
   mocks.queries.billDiscountSetting = query({ enabled: false, canChange: false });
+  // DEV-977 phase 3: nobody is named in the discount sheet unless a test says otherwise.
+  mocks.queries.discountApprovers = query([]);
   // DEV-97: the operator takes payment unless a test says otherwise.
   mocks.queries.settlementAccess = query({
     authorized: true,
@@ -3496,6 +3500,75 @@ describe('PharmacyCounterConsole barcode safety', () => {
         discountApproval: { staffProfileId: 'staff-manager', pin: '975310' },
       });
       expect(mocks.refetch).toHaveBeenCalled();
+    });
+
+    // DEV-977 phase 3 (Counter v2 A4): the discount sheet's "Whole bill" choice is the same
+    // whole-bill procedure, with the same approval dialog and the same request.
+    it('gives it from the discount sheet\'s "Whole bill" choice through the same procedure and approval', async () => {
+      mocks.queries.billDiscountSetting = query({ enabled: true, canChange: false });
+      mocks.discountApprovers.mockResolvedValue([
+        { id: 'staff-manager', name: 'Manager', self: false },
+      ]);
+      mocks.mutations
+        .applyBillDiscount!.mockRejectedValueOnce(
+          refused('FORBIDDEN', 'A discount needs a manager to approve it with their PIN.')
+        )
+        .mockResolvedValueOnce({
+          status: 'APPLIED',
+          totalMinor: 2_500,
+          previousTotalMinor: 0,
+          lines: [{ saleLineId: 'line-a', discountMinor: 2_500 }],
+          excluded: [],
+        });
+      mocks.queries.discountApprovers = query([
+        { id: 'staff-manager', name: 'Manager', self: false },
+      ]);
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+      const sheet = screen.getByRole('dialog', { name: 'Discount on the next item' });
+      // The supervisor block names who can approve, from the same approvers read.
+      const block = within(sheet).getByRole('region', { name: 'Supervisor approval' });
+      expect(await within(block).findByRole('listitem')).toHaveTextContent('Manager');
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Whole bill' }));
+      fireEvent.change(within(sheet).getByLabelText('Discount (%)'), { target: { value: '10' } });
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Apply to bill' }));
+      const dialog = await screen.findByRole('dialog', { name: 'Approve this discount?' });
+      expect(dialog).toHaveTextContent('Whole bill: a discount of 10% off the bill.');
+      await within(dialog).findByRole('option', { name: 'Manager' });
+      fireEvent.change(within(dialog).getByLabelText('Approving manager or owner'), {
+        target: { value: 'staff-manager' },
+      });
+      fireEvent.change(within(dialog).getByLabelText('Approver PIN'), {
+        target: { value: '975310' },
+      });
+      fireEvent.click(within(dialog).getByRole('button', { name: 'Approve discount' }));
+      await screen.findByText(
+        'A whole-bill discount of Rs 25.00 is on the bill, shared over 1 item.'
+      );
+      expect(mocks.mutations.applyBillDiscount).toHaveBeenLastCalledWith({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        discount: { kind: 'PERCENT', bps: 1_000 },
+        discountApproval: { staffProfileId: 'staff-manager', pin: '975310' },
+      });
+      expect(mocks.refetch).toHaveBeenCalled();
+      // Nothing was held for the next item.
+      expect(screen.queryByRole('button', { name: 'Remove discount' })).toBeNull();
+    });
+
+    it('offers only the next item in the sheet once the bill has taken a payment', () => {
+      mocks.queries.billDiscountSetting = query({ enabled: true, canChange: false });
+      mocks.queries.counterCart = {
+        ...query(
+          cart({
+            totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 5000 },
+          })
+        ),
+        refetch: mocks.refetch,
+      };
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+      expect(screen.getByRole('button', { name: 'Whole bill' })).toBeDisabled();
     });
 
     it('tells the cashier when adding an item removed the bill discount, to give it again', async () => {

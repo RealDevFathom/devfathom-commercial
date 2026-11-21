@@ -80,7 +80,7 @@ import { CounterRxSelfSign } from './counter-rx-self-sign';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
 import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
-import { CounterBillDiscountEntry } from './counter-bill-discount';
+import { CounterBillDiscountEntry, useCounterBillDiscount } from './counter-bill-discount';
 import {
   CounterDiscountEntry,
   counterDiscountMinor,
@@ -1476,6 +1476,45 @@ function ScopedPharmacyCounterConsole({
     branchAuthorized &&
     (pending === 'addToCart' || drainingScan || queuedScans > 0);
   const lineCount = cart?.lines.length ?? 0;
+  // DEV-977 phase 3 (Counter v2 A4): the discount sheet's supervisor block names who can
+  // approve, read only while the sheet is open. The approval dialog keeps its own read.
+  const [discountSheetOpen, setDiscountSheetOpen] = useState(false);
+  const sheetApproversQuery = trpc.pharmacySales.discountApprovers.useQuery(
+    { branchId },
+    { enabled: discountSheetOpen && Boolean(branchId) && branchAuthorized, retry: false }
+  );
+  const sheetApprovers = sheetApproversQuery.isError
+    ? ({ status: 'error' } as const)
+    : sheetApproversQuery.data
+      ? ({ status: 'ready', list: sheetApproversQuery.data } as const)
+      : ({ status: 'loading' } as const);
+  // DEV-977 phase 3 (Counter v2 A4): the discount sheet's "Whole bill" choice uses the same
+  // whole-bill procedure and approval dialog as the bill's own form (DEV-956).
+  const sheetBillDiscount = useCounterBillDiscount({
+    branchId,
+    saleId: cart?.saleId ?? '',
+    lines: cart?.lines ?? [],
+    requestApproval: requestBillDiscountApproval,
+    onChanged: (message) => {
+      setNotice({ tone: 'success', message });
+      void cartQuery.refetch();
+    },
+  });
+  const sheetWholeBill =
+    currentBill && cart && cart.status === 'OPEN' && lineCount > 0 && sheetBillDiscount.enabled
+      ? {
+          disabled:
+            busy ||
+            !branchAuthorized ||
+            !online ||
+            cart.totals.tenderedMinor > 0 ||
+            sheetBillDiscount.pending,
+          apply: async (
+            discount: { kind: 'PERCENT'; bps: number } | { kind: 'AMOUNT'; minor: number },
+            label: string
+          ) => (await sheetBillDiscount.send(discount, label)).error,
+        }
+      : undefined;
   const describeBusy = (billReadRequired: boolean) =>
     unknownTender || attempt !== null || checkingOutcome
       ? 'Check the payment outcome before changing this bill or branch.'
@@ -5121,6 +5160,9 @@ function ScopedPharmacyCounterConsole({
                     held={heldDiscount}
                     disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
                     returnFocus={searchRef}
+                    wholeBill={sheetWholeBill}
+                    approvers={sheetApprovers}
+                    onOpenChange={setDiscountSheetOpen}
                     onHold={(discount) => {
                       setHeldDiscount({ ...discount, branchId });
                       setNotice({
