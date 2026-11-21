@@ -40,7 +40,8 @@ const priorCatalogDigests = {
   // differs only by that one grant.
   // DEV-19 (#1012): pharmacy:catalogue-edit in the pharmacy capability catalog
   // and on the Owner / Operator template; the hashed data differs only by those.
-  PHARMACY: '7f7b7a23d812201f4d55f1ff4aed97d05db11264f8c2ae6654fb4d9d7c0203ab',
+  // DEV-969: exact finance:read and finance:manage grants on Finance and Owner / Operator.
+  PHARMACY: '884283930cdbe00569ef2dad1878ad15328460b0f0ef10d0f8a9709b796a7307',
 };
 
 const property = {

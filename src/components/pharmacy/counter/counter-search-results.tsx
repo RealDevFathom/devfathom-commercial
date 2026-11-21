@@ -12,7 +12,6 @@ import {
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
 import { formatMinor, formatShortExpiry } from '@/lib/pharmacy/counter-receipt';
-import { STRENGTH_NOT_RECORDED } from '@/lib/pharmacy/medicine';
 import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
 import { formatStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 
@@ -284,18 +283,16 @@ export function CounterSearchResults({
                     {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                   </span>
                   <span className="col-span-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
-                    <span className="block">
-                      {row.strength ? (
-                        <>
-                          <span>Strength:</span>{' '}
-                          <span className="ms-1">
-                            <bdi dir="auto">{row.strength}</bdi>
-                          </span>
-                        </>
-                      ) : (
-                        STRENGTH_NOT_RECORDED
-                      )}
-                    </span>
+                    {/* DEV-977 phase 3 (owner, 21 Nov 2026): imported medicines carry their strength
+                        in the name, so a missing one shows nothing here, not a placeholder. */}
+                    {row.strength ? (
+                      <span className="block">
+                        <span>Strength:</span>{' '}
+                        <span className="ms-1">
+                          <bdi dir="auto">{row.strength}</bdi>
+                        </span>
+                      </span>
+                    ) : null}
                     <span className="block">
                       <span>Form:</span> {row.presentation}
                       {row.dosageForm ? ` · ${row.dosageForm}` : ''}

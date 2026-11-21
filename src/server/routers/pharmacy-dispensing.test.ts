@@ -29,10 +29,12 @@ import { pharmacyDispensingRouter } from './pharmacy-dispensing';
 function caller() {
   return pharmacyDispensingRouter.createCaller({
     db: {
+      user: { findUnique: vi.fn(async () => null) },
+      $queryRaw: vi.fn(async () => [{ id: 'review-1' }]),
       pharmacySubstitutionRecord: { create: mocks.create },
       pharmacyPharmacistReviewItem: { findMany: mocks.findMany },
     },
-    entitlements: { enabledModules: ['pharmacy-core'] },
+    entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'] },
     session: {
       expires: 'later',
       user: { id: 'counter-user', role: 'EMPLOYEE', status: 'ACTIVE' },
