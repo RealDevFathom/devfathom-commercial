@@ -6949,6 +6949,46 @@ describe('DEV-705 keyboard loose sale', () => {
     expect(screen.queryByRole('region', { name: 'Next line' })).not.toBeInTheDocument();
   });
 
+  // DEV-1005: Enter on a controlled result is refused until it is authorised; the refusal
+  // stages the result as Shift+Enter would, so the authorization panel it names is shown.
+  it('stages a controlled result refused on Enter, so its authorization panel is shown', async () => {
+    const row = barcodeRow();
+    const controlledRow = { ...row, restriction: { ...row.restriction, controlled: true } };
+    mocks.queries.counterSearch = query({ rows: [controlledRow], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByTestId('controlled-authorization')).not.toBeInTheDocument();
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('ready'));
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await screen.findByText(/Controlled medicine needs the patient address/);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    expect(screen.getByTestId('controlled-authorization')).toBeInTheDocument();
+    const nextLine = screen.getByRole('region', { name: 'Next line' });
+    expect(nextLine).toHaveTextContent(row.displayName);
+    expect(screen.getByLabelText('Quantity')).toHaveValue('1');
+    expect(
+      screen.getByRole('dialog', { name: 'Patient, prescription and checks' })
+    ).toBeInTheDocument();
+  });
+
+  it('adds an ordinary result on Enter as before: no line form, no authorization, no checks', async () => {
+    mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: 'Panadol' } });
+    await waitFor(() => expect(mocks.searchProps.mock.calls.at(-1)![0].state).toBe('ready'));
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/Controlled medicine needs the patient address/)).toBeNull();
+    expect(screen.queryByTestId('controlled-authorization')).not.toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Next line' })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('dialog', { name: 'Patient, prescription and checks' })
+    ).not.toBeInTheDocument();
+  });
+
   // The line form is still one key away for a quantity or batch chosen before adding.
   it('stages the current first text result with Shift+Enter and moves directly to quantity', async () => {
     mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
