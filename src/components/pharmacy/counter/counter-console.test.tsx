@@ -4484,7 +4484,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     });
 
     // DEV-977 phase 3 review: the typed PIN or code never outlives the sheet.
-    it('clears the typed PIN when the sheet closes, by Escape or Close, and on a new scan', async () => {
+    it('clears the typed PIN however the sheet closes, and on a new scan', async () => {
       const row = controlledPack();
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
       const name = `Authorise ${row.displayName}`;
@@ -4503,11 +4503,76 @@ describe('PharmacyCounterConsole barcode safety', () => {
       fireEvent.click(within(sheet).getByRole('button', { name: 'Close' }));
       await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
       expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
+      // "Find the patient" closes it for the checks sheet: the PIN does not wait there either.
+      mocks.queries.counterPatientPanel = query();
+      act(() => mocks.rxPanelProps.mock.lastCall![0].onClearPatient());
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      sheet = await screen.findByRole('dialog', { name });
+      act(() => mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '5678'));
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Find the patient' }));
+      expect(
+        screen.getByRole('dialog', { name: 'Patient, prescription and checks' })
+      ).toBeInTheDocument();
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
+      fireEvent.click(
+        within(screen.getByRole('dialog', { name: 'Patient, prescription and checks' })).getByRole(
+          'button',
+          { name }
+        )
+      );
+      sheet = await screen.findByRole('dialog', { name });
+      // "Don't add it", offered once this member turns out not to be able to dispense.
+      act(() => mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '8765'));
+      const pharmacists = { ...mocks.queries.controlledPharmacists! };
+      Object.assign(mocks.queries.controlledPharmacists!, {
+        isSuccess: false,
+        isError: true,
+        error: Object.assign(new Error('Forbidden'), { data: { code: 'FORBIDDEN' } }),
+      });
+      act(() =>
+        mocks.controlledProps.mock.lastCall![0].controlled.onChange('prescriberRegNo', 'R-1')
+      );
+      fireEvent.click(within(sheet).getByRole('button', { name: "Don't add it" }));
+      await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
+      Object.assign(mocks.queries.controlledPharmacists!, { error: null }, pharmacists);
+      act(stageControlledMedicine);
+      fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+      await screen.findByRole('dialog', { name });
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
       // A scanned pack opens the sheet afresh with no PIN in it.
+      fireEvent.click(
+        within(screen.getByRole('dialog', { name })).getByRole('button', { name: 'Close' })
+      );
+      await waitFor(() => expect(screen.queryByRole('dialog', { name })).toBeNull());
       scan(payload);
       await screen.findByRole('dialog', { name });
       expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
+
+    // DEV-977 phase 3 delta review: a refusal never outlives the sheet either.
+    it('drops the last refusal when the sheet closes for "Find the patient"', async () => {
+      const row = controlledPack();
+      mocks.mutations.addLine!.mockRejectedValueOnce(
+        refused('FORBIDDEN', 'The pharmacist PIN was not accepted.')
+      );
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const name = `Authorise ${row.displayName}`;
+      scan(payload);
+      let sheet = await screen.findByRole('dialog', { name });
+      fillAuthorization();
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Authorise line' }));
+      expect(await within(sheet).findByRole('alert')).toHaveTextContent(
+        'The pharmacist PIN was not accepted.'
+      );
+      // The patient is taken off, so the sheet offers "Find the patient" again.
+      mocks.queries.counterPatientPanel = query();
+      act(() => mocks.rxPanelProps.mock.lastCall![0].onClearPatient());
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Find the patient' }));
+      const checks = screen.getByRole('dialog', { name: 'Patient, prescription and checks' });
+      fireEvent.click(within(checks).getByRole('button', { name }));
+      sheet = await screen.findByRole('dialog', { name });
+      expect(within(sheet).queryByRole('alert')).toBeNull();
     });
 
     // DEV-977 phase 3 review: without Pharmacy Safety, "only a pharmacist" would be untrue.

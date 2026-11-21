@@ -909,16 +909,18 @@ function ScopedPharmacyCounterConsole({
   // scanned serialised pack of a controlled medicine waiting there. The pack is kept as scanned
   // (its payload, so the server pins its own lot) and nothing is on the bill until it is added.
   const [controlledOpen, setControlledOpen] = useState(false);
+  // DEV-977 phase 3 review: the server's refusal of an "Authorise line", said inside the open
+  // sheet (it is also the counter's notice, which the sheet covers). Never holds the PIN.
+  const [controlledError, setControlledError] = useState<string | null>(null);
   // DEV-977 phase 3 review: the typed pharmacist PIN or code never outlives the sheet. Every way
   // the sheet closes (Close, Escape, the backdrop, "Find the patient", "Don't add it", or an add)
   // clears it; the add itself clears it after every attempt.
   const closeControlled = useCallback(() => {
     setControlledOpen(false);
     setControlledAuth((current) => (current.pin ? { ...current, pin: '' } : current));
+    // Nor does the last refusal: it belonged to the attempt the sheet was open for.
+    setControlledError(null);
   }, []);
-  // DEV-977 phase 3 review: the server's refusal of an "Authorise line", said inside the open
-  // sheet (it is also the counter's notice, which the sheet covers). Never holds the PIN.
-  const [controlledError, setControlledError] = useState<string | null>(null);
   const [pendingPack, setPendingPack] = useState<{
     row: CounterSearchRow;
     pack: { payload: string; serial: string };
