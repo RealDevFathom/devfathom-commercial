@@ -10,6 +10,8 @@ import { ALL_ACTIONS } from './policies';
 export const intendedPharmacyGrants = {
   owner: ['pharmacy:*', 'reports:operational', 'reports:financial', 'pharmacy:safety'],
   'owner-operator': [
+    'finance:read',
+    'finance:manage',
     'reports:operational',
     'reports:financial',
     'pharmacy:orders',
@@ -46,7 +48,7 @@ export const intendedPharmacyGrants = {
   procurement: ['pharmacy:procurement'],
   inventory: ['pharmacy:inventory'],
   // DEV-519: financial reports live behind the operational Reports surface.
-  finance: ['reports:operational', 'reports:financial'],
+  finance: ['reports:operational', 'reports:financial', 'finance:read', 'finance:manage'],
   auditor: ['reports:operational'],
 };
 
@@ -105,7 +107,9 @@ describe('canonical capability contract (#130)', () => {
       // The owner's pharmacy:* never reaches the exact-grant-only actions; only its
       // explicit pharmacy:safety grant (#479 PV filing/review) does.
       expect(owner.capabilities.some((grant) => capabilityMatches(grant, action))).toBe(
-        !EXACT_GRANT_ONLY_ACTIONS.has(action) || action === 'pharmacy:safety'
+        action !== 'finance:read' &&
+          action !== 'finance:manage' &&
+          (!EXACT_GRANT_ONLY_ACTIONS.has(action) || action === 'pharmacy:safety')
       );
     }
   });
@@ -132,7 +136,7 @@ describe('canonical capability contract (#130)', () => {
         'pharmacy:orders',
       ],
     ],
-    ['finance', ['reports:operational', 'reports:financial']],
+    ['finance', ['reports:operational', 'reports:financial', 'finance:read', 'finance:manage']],
     ['auditor', ['reports:operational']],
   ])('limits %s to its intended checked actions', (key, actions) => {
     const role = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;

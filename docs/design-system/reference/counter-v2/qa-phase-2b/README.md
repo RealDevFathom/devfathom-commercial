@@ -22,8 +22,10 @@ Each image holds one panel at five widths (1440, 1366, 1024, 768, 375), in light
 | `*-no-permission.png` | C6 | Returns, as a cashier with no refund access (1440 and 375) |
 | `*-offline.png` | B2, C7 | Offline banner. Offline selling is off, so the counter is a price check. |
 
-The E2E seed has no controlled medicine, so `*-checks.png` shows the sheet without the controlled
-steps. The arrangement of those steps is covered by unit tests in `counter-rx-panel.test.tsx`.
+When this set was taken the E2E seed had no controlled medicine, so `*-checks.png` shows the sheet
+without the controlled steps. DEV-1005 has since added a controlled capsule to the seed; the steps
+on the real panel are in `after-controlled-step-*.png` below. Phase 3 moved them into their own
+"Authorise" sheet (see `../qa-phase-3/README.md`).
 
 ## Keyboard only (1440, light, reduced motion)
 

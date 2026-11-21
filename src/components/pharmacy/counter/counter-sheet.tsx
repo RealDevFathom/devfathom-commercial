@@ -224,14 +224,20 @@ export function CounterNoPermission({
   children,
   who,
   role,
+  onDismiss,
 }: {
   heading: ReactNode;
   children: ReactNode;
   who: ReactNode;
   /** The member's own role, when the screen knows it. */
   role?: ReactNode;
+  /**
+   * DEV-977 phase 3 (Counter v2 C6): closes the panel the card sits in. Drawn as the design's
+   * full-width "Got it" below the card, so the card itself still holds no button.
+   */
+  onDismiss?: () => void;
 }) {
-  return (
+  const card = (
     <CounterStateCard tone="warning" heading={heading} data-counter-no-permission="">
       {children}
       <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-start text-[13px]">
@@ -245,5 +251,14 @@ export function CounterNoPermission({
         ) : null}
       </dl>
     </CounterStateCard>
+  );
+  if (!onDismiss) return card;
+  return (
+    <>
+      {card}
+      <Button type="button" className="min-h-11 w-full" onClick={onDismiss}>
+        Got it
+      </Button>
+    </>
   );
 }

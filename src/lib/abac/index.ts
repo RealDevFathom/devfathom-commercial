@@ -11,6 +11,7 @@
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
 import { decideFromRules } from './capabilities';
+import { isPharmacyFinanceAction, PHARMACY_FINANCE_MANAGE } from './pharmacy-finance-actions';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, RESOURCE_CONSTRAINTS, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -24,19 +25,29 @@ export type CanOptions = {
   source?: Environment['source'];
   ip?: string | null;
   db?: AuthzDb;
+  /** Only an active system Owner may rely on the coarse role policy when no grant matches. */
+  ownerOnlyFallback?: boolean;
 };
 
 async function customDecision(
   db: AuthzDb,
-  userId: string,
+  subject: Subject,
   action: string,
   now: Date
-): Promise<{ decision: boolean | null; hasOrganizationRole: boolean }> {
+): Promise<{ decision: boolean | null; hasOrganizationRole: boolean; isSystemOwner: boolean }> {
+  const checkSystemFinanceGrant = isPharmacyFinanceAction(action) && subject.role !== 'ADMIN';
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: { id: subject.id },
     select: {
+      role: true,
+      status: true,
+      organization: checkSystemFinanceGrant && { select: { vertical: true } },
       organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
+        select: {
+          key: true,
+          isSystem: true,
+          permissions: { select: { capability: true, effect: true } },
+        },
       },
       permissionOverrides: {
         where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
@@ -44,15 +55,29 @@ async function customDecision(
       },
     },
   });
-  if (!user) return { decision: false, hasOrganizationRole: false };
+  if (!user) return { decision: false, hasOrganizationRole: false, isSystemOwner: false };
   // Prescription capture is narrower than dispensing. Existing pharmacist
   // grants remain authoritative for it, including DENYs, without granting
   // tenant administrators the wider dispensing capability (`decideFromRules`).
-  const decision = decideFromRules(
-    [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])],
-    action
-  );
-  return { decision, hasOrganizationRole: user.organizationRole !== null };
+  const roleRules = user.organizationRole?.permissions ?? [];
+  // Pharmacy's built-in finance grants are paired with tenant ADMIN. A personal grant
+  // is evaluated independently, and every role or personal DENY still participates.
+  const effectiveRoleRules =
+    checkSystemFinanceGrant &&
+    user.organizationRole?.isSystem &&
+    user.organization?.vertical === 'PHARMACY'
+      ? roleRules.filter((rule) => rule.capability !== action || rule.effect !== 'ALLOW')
+      : roleRules;
+  const decision = decideFromRules([...user.permissionOverrides, ...effectiveRoleRules], action);
+  return {
+    decision,
+    hasOrganizationRole: user.organizationRole !== null,
+    isSystemOwner:
+      user.status === 'ACTIVE' &&
+      user.role === 'ADMIN' &&
+      user.organizationRole?.isSystem === true &&
+      user.organizationRole.key === 'owner',
+  };
 }
 
 /**
@@ -90,8 +115,15 @@ export async function can(
     return false;
   }
   try {
-    const { decision, hasOrganizationRole } = await customDecision(db, subject.id, action, env.now);
+    const { decision, hasOrganizationRole, isSystemOwner } = await customDecision(
+      db,
+      subject,
+      action,
+      env.now
+    );
     if (decision !== null) return decision;
+    if (action === PHARMACY_FINANCE_MANAGE) return isSystemOwner && subject.role === 'ADMIN';
+    if (opts.ownerOnlyFallback && !isSystemOwner) return false;
     // Procurement's tenant-admin fallback exists only for legacy users who do
     // not yet have an organization role. Once a role is assigned, its
     // capabilities are the boundary: an omitted procurement grant must not
