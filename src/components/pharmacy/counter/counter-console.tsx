@@ -2110,6 +2110,14 @@ function ScopedPharmacyCounterConsole({
             message:
               'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
           });
+          // DEV-1005: a one-step add (Enter, or a plain barcode) is staged as Shift+Enter stages
+          // it, so the authorization panel this notice points to is shown and the line is added
+          // once it is complete. A serialized pack scan is left as it was: staging would drop
+          // the scanned pack's own lot.
+          if (scannedRow && !scannedPack) {
+            stageRow(scannedRow, false);
+            setSaleUnit(option.kind);
+          }
           openChecks();
           return;
         }
@@ -2407,6 +2415,7 @@ function ScopedPharmacyCounterConsole({
       selectedOption,
       setActiveSale,
       setupNotice,
+      stageRow,
       utils,
     ]
   );
@@ -4049,7 +4058,14 @@ function ScopedPharmacyCounterConsole({
           </option>
         ))}
       </select>
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto [scrollbar-width:none]">
+      {/* DEV-1005: at narrow widths this strip scrolls sideways, so it takes the keyboard focus
+          (arrow keys then scroll it) and shows the Studio focus ring. */}
+      <div
+        role="group"
+        aria-label="Counter status"
+        tabIndex={0}
+        className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto rounded-full [scrollbar-width:none] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
         <div className="flex shrink-0 items-center gap-2" aria-label="Bill status">
           <StatusPill
             status={saleId ? 'open' : 'idle'}

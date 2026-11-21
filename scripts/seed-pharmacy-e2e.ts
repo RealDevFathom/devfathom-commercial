@@ -292,6 +292,41 @@ async function seedAdminPin() {
   });
 }
 
+/**
+ * DEV-1005: the seeded pharmacist's own staff PIN, so the counter lane can show a controlled
+ * line countersigned by a second pharmacist. Disposable lane only.
+ */
+async function seedPharmacistPin() {
+  await asTenant(async (tx) => {
+    await tx.restaurantStaffProfile.upsert({
+      where: { id: PHARMACY_E2E.pharmacistStaffProfileId },
+      update: { status: 'ACTIVE', updatedAt: FIXED_AT },
+      create: {
+        id: PHARMACY_E2E.pharmacistStaffProfileId,
+        organizationId: PHARMACY_E2E.organizationId,
+        userId: PHARMACY_E2E.pharmacistId,
+        displayName: PHARMACY_E2E.pharmacistName,
+        status: 'ACTIVE',
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    await tx.restaurantOperatorCredential.upsert({
+      where: { id: PHARMACY_E2E.pharmacistPinCredentialId },
+      update: { failedAttempts: 0, lockedUntil: null, revokedAt: null },
+      create: {
+        id: PHARMACY_E2E.pharmacistPinCredentialId,
+        organizationId: PHARMACY_E2E.organizationId,
+        staffProfileId: PHARMACY_E2E.pharmacistStaffProfileId,
+        type: 'PIN',
+        credentialHash: hashSync(PHARMACY_E2E.pharmacistPin, 10),
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+}
+
 async function seedBranch() {
   await asTenant(async (tx) => {
     const branch = {
@@ -659,6 +694,8 @@ type MedicineSeed = {
   presentation: string;
   dosageForm: string;
   rx: boolean;
+  /** DEV-1005: the counter lane's controlled capsule. */
+  controlled?: boolean;
   packLevels: Array<{ id: string; level: 'BOX' | 'STRIP' | 'UNIT'; unitsPerParent: number }>;
   barcode?: string;
   alias?: string;
@@ -669,8 +706,34 @@ type MedicineSeed = {
   onHandUnits: number;
 };
 
+/**
+ * DEV-1005: the controlled capsule is disposable-lane data only; the staging demo seed (which
+ * shares this script) never gets a controlled medicine.
+ */
+const SEED_CONTROLLED = process.env.STAGING_DEMO_SEED !== '1';
+
 function medicineSeeds(): MedicineSeed[] {
-  const { otc, syrup, rx } = PHARMACY_E2E.medicines;
+  const { otc, syrup, rx, controlled } = PHARMACY_E2E.medicines;
+  const controlledSeed: MedicineSeed = {
+    id: controlled.id,
+    name: controlled.name,
+    strength: controlled.strength,
+    presentationId: controlled.presentationId,
+    presentation: controlled.presentation,
+    dosageForm: 'Capsule',
+    rx: true,
+    controlled: true,
+    packLevels: [
+      { id: controlled.packLevelIds.box, level: 'BOX', unitsPerParent: 1 },
+      { id: controlled.packLevelIds.strip, level: 'STRIP', unitsPerParent: 2 },
+      { id: controlled.packLevelIds.unit, level: 'UNIT', unitsPerParent: 10 },
+    ],
+    batchId: controlled.batchId,
+    batchNumber: controlled.batchNumber,
+    unitsPerPack: controlled.unitsPerPack,
+    printedMrpMinor: controlled.printedMrpMinor,
+    onHandUnits: controlled.onHandUnits,
+  };
   return [
     {
       id: otc.id,
@@ -732,6 +795,7 @@ function medicineSeeds(): MedicineSeed[] {
       printedMrpMinor: rx.printedMrpMinor,
       onHandUnits: rx.onHandUnits,
     },
+    ...(SEED_CONTROLLED ? [controlledSeed] : []),
   ];
 }
 
@@ -761,7 +825,7 @@ async function seedMedicines() {
         rx: seed.rx,
         otc: !seed.rx,
         restricted: false,
-        controlled: false,
+        controlled: seed.controlled ?? false,
         highAlert: false,
         lasa: false,
         coldChain: false,
@@ -1124,6 +1188,7 @@ async function main() {
     await seedCashier(passwordHash);
     // DEV-497: the browser lane signs in as cashier, pharmacist and owner.
     await seedStagingDemoPharmacist(passwordHash);
+    if (!stagingDemo) await seedPharmacistPin();
     // DEV-751: the procedures lane signs in as a separate manager and pharmacist.
     if (!stagingDemo) await seedSopTeam(passwordHash);
     await seedMedicines();

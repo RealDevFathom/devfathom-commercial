@@ -51,6 +51,8 @@ export function CounterTopBar({ statusLine }: { statusLine?: ReactNode }) {
               brand={chrome.brand}
               subtitle="Pharmacy workspace"
               textClassName="hidden leading-tight md:block"
+              // DEV-1005: the counter is a touch screen; its controls are at least 44px.
+              className="min-h-11"
             />
           </div>
         </>
@@ -96,7 +98,7 @@ function CounterWorkspaceTools() {
         <WorkspaceSearch compact />
         <AskFathomButton />
         <ThemeToggleButton />
-        <NotificationBell />
+        <NotificationBell touchTarget />
         <AccountMenu />
       </div>
     </>
