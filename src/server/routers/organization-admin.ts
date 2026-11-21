@@ -635,7 +635,7 @@ export const organizationAdminRouter = router({
         const existing = roleId
           ? await tx.organizationRole.findFirst({
               where: { id: roleId, organizationId: id },
-              include: { permissions: true },
+              ...(isPharmacyContext(ctx) && { include: { permissions: true } }),
             })
           : null;
         if (roleId && !existing) {
