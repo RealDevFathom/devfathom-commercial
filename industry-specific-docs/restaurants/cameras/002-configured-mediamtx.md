@@ -19,8 +19,10 @@ The server-side static binding is the allowlist. Database gateway URLs and camer
 `sourceRef` values cannot cause arbitrary outbound requests. TLS verification stays on;
 the socket uses the binding's private IPv4 address without resolving DNS. Only RFC1918
 addresses are accepted. Each response has a ten-second deadline, a 256 KiB manifest or
-16 MiB media limit, no redirects or compression, and at most sixteen concurrent reads
-per server transport instance. This is not a distributed per-user rate limiter.
+16 MiB media limit, no compression, and at most sixteen concurrent reads per server
+transport instance. The only redirect followed is MediaMTX's own same-path
+`?cookieCheck=1` session step (DEV-1003, below). This is not a distributed per-user rate
+limiter.
 
 All supported HLS playlist references, including master variants and fMP4 initialization
 maps, return through the same authorized app endpoint. URLs, query strings, escaped paths,
@@ -98,6 +100,37 @@ registers through the existing administrative contract and directs the operator 
 registered camera card's manual connection diagnostic. The unused RTSP port input is removed;
 the gateway owner configures that port. Stored credentials do not provision the DVR. Recording,
 retention usage, PTZ, audio and export are not implemented by this live transport.
+
+## Supported relay versions, sessions and H.265 (DEV-1003)
+
+Restaurant and pharmacy cameras share one relay client (`src/lib/cameras/mediamtx.ts`), so the
+same rules apply to both. The full description, the version table and the reference relay
+configuration live in
+`industry-specific-docs/pharmacy/cameras/001-configured-gateway-live-view.md`, section
+"Supported relay versions and reference configuration". In short:
+
+- **Supported: MediaMTX v1.17.1 to v1.21.4.** Tested on 20 Nov 2026 against the official
+  v1.17.1, v1.18.0 and v1.21.4 Linux release binaries with a synthetic H.264 and H.265 source.
+  Newer releases are not yet checked.
+- MediaMTX v1.18.0 and later answer the first playlist request with a `302` to the same path plus
+  `?cookieCheck=1`, check the reader login there and then require the session secret on every
+  later request (sessions close after 30 s idle). The app follows only that exact step, keeps the
+  secret and the reader login on the server, and opens a new session once when the relay ends one.
+  It never follows a redirect to another host, address, scheme, port or path, and never uses
+  `hlsCDNSecret`, which turns the relay's login check off.
+- **Check configured connection** reads the master and the first media playlist. A relay outside
+  the supported range, or one that redirects anywhere else, reports `relay-unsupported`: "The
+  camera relay answered in a way this app does not support. Supported: MediaMTX v1.17.1 to
+  v1.21.4 with the reference configuration in the camera setup document." The other outcomes keep
+  their meaning.
+- The reference configuration sets `moq: false` (MediaMTX v1.19.0 and later open a MoQ server on
+  extra ports by default; delete that line on v1.17.1 or v1.18.0) and `hlsVariant: fmp4`, which
+  carries H.264 and H.265. With `mpegts`, MediaMTX refuses H.265 sources.
+- **H.265 cameras.** Nothing is transcoded and nothing on the recorder is changed. The check reads
+  the codec from the playlist and, for H.265, adds: "This camera sends H.265 (HEVC) video, which
+  the app does not convert. Safari on Mac, iPhone and iPad plays it. Chrome and Edge play it only
+  on computers with H.265 hardware decoding. Other browsers may show no picture." Live view shows a
+  plain H.265 message instead of a black picture when the browser cannot decode it.
 
 ## Compatibility and acceptance gates
 

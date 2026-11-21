@@ -345,6 +345,7 @@ describe('revocation, expiry and failure containment', () => {
     'auth-failed',
     'gateway-unreachable',
     'unsupported-stream',
+    'relay-unsupported',
   ] as const)('returns only the fixed %s code on transport failure', async (code) => {
     mocks.read.mockRejectedValue(new CameraTransportError(code));
     const res = await call();
