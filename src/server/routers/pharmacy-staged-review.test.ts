@@ -124,6 +124,22 @@ describe('staged review authorization and reads', () => {
     expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
   });
+  it('requires catalogue edit for both upload steps even for an administrator', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: null,
+      permissionOverrides: [{ capability: 'pharmacy:catalogue-edit', effect: 'DENY' }],
+    });
+    const upload = {
+      branchId: scope.branchId,
+      fileName: 'products.csv',
+      content: Buffer.from('Name\nTest Tablet').toString('base64'),
+    };
+    await expect(caller().stagingUpload(upload)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().stageBatch({ ...upload, mapping: { product: 0 } })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+  });
   it('rejects branch substitution before reading source or batch', async () => {
     db.pharmacyBranch.findFirst.mockResolvedValue(null);
     await expect(caller().stagedRows(scope)).rejects.toMatchObject({ code: 'FORBIDDEN' });

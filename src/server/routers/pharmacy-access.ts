@@ -28,6 +28,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
   'pharmacy:prescriptions',
   'pharmacy:dispense',
+  'pharmacy:catalogue-review',
   'reports:operational',
   'pharmacy:counter',
   'pharmacy:close',

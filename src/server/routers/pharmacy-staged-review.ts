@@ -1,3 +1,4 @@
+import { CATALOGUE_EDIT_ACTIONS } from '@/lib/pharmacy/catalogue-editor';
 import { annotateAudit } from '../audit';
 import {
   stagingInput,
@@ -17,7 +18,7 @@ import {
 import { applyLegacyControlledClass } from '@/lib/pharmacy/migration/legacy-controlled';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { adminProcedure, contextualCapabilityProcedure, router, type TRPCContext } from '../trpc';
 import {
   assertReviewBranch,
   listStagedMedicines,
@@ -84,10 +85,12 @@ async function readUpload(input: {
   }
 }
 
+const catalogueEditor = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
+
 /** Server-page/action caller only. Nesting preserves the existing pharmacy-core entitlement path. */
 export const pharmacyStagedReviewRouter = router({
   pharmacyMedicine: router({
-    stagingUpload: adminProcedure.input(stagingUploadInput).mutation(async ({ ctx, input }) => {
+    stagingUpload: catalogueEditor.input(stagingUploadInput).mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       await assertReviewBranch(ctx.db, organizationId(ctx), input.branchId);
       const { table } = await readUpload(input);
@@ -99,7 +102,7 @@ export const pharmacyStagedReviewRouter = router({
       );
       return { headers: [...table.headers], rowCount: table.rows.length, mapping };
     }),
-    stageBatch: adminProcedure.input(stagingInput).mutation(async ({ ctx, input }) => {
+    stageBatch: catalogueEditor.input(stagingInput).mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       const org = organizationId(ctx);
       await assertReviewBranch(ctx.db, org, input.branchId);

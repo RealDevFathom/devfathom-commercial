@@ -227,6 +227,11 @@ const soloTemplate = [
           // The editor names a branch, but holds no stock control there: no reorder branch.
           const request = await editor.createStagedMedicines({ batchId, branchId: id('branch_a') });
           assert.equal((request as { status: string }).status, 'PENDING');
+          // A pending request does not grant the cashier access to its proposed medicines.
+          await refusal(
+            cashier.proposedImport({ editId: (request as { id: string }).id }),
+            'FORBIDDEN'
+          );
           assert.equal(
             (request as unknown as { changes: { json: { reorderBranchId: string | null } } })
               .changes.json.reorderBranchId,

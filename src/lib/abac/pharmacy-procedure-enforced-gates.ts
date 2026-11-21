@@ -212,6 +212,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyMedicine.ingestPriceNotices': ['pharmacy:safety'],
   'pharmacyMedicine.priceNotices': ['pharmacy:safety'],
   'pharmacyMedicine.priceOverrides': ['admin:access'],
+  'pharmacyMedicine.proposedImport': ['pharmacy:catalogue-review'],
   'pharmacyMedicine.proposeCatalogueEdit': ['contextual'],
   'pharmacyMedicine.publishAssertions': ['signed-in'],
   'pharmacyMedicine.recordPrintedMrp': ['contextual'],

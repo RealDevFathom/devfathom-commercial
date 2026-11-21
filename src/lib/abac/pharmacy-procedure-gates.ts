@@ -1018,6 +1018,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure -> admin:access',
     none: 'workspace administrators only (admin:access)',
   },
+  'pharmacyMedicine.proposedImport': {
+    gate: "capabilityProcedure('pharmacy:catalogue-review'); pending import in the caller's workspace, an admitted active branch, and the proposed file checksum",
+    lines: ['review-catalogue/approve-reject-others-catalogue'],
+  },
   'pharmacyMedicine.proposeCatalogueEdit': {
     gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
     lines: ['suggest-catalogue-edits/only-workspace-administrator-add'],

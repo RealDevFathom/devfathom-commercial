@@ -2,6 +2,7 @@
 
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 
+import { ApprovedImportCreation, ProposedImport } from './proposed-import';
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -112,7 +113,9 @@ export function askReviewers(names: readonly string[]): string {
   return `Ask ${list} to approve this.`;
 }
 
-export function CatalogueApprovalQueue() {
+export function CatalogueApprovalQueue({ reviewerView = false }: { reviewerView?: boolean } = {}) {
+  const [reviewId, setReviewId] = useState<string | null>(null);
+  const [approvedBatch, setApprovedBatch] = useState<{ id: string; fileName: string } | null>(null);
   const [pin, setPin] = useState('');
   const [query, setQuery] = useState('');
   const [medicineId, setMedicineId] = useState('');
@@ -157,6 +160,16 @@ export function CatalogueApprovalQueue() {
     onSuccess: async (result) => {
       setPin('');
       setDecisionNotice(decisionMessage(result));
+      if (result?.status === 'APPROVED' && reviewerView) {
+        const edit = queue.data?.find(
+          (item) => item.id === result.id && item.operation === 'createStagedMedicines'
+        );
+        const request = (
+          edit?.changes as { json?: { batchId?: string; fileName?: string } } | undefined
+        )?.json;
+        if (request?.batchId && request.fileName)
+          setApprovedBatch({ id: request.batchId, fileName: request.fileName });
+      }
       await utils.pharmacyMedicine.catalogueEdits.invalidate();
     },
     onError: () => {
@@ -297,6 +310,13 @@ export function CatalogueApprovalQueue() {
       {!queue.isPending && !queue.error && queue.data?.length === 0 ? (
         <p className="text-sm text-text-muted">No catalogue edits are awaiting review.</p>
       ) : null}
+      {approvedBatch && (
+        <ApprovedImportCreation
+          key={approvedBatch.id}
+          batchId={approvedBatch.id}
+          fileName={approvedBatch.fileName}
+        />
+      )}
       <div className="space-y-4">
         {queue.data?.map((edit) => {
           const mode = approvalMode(edit.ownEdit);
@@ -343,6 +363,22 @@ export function CatalogueApprovalQueue() {
                     </div>
                   ))}
               </dl>
+              {edit.operation === 'createStagedMedicines' && canDecide && !ownerPinApproval && (
+                <div className="mb-4 space-y-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="touch"
+                    aria-expanded={reviewId === edit.id}
+                    onClick={() => setReviewId(reviewId === edit.id ? null : edit.id)}
+                  >
+                    {reviewId === edit.id
+                      ? 'Close proposed medicines'
+                      : 'Review proposed medicines'}
+                  </Button>
+                  {reviewId === edit.id && <ProposedImport editId={edit.id} />}
+                </div>
+              )}
               {canDecide && mode === 'OTHER_REVIEWER' ? (
                 <p role="note" className="mb-4 text-sm">
                   You submitted this edit, so another reviewer must approve it.{' '}

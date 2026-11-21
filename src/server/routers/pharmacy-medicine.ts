@@ -71,6 +71,7 @@ import {
 } from '@/lib/pharmacy/migration/legacy-controlled';
 import {
   createStagedMedicinesChunk,
+  planStagedMedicine,
   failureDetail,
   isPassingFailure,
   STAGED_CREATION_BUSY,
@@ -79,6 +80,7 @@ import {
   StagedCreationSystemicRefusal,
   stagedCreationProgress,
 } from '@/lib/pharmacy/migration/staged-creation';
+import { CATALOGUE_EDIT_ACTIONS } from '@/lib/pharmacy/catalogue-editor';
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
 import { admittedInventoryBranchIds } from './pharmacy-inventory';
 import { annotateAudit } from '../audit';
@@ -376,9 +378,6 @@ const catalogueProposer = Symbol('catalogueProposer');
 const replayAuthority = (ctx: TRPCContext) =>
   (ctx as TRPCContext & { [catalogueReplay]?: readonly Action[] })[catalogueReplay];
 const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ctx));
-// DEV-19: submitting any catalogue edit needs the catalogue-edit capability (deny
-// by default) on top of tenant administration; an explicit DENY refuses an admin.
-const CATALOGUE_EDIT_ACTIONS = ['admin:access', 'pharmacy:catalogue-edit'] as const;
 const REVIEWER_AUTHORITY = ['pharmacy:catalogue-review'] as const;
 // An owner approving without the review grant (no other reviewer) is held to the editor's own
 // capabilities; their fresh PIN was verified before the replay.
@@ -582,7 +581,8 @@ export const pharmacyMedicineRouter = router({
     if (!access.reviewer && !access.editor)
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'You do not have permission for this action.',
+        message:
+          'Your role cannot open the catalogue queue. Ask a catalogue editor to submit the change or a catalogue reviewer to decide it.',
       });
     // DEV-976: the screen asks for the approver's own PIN only on edits they submitted.
     return (await listPendingCatalogueEdits(ctx.db)).map((edit) => ({
@@ -603,7 +603,8 @@ export const pharmacyMedicineRouter = router({
     if (user.organizationId !== organizationId || (!access.reviewer && !access.ownerFallback))
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'Approving catalogue edits needs the catalogue review permission.',
+        message:
+          'Ask a catalogue reviewer to decide this edit. When nobody else holds catalogue review permission, a pharmacy owner can approve it with their own approval code or PIN.',
       });
     const scope = { organizationId, actorId: user.id, actorOrganizationId: user.organizationId };
     // The check decideCatalogueEdit makes when the approver submitted the edit.
@@ -685,7 +686,8 @@ export const pharmacyMedicineRouter = router({
       if (!access.reviewer && !access.ownerFallback)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'Approving catalogue edits needs the catalogue review permission.',
+          message:
+            'Ask a catalogue reviewer to decide this edit. When nobody else holds catalogue review permission, a pharmacy owner can approve it with their own approval code or PIN.',
         });
       const authority = access.reviewer ? REVIEWER_AUTHORITY : SOLO_OWNER_AUTHORITY;
       return decideCatalogueEdit(
@@ -1455,6 +1457,96 @@ export const pharmacyMedicineRouter = router({
         });
       })
     ),
+
+  /** Only the named file in a pending proposal is visible through the review queue. */
+  proposedImport: capabilityProcedure('pharmacy:catalogue-review')
+    .input(
+      z.object({ editId: boundedId, page: z.number().int().min(1).max(10000).default(1) }).strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      if (
+        organizationId !== ctx.session.user.organizationId ||
+        (ctx.organization && ctx.organization.id !== organizationId)
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Sign in to the pharmacy that submitted this import to review it.',
+        });
+      const proposal = await ctx.db.pharmacyCatalogueEdit.findFirst({
+        where: {
+          organizationId,
+          id: input.editId,
+          status: 'PENDING',
+          operation: STAGED_CREATION_OPERATION,
+        },
+        select: { changes: true },
+      });
+      const request = z
+        .object({
+          json: z.object({
+            batchId: boundedId,
+            sourceSha256: z.string().min(1),
+            reorderBranchId: boundedId.nullish(),
+          }),
+        })
+        .safeParse(proposal?.changes);
+      const unavailable =
+        'This import is no longer awaiting review here. Ask the catalogue editor to check the request.';
+      if (!request.success) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
+      const { batchId, sourceSha256, reorderBranchId } = request.data.json;
+      const branches = await admittedInventoryBranchIds(ctx);
+      if (!branches.size || (reorderBranchId && !branches.has(reorderBranchId)))
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message:
+            'This import needs a catalogue reviewer assigned to an active branch covered by the request. Ask the pharmacy owner to check the branch assignment.',
+        });
+      const batch = await ctx.db.pharmacyMigrationBatch.findFirst({
+        where: {
+          organizationId,
+          id: batchId,
+          source: { organizationId, contentHash: sourceSha256 },
+        },
+        select: { id: true },
+      });
+      if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
+      const pageSize = 25;
+      const rows = await ctx.db.pharmacyMigrationRow.findMany({
+        where: { organizationId, batchId: batch.id, targetModelKey: 'med.product' },
+        orderBy: [{ rowNumber: 'asc' }, { id: 'asc' }],
+        skip: (input.page - 1) * pageSize,
+        take: pageSize + 1,
+        select: {
+          id: true,
+          sourceKey: true,
+          rowNumber: true,
+          productName: true,
+          packLabel: true,
+          packFactor: true,
+          mrpMinor: true,
+          barcode: true,
+          rawPayload: true,
+        },
+      });
+      return {
+        hasMore: rows.length > pageSize,
+        rows: rows.slice(0, pageSize).map((row) => {
+          // Match the creation preview without returning arbitrary source cells or commercial terms.
+          const plan = planStagedMedicine({ ...row, costMinor: null });
+          return {
+            rowNumber: row.rowNumber,
+            productName: plan?.productName ?? null,
+            unitsPerPack: plan?.unitsPerPack ?? null,
+            presentation: plan?.presentation ?? null,
+            mrpMinor: plan?.mrpMinor ?? null,
+            controlled: plan?.narcoticsClass ?? false,
+            genericName: plan?.genericName ?? null,
+            barcode: plan?.barcode ?? null,
+          };
+        }),
+      };
+    }),
 
   /** DEV-912: where a staged file's bulk creation stands, for an editor or a reviewer. */
   stagedMedicineCreation: auditedProtectedProcedure

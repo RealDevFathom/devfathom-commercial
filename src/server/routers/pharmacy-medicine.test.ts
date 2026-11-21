@@ -60,6 +60,9 @@ function makeDb() {
         ...data,
       })),
     },
+    pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]) },
+    pharmacyMigrationBatch: model(),
+    pharmacyMigrationRow: { findMany: vi.fn().mockResolvedValue([]) },
     medicineProvenance: {
       ...model(),
       findMany: vi.fn(),
@@ -79,7 +82,12 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'user_a') {
+function caller(
+  enabledModules = ['pharmacy-core'],
+  role = 'ADMIN',
+  actorId = 'user_a',
+  organizationId?: string
+) {
   return pharmacyMedicineRouter.createCaller({
     db,
     entitlements: {
@@ -92,7 +100,7 @@ function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'u
     },
     session: {
       expires: 'later',
-      user: { id: actorId, role, status: 'ACTIVE' },
+      user: { id: actorId, role, status: 'ACTIVE', organizationId },
     },
     organization: null,
     support: null,
@@ -115,6 +123,90 @@ beforeEach(() => {
   db = makeDb();
   mocks.verifyPin.mockReset().mockResolvedValue('OK');
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+describe('staged import proposal read', () => {
+  const read = () =>
+    caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a').proposedImport({ editId: 'edit' });
+  beforeEach(() => {
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue({
+      changes: { json: { batchId: 'batch_a', sourceSha256: 'hash', reorderBranchId: 'branch_a' } },
+    });
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValue({
+      id: 'batch_a',
+      source: { fileName: 'proposal.csv' },
+    });
+    db.pharmacyMigrationRow.findMany.mockResolvedValue([
+      {
+        rowNumber: 1,
+        productName: 'Tablet',
+        packLabel: '10',
+        packFactor: BigInt(10),
+        mrpMinor: BigInt(3000),
+        costMinor: BigInt(2100),
+        rawPayload: { secret: 'hidden', Supplier: 'private' },
+      },
+    ]);
+  });
+  it('reads only proposed product fields from the pending request in the assigned branch', async () => {
+    grantCatalogueReview('user_a');
+    const result = await read();
+    expect(result.rows[0]).toMatchObject({
+      rowNumber: 1,
+      productName: 'Tablet',
+      unitsPerPack: 10,
+      mrpMinor: 3000,
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /hash|private|secret|costMinor|purchasePrice|supplier|sourceKey/i
+    );
+    expect(db.pharmacyCatalogueEdit.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          id: 'edit',
+          status: 'PENDING',
+          operation: 'createStagedMedicines',
+        },
+      })
+    );
+    expect(db.pharmacyMigrationBatch.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          id: 'batch_a',
+          source: { organizationId: 'org_a', contentHash: 'hash' },
+        },
+      })
+    );
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', batchId: 'batch_a', targetModelKey: 'med.product' },
+        orderBy: [{ rowNumber: 'asc' }, { id: 'asc' }],
+        skip: 0,
+        take: 26,
+      })
+    );
+  });
+  it('refuses a non-reviewer before it looks up any request', async () => {
+    await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyCatalogueEdit.findFirst).not.toHaveBeenCalled();
+  });
+  it('refuses an unassigned branch before reading batch data', async () => {
+    grantCatalogueReview('user_a');
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+    await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses a missing proposal or mismatched file before reading rows', async () => {
+    grantCatalogueReview('user_a');
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValueOnce(null);
+    await expect(read()).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValueOnce(null);
+    await expect(read()).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
 });
 
 const catalogueEdits = [
