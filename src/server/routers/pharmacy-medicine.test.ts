@@ -188,6 +188,30 @@ describe('staged import proposal read', () => {
       })
     );
   });
+  it('reopens only a request approved by this reviewer, without loading staged rows', async () => {
+    grantCatalogueReview('user_a');
+    const result = await caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a').proposedImport({
+      editId: 'edit',
+      approvedByMe: true,
+    });
+    expect(db.pharmacyCatalogueEdit.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          id: 'edit',
+          status: 'APPROVED',
+          reviewerId: 'user_a',
+          operation: 'createStagedMedicines',
+        },
+      })
+    );
+    expect(result).toEqual({
+      approved: { batchId: 'batch_a', fileName: 'proposal.csv' },
+      rows: [],
+      hasMore: false,
+    });
+    expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
   it('refuses a non-reviewer before it looks up any request', async () => {
     await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(db.pharmacyCatalogueEdit.findFirst).not.toHaveBeenCalled();

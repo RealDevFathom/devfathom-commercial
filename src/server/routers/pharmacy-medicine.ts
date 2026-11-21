@@ -1458,10 +1458,16 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  /** Only the named file in a pending proposal is visible through the review queue. */
+  /** The proposal exposes staged rows only while pending. Its signer can resume an approved file. */
   proposedImport: capabilityProcedure('pharmacy:catalogue-review')
     .input(
-      z.object({ editId: boundedId, page: z.number().int().min(1).max(10000).default(1) }).strict()
+      z
+        .object({
+          editId: boundedId,
+          page: z.number().int().min(1).max(10000).default(1),
+          approvedByMe: z.literal(true).optional(),
+        })
+        .strict()
     )
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
@@ -1477,7 +1483,9 @@ export const pharmacyMedicineRouter = router({
         where: {
           organizationId,
           id: input.editId,
-          status: 'PENDING',
+          ...(input.approvedByMe
+            ? { status: 'APPROVED', reviewerId: ctx.session.user.id }
+            : { status: 'PENDING' }),
           operation: STAGED_CREATION_OPERATION,
         },
         select: { changes: true },
@@ -1491,8 +1499,9 @@ export const pharmacyMedicineRouter = router({
           }),
         })
         .safeParse(proposal?.changes);
-      const unavailable =
-        'This import is no longer awaiting review here. Ask the catalogue editor to check the request.';
+      const unavailable = input.approvedByMe
+        ? 'This file needs an approved request signed by you. Ask its catalogue editor to check the approval.'
+        : 'This import is no longer awaiting review here. Ask the catalogue editor to check the request.';
       if (!request.success) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
       const { batchId, sourceSha256, reorderBranchId } = request.data.json;
       const branches = await admittedInventoryBranchIds(ctx);
@@ -1508,9 +1517,15 @@ export const pharmacyMedicineRouter = router({
           id: batchId,
           source: { organizationId, contentHash: sourceSha256 },
         },
-        select: { id: true },
+        select: { id: true, source: { select: { fileName: true } } },
       });
       if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
+      if (input.approvedByMe)
+        return {
+          approved: { batchId: batch.id, fileName: batch.source.fileName },
+          rows: [],
+          hasMore: false,
+        };
       const pageSize = 25;
       const rows = await ctx.db.pharmacyMigrationRow.findMany({
         where: { organizationId, batchId: batch.id, targetModelKey: 'med.product' },
@@ -1530,6 +1545,7 @@ export const pharmacyMedicineRouter = router({
         },
       });
       return {
+        approved: null,
         hasMore: rows.length > pageSize,
         rows: rows.slice(0, pageSize).map((row) => {
           // Match the creation preview without returning arbitrary source cells or commercial terms.

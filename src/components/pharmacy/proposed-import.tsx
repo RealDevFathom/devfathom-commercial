@@ -1,5 +1,6 @@
 'use client';
 
+import { useSearchParams } from 'next/navigation';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -79,13 +80,28 @@ export function ProposedImport({ editId }: { editId: string }) {
   );
 }
 
-export function ApprovedImportCreation({
-  batchId,
-  fileName,
-}: {
-  batchId: string;
-  fileName: string;
-}) {
+/** A refresh rechecks the signed-in reviewer, branch and approval before showing Create. */
+export function ReviewerApprovedImport() {
+  const editId = useSearchParams()?.get('approvedImport');
+  return editId ? <ApprovalReceipt key={editId} editId={editId} /> : null;
+}
+
+function ApprovalReceipt({ editId }: { editId: string }) {
+  const receipt = trpc.pharmacyMedicine.proposedImport.useQuery(
+    { editId, approvedByMe: true },
+    { retry: false }
+  );
+  if (receipt.isPending) return <p role="status">Loading the approved file…</p>;
+  if (receipt.error)
+    return (
+      <p role="alert" className="text-destructive">
+        {receipt.error.message}
+      </p>
+    );
+  return receipt.data.approved ? <ApprovedImportCreation {...receipt.data.approved} /> : null;
+}
+
+function ApprovedImportCreation({ batchId, fileName }: { batchId: string; fileName: string }) {
   const state = trpc.pharmacyMedicine.stagedMedicineCreation.useQuery(
     { batchId },
     { retry: false }

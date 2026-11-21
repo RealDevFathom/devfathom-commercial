@@ -109,7 +109,10 @@ for (const scenario of scenarios) {
           })
         ).toBeVisible();
         if (decision === 'Approve') {
-          if (!member) await acting.reload();
+          await acting.reload();
+          await expect(
+            acting.getByRole('button', { name: 'Create medicines', exact: true })
+          ).toBeVisible();
           await acting.getByRole('button', { name: 'Create medicines', exact: true }).click();
           await expect(acting.getByText('All medicines created', { exact: true })).toBeVisible();
         }

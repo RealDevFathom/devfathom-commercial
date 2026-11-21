@@ -1019,7 +1019,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyMedicine.proposedImport': {
-    gate: "capabilityProcedure('pharmacy:catalogue-review'); pending import in the caller's workspace, an admitted active branch, and the proposed file checksum",
+    gate: "capabilityProcedure('pharmacy:catalogue-review'); pending import in the caller's workspace, an admitted active branch, and the proposed file checksum; only its approver can reopen the approved file for creation",
     lines: ['review-catalogue/approve-reject-others-catalogue'],
   },
   'pharmacyMedicine.proposeCatalogueEdit': {
