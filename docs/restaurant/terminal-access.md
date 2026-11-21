@@ -1,0 +1,15 @@
+# Restaurant terminal access
+
+An unlocked register requires an active staff profile assigned to the device’s branch and `pos:operate`. Kitchen and delivery displays require `kitchen:operate`. Unlock and handover verify the incoming credential before checking these rights. A denied handover leaves the outgoing operator in place.
+
+The terminal checks each operation’s own permissions. For example, a cashier with `payments:collect` can settle a bill even when the automatic loyalty snapshot returns 403 for missing `customers:read`. An operation refusal preserves both the binding and its previous idle timestamp. A refused device or invalid binding carries the `X-Terminal-Access: denied` header on 403. The kitchen board shows the server’s reason and retains the board for ordinary operation refusals.
+
+A staff deactivation, branch transfer, PIN reset or PIN revocation ends the affected person’s open bindings in the same transaction. Permission changes compare the effective terminal operations before and after the edit, including active job roles, direct grants, linked-user permissions, wildcard rules, and overriding denies. Adding rights or losing one of two equivalent grants preserves the binding.
+
+## Kitchen polling cost
+
+The station queue normally polls every five seconds. The delivery queue polls every ten seconds. Both present the session token. Each successful unlocked poll takes a row lock on the session by its unique token hash, rechecks the operator and device, and writes the server activity time once. A station read without a session token retains its device-only path.
+
+Compared with a device-only queue read, a session-bearing poll adds one session lookup, the operator authorization reads, and one session activity update on success. The authorization check makes three Prisma calls: the staff profile with linked-user rules, active branch job-role holdings with their capabilities, and direct branch grants. With an active held role and a linked user with an organization role, these calls issued **nine SQL SELECTs** on the disposable PostgreSQL 16 fixture. With no linked user or held roles, Prisma omits the corresponding relation reads. This count excludes the device, entitlement and queue data reads the endpoint already performs. The migration’s revocation comparison runs on access edits; it adds no query to a poll.
+
+The unique session token hash handles the lookup, with device ID checked on the matched row. The session activity update, staff profile, linked user, organization role and job roles use their primary keys. The staff holdings lookup has a staff ID index and a staff/job role/branch unique index. Direct branch grants use the staff/branch/capability unique index prefix. Linked-user overrides, organization role permissions and job role capabilities each have unique indexes beginning with their user or role IDs. The session table also indexes the bound staff ID and device ID for revocation.
