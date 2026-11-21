@@ -11,6 +11,8 @@ import {
   createCounterQueue,
   enqueueCounterCommand,
 } from './counter-command-queue';
+import { sealOfflineSale } from './offline-sale-seal-node';
+import type { SealableSale } from './offline-sale-seal';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -98,6 +100,29 @@ it('composes on HTTP LAN and signs the final route-valid body across retry', asy
   expect(result.ok).toBe(true);
   if (!result.ok) throw new Error(result.reason);
   const deviceSecret = `pcd_${randomBytes(32).toString('base64url')}`;
+  // DEV-957 phase 2 (hardening 4): the runtime seals a sale at the moment it is taken; the
+  // route requires that seal, so it is added here as the runtime adds it.
+  const sealable = {
+    sequence: result.command.sequence,
+    idempotencyKey: result.command.idempotencyKey,
+    action: result.command.action,
+    leasedReceipt: {
+      leaseId: 'lease-1',
+      receiptNumber: result.command.receiptNumber,
+      originalSaleAt: result.command.clientOriginAt,
+    },
+    snapshots: [],
+    lines: result.command.payload.lines as SealableSale['lines'],
+    amountMinor: 100,
+    cashReceivedMinor: 100,
+  };
+  const { seal } = sealOfflineSale(
+    { organizationId: 'org-1', branchId: 'branch-1', deviceId: 'counter-test' },
+    sealable,
+    { previousHash: null, lineTotalsMinor: [100] },
+    deviceSecret
+  );
+  result.command.payload.seal = seal;
   const signer = (body: Record<string, unknown>, receipt: Record<string, unknown>) => ({
     command: signPharmacyCommand(
       { organizationId: 'org-1', branchId: 'branch-1' },

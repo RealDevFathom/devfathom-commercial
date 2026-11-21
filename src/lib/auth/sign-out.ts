@@ -3,6 +3,22 @@ import { signOut } from 'next-auth/react';
 import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
 import { clearCounterShell } from '@/lib/pharmacy/counter-shell';
 
+/** Loaded only when signing out, so the counter store never weighs on other pages. */
+async function clearOfflineCounterDrafts(): Promise<void> {
+  try {
+    const [{ discardCounterDrafts }, { readCounterEnrolmentMirror }, { createCounterIndexedDbDriver }] =
+      await Promise.all([
+        import('@/lib/pharmacy/counter-offline-session'),
+        import('@/lib/pharmacy/counter-device-store'),
+        import('@/lib/pharmacy/counter-offline-runtime'),
+      ]);
+    const enrolment = readCounterEnrolmentMirror();
+    if (enrolment) await discardCounterDrafts(enrolment, createCounterIndexedDbDriver());
+  } catch {
+    // Never keeps anyone signed in.
+  }
+}
+
 /**
  * Sign out of BOTH authentication and organization-selection state.
  *
@@ -19,6 +35,9 @@ export async function signOutEverything(callbackUrl = '/login') {
   // DEV-957: the offline counter page is stored for the person signed in now;
   // the next person at this computer must never be shown it. Never throws.
   const shellCleared = clearCounterShell();
+  // DEV-957 phase 2: and an offline bill they were building is not left for the next
+  // person. Queued sales stay: that money was taken and must still be sent.
+  const draftsCleared = clearOfflineCounterDrafts();
   // DEV-970: the next person (or the next sign-in) sees the counter's sale checks in full.
   clearCounterReadinessOkay();
   try {
@@ -27,5 +46,6 @@ export async function signOutEverything(callbackUrl = '/login') {
     // Ignore — the intent is single-use and expires in five minutes regardless.
   }
   await shellCleared;
+  await draftsCleared;
   await signOut({ callbackUrl });
 }

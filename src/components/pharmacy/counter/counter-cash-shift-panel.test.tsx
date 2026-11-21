@@ -217,6 +217,22 @@ describe('DEV-958B shift report', () => {
     expect(screen.getByText('No refunds in this shift.')).toBeInTheDocument();
   });
 
+  it("offline, never says whose shift it is on the stored session's word", () => {
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    try {
+      mocks.approvers = [{ id: 'cashier-a', name: 'Ayesha', isYou: true }];
+      panel({ openShift, lastClosedShift: null, currency: 'PKR' });
+      expect(screen.queryByText(/Your shift/)).not.toBeInTheDocument();
+      expect(screen.getByText(/Ayesha's shift/)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Close shift' }));
+      fireEvent.change(screen.getByLabelText('Cash counted (PKR)'), { target: { value: '100' } });
+      expect(screen.queryByText(/\(you\)/)).not.toBeInTheDocument();
+    } finally {
+      online.mockRestore();
+      mocks.approvers = [{ id: 'manager-b', name: 'Bilal', isYou: false }];
+    }
+  });
+
   it('never uses the sign alone', () => {
     expect(shiftVarianceLabel(0, 'PKR')).toBe('Balanced');
     expect(shiftVarianceLabel(25, 'PKR')).toBe('Over PKR 0.25');

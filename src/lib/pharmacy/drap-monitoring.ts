@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { releaseCounterQuotasForSafety } from './counter-stock-holds';
 import { PharmacyInventoryError } from './inventory';
 import {
   lockRecallAuthority,
@@ -440,6 +441,7 @@ export async function confirmDrapRecall(
         units: balance.onHandUnits,
         reason: `DRAP recall ${ingest.sourceReference}: ${reason}`,
         idempotencyKeyPrefix: `drap:${ingest.id}:${balance.inventoryLotId}:${balance.stockLocationId}`,
+        cause: 'RECALL',
       }
     );
     await db.pharmacyRecallQuarantineAction.create({
@@ -456,6 +458,9 @@ export async function confirmDrapRecall(
       },
     });
   }
+  // DEV-957: every counter quota left on the recalled batches goes too, so no counter
+  // keeps selling them offline (the quarantine above released the ones it emptied).
+  await releaseCounterQuotasForSafety(db, scope, { batchIds: recalledIds }, 'RECALL');
   return db.pharmacyDrapIngest.findFirstOrThrow({
     where: { organizationId: scope.organizationId, id: ingest.id },
   });

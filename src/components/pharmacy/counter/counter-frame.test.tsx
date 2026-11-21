@@ -140,3 +140,35 @@ describe('DEV-977 counter frame (Counter v2)', () => {
     expect(screen.getByRole('button', { name: 'Account' })).toBeInTheDocument();
   });
 });
+
+// DEV-957 phase 2 (shared till): the stored counter page reopened with no connection still
+// carries the last session; the counter's own top bar never presents that person.
+describe('counter top bar with the browser offline', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('shows "Offline / Sign-in not checked" instead of the last signed-in person', () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    inShell(
+      <CounterFrame statusLine="Offline · Main branch">
+        <p>Body</p>
+      </CounterFrame>
+    );
+    const header = screen.getByRole('banner');
+    expect(within(header).getByText('Offline')).toBeInTheDocument();
+    expect(within(header).getByText('Sign-in not checked')).toBeInTheDocument();
+    expect(header).not.toHaveTextContent('Test owner');
+    expect(header).not.toHaveTextContent('Workspace role: Admin');
+  });
+
+  it('shows the signed-in person when the connection is back', () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    inShell(
+      <CounterFrame>
+        <p>Body</p>
+      </CounterFrame>
+    );
+    const header = screen.getByRole('banner');
+    expect(within(header).getByText('Test owner')).toBeInTheDocument();
+    expect(header).not.toHaveTextContent('Sign-in not checked');
+  });
+});

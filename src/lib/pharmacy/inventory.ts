@@ -38,6 +38,10 @@ export class PharmacyInventoryError extends Error {
       | 'VARIANCE_REASON_REQUIRED'
       | 'UNSALEABLE_DESTINATION'
       | 'IDEMPOTENCY_CONFLICT'
+      /** DEV-957: the units are set aside for an offline counter; `userMessage` names it. */
+      | 'HELD_FOR_COUNTER',
+    /** A plain sentence for the person, when the reason alone does not say enough. */
+    readonly userMessage?: string
   ) {
     super(reason);
   }

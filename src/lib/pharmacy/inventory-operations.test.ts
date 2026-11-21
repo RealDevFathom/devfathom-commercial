@@ -33,7 +33,17 @@ function database(witness: { id: string } | null) {
     $queryRaw: vi.fn().mockResolvedValue([]),
     user: { findFirst: vi.fn().mockResolvedValue(witness) },
     pharmacyInventoryLot: {
-      findFirst: vi.fn().mockResolvedValue({ id: input.inventoryLotId, unitsPerPack: 10 }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: input.inventoryLotId,
+        unitsPerPack: 10,
+        manufacturingBatchId: 'batch_1',
+      }),
+    },
+    // DEV-957: a write-off of good stock checks no counter holds its units.
+    pharmacyManufacturingBatch: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ state: 'ACTIVE', expiresAt: new Date('2099-01-01T00:00:00.000Z') }),
     },
     pharmacyStockBalance: {
       findFirst: vi.fn().mockResolvedValue({ onHandUnits: 20, looseUnits: 5 }),

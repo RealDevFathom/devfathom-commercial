@@ -1014,3 +1014,56 @@ describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surf
     }
   );
 });
+
+// DEV-957 phase 2 (shared till): the stored offline counter page opens this drawer from its
+// own bar, with the last session still in the page.
+describe('menu drawer user chip with the browser offline', () => {
+  const entitlements = {
+    organizationId: 'org-1',
+    vertical: 'PHARMACY' as const,
+    seatLimit: 10,
+    activeSeats: 1,
+    enabledModules: ['pharmacy-core'],
+    modules: [],
+    limits: {},
+  };
+  function renderDrawer(collapsed = false) {
+    useSessionMock.mockReturnValue({
+      data: {
+        user: {
+          role: 'ADMIN',
+          name: 'Ayesha Khan',
+          title: 'Branch manager',
+          image: 'https://example.test/avatar.png',
+        },
+      },
+    } as never);
+    return render(
+      <EntitlementsProvider value={entitlements}>
+        <Sidebar collapsible={false} collapsed={collapsed} />
+      </EntitlementsProvider>
+    );
+  }
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each([false, true])('names nobody offline (collapsed: %s)', (collapsed) => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+    const { container } = renderDrawer(collapsed);
+    const chip = container.querySelector('[data-sidebar-identity="offline"]');
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveTextContent(collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked');
+    expect(container).not.toHaveTextContent('Ayesha Khan');
+    expect(container).not.toHaveTextContent('Branch manager');
+    expect(container).not.toHaveTextContent(/\bAK\b/);
+    expect(container.querySelector('img[src*="avatar"]')).toBeNull();
+    expect(container.querySelector('[alt="Ayesha Khan"]')).toBeNull();
+  });
+
+  it('shows the signed-in person online, as before', () => {
+    vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true);
+    const { container } = renderDrawer();
+    expect(container).toHaveTextContent('Ayesha Khan');
+    expect(container).toHaveTextContent('Branch manager');
+    expect(container.querySelector('[data-sidebar-identity="offline"]')).toBeNull();
+  });
+});

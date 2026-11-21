@@ -15266,6 +15266,9 @@ model PharmacyRegisteredDevice {
   status                     PharmacyDeviceStatus @default(ACTIVE)
   revokedAt                  DateTime?
   lastSeenAt                 DateTime?
+  /// DEV-957 phase 2: the server stops issuing snapshots, receipt blocks and quotas to this
+  /// secret at this time; an online counter renews it first. Rotation moves it 30 days on.
+  secretExpiresAt            DateTime             @default(dbgenerated("(CURRENT_TIMESTAMP + '30 days'::interval)"))
   /// Durable FIFO cursor, including the exhausted Int sequence sentinel (2147483648).
   nextOfflineCommandSequence BigInt               @default(1)
   enrolledByActorId          String

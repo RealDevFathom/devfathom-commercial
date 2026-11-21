@@ -18,6 +18,7 @@ import type {
   CounterReplaySigner,
 } from './counter-command-queue';
 import { canonicalJson } from './offline-snapshot-envelope';
+import type { OfflineSaleSealer, SealDigest } from './offline-sale-seal';
 
 export const PHARMACY_COMMAND_SIGNING_DOMAIN = 'pharmacy-offline-command:v1\n';
 const SECRET_FORMAT = /^pcd_[A-Za-z0-9_-]{43}$/;
@@ -93,4 +94,21 @@ export function counterReplaySigner(
     command: await signCounterCommand(key, scope, deviceId, body, subtle),
     receipt: await signCounterCommand(key, scope, deviceId, leasedReceipt, subtle),
   });
+}
+
+/**
+ * DEV-957 phase 2 (hardening 4): seal a sale at the moment it is taken. The SHA-256 hash
+ * chains it to the next sale; the HMAC under the same non-extractable key proves it.
+ * Byte for byte what `offline-sale-seal-node.ts` recomputes on the server.
+ */
+export function counterSaleSealer(key: CryptoKey, subtle?: SubtleCrypto): OfflineSaleSealer {
+  return async (message: string): Promise<SealDigest> => {
+    const bytes = new TextEncoder().encode(message);
+    const crypto = subtleCrypto(subtle);
+    const buffer = bytes.buffer.slice(0) as ArrayBuffer;
+    return {
+      hash: hex(await crypto.digest('SHA-256', buffer)),
+      signature: hex(await crypto.sign('HMAC', key, buffer)),
+    };
+  };
 }

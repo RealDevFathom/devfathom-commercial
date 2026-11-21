@@ -11,6 +11,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { OfflineSnapshotEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
 
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
@@ -92,9 +93,20 @@ function envelope(
   };
 }
 
+
+/**
+ * DEV-957 phase 2 (hardening 4): the counter seals each sale when it is taken; the route
+ * checks that seal. This counter's first sale names no sale before it.
+ */
 function command(originalSaleAt: string) {
+  return router.counterReplaySchema.parse(offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(originalSaleAt), {
+    previousHash: null,
+  }));
+}
+
+function unsealedCommand(originalSaleAt: string) {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' });
-  return router.counterReplaySchema.parse({
+  return {
     sequence: 1,
     idempotencyKey: 'idem_1',
     action: 'CASH_OTC_SALE',
@@ -106,7 +118,8 @@ function command(originalSaleAt: string) {
       signature: signing.signSnapshotEnvelope(receiptEnvelope),
     },
     snapshots: KINDS.map((kind) => {
-      const payload = { kind };
+      // Offline cash selling forced ON in the signed RULES (it is off in the product).
+      const payload = kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind };
       const signed = envelope(kind, payload);
       return { envelope: signed, signature: signing.signSnapshotEnvelope(signed), payload };
     }),
@@ -124,7 +137,7 @@ function command(originalSaleAt: string) {
     ],
     amountMinor: 100,
     cashReceivedMinor: 100,
-  });
+  };
 }
 
 function db(timezone: string | null, businessDayEndsAtHistory = 0) {

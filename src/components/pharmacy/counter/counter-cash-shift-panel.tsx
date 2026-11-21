@@ -14,6 +14,7 @@ import { trpc } from '@/lib/trpc';
 
 import { CashShiftReportView, shiftClockTime, shiftVarianceLabel } from './cash-shift-report-view';
 import { COUNTER_NATIVE_SELECT_CLASS, type CounterCashier } from './counter-drawer-operator';
+import { useBrowserOnline } from './use-browser-online';
 
 /** The counter's view of a drawer that runs shifts, as `drawerStatus` reports it. */
 export type CounterCashShiftStatus = {
@@ -211,7 +212,13 @@ function CloseShift({
     expected !== null &&
     (!needsNote || note.trim().length > 0) &&
     (!needsApproval || (Boolean(approverId) && pinValid));
-  const owner = shift.isYours ? 'Your shift' : `${shift.cashierName ?? 'Another cashier'}'s shift`;
+  // DEV-957 shared till: offline, the counter cannot check who is signed in, so it never says
+  // "your" shift on the stored session's word; it names the shift's cashier as the server read it.
+  const browserOnline = useBrowserOnline();
+  const owner =
+    shift.isYours && browserOnline
+      ? 'Your shift'
+      : `${shift.cashierName ?? 'Another cashier'}'s shift`;
 
   return (
     <div
@@ -358,7 +365,7 @@ function CloseShift({
                       <option value="">Choose a manager or owner</option>
                       {approvers.data.map((approver) => (
                         <option key={approver.id} value={approver.id}>
-                          {approver.isYou
+                          {approver.isYou && browserOnline
                             ? `${approver.name ?? 'You'} (you)`
                             : (approver.name ?? 'Manager')}
                         </option>

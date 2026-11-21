@@ -18,6 +18,8 @@ import { useShellChrome } from '@/components/layout/shell-chrome';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 
+import { useBrowserOnline } from './use-browser-online';
+
 /**
  * DEV-977 — the counter's own top bar (Counter v2).
  *
@@ -71,13 +73,18 @@ export function CounterTopBar({ statusLine }: { statusLine?: ReactNode }) {
 function CounterWorkspaceTools() {
   const { data: session } = useSession();
   const roleLabel = useWorkspaceRoleLabel();
+  // DEV-957 phase 2 (shared till): the counter page opened with no connection cannot check
+  // who is signed in, so it never presents the last person as the one at the till.
+  const browserOnline = useBrowserOnline();
   return (
     <>
       <div className="hidden min-w-0 border-s border-border-subtle ps-4 leading-snug lg:block">
         <span className="block text-[13px] font-semibold text-text-strong">
-          {session?.user?.name ?? 'Workspace'}
+          {browserOnline ? (session?.user?.name ?? 'Workspace') : 'Offline'}
         </span>
-        <span className="block max-w-44 truncate text-xs text-text-muted">{roleLabel}</span>
+        <span className="block max-w-44 truncate text-xs text-text-muted">
+          {browserOnline ? roleLabel : 'Sign-in not checked'}
+        </span>
       </div>
       <nav
         aria-label="Breadcrumb"

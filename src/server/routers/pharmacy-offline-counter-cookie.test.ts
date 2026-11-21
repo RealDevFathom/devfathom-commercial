@@ -109,6 +109,8 @@ beforeEach(() => {
     organizationId: ORG,
     status: 'ACTIVE',
     revokedAt: null,
+    // DEV-957 phase 2: the device row now carries its credential expiry.
+    secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
   });
   mocks.issueOfflineSnapshot.mockImplementation(async (_db, _scope, input: { kind: string }) => ({
     kind: input.kind,
@@ -188,6 +190,22 @@ describe('DEV-957 counter route: cookie credential', () => {
     expect((await behindProxy('https://tenant.example')).status).toBe(201);
     expect((await behindProxy('https://evil.example')).status).toBe(403);
     expect((await behindProxy('http://tenant.example')).status).toBe(403);
+  });
+
+  it('DEV-957 phase 2: ignores a forged X-Forwarded-Host on a request to the public host', async () => {
+    const forged = (origin: string) =>
+      route.pharmacyCounterRoute('establish')(
+        new Request('https://tenant.test/api/pharmacy/counter/establish', {
+          method: 'POST',
+          headers: { host: 'tenant.test', cookie, origin, 'x-forwarded-host': 'evil.example' },
+          body: '{}',
+        })
+      );
+    const refused = await forged('https://evil.example');
+    expect(refused.status).toBe(403);
+    expect(await refused.json()).toEqual({ error: 'origin_denied' });
+    expect(mocks.resolveBySecret).not.toHaveBeenCalled();
+    expect((await forged(ORIGIN)).status).toBe(201);
   });
 
   it('keeps the bearer path working without an Origin header', async () => {
@@ -285,6 +303,8 @@ describe('DEV-957 bind route: setting the device cookie', () => {
       organizationId: 'org_other',
       status: 'ACTIVE',
       revokedAt: null,
+      // DEV-957 phase 2: the device row now carries its credential expiry.
+      secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
     });
     expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(401);
     mocks.resolveBySecret.mockResolvedValueOnce({

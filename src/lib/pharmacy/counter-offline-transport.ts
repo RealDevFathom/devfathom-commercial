@@ -63,6 +63,7 @@ export type CounterEstablished = {
   sessionToken: string;
   device: { id: string; branchId: string; organizationId: string };
   snapshotPublicKey: string;
+  credential?: { expiresAt: string; expired: boolean; renewDue: boolean };
 };
 export type CounterSignedSnapshot = {
   id?: string;
@@ -100,6 +101,22 @@ export async function fetchCounterSnapshots(
   return { snapshots: result.snapshots as CounterSignedSnapshot[], publicKey: result.publicKey };
 }
 
+/**
+ * DEV-957 phase 2: rotate this counter's own device secret before it expires. The server
+ * sets the new httpOnly cookie and returns the secret once, for the signing key only.
+ */
+export async function renewCounterCredential(
+  sessionToken: string
+): Promise<{ secret: string; credentialExpiresAt: string }> {
+  const result = (await counterPost('/api/pharmacy/counter/renew', {}, sessionToken)) as {
+    secret?: unknown;
+    credentialExpiresAt?: unknown;
+  };
+  if (typeof result?.secret !== 'string' || typeof result.credentialExpiresAt !== 'string')
+    throw new CounterRequestError(502, 'unexpected_response');
+  return { secret: result.secret, credentialExpiresAt: result.credentialExpiresAt };
+}
+
 export function reserveCounterReceipts(sessionToken: string, size: number): Promise<unknown> {
   return counterPost('/api/pharmacy/counter/lease', { size }, sessionToken);
 }
@@ -119,6 +136,10 @@ export function counterSetupMessage(error: unknown): string {
       return 'The server cannot be reached. Offline mode keeps the last price list this counter checked.';
     case 'unauthorized_device':
       return 'The server no longer accepts this computer as a counter. A manager can enrol it again in Settings, Counter computers.';
+    case 'device_revoked':
+      return 'A manager revoked this counter, so its offline data was deleted from this computer and it can no longer sell offline. A manager can enrol it again in Settings, Counter computers.';
+    case 'device_credential_expired':
+      return "This counter's credential expired, so it gets no new price list, receipt numbers or stock for offline selling. A manager can renew it in Settings, Counter computers (Rotate credential).";
     case 'unauthorized':
       return 'You are signed out. Sign in again to set up offline mode.';
     case 'forbidden':
