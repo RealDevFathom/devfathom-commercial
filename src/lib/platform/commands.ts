@@ -19,7 +19,7 @@ import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activa
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { verifyTotp } from '@/lib/totp';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
-import { revokeOperatorSessions } from '@/lib/tenancy/end-support-sessions';
+import { revokeOperatorSessions } from '@/lib/platform/capabilities';
 import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';

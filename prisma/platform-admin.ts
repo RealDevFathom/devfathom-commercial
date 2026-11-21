@@ -1,8 +1,7 @@
 import { compare, hash } from 'bcryptjs';
 
 import type { Prisma } from '../src/generated/prisma/client.js';
-
-import { revokeOperatorSessions } from '../src/lib/tenancy/end-support-sessions.js';
+import { revokeOperatorSessions } from '../src/lib/platform/capabilities.js';
 
 export type PlatformAdminOutcome =
   { status: 'unset' } | { status: 'created' | 'updated'; email: string };

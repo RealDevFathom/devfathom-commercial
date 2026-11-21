@@ -9,8 +9,7 @@ import {
 } from '@/lib/platform/auth';
 import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
-import { canPlatformRole } from '@/lib/platform/capabilities';
-import { endSupportSessions } from '@/lib/tenancy/end-support-sessions';
+import { canPlatformRole, endSupportSessions } from '@/lib/platform/capabilities';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export const SUPPORT_SESSION_COOKIE = 'df_support_session';
