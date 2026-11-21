@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { Children, isValidElement, type ReactElement, type ReactNode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -91,6 +92,7 @@ beforeEach(() => {
     { id: 'branch_2', name: 'Second authorized branch' },
   ]);
   mocks.workspace.mockResolvedValue({
+    mayManageAccounts: true,
     settlementCandidates: [],
     settlementBatches: [],
     transactions: [],
@@ -289,6 +291,7 @@ describe('DEV-103 native AP payments in recent transactions', () => {
       idempotencyKey: 'browser-uuid-1',
     };
     mocks.workspace.mockResolvedValue({
+      mayManageAccounts: true,
       settlementCandidates: [],
       settlementBatches: [],
       bankLines: [],
@@ -445,6 +448,7 @@ describe('Finance posting window on the organisation clock (DEV-722)', () => {
     );
     // One settlement candidate, so the settlement form (with its business date) renders.
     mocks.workspace.mockResolvedValue({
+      mayManageAccounts: true,
       settlementCandidates: [
         {
           id: 'tender_1',
@@ -503,4 +507,36 @@ describe('Finance posting window on the organisation clock (DEV-722)', () => {
     visit(tree);
     expect(defaults).toEqual({ businessDate: '2026-08-01', occurredAt: '2026-08-01' });
   });
+});
+
+it('explains a finance refusal and who can grant access', async () => {
+  mocks.workspace.mockRejectedValueOnce(
+    new TRPCError({ code: 'FORBIDDEN', message: 'private detail' })
+  );
+  const html = renderToStaticMarkup(
+    await PharmacyFinancePage({ searchParams: Promise.resolve({}) })
+  );
+  expect(html).toContain('Ask your workspace owner for finance access');
+  expect(html).not.toContain('private detail');
+  expect(html).not.toContain('Refresh the page');
+});
+
+it('explains view-only finance and disables posting', async () => {
+  const workspace = await mocks.workspace();
+  mocks.workspace.mockResolvedValue({ ...workspace, mayManageAccounts: false });
+  const tree = await PharmacyFinancePage({ searchParams: Promise.resolve({}) });
+  const markup = renderToStaticMarkup(sectionProps(tree, PageHeader).actions as ReactElement);
+  expect(markup).toContain('Balance sheet');
+  // Read the posting form directly: nested report components load independently.
+  let postingButton: ReactElement | undefined;
+  function visit(node: ReactNode) {
+    Children.forEach(node, (child) => {
+      if (!isValidElement<{ children?: ReactNode; disabled?: boolean }>(child)) return;
+      if (child.props.children === 'Post transaction') postingButton = child;
+      else visit(child.props.children);
+    });
+  }
+  visit(tree);
+  expect(postingButton).toBeDefined();
+  expect(postingButton!.props).toMatchObject({ disabled: true });
 });

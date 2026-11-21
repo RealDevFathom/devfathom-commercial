@@ -1,10 +1,10 @@
-import { hash } from 'bcryptjs';
+import { compare, hash } from 'bcryptjs';
 
 import type { Prisma } from '../src/generated/prisma/client.js';
+import { revokeOperatorSessions } from '../src/lib/platform/capabilities.js';
 
 export type PlatformAdminOutcome =
-  | { status: 'unset' }
-  | { status: 'created' | 'updated'; email: string };
+  { status: 'unset' } | { status: 'created' | 'updated'; email: string };
 
 /**
  * Applies `PLATFORM_ADMIN_EMAIL` / `PLATFORM_ADMIN_PASSWORD` to the platform
@@ -33,9 +33,12 @@ export async function upsertPlatformAdmin(
   }
 
   const normalizedEmail = email.toLowerCase();
+  // Share the operator-management lock so concurrent seed runs and commands
+  // compare against the credentials that this transaction actually replaces.
+  await tx.$executeRawUnsafe('SELECT pg_advisory_xact_lock(1597, 1)');
   const existing = await tx.platformUser.findUnique({
     where: { email: normalizedEmail },
-    select: { id: true },
+    select: { id: true, role: true, passwordHash: true },
   });
   const passwordHash = await hash(password, 12);
   await tx.platformUser.upsert({
@@ -48,6 +51,15 @@ export async function upsertPlatformAdmin(
       role: 'SUPER_ADMIN',
     },
   });
+  if (existing) {
+    const reasons = [
+      existing.role !== 'SUPER_ADMIN' && 'Operator role changed',
+      !(await compare(password, existing.passwordHash)) && 'Operator password changed',
+    ].filter(Boolean);
+    if (reasons.length) {
+      await revokeOperatorSessions(tx, existing.id, `Deployment seed: ${reasons.join('; ')}`, null);
+    }
+  }
   return { status: existing ? 'updated' : 'created', email: normalizedEmail };
 }
 

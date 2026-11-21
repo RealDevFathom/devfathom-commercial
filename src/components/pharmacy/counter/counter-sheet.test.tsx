@@ -1,5 +1,5 @@
-import { render, screen, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
 
 import { Dialog, DialogPortal } from '@/components/ui/dialog';
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
@@ -88,5 +88,37 @@ describe('DEV-977 phase 2B: the Counter v2 sheet frame', () => {
     );
     expect(within(card).getByText('Your role').nextElementSibling).toHaveTextContent('Cashier');
     expect(within(card).queryByRole('button')).toBeNull();
+  });
+});
+
+describe('DEV-977 phase 3: "Got it" on the no-permission card (C6)', () => {
+  it('closes the panel with a full-width "Got it" below the card, never inside it', () => {
+    const onDismiss = vi.fn();
+    render(
+      <CounterNoPermission
+        heading="Ask a pharmacist"
+        who="Pharmacists and the owner"
+        onDismiss={onDismiss}
+      >
+        <p>Needs the dispensing permission.</p>
+      </CounterNoPermission>
+    );
+    const card = screen.getByRole('heading', { name: 'Ask a pharmacist' }).parentElement!;
+    // The card itself still offers no way round the permission.
+    expect(within(card).queryByRole('button')).toBeNull();
+    const gotIt = screen.getByRole('button', { name: 'Got it' });
+    expect(card.contains(gotIt)).toBe(false);
+    expect(gotIt.className).toContain('w-full');
+    fireEvent.click(gotIt);
+    expect(onDismiss).toHaveBeenCalledOnce();
+  });
+
+  it('shows no "Got it" where the screen gives it nothing to close', () => {
+    render(
+      <CounterNoPermission heading="Ask a pharmacist" who="Pharmacists and the owner">
+        <p>Needs the dispensing permission.</p>
+      </CounterNoPermission>
+    );
+    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
   });
 });

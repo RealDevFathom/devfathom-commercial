@@ -119,6 +119,7 @@ describe('ApAgingPage', () => {
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue({ session: actor.session });
     mocks.aging.mockResolvedValue({
+      mayManageAccounts: true,
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
       view,
       retrievedAt: new Date('2026-11-15T12:00:00.000Z'),
@@ -146,6 +147,20 @@ describe('ApAgingPage', () => {
     vi.useRealTimers();
   });
 
+  it('shows the aging to a view-only member and explains why payment entry is unavailable', async () => {
+    mocks.aging.mockResolvedValue({
+      scope: { organizationId: 'org_1', branchId: 'branch_1' },
+      view,
+      retrievedAt: NOW,
+      mayManageAccounts: false,
+    });
+    const output = await html({ branch: 'branch_1' });
+    expect(output).toContain('Outstanding by age');
+    expect(output).toContain(
+      'Ask your workspace owner for permission to manage pharmacy account transactions.'
+    );
+    expect(output).not.toContain('Record invoice');
+  });
   it('renders the query form without authenticating or reading', async () => {
     const output = await html({});
     expect(output).toContain('Supplier expense invoice aging');
@@ -229,6 +244,7 @@ describe('ApAgingPage', () => {
 
   it('never shows a partial total, list or export above the ceiling', async () => {
     mocks.aging.mockResolvedValue({
+      mayManageAccounts: true,
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
       view: { ...view, complete: false },
       retrievedAt: new Date(),
@@ -261,6 +277,7 @@ describe('ApAgingPage', () => {
 
   it('explains an empty view and offers no export', async () => {
     mocks.aging.mockResolvedValue({
+      mayManageAccounts: true,
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
       view: { ...view, rows: [], totals: [] },
       retrievedAt: new Date(),
@@ -272,6 +289,7 @@ describe('ApAgingPage', () => {
 
   it('never declares the branch clear when the view was refused for size', async () => {
     mocks.aging.mockResolvedValue({
+      mayManageAccounts: true,
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
       view: { ...view, complete: false, scannedInvoices: 10_001, rows: [], totals: [] },
       retrievedAt: new Date(),
@@ -300,6 +318,7 @@ describe('ApAgingPage', () => {
 
   it('asks for an invoice first when nothing is open to pay', async () => {
     mocks.aging.mockResolvedValue({
+      mayManageAccounts: true,
       scope: { organizationId: 'org_1', branchId: 'branch_1' },
       view: { ...view, rows: [], totals: [] },
       retrievedAt: new Date(),
@@ -324,6 +343,7 @@ describe('ApAgingPage', () => {
 
   it('refuses a response scoped to another organization or branch', async () => {
     mocks.aging.mockResolvedValue({
+      mayManageAccounts: true,
       scope: { organizationId: 'org_2', branchId: 'branch_1' },
       view,
       retrievedAt: new Date(),

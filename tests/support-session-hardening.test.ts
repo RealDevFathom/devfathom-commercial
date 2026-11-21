@@ -2,16 +2,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PlatformIdentity } from '@/lib/platform/auth';
 
 const mocks = vi.hoisted(() => ({
+  $queryRaw: vi.fn(),
+  platformSession: { findFirst: vi.fn() },
   organization: { findUnique: vi.fn() },
   user: { findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
   platformSupportSession: {
     create: vi.fn(),
     updateMany: vi.fn(),
+    updateManyAndReturn: vi.fn(),
     findUnique: vi.fn(),
     findMany: vi.fn(),
   },
   platformAuditLog: { create: vi.fn() },
-  platformUser: { findMany: vi.fn() },
+  platformUser: { findMany: vi.fn(), findUnique: vi.fn() },
   notification: { createMany: vi.fn() },
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
@@ -59,6 +62,14 @@ const session = () => ({
 
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.platformUser.findUnique.mockResolvedValue({
+    role: 'SUPPORT',
+    active: true,
+    mfaEnabledAt: new Date(),
+    encryptedTotpSecret: 'fixture',
+  });
+  mocks.platformSession.findFirst.mockResolvedValue({ id: actor.sessionId });
+  mocks.platformSupportSession.updateManyAndReturn.mockResolvedValue([]);
   mocks.organization.findUnique.mockResolvedValue({
     id: 'org_one',
     slug: 'one',
@@ -111,6 +122,30 @@ describe('support-session hardening', () => {
     mocks.notification.createMany.mockRejectedValue(new Error('notification failed'));
     await expect(createSupportSession(input)).rejects.toThrow('notification failed');
   });
+  it.each([
+    null,
+    { active: false, role: 'SUPPORT' },
+    { active: true, role: 'AUDITOR' },
+    { active: true, role: 'SUPPORT', mfaRequired: true, mfaEnabledAt: null },
+  ])(
+    'refuses issuance, ticket exchange and tenant access without an eligible issuing operator (%j)',
+    async (currentOperator) => {
+      mocks.platformUser.findUnique.mockResolvedValue(currentOperator);
+      await expect(createSupportSession(input)).rejects.toMatchObject({ status: 403 });
+      await expect(
+        consumeSupportLaunchTicket({ launchToken: 'l'.repeat(40), organizationId: 'org_one' })
+      ).rejects.toMatchObject({ status: 401 });
+      expect(
+        await getSupportSession(
+          new Request('http://one.localhost', {
+            headers: { cookie: `df_support_session=${'t'.repeat(40)}` },
+          })
+        )
+      ).toBeNull();
+      expect(mocks.platformSupportSession.create).not.toHaveBeenCalled();
+      expect(mocks.platformSupportSession.updateMany).not.toHaveBeenCalled();
+    }
+  );
   it('attributes launch to the original platform operator and tenant target', async () => {
     await consumeSupportLaunchTicket({ launchToken: 'l'.repeat(40), organizationId: 'org_one' });
     expect(mocks.platformAuditLog.create).toHaveBeenCalledWith({
