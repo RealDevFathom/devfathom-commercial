@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Suspense } from 'react';
@@ -365,19 +366,19 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" method="get">
           <label className="text-sm text-text-body">
             Branch
-            <select className={selectClass} defaultValue={branch} name="branch">
+            <StudioSelect className={selectClass} defaultValue={branch} name="branch">
               {canAllBranches ? <option value="all">All active branches</option> : null}
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           {canOperational && inventoryEnabled ? (
             <label className="text-sm text-text-body">
               Stock location
-              <select
+              <StudioSelect
                 className={selectClass}
                 defaultValue={stockLocationId ?? 'all'}
                 name="stockLocation"
@@ -390,7 +391,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                     {location.isActive ? '' : ' (inactive)'}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
           ) : null}
           <label className="text-sm text-text-body">

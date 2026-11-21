@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import type { Metadata } from 'next';
 import {
@@ -557,7 +558,7 @@ export default async function PharmacyReportsPage({
         <form data-report-filters className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             {screenCopy.reports.branch}
-            <select
+            <StudioSelect
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               defaultValue={branch ?? ''}
               name="branch"
@@ -568,13 +569,13 @@ export default async function PharmacyReportsPage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <div className="text-sm text-text-body">
             <label htmlFor="report-supplier" className="block">
               {screenCopy.reports.supplier}
             </label>
-            <select
+            <StudioSelect
               id="report-supplier"
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               defaultValue={supplier ?? ''}
@@ -590,7 +591,7 @@ export default async function PharmacyReportsPage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
             {suppliers === null ? (
               <span id="supplier-load-error" className="block text-sm text-text-muted">
                 {screenCopy.reports.supplierNamesCouldNotLoadApplyFiltersAgain}

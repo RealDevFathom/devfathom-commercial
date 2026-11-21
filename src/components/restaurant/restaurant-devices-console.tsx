@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -440,7 +442,7 @@ export function RestaurantDevicesConsole() {
             </div>
             <label className="space-y-1.5">
               <span className={labelClass}>Device kind</span>
-              <select
+              <StudioSelect
                 name="kind"
                 value={enrollmentKind}
                 onChange={(event) => {
@@ -451,7 +453,7 @@ export function RestaurantDevicesConsole() {
               >
                 <option value="POS">POS register</option>
                 <option value="KDS">Kitchen display</option>
-              </select>
+              </StudioSelect>
             </label>
             {/*
               WHA-1181 (9) — the station field belongs to a kitchen display and
@@ -524,7 +526,7 @@ export function RestaurantDevicesConsole() {
                     ) : null}
                   </div>
                 ) : (
-                  <select
+                  <StudioSelect
                     id="device-station-id"
                     name="stationId"
                     value={enrollmentStationId}
@@ -542,7 +544,7 @@ export function RestaurantDevicesConsole() {
                         {station.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 )}
                 {enrollError ? (
                   <p id="device-station-error" role="alert" className="text-sm text-destructive">
@@ -648,7 +650,7 @@ export function RestaurantDevicesConsole() {
               ) : null}
               <label className="space-y-1.5">
                 <span className={labelClass}>Approving staff</span>
-                <select
+                <StudioSelect
                   name="approvingStaffProfileId"
                   required
                   defaultValue=""
@@ -662,14 +664,14 @@ export function RestaurantDevicesConsole() {
                       {staff.displayName}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </label>
               <label className="space-y-1.5">
                 <span className={labelClass}>Approving credential type</span>
-                <select name="approvingType" defaultValue="PIN" className={selectClass}>
+                <StudioSelect name="approvingType" defaultValue="PIN" className={selectClass}>
                   <option value="PIN">PIN</option>
                   <option value="BADGE">Badge</option>
-                </select>
+                </StudioSelect>
               </label>
               <label className="space-y-1.5">
                 <span className={labelClass}>Approving PIN or badge secret</span>

@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -73,10 +74,12 @@ describe('layoutWithPaper', () => {
 describe('PharmacyPrinterSettingsConsole', () => {
   it('shows the saved branch paper and saves a new choice with the current revision', () => {
     render(<PharmacyPrinterSettingsConsole canSave />);
-    const paper = screen.getByLabelText('Receipt printer and paper');
-    expect(paper).toHaveValue('THERMAL');
+    const paper = screen.getByLabelText('Receipt printer and paper', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    expect(selectFieldControl(paper)).toHaveValue('THERMAL');
     expect(screen.getByRole('button', { name: 'Save printer settings' })).toBeDisabled();
-    fireEvent.change(paper, { target: { value: 'A4' } });
+    fireEvent.change(selectFieldControl(paper), { target: { value: 'A4' } });
     expect(screen.getByText('Unsaved change')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Save printer settings' }));
     expect(mocks.mutate).toHaveBeenCalledWith({
@@ -89,11 +92,23 @@ describe('PharmacyPrinterSettingsConsole', () => {
   it('starts on a saved A4 preference and a saved 58 mm roll', () => {
     mocks.format = ok({ layout: { ...layout, browserPaper: 'A4' }, revision: 1 });
     const { unmount } = render(<PharmacyPrinterSettingsConsole canSave />);
-    expect(screen.getByLabelText('Receipt printer and paper')).toHaveValue('A4');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Receipt printer and paper', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('A4');
     unmount();
     mocks.format = ok({ layout: { ...layout, paperWidth: 58 }, revision: 1 });
     render(<PharmacyPrinterSettingsConsole canSave />);
-    expect(screen.getByLabelText('Receipt printer and paper')).toHaveValue('THERMAL_58');
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Receipt printer and paper', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('THERMAL_58');
   });
 
   it('reports a saved result and refreshes the branch format', async () => {
@@ -113,7 +128,11 @@ describe('PharmacyPrinterSettingsConsole', () => {
 
   it('keeps the paper read-only for non-administrators but allows a test print', () => {
     render(<PharmacyPrinterSettingsConsole canSave={false} />);
-    expect(screen.getByLabelText('Receipt printer and paper')).toBeDisabled();
+    expect(
+      screen.getByLabelText('Receipt printer and paper', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Save printer settings' })).toBeDisabled();
     expect(screen.getByText(/Only a workspace administrator can change/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
@@ -122,10 +141,24 @@ describe('PharmacyPrinterSettingsConsole', () => {
 
   it('prints an Urdu test page on the selected paper without claiming the printer printed', async () => {
     render(<PharmacyPrinterSettingsConsole canSave />);
-    fireEvent.change(screen.getByLabelText('Receipt printer and paper'), {
-      target: { value: 'THERMAL_58' },
-    });
-    fireEvent.change(screen.getByLabelText('Test language'), { target: { value: 'ur' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Receipt printer and paper', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'THERMAL_58' },
+      }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Test language', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'ur' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Print test page' }));
     expect(mocks.print).toHaveBeenCalledWith('THERMAL_58', 'ur', 'Main');
     expect(await screen.findByRole('status')).toHaveTextContent(
@@ -149,11 +182,31 @@ describe('PharmacyPrinterSettingsConsole', () => {
 
   it('switches branch and offers retry when saved settings cannot be read', () => {
     render(<PharmacyPrinterSettingsConsole canSave />);
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b2' } });
-    expect(screen.getByLabelText('Branch')).toHaveValue('b2');
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'b2' } }
+    );
+    expect(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('b2');
     const refetch = vi.fn();
     mocks.format = { data: undefined, isLoading: false, isError: true, refetch };
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'b1' } }
+    );
     expect(screen.getByRole('alert')).toHaveTextContent(/could not be loaded. Nothing was changed/);
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
     expect(refetch).toHaveBeenCalled();
@@ -170,7 +223,14 @@ describe('PharmacyPrinterSettingsConsole', () => {
     const { unmount } = render(<PharmacyPrinterSettingsConsole canSave />);
     expect(screen.getByRole('heading', { name: 'Thermal print bridges' })).toBeInTheDocument();
     expect(bridges.props).toHaveBeenLastCalledWith({ branchId: 'b1', branchName: 'Main' });
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'b2' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'b2' } }
+    );
     expect(bridges.props).toHaveBeenLastCalledWith({ branchId: 'b2', branchName: 'Second' });
     unmount();
     bridges.props.mockClear();

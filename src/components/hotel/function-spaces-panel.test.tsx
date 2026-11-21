@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -263,7 +264,14 @@ describe('HotelFunctionSpacesPanel', () => {
     fireEvent.change(within(form).getByLabelText('What for'), {
       target: { value: 'Board meeting' },
     });
-    fireEvent.change(within(form).getByLabelText('Claim'), { target: { value: 'FUNCTION' } });
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByLabelText('Claim', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'FUNCTION' } }
+    );
     fireEvent.change(within(form).getByLabelText('From'), {
       target: { value: '2026-10-03T19:00' },
     });

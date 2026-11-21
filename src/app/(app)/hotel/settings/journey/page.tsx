@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import { TRPCError } from '@trpc/server';
 
@@ -159,7 +160,7 @@ export default async function HotelJourneyTemplatesPage({
                 <label htmlFor="journey-property" className="block text-sm font-semibold">
                   Property
                 </label>
-                <select
+                <StudioSelect
                   id="journey-property"
                   name="branchId"
                   defaultValue=""
@@ -174,7 +175,7 @@ export default async function HotelJourneyTemplatesPage({
                       {property.name}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <button type="submit" className={buttonVariants({ className: 'min-h-11' })}>
                 Open guest messages

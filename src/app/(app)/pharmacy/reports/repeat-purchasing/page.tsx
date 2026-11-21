@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -94,7 +95,7 @@ export default async function RepeatPurchasingPage({
           </label>
           <label className="text-sm text-text-body">
             Selected authorized branches
-            <select
+            <StudioSelect
               name="branch"
               defaultValue={branchId ?? ''}
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-2 focus-visible:outline-ring"
@@ -108,7 +109,7 @@ export default async function RepeatPurchasingPage({
                   {b.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <p id="repeat-window-help" className="text-sm text-text-muted md:col-span-2">
             Up to 90 inclusive enrollment days. Cutoff stays fixed when filters change. Today is

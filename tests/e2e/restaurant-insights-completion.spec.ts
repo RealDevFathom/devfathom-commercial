@@ -1,3 +1,4 @@
+import { chooseSelectField, selectFieldNative } from './fixtures/select-field';
 import { readFile } from 'node:fs/promises';
 
 import { expect, test, type Locator, type Page } from '@playwright/test';
@@ -185,10 +186,10 @@ async function openInsights(page: Page, actor: 'restaurantAdmin' | 'restaurantOp
 }
 
 async function selectSeededBranch(page: Page) {
-  const branch = page.getByLabel('Branch', { exact: true });
+  const branch = page.getByRole('combobox', { name: 'Branch', exact: true });
   await expect(branch).toBeEnabled();
-  await branch.selectOption(fixture.branchId);
-  await expect(branch).toHaveValue(fixture.branchId);
+  await chooseSelectField(branch, fixture.branchId);
+  await expect(await selectFieldNative(branch)).toHaveValue(fixture.branchId);
 }
 
 function insightsTab(page: Page, name: string) {
@@ -817,7 +818,7 @@ test('denies every Insights read to an actor without the report capabilities', a
   const origin = new URL(page.url()).origin;
   // This actor cannot list branches. The UI correctly fails closed before any
   // branch-scoped card can load; selecting an unavailable option is not a user path.
-  const branch = page.getByLabel('Branch', { exact: true });
+  const branch = page.getByRole('combobox', { name: 'Branch', exact: true });
   await expect(branch).toBeDisabled();
   await expect(branch).toHaveAttribute('aria-invalid', 'true');
   await expect(branch).toContainText('Branches unavailable');
@@ -901,10 +902,10 @@ test('serves populated Insights on a tenant whose company chat is persistently o
       response.url().includes('restaurantInsights.listFinancialReports') &&
       response.status() === 200
   );
-  const branch = page.getByLabel('Branch', { exact: true });
+  const branch = page.getByRole('combobox', { name: 'Branch', exact: true });
   await expect(branch).toBeEnabled();
-  await branch.selectOption(tenant.branchId);
-  await expect(branch).toHaveValue(tenant.branchId);
+  await chooseSelectField(branch, tenant.branchId);
+  await expect(await selectFieldNative(branch)).toHaveValue(tenant.branchId);
   await financialResponded;
 
   await expect(insightsTab(page, 'Financial')).toHaveAttribute('aria-selected', 'true');
@@ -971,7 +972,7 @@ test('denies the Insights route and its authenticated API when the module entitl
   );
   await expect(page.getByRole('heading', { name: 'Insights', exact: true })).toHaveCount(0);
   await expect(page.getByText('Restaurant Insights module disabled')).toHaveCount(0);
-  await expect(page.getByLabel('Branch', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: 'Branch', exact: true })).toHaveCount(0);
   await expect(page.getByLabel('From date')).toHaveCount(0);
 
   // The shell's chat affordance is live here, which separates this denial from

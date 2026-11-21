@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { SectionCard } from '@/components/ui/section-card';
 import type { BranchOption } from '../_lib/types';
 import { EmptyState } from './console-chrome';
@@ -58,7 +59,7 @@ export function BranchPicker({
       )}
       <label className="min-w-0 text-sm font-medium text-text-body" htmlFor="branch-scope">
         Branch
-        <select
+        <StudioSelect
           className="mt-1 min-h-11 w-full min-w-56 rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
           defaultValue={selected ?? ''}
           id="branch-scope"
@@ -72,7 +73,7 @@ export function BranchPicker({
               {branch.name} — {branch.city}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </label>
       <button
         className="min-h-11 rounded-[var(--radius-sm)] border border-border-default px-4 text-sm font-medium text-text-strong hover:bg-muted focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import Link from 'next/link';
 import { useId, useState } from 'react';
 
@@ -211,7 +213,7 @@ export function SopRecordPicker({
         >
           <label className="grid gap-1.5 text-sm font-medium text-text-strong" htmlFor={id}>
             <span>Choose the {label}</span>
-            <select
+            <StudioSelect
               id={id}
               aria-label={`${label} for ${stepTitle}`}
               aria-invalid={error && !needsLinkNote ? true : undefined}
@@ -229,7 +231,7 @@ export function SopRecordPicker({
                   {recordOptionLabel(record)}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           {needsLinkNote ? (
             <label

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * PROP-02 / PROP-03 / HK-01 / HK-03 — the rooms surface: the room types a
  * property sells, the rooms (dorm rooms, units) under them, each room's
@@ -668,7 +670,7 @@ function RoomTypeForm({
         error={message('inventoryKind')}
         hint={kinds.find((option) => option.value === kind)?.description}
       >
-        <select
+        <StudioSelect
           id="inventoryKind"
           name="inventoryKind"
           value={kind}
@@ -682,7 +684,7 @@ function RoomTypeForm({
               {option.enabled ? '' : ' (not available for this property)'}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       {kind === 'BED' ? (
         <Field
@@ -851,7 +853,7 @@ function RoomForm({
             : undefined
         }
       >
-        <select
+        <StudioSelect
           id="roomTypeId"
           name="roomTypeId"
           value={roomTypeId}
@@ -864,7 +866,7 @@ function RoomForm({
               {type.name} ({type.code})
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       <Field
         htmlFor="number"
@@ -883,7 +885,7 @@ function RoomForm({
         error={errors.connectingRoomId}
         hint="Optional. A room this one opens into."
       >
-        <select
+        <StudioSelect
           id="connectingRoomId"
           name="connectingRoomId"
           defaultValue=""
@@ -896,7 +898,7 @@ function RoomForm({
               {room.number}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       {selectedType?.inventoryKind === 'BED' ? (
         <Field
@@ -905,7 +907,7 @@ function RoomForm({
           error={errors.genderPolicy}
           hint="Who may be booked into this shared room."
         >
-          <select
+          <StudioSelect
             id="genderPolicy"
             name="genderPolicy"
             defaultValue="ANY"
@@ -917,7 +919,7 @@ function RoomForm({
                 {option.label}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
       ) : null}
       <Field
@@ -1326,7 +1328,7 @@ function StatusEditor({
     >
       {isDorm ? (
         <Field htmlFor={`${prefix}-target`} label="Change">
-          <select
+          <StudioSelect
             id={`${prefix}-target`}
             ref={first}
             value={target}
@@ -1340,7 +1342,7 @@ function StatusEditor({
                 Bed {candidate.label} · {HOTEL_ROOM_STATUS_LABELS[candidate.status]}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
       ) : (
         <p className="text-sm text-text-body">
@@ -1349,7 +1351,7 @@ function StatusEditor({
         </p>
       )}
       <Field htmlFor={`${prefix}-status`} label="New status" error={errors.status}>
-        <select
+        <StudioSelect
           id={`${prefix}-status`}
           ref={isDorm ? undefined : first}
           name="status"
@@ -1364,7 +1366,7 @@ function StatusEditor({
               {option.label}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       <Field
         htmlFor={`${prefix}-reason`}
@@ -1453,7 +1455,7 @@ function BlockEditor({
         error={errors.kind}
         hint={blockKindOptions[0]?.description}
       >
-        <select
+        <StudioSelect
           id={`${prefix}-kind`}
           ref={first}
           name="kind"
@@ -1466,7 +1468,7 @@ function BlockEditor({
               {option.label}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       <Field htmlFor={`${prefix}-start`} label="From" error={errors.startDate}>
         <Input

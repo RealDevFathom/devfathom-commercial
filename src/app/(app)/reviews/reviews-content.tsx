@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useMemo, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import {
@@ -383,7 +385,7 @@ function AssignReviewerForm({ cycleId }: { cycleId: string }) {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
           <div>
             <label className="mb-1 block text-xs font-medium text-foreground">Subject</label>
-            <select
+            <StudioSelect
               value={subjectId}
               onChange={(e) => setSubjectId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -394,11 +396,11 @@ function AssignReviewerForm({ cycleId }: { cycleId: string }) {
                   {u.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="mb-1 block text-xs font-medium text-foreground">Reviewer</label>
-            <select
+            <StudioSelect
               value={reviewerId}
               onChange={(e) => setReviewerId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -409,7 +411,7 @@ function AssignReviewerForm({ cycleId }: { cycleId: string }) {
                   {u.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <Button
             onClick={() => canSubmit && add.mutate({ cycleId, subjectId, reviewerId })}

@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -53,7 +54,7 @@ export function BranchSelect({
   name?: string;
 }) {
   return (
-    <select
+    <StudioSelect
       id={id}
       className="min-h-11 w-full min-w-0 rounded-md border border-input bg-surface-card px-2.5 text-sm text-foreground transition-colors outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive"
       name={name}
@@ -69,6 +70,6 @@ export function BranchSelect({
           {branch.name}
         </option>
       ))}
-    </select>
+    </StudioSelect>
   );
 }

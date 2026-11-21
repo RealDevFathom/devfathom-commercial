@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -265,7 +267,7 @@ export function TrelloImportContent() {
               ))}
             </div>
             {targetMode === 'existing' ? (
-              <select
+              <StudioSelect
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
@@ -276,7 +278,7 @@ export function TrelloImportContent() {
                     {p.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             ) : (
               <>
                 <input
@@ -450,7 +452,7 @@ function MemberMappingRow({
         <p className="text-xs text-muted-foreground">@{trelloMember.username}</p>
       </div>
       <span className="text-xs text-muted-foreground">&rarr;</span>
-      <select
+      <StudioSelect
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full sm:w-44 rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -461,7 +463,7 @@ function MemberMappingRow({
             {m.name}
           </option>
         ))}
-      </select>
+      </StudioSelect>
     </div>
   );
 }

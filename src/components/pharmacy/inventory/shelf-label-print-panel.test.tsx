@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -51,7 +52,14 @@ describe('DEV-90 shelf label print panel', () => {
     fireEvent.change(screen.getByLabelText('Labels for Paracetamol batch B-1'), {
       target: { value: '3' },
     });
-    fireEvent.change(screen.getByLabelText('Label size'), { target: { value: '50x25' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Label size', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: '50x25' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Print 3 labels' }));
 
     expect(await screen.findByRole('status')).toHaveTextContent(

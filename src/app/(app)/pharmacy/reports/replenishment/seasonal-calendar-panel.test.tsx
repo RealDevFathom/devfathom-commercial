@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -72,7 +73,14 @@ describe('seasonal calendar panel', () => {
     });
     render(<SeasonalCalendarPanel branchId="branch-1" today="2026-11-03" />);
     expect(screen.getByText('Ramadan 1448')).toBeVisible();
-    fireEvent.change(screen.getByLabelText('Season'), { target: { value: 'MONSOON' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Season', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'MONSOON' } }
+    );
     expect(screen.getByLabelText('Label')).toHaveValue('Monsoon');
     fireEvent.click(screen.getByRole('button', { name: 'Add window' }));
     expect(mocks.save).toHaveBeenCalledWith({
