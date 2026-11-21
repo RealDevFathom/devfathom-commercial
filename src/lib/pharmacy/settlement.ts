@@ -38,9 +38,13 @@ import {
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
 import { counterOperatorDenial } from './counter-capability';
-import { anyCardTerminalTender, countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
+import {
+  anyCardTerminalTender,
+  countOpenCardTerminalAttempts,
+} from './card-terminal/open-attempts';
 
-export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
+export type PharmacyTenderType =
+  'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT' | ManualTenderType;
 
 export class PharmacySettlementError extends Error {
   constructor(
@@ -340,15 +344,27 @@ export async function readPharmacyTenderOutcome(
     )
       return unknown;
 
-    if (isManualTender(input.type) && (tender.provider !== 'MANUAL_MERCHANT' ||
-      tender.providerRef !== (input.providerRef ?? null) || tender.payerName !== input.payerName?.trim() ||
-      tender.referenceSkipped !== (input.referenceSkipped ?? false))) return unknown;
-    if (input.approvalCode !== undefined && (tender.provider !== MANUAL_CARD_PROVIDER ||
-      tender.providerRef !== input.providerRef?.trim() ||
-      tender.approvalCode !== input.approvalCode.trim())) return unknown;
+    if (
+      isManualTender(input.type) &&
+      (tender.provider !== 'MANUAL_MERCHANT' ||
+        tender.providerRef !== (input.providerRef ?? null) ||
+        tender.payerName !== input.payerName?.trim() ||
+        tender.referenceSkipped !== (input.referenceSkipped ?? false))
+    )
+      return unknown;
+    if (
+      input.approvalCode !== undefined &&
+      (tender.provider !== MANUAL_CARD_PROVIDER ||
+        tender.providerRef !== input.providerRef?.trim() ||
+        tender.approvalCode !== input.approvalCode.trim())
+    )
+      return unknown;
 
-    if (input.type === 'BANK_TRANSFER' &&
-      (tender.providerRef ?? null) !== (input.providerRef?.trim() ?? null)) return unknown;
+    if (
+      input.type === 'BANK_TRANSFER' &&
+      (tender.providerRef ?? null) !== (input.providerRef?.trim() ?? null)
+    )
+      return unknown;
 
     return { status: 'ACCEPTED', replayUnsafe: true, result };
   } catch {
@@ -368,8 +384,7 @@ export type PharmacyTenderDiscardRecord = {
 };
 
 export type PharmacyTenderDiscard =
-  | { status: 'DISCARDED' }
-  | { status: 'ACCEPTED'; result: z.infer<typeof tenderResultSchema> };
+  { status: 'DISCARDED' } | { status: 'ACCEPTED'; result: z.infer<typeof tenderResultSchema> };
 
 /**
  * DEV-712: a supervisor discards a counter payment attempt whose outcome is unknown.
@@ -776,30 +791,35 @@ export async function applyPharmacyTender(
   const manualCard = input.type === 'CARD' && !input.adapter;
   const bankTransfer = input.type === 'BANK_TRANSFER';
   if (manualCard || bankTransfer) {
-    if (input.payerName !== undefined || input.referenceSkipped !== undefined ||
-        input.cashReceivedMinor !== undefined)
+    if (
+      input.payerName !== undefined ||
+      input.referenceSkipped !== undefined ||
+      input.cashReceivedMinor !== undefined
+    )
       throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   }
   if (!manualCard && input.approvalCode !== undefined) {
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   }
-  if (!isManualTender(input.type) && !manualCard && !bankTransfer &&
-      (input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined))
+  if (
+    !isManualTender(input.type) &&
+    !manualCard &&
+    !bankTransfer &&
+    (input.providerRef !== undefined ||
+      input.payerName !== undefined ||
+      input.referenceSkipped !== undefined)
+  )
     throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
   if (input.type === 'CASH') {
     cashReceivedMinor = input.cashReceivedMinor ?? input.amountMinor;
     if (!Number.isSafeInteger(cashReceivedMinor) || cashReceivedMinor < input.amountMinor)
       throw new PharmacySettlementError('INVALID_AMOUNT');
     changeGivenMinor = cashReceivedMinor - input.amountMinor;
-    const drawer = await resolveOperatingPharmacyDrawer(
-      db,
-      scope,
-      input,
-      options.drawerOperator
-    );
+    const drawer = await resolveOperatingPharmacyDrawer(db, scope, input, options.drawerOperator);
     drawerSessionId = drawer.id;
   } else if (isManualTender(input.type)) {
-    if (input.cashReceivedMinor !== undefined) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+    if (input.cashReceivedMinor !== undefined)
+      throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     // Policy and capture are checked in the money transaction. Saving policy
     // takes UPDATE on the same branch row, so a concurrent skip-policy change
     // cannot slip between this read and the committed tender.
@@ -808,8 +828,10 @@ export async function applyPharmacyTender(
     const branch = await readManualPaymentSettings(db, scope);
     try {
       const capture = validateManualTender(branch.settings, {
-        type: input.type, providerRef: input.providerRef,
-        payerName: input.payerName, referenceSkipped: input.referenceSkipped,
+        type: input.type,
+        providerRef: input.providerRef,
+        payerName: input.payerName,
+        referenceSkipped: input.referenceSkipped,
       });
       provider = 'MANUAL_MERCHANT';
       providerRef = capture.providerRef;
@@ -817,10 +839,13 @@ export async function applyPharmacyTender(
       referenceSkipped = capture.referenceSkipped;
       // The signed-in cashier attests the money reached the merchant account.
       confirmedById = scope.actorId;
-    } catch { throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE'); }
+    } catch {
+      throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
+    }
   } else if (manualCard) {
     const capture = manualCardCaptureSchema.safeParse({
-      providerRef: input.providerRef, approvalCode: input.approvalCode,
+      providerRef: input.providerRef,
+      approvalCode: input.approvalCode,
     });
     if (!capture.success) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     provider = MANUAL_CARD_PROVIDER;
@@ -862,29 +887,31 @@ export async function applyPharmacyTender(
   // DEV-958B: the database puts the tender in the counter's open cash shift (none on a drawer
   // without shifts). An offline sale carries the time it was sold, so it stays in the shift it was
   // sold in while that shift is open, and is a late arrival on it once it has closed.
-  const tender = await withCashShiftRefusal(db.pharmacyTender.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      saleId: sale.id,
-      type: input.type,
-      amountMinor: input.amountMinor,
-      cashReceivedMinor,
-      changeGivenMinor,
-      drawerSessionId,
-      provider,
-      providerRef,
-      payerName,
-      referenceSkipped,
-      approvalCode,
-      confirmedById,
-      createdAt: providerPostingAt,
-      businessDate: input.businessDate,
-      actorId: scope.actorId,
-      deviceId: input.deviceId,
-      ...(input.leasedReceipt ? { soldAt: new Date(input.leasedReceipt.originalSaleAt) } : {}),
-    },
-  }));
+  const tender = await withCashShiftRefusal(
+    db.pharmacyTender.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: sale.id,
+        type: input.type,
+        amountMinor: input.amountMinor,
+        cashReceivedMinor,
+        changeGivenMinor,
+        drawerSessionId,
+        provider,
+        providerRef,
+        payerName,
+        referenceSkipped,
+        approvalCode,
+        confirmedById,
+        createdAt: providerPostingAt,
+        businessDate: input.businessDate,
+        actorId: scope.actorId,
+        deviceId: input.deviceId,
+        ...(input.leasedReceipt ? { soldAt: new Date(input.leasedReceipt.originalSaleAt) } : {}),
+      },
+    })
+  );
   if (provider === PREPAID_PROVIDER)
     await movePrepaid(db, scope, {
       customerId: sale.customerId!,
@@ -895,17 +922,19 @@ export async function applyPharmacyTender(
     });
   await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });
   if (drawerSessionId)
-    await withCashShiftRefusal(db.pharmacyDrawerMovement.create({
-      data: {
-        organizationId: scope.organizationId,
-        drawerSessionId,
-        kind: 'CASH_SALE',
-        amountMinor: input.amountMinor,
-        actorId: scope.actorId,
-        // DEV-958B: the cash goes in the shift the database gave its tender.
-        ...cashShiftOf(tender),
-      },
-    }));
+    await withCashShiftRefusal(
+      db.pharmacyDrawerMovement.create({
+        data: {
+          organizationId: scope.organizationId,
+          drawerSessionId,
+          kind: 'CASH_SALE',
+          amountMinor: input.amountMinor,
+          actorId: scope.actorId,
+          // DEV-958B: the cash goes in the shift the database gave its tender.
+          ...cashShiftOf(tender),
+        },
+      })
+    );
 
   if (settled) {
     // F2: a leased offline receipt number was consumed above in this transaction; online
@@ -1195,7 +1224,9 @@ export function computePharmacyClose(source: CloseSource) {
     sales: [...source.sales].sort((a, b) => a.id.localeCompare(b.id)),
     refunds: [...source.refunds].sort((a, b) => a.id.localeCompare(b.id)),
     drawers: [...source.drawers].sort((a, b) => a.id.localeCompare(b.id)),
-    ...(source.tenders ? { tenders: [...source.tenders].sort((a, b) => a.id.localeCompare(b.id)) } : {}),
+    ...(source.tenders
+      ? { tenders: [...source.tenders].sort((a, b) => a.id.localeCompare(b.id)) }
+      : {}),
   };
   const grossSalesMinor = ordered.sales.reduce((sum, row) => sum + row.totalMinor, 0);
   const refundTotalMinor = ordered.refunds.reduce((sum, row) => sum + row.amountMinor, 0);
@@ -1264,7 +1295,8 @@ export async function openPharmacyDrawer(
     await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
   await requirePharmacyDayOpen(db, scope, input.businessDate);
   const operatingCashierId = input.operatingCashierId ?? scope.actorId;
-  if (operatingCashierId !== scope.actorId) await assertBranchCashier(db, scope, operatingCashierId);
+  if (operatingCashierId !== scope.actorId)
+    await assertBranchCashier(db, scope, operatingCashierId);
   // One OPEN drawer per counter device (the partial unique index
   // `pharmacy_one_open_drawer_per_device`). The pre-check answers the ordinary
   // second click with the typed reason; the P2002 translation below is the
@@ -1451,16 +1483,18 @@ export async function recordPharmacyCashMovement(
   // drawer. A drawer left open from an earlier business day is closed with that day, so cash is
   // never booked onto a day that has already ended.
   if (input.requireCurrentBusinessDate) await requireTodaysPharmacyDrawer(db, scope, drawer);
-  return withCashShiftRefusal(db.pharmacyDrawerMovement.create({
-    data: {
-      organizationId: scope.organizationId,
-      drawerSessionId: drawer.id,
-      kind: input.kind,
-      amountMinor: input.amountMinor,
-      reason: input.reason.trim(),
-      actorId: scope.actorId,
-    },
-  }));
+  return withCashShiftRefusal(
+    db.pharmacyDrawerMovement.create({
+      data: {
+        organizationId: scope.organizationId,
+        drawerSessionId: drawer.id,
+        kind: input.kind,
+        amountMinor: input.amountMinor,
+        reason: input.reason.trim(),
+        actorId: scope.actorId,
+      },
+    })
+  );
 }
 
 /**
@@ -1569,15 +1603,17 @@ export async function closePharmacyDrawer(
   );
   // DEV-958B: a drawer that runs shifts closes only after its last shift, on that shift's count
   // (the database refuses otherwise).
-  await withCashShiftRefusal(db.pharmacyDrawerMovement.create({
-    data: {
-      organizationId: scope.organizationId,
-      drawerSessionId: drawer.id,
-      kind: 'CLOSING_COUNT',
-      amountMinor: input.countedCashMinor,
-      actorId: scope.actorId,
-    },
-  }));
+  await withCashShiftRefusal(
+    db.pharmacyDrawerMovement.create({
+      data: {
+        organizationId: scope.organizationId,
+        drawerSessionId: drawer.id,
+        kind: 'CLOSING_COUNT',
+        amountMinor: input.countedCashMinor,
+        actorId: scope.actorId,
+      },
+    })
+  );
   const closed = await db.pharmacyDrawerSession.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: drawer.id } },
     data: {
@@ -1688,27 +1724,29 @@ export async function cutPharmacyDailyClose(
   const isFinal = await firstCloseIsFinal(db, scope.organizationId, scope.branchId);
 
   // DEV-958B: the database refuses a day close while a shift of the day is open.
-  const close = await withCashShiftRefusal(db.pharmacyDailyClose.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      businessDate: input.businessDate,
-      sequence: (prior?.sequence ?? 0) + 1,
-      supersedesCloseId: prior?.id,
-      // The row is append-only, so its one reason is written here: the reopen reason when given,
-      // as before, otherwise the variance note.
-      reason: input.reopenReason?.trim() ?? (input.varianceNote?.trim() || undefined),
-      ...aggregate,
-      tenderTotals: aggregateTenderTotals(
-        tenders,
-        refunds,
-        await manualConfirmerNames(db, scope.organizationId, tenders)
-      ),
-      isFinal,
-      controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,
-      actorId: scope.actorId,
-    },
-  }));
+  const close = await withCashShiftRefusal(
+    db.pharmacyDailyClose.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        businessDate: input.businessDate,
+        sequence: (prior?.sequence ?? 0) + 1,
+        supersedesCloseId: prior?.id,
+        // The row is append-only, so its one reason is written here: the reopen reason when given,
+        // as before, otherwise the variance note.
+        reason: input.reopenReason?.trim() ?? (input.varianceNote?.trim() || undefined),
+        ...aggregate,
+        tenderTotals: aggregateTenderTotals(
+          tenders,
+          refunds,
+          await manualConfirmerNames(db, scope.organizationId, tenders)
+        ),
+        isFinal,
+        controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,
+        actorId: scope.actorId,
+      },
+    })
+  );
   // The counted cash variance reaches the journal in the close's own transaction (CASH / CASH_OVER_SHORT).
   await postDailyCloseEntry(db, scope, { closeId: close.id, at: close.createdAt });
   await requestCounterEvidence(db, scope, { kind: 'DAILY_CLOSE', subjectId: close.id });

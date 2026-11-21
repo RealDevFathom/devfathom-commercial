@@ -580,7 +580,10 @@ describe('DEV-501 one confirm records the return and refunds it', () => {
       f.db,
       expect.anything(),
       expect.objectContaining({ amountMinor: 350, manualCashFallback: true }),
-      { requireCurrentBusinessDate: true, drawerOperator: { kind: 'COUNTER', actorIsManager: true } }
+      {
+        requireCurrentBusinessDate: true,
+        drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+      }
     );
     vi.mocked(refundPharmacyTender).mockClear();
     await expect(
