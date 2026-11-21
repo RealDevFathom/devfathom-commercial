@@ -3,13 +3,14 @@ import { TRPCError } from '@trpc/server';
 import {
   MAX_TRELLO_REQUEST_BYTES,
   TRELLO_LIMIT_MESSAGE,
-  trelloImportWithinLimits,
+  trelloRawLimit,
+  trelloRecordLimit,
 } from '@/types/trello-import-limits';
 
 const IMPORT_PATH = 'trelloImport.importBoard';
 
-function oversized(): never {
-  throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: TRELLO_LIMIT_MESSAGE });
+function oversized(message = TRELLO_LIMIT_MESSAGE): never {
+  throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message });
 }
 
 function invalid(): never {
@@ -65,7 +66,10 @@ export async function preflightTrelloImport(req: Request, paths: string[]) {
   const input = record(envelope?.json);
   if (!input || envelope?.meta !== undefined) invalid();
   // Budget the defaulted flag as the procedure will see it.
-  if (!trelloImportWithinLimits({ includeArchived: false, ...input })) oversized();
+  const limit =
+    trelloRawLimit({ includeArchived: false, ...input }) ??
+    trelloRecordLimit(input.trelloJson, input.includeArchived === true);
+  if (limit) oversized(limit);
 
   // The tRPC JSON adapter uses req.json(). Share the parsed body and allow
   // Next's request proxy to return the method bound to its original Request.

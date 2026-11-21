@@ -732,6 +732,20 @@ describe('Trello import HTTP preflight', () => {
     }
   );
 
+  it('names the imported list limit before tenant authentication or database access', async () => {
+    const trelloJson = {
+      ...board,
+      lists: Array.from({ length: 501 }, (_, id) => ({ id: String(id) })),
+    };
+    const response = await post(JSON.stringify({ '0': { json: { ...input, trelloJson } } }));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({
+      error: { json: { message: expect.stringContaining('500 lists') } },
+    });
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(harness.outcomes).toEqual([]);
+  });
+
   it('rejects a repeated import path in a single transaction', async () => {
     const response = await post(
       JSON.stringify({ '0': { json: input }, '1': { json: input } }),

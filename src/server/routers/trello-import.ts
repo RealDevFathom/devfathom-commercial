@@ -4,7 +4,7 @@ import { router, protectedProcedure } from '../trpc';
 import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
 import { trelloBoardSchema, trelloColorMap } from '@/types/trello';
-import { TRELLO_LIMIT_MESSAGE, trelloImportWithinLimits } from '@/types/trello-import-limits';
+import { trelloRawLimit, trelloRecordLimit } from '@/types/trello-import-limits';
 import { uploadNameFromRef } from '@/lib/uploads/registry';
 import { acquireTrelloImportLocks } from '@/server/trello-import-locks';
 
@@ -88,9 +88,9 @@ export const trelloImportRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
-      if (!trelloImportWithinLimits(input)) {
-        throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: TRELLO_LIMIT_MESSAGE });
-      }
+      const limit =
+        trelloRawLimit(input) ?? trelloRecordLimit(input.trelloJson, input.includeArchived);
+      if (limit) throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: limit });
       const parsed = trelloBoardSchema.safeParse(input.trelloJson);
       if (!parsed.success) {
         throw new TRPCError({
@@ -446,26 +446,26 @@ export const trelloImportRouter = router({
 
           // Create comments
           const cardComments = commentMap.get(card.id) || [];
-          for (const comment of cardComments) {
-            // Only attribute a comment to a real member of the target project;
-            // otherwise fall back to the importer. Prevents audit-trail forgery.
-            const mappedUserId = comment.memberCreator
-              ? input.memberMapping[comment.memberCreator.id]
-              : undefined;
-            const userId =
-              mappedUserId && projectMemberIds.has(mappedUserId)
-                ? mappedUserId
-                : ctx.session.user.id;
-
-            await tx.taskComment.create({
-              data: {
+          for (let start = 0; start < cardComments.length; start += 1_000) {
+            const data = cardComments.slice(start, start + 1_000).map((comment) => {
+              // Only attribute a comment to a real member of the target project;
+              // otherwise fall back to the importer. Prevents audit-trail forgery.
+              const mappedUserId = comment.memberCreator
+                ? input.memberMapping[comment.memberCreator.id]
+                : undefined;
+              const userId =
+                mappedUserId && projectMemberIds.has(mappedUserId)
+                  ? mappedUserId
+                  : ctx.session.user.id;
+              return {
                 content: comment.data.text || '',
                 taskId: task.id,
                 userId,
                 // TRELLO-01: fall back to "now" if the comment timestamp is unparseable.
                 createdAt: safeDate(comment.date) ?? new Date(),
-              },
+              };
             });
+            await tx.taskComment.createMany({ data });
           }
 
           tasksCreated++;

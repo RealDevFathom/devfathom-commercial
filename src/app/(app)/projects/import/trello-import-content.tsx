@@ -27,7 +27,9 @@ import { trelloBoardSchema } from '@/types/trello';
 import {
   MAX_TRELLO_REQUEST_BYTES,
   TRELLO_LIMIT_MESSAGE,
-  trelloImportWithinLimits,
+  TRELLO_IMPORT_LIMITS,
+  trelloRawLimit,
+  trelloRecordLimit,
 } from '@/types/trello-import-limits';
 import type { TrelloBoard, TrelloMember } from '@/types/trello';
 
@@ -85,8 +87,9 @@ export function TrelloImportContent() {
     reader.onload = (e) => {
       try {
         const json = JSON.parse(e.target?.result as string);
-        if (!trelloImportWithinLimits({ trelloJson: json })) {
-          setError(TRELLO_LIMIT_MESSAGE);
+        const limit = trelloRawLimit({ trelloJson: json });
+        if (limit) {
+          setError(limit);
           return;
         }
         const parsed = trelloBoardSchema.safeParse(json);
@@ -132,6 +135,11 @@ export function TrelloImportContent() {
 
   const handleImport = () => {
     if (!uploadedBoard || !canImport) return;
+    const limit = trelloRecordLimit(uploadedBoard.json, includeArchived);
+    if (limit) {
+      setError(limit);
+      return;
+    }
     setStep('importing');
     setError('');
     importMutation.mutate({
@@ -225,6 +233,16 @@ export function TrelloImportContent() {
           </h3>
           <p className="mt-2 text-sm text-muted-foreground text-center max-w-sm">
             Export from Trello: Menu &rarr; More &rarr; Print and Export &rarr; Export as JSON
+          </p>
+          <p className="mt-2 max-w-sm text-center text-sm text-text-muted">
+            Up to 16 MiB per upload. Each import can include{' '}
+            {TRELLO_IMPORT_LIMITS.cards.toLocaleString('en-US')} cards,{' '}
+            {TRELLO_IMPORT_LIMITS.lists.toLocaleString('en-US')} lists,{' '}
+            {TRELLO_IMPORT_LIMITS.checklistItems.toLocaleString('en-US')} checklist items and{' '}
+            {TRELLO_IMPORT_LIMITS.comments.toLocaleString('en-US')} comments. Card names can be up
+            to {TRELLO_IMPORT_LIMITS.cardName.toLocaleString('en-US')} characters. Complex exports
+            can also exceed the {TRELLO_IMPORT_LIMITS.work.toLocaleString('en-US')}-unit processing
+            limit.
           </p>
           <Button
             type="button"

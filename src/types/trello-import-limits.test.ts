@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
-import { trelloImportWithinLimits } from './trello-import-limits';
+import {
+  trelloImportWithinLimits,
+  trelloRawLimit,
+  trelloRecordLimit,
+} from './trello-import-limits';
 
 describe('Trello import limits', () => {
   it.each([
-    ['lists', 500],
-    ['cards', 3000],
+    ['lists', 10000],
+    ['cards', 10000],
     ['labels', 500],
     ['members', 1000],
     ['checklists', 3000],
@@ -78,11 +82,66 @@ describe('Trello import limits', () => {
   });
 
   it('charges an overall budget even when each local limit is respected', () => {
-    const parts = Array.from({ length: 25 }, (_, i) =>
-      Array.from({ length: i === 24 ? 9973 : 10000 }, () => null)
+    const parts = Array.from({ length: 200 }, (_, i) =>
+      Array.from({ length: i === 199 ? 9798 : 10000 }, () => null)
     );
     expect(trelloImportWithinLimits({ parts })).toBe(true);
-    parts[24].push(null);
+    parts[199].push(null);
     expect(trelloImportWithinLimits({ parts })).toBe(false);
+  });
+});
+
+describe('imported Trello record and card name limits', () => {
+  const list = { id: 'list' };
+  const card = { id: 'card', idList: list.id };
+  const checkItem = { name: 'Review', state: 'incomplete' };
+  const comment = { type: 'commentCard', data: { card: { id: card.id } } };
+
+  it('allows the maximum card name and reports the exceeded length', () => {
+    const input = (length: number) => ({ trelloJson: { cards: [{ name: 'x'.repeat(length) }] } });
+    expect(trelloRawLimit(input(16384))).toBeNull();
+    expect(trelloRawLimit(input(16385))).toContain('16,384-character card name');
+  });
+
+  it.each([
+    ['lists', Array.from({ length: 500 }, (_, id) => ({ id: String(id) })), list, '500 lists'],
+    [
+      'cards',
+      Array.from({ length: 5000 }, (_, id) => ({ ...card, id: String(id) })),
+      card,
+      '5,000 cards',
+    ],
+    [
+      'checklists',
+      Array.from({ length: 100 }, () => ({
+        idCard: card.id,
+        checkItems: Array(500).fill(checkItem),
+      })),
+      { idCard: card.id, checkItems: [checkItem] },
+      '50,000 checklist items',
+    ],
+    ['actions', Array(100000).fill(comment), comment, '100,000 comments'],
+  ])(
+    'allows %s at the record limit and names the maximum when exceeded',
+    (key, values, extra, message) => {
+      const board = { lists: [list], cards: [card], [key]: values };
+      expect(trelloRecordLimit(board, false)).toBeNull();
+      expect(trelloRecordLimit({ ...board, [key]: [...values, extra] }, false)).toContain(message);
+    }
+  );
+
+  it('counts records only for cards placed by the import', () => {
+    const comments = Array(100001).fill({
+      type: 'commentCard',
+      data: { card: { id: 'archived' } },
+    });
+    const board = {
+      lists: [list],
+      cards: [card, { id: 'archived', closed: true }],
+      actions: comments,
+    };
+    expect(trelloRecordLimit(board, false)).toBeNull();
+    expect(trelloRecordLimit(board, true)).toContain('100,000 comments');
+    expect(trelloRecordLimit({ ...board, cards: [card] }, true)).toBeNull();
   });
 });

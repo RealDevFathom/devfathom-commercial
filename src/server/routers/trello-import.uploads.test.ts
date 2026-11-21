@@ -26,6 +26,9 @@ const db = {
   column: { create: vi.fn(async () => ({ id: 'column_1' })) },
   task: { create: vi.fn(async () => ({ id: 'task_1' })) },
   taskAttachment: { createMany: vi.fn() },
+  taskComment: {
+    createMany: vi.fn((batch: { data: unknown[] }) => ({ count: batch.data.length })),
+  },
   $queryRaw: vi.fn(async () => [{ acquired: true }]),
   $transaction: vi.fn(async (run: (tx: unknown) => Promise<unknown>) => run(db)),
 };
@@ -105,9 +108,20 @@ it('rejects an oversized board and structurally invalid JSON before starting imp
   await expect(
     caller().importBoard({
       ...base,
-      trelloJson: { ...exportWith('https://example.test/file'), cards: new Array(3001).fill(null) },
+      trelloJson: {
+        ...exportWith('https://example.test/file'),
+        cards: Array.from({ length: 5001 }, (_, i) => ({
+          id: String(i),
+          name: 'Card',
+          pos: 1,
+          idList: 'list_1',
+        })),
+      },
     })
-  ).rejects.toMatchObject({ code: 'PAYLOAD_TOO_LARGE' });
+  ).rejects.toMatchObject({
+    code: 'PAYLOAD_TOO_LARGE',
+    message: expect.stringContaining('5,000 cards'),
+  });
   expect(db.$transaction).not.toHaveBeenCalled();
   expect(db.project.create).not.toHaveBeenCalled();
 });
@@ -131,4 +145,27 @@ it('imports a normal board with its tasks and attachment in one transaction', as
   expect(db.taskAttachment.createMany).toHaveBeenCalledWith({
     data: [{ taskId: 'task_1', name: 'file', url }],
   });
+});
+
+it('writes large comment sets in bounded groups and keeps project attribution', async () => {
+  const board = exportWith('https://example.test/file');
+  const date = '2026-11-21T00:00:00.000Z';
+  const actions = Array.from({ length: 1001 }, (_, index) => ({
+    type: 'commentCard',
+    date,
+    data: { card: { id: 'card_1' }, text: `Comment ${index}` },
+    memberCreator: { id: 'external', username: 'external', fullName: 'External' },
+  }));
+  await expect(
+    caller().importBoard({
+      trelloJson: { ...board, actions },
+      newProjectName: 'Imported',
+      memberMapping: { external: 'other-user' },
+    })
+  ).resolves.toMatchObject({ tasksCreated: 1 });
+  expect(db.taskComment.createMany).toHaveBeenCalledTimes(2);
+  expect(db.taskComment.createMany.mock.calls[0][0].data).toHaveLength(1000);
+  expect(db.taskComment.createMany.mock.calls[1][0].data).toEqual([
+    { taskId: 'task_1', userId: 'user_1', content: 'Comment 1000', createdAt: new Date(date) },
+  ]);
 });
