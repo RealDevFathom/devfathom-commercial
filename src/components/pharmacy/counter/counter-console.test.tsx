@@ -8418,3 +8418,31 @@ describe('DEV-977 phase 2B: the counter panels in the Counter v2 sheets', () => 
     expect(paid.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
   });
 });
+
+describe('DEV-977 phase 3: the Counter status strip', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('is no tab stop while its pills fit on the bar', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const strip = screen.getByRole('group', { name: 'Counter status' });
+    expect(strip).not.toHaveAttribute('tabindex');
+  });
+
+  it('takes the keyboard focus while its pills scroll sideways (375 and 768)', () => {
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.getAttribute('aria-label') === 'Counter status' ? 900 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function (
+      this: HTMLElement
+    ) {
+      return this.getAttribute('aria-label') === 'Counter status' ? 343 : 0;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const strip = screen.getByRole('group', { name: 'Counter status' });
+    expect(strip).toHaveAttribute('tabindex', '0');
+    strip.focus();
+    expect(strip).toHaveFocus();
+  });
+});

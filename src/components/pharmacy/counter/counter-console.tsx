@@ -100,6 +100,7 @@ import type { CounterTenderDiscardInput } from './counter-tender-discard';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { useBrowserOnline } from './use-browser-online';
+import { useHorizontalOverflow } from './use-horizontal-overflow';
 import { useCounterEnrolment, useCounterOffline } from './use-counter-offline';
 import {
   CounterOfflineBannerDetail,
@@ -819,6 +820,8 @@ function ScopedPharmacyCounterConsole({
   const [checksOpen, setChecksOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
+  // DEV-977 phase 3: the Counter status strip is a tab stop only while it scrolls sideways.
+  const [statusStripRef, statusStripScrolls] = useHorizontalOverflow<HTMLDivElement>();
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -4059,11 +4062,13 @@ function ScopedPharmacyCounterConsole({
         ))}
       </select>
       {/* DEV-1005: at narrow widths this strip scrolls sideways, so it takes the keyboard focus
-          (arrow keys then scroll it) and shows the Studio focus ring. */}
+          (arrow keys then scroll it) and shows the Studio focus ring. DEV-977 phase 3: only
+          while it actually scrolls; where its pills fit it is no tab stop. */}
       <div
+        ref={statusStripRef}
         role="group"
         aria-label="Counter status"
-        tabIndex={0}
+        tabIndex={statusStripScrolls ? 0 : undefined}
         className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto rounded-full [scrollbar-width:none] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <div className="flex shrink-0 items-center gap-2" aria-label="Bill status">
