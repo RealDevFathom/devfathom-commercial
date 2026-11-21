@@ -2129,7 +2129,28 @@ test('Counter v2 — the discount sheet: whole bill or next item, and who can ap
 
 const SERVER_FEATURE_QA = 'playwright-artifacts/pharmacy-counter-server-features';
 async function featureShots(page: Page, name: string, focus: Locator) {
-  await qaShots(page, name, { focus, widths: [375, 768, 1024, 1440], dir: SERVER_FEATURE_QA });
+  const widths = [375, 768, 1024, 1440];
+  const original = page.viewportSize();
+  for (const width of widths) {
+    await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
+    for (const theme of ['light', 'dark'] as const) {
+      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'no-preference' });
+      await page.evaluate(
+        (value) => document.documentElement.setAttribute('data-theme', value),
+        theme
+      );
+      await focus.focus();
+      await page.keyboard.press('Shift+Tab');
+      await page.keyboard.press('Tab');
+      await expect(focus).toBeFocused();
+      expect(await focus.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+      ).toBe(true);
+    }
+  }
+  if (original) await page.setViewportSize(original);
+  await qaShots(page, name, { focus, widths, dir: SERVER_FEATURE_QA });
 }
 test('B3 returns and refunds two receipt lines in one confirmation', async ({ page }) => {
   test.setTimeout(120_000);
@@ -2142,7 +2163,8 @@ test('B3 returns and refunds two receipt lines in one confirmation', async ({ pa
     await addFirstResult(page, med.name);
     await expect(billLine(page, med.name)).toBeVisible();
   }
-  await tenderCash(page, '5.50');
+  // Sell the full bottle, then return just one of its 60 units along with the tablet.
+  await tenderCash(page, '182.50');
   const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ });
   await expect(receipt).toBeVisible();
   const number = (await receipt.getAttribute('aria-label'))!.match(/\d+/)![0];
@@ -2191,6 +2213,7 @@ test('A4 approves a discount on the selected existing line inside the discount s
   const otc = PHARMACY_E2E.medicines.otc;
   await search(page, otc.brandName);
   await addFirstResult(page, otc.name);
+  await expect(billLine(page, otc.name)).toBeVisible();
   const totals = page.getByRole('complementary', { name: 'Bill total' });
   await pressControl(totals.getByRole('button', { name: 'Discount', exact: true }));
   const sheet = page.getByRole('dialog');

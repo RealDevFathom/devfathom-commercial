@@ -1395,11 +1395,6 @@ export async function removeSaleLine(
   };
 }
 
-/**
- * DEV-977B: changes the quantity or sale unit of one line on an open, unpaid counter bill.
- * The old line is taken off and a new one added under the request key with every rule of
- * adding a line, so the bill's money is exactly that of a bill rung up with the new line.
- */
 /** Price an existing line under the same owner limits and batch cost floors as a new line. */
 export async function discountBillLine(
   db: ScopedDb,
@@ -1510,6 +1505,11 @@ export async function discountBillLine(
   return { discountMinor: share.discountMinor };
 }
 
+/**
+ * DEV-977B: changes the quantity or sale unit of one line on an open, unpaid counter bill.
+ * The old line is taken off and a new one added under the request key with every rule of
+ * adding a line, so the bill's money is exactly that of a bill rung up with the new line.
+ */
 export async function changeSaleLine(
   db: ScopedDb,
   scope: LedgerScope,

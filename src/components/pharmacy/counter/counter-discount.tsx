@@ -297,7 +297,9 @@ export function CounterDiscountEntry({
             <DialogDescription className="sr-only">
               {toBill
                 ? 'One discount shared over the items of this bill.'
-                : 'A manual discount on the next item you add to this bill.'}
+                : toLine
+                  ? 'Apply a manual discount to the selected item on this bill.'
+                  : 'A manual discount on the next item you add to this bill.'}
             </DialogDescription>
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4.5 text-sm">
               {wholeBill || billLines?.lines.length ? (

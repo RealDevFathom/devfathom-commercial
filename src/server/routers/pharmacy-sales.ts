@@ -2847,13 +2847,6 @@ export const pharmacySalesRouter = router({
       });
       return { enabled: saved.enabled };
     }),
-  /**
-   * DEV-956: give, change or remove (zero) the one whole-bill discount on an open, unpaid bill,
-   * as an amount or a percentage. It is approved exactly as an item discount is: the operator's
-   * own discount right, or a manager's or owner's PIN (solo: the sole approver re-enters their
-   * own). The server shares it onto the lines under the owner's maximum, cost and minimum
-   * margin, and refuses what the bill cannot take in full, naming the most it can take.
-   */
   discountBillLine: protectedProcedure
     .input(
       z
@@ -2911,6 +2904,13 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  /**
+   * DEV-956: give, change or remove (zero) the one whole-bill discount on an open, unpaid bill,
+   * as an amount or a percentage. It is approved exactly as an item discount is: the operator's
+   * own discount right, or a manager's or owner's PIN (solo: the sole approver re-enters their
+   * own). The server shares it onto the lines under the owner's maximum, cost and minimum
+   * margin, and refuses what the bill cannot take in full, naming the most it can take.
+   */
   applyBillDiscount: protectedProcedure
     .input(
       z

@@ -130,7 +130,11 @@ function PackForm({ branchId, saleId, lines, disabled, refresh }: Props) {
         )}
       </fieldset>
       <CounterSheetFooter>
-        <Button size="touch" disabled={disabled || !selected || !code.trim() || check.isPending}>
+        <Button
+          type="submit"
+          size="touch"
+          disabled={disabled || !selected || !code.trim() || check.isPending}
+        >
           {check.isPending ? 'Checking…' : 'Check pack'}
         </Button>
       </CounterSheetFooter>
