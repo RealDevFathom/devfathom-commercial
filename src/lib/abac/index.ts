@@ -1,4 +1,3 @@
-import { PHARMACY_FINANCE_MANAGE } from './pharmacy-finance-actions';
 /**
  * ABAC engine — the central authorization decision point.
  *
@@ -12,6 +11,7 @@ import { PHARMACY_FINANCE_MANAGE } from './pharmacy-finance-actions';
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
 import { decideFromRules } from './capabilities';
+import { isPharmacyFinanceAction, PHARMACY_FINANCE_MANAGE } from './pharmacy-finance-actions';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, RESOURCE_CONSTRAINTS, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -31,15 +31,17 @@ export type CanOptions = {
 
 async function customDecision(
   db: AuthzDb,
-  userId: string,
+  subject: Subject,
   action: string,
   now: Date
 ): Promise<{ decision: boolean | null; hasOrganizationRole: boolean; isSystemOwner: boolean }> {
+  const checkSystemFinanceGrant = isPharmacyFinanceAction(action) && subject.role !== 'ADMIN';
   const user = await db.user.findUnique({
-    where: { id: userId },
+    where: { id: subject.id },
     select: {
       role: true,
       status: true,
+      organization: checkSystemFinanceGrant && { select: { vertical: true } },
       organizationRole: {
         select: {
           key: true,
@@ -57,10 +59,16 @@ async function customDecision(
   // Prescription capture is narrower than dispensing. Existing pharmacist
   // grants remain authoritative for it, including DENYs, without granting
   // tenant administrators the wider dispensing capability (`decideFromRules`).
-  const decision = decideFromRules(
-    [...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])],
-    action
-  );
+  const roleRules = user.organizationRole?.permissions ?? [];
+  // Pharmacy's built-in finance grants are paired with tenant ADMIN. A personal grant
+  // is evaluated independently, and every role or personal DENY still participates.
+  const effectiveRoleRules =
+    checkSystemFinanceGrant &&
+    user.organizationRole?.isSystem &&
+    user.organization?.vertical === 'PHARMACY'
+      ? roleRules.filter((rule) => rule.capability !== action || rule.effect !== 'ALLOW')
+      : roleRules;
+  const decision = decideFromRules([...user.permissionOverrides, ...effectiveRoleRules], action);
   return {
     decision,
     hasOrganizationRole: user.organizationRole !== null,
@@ -109,7 +117,7 @@ export async function can(
   try {
     const { decision, hasOrganizationRole, isSystemOwner } = await customDecision(
       db,
-      subject.id,
+      subject,
       action,
       env.now
     );
