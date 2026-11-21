@@ -28,6 +28,7 @@ import {
   authorizeControlledRestoration,
   type ControlledRestorationPin,
 } from './controlled-restoration-authorization';
+import { isLiveOrganizationOwner } from './owner-data-export';
 import { appendControlledSupplierReturn, lockRegister } from './controlled-register';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -303,6 +304,45 @@ async function removalArrangement(
   return { sealedPacks: sealedUnits / unitsPerPack, looseUnits };
 }
 
+type LegacySupplierDispatch = {
+  lineId: string;
+  purchaseReturnId: string;
+  batch: string | null;
+  quantity: number;
+  supplier: string;
+  dispatchedAt: Date;
+  sender: string;
+};
+
+/** New controlled dispatches cannot reach DISPATCHED without a register row.
+ * This read never signs evidence, consumes a credential or posts stock.
+ */
+export async function legacySupplierDispatches(db: ScopedDb, scope: LedgerScope, after?: string) {
+  if (!(await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId))) return null;
+  const rows = await db.$queryRaw<LegacySupplierDispatch[]>`
+    SELECT l.id AS "lineId", d.id AS "purchaseReturnId", b."batchNumber" AS batch,
+           l."quantityUnits" AS quantity, s.name AS supplier, d."dispatchedAt",
+           COALESCE(u.name, d."dispatchedByUserId") AS sender
+    FROM pharmacy_purchase_returns d
+    JOIN pharmacy_purchase_return_lines l ON l."organizationId" = d."organizationId" AND l."purchaseReturnId" = d.id
+    JOIN pharmacy_inventory_lots lot ON lot."organizationId" = l."organizationId" AND lot.id = l."inventoryLotId"
+    JOIN pharmacy_manufacturing_batches b ON b."organizationId" = lot."organizationId" AND b.id = lot."manufacturingBatchId"
+    JOIN pharmacy_medicines m ON m."organizationId" = b."organizationId" AND m.id = b."medicineId"
+    JOIN pharmacy_suppliers s ON s."organizationId" = d."organizationId" AND s.id = d."supplierId"
+    LEFT JOIN users u ON u."organizationId" = d."organizationId" AND u.id = d."dispatchedByUserId"
+    WHERE d."organizationId" = ${scope.organizationId} AND d."branchId" = ${scope.branchId}
+      AND NOT d."dispatchedWithRegisterPolicy" AND d.status IN ('DISPATCHED','SETTLED') AND (
+        m.controlled OR EXISTS (SELECT FROM pharmacy_controlled_register_entries purchase
+          JOIN pharmacy_stock_movements receipt ON receipt."organizationId" = purchase."organizationId" AND receipt.id = purchase."stockMovementId"
+          WHERE purchase."organizationId" = l."organizationId" AND purchase."inventoryLotId" = l."inventoryLotId"
+            AND purchase."entryKind" = 'PURCHASE' AND receipt."occurredAt" <= d."dispatchedAt")
+      ) AND l.id > ${after ?? ''}
+      AND NOT EXISTS (SELECT FROM pharmacy_controlled_register_entries e
+        WHERE e."organizationId" = l."organizationId" AND e."supplierReturnLineId" = l.id)
+    ORDER BY l.id LIMIT 51`;
+  return { rows: rows.slice(0, 50), next: rows.length > 50 ? rows[49]!.lineId : null };
+}
+
 /**
  * Post the return. Each line becomes a matched movement pair in the same lot and
  * location: out of AVAILABLE, into RETURN_TO_SUPPLIER. The reservation is then
@@ -317,6 +357,7 @@ export async function dispatchPurchaseReturn(
     at: Date;
     idempotencyKeyPrefix: string;
     controlledWitness?: ControlledRestorationPin;
+    recordLateLineId?: string;
   }
 ) {
   await db.$queryRaw`SELECT id FROM pharmacy_purchase_returns WHERE "organizationId"=${scope.organizationId}
@@ -343,11 +384,32 @@ export async function dispatchPurchaseReturn(
     },
   });
   if (!found) throw new PharmacySupplierReturnError('CROSS_BRANCH_REFERENCE');
-  if (found.status === 'DISPATCHED' || found.status === 'SETTLED') {
-    return loadReturn(db, scope, input.purchaseReturnId);
+  const sent = found.status === 'DISPATCHED' || found.status === 'SETTLED';
+  const lateLine = input.recordLateLineId
+    ? found.lines.find((line) => line.id === input.recordLateLineId)
+    : null;
+  if (input.recordLateLineId) {
+    if (!(await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId))) {
+      throw new PharmacySupplierReturnError('LATE_OWNER_REQUIRED');
+    }
+    if (
+      !sent ||
+      found.dispatchedWithRegisterPolicy ||
+      !found.dispatchedAt ||
+      !lateLine ||
+      (await db.pharmacyControlledRegisterEntry.findFirst({
+        where: { organizationId: scope.organizationId, supplierReturnLineId: lateLine.id },
+        select: { id: true },
+      }))
+    ) {
+      throw new PharmacySupplierReturnError('LATE_DISPATCH_UNAVAILABLE');
+    }
+  } else {
+    if (sent) throw new PharmacySupplierReturnError('ALREADY_DISPATCHED');
+    assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'DISPATCHED');
   }
-  assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'DISPATCHED');
-  const controlled = found.lines.some((line) => line.lot.batch.medicine.controlled);
+  const controlled =
+    Boolean(lateLine) || found.lines.some((line) => line.lot.batch.medicine.controlled);
   const witness = controlled
     ? await authorizeControlledRestoration(
         db,
@@ -358,6 +420,25 @@ export async function dispatchPurchaseReturn(
       )
     : undefined;
   if (controlled) await lockRegister(db, scope.organizationId, scope.branchId);
+
+  if (input.recordLateLineId) {
+    if (!lateLine || !found.dispatchedAt || !witness)
+      throw new PharmacySupplierReturnError('LATE_DISPATCH_UNAVAILABLE');
+    const [movement] = await db.$queryRaw<{ id: string | null }[]>`
+      SELECT pharmacy_legacy_supplier_outgoing(${scope.organizationId}, ${scope.branchId}, ${lateLine.id}) AS id`;
+    if (!movement?.id) throw new PharmacySupplierReturnError('LATE_MOVEMENT_UNCLEAR');
+    await appendControlledSupplierReturn(db, scope, {
+      supplierId: found.supplierId,
+      supplierName: found.supplier.name,
+      lineId: lateLine.id,
+      inventoryLotId: lateLine.inventoryLotId,
+      movementId: movement.id,
+      quantity: lateLine.quantityUnits,
+      lateDispatchAt: found.dispatchedAt,
+      witness,
+    });
+    return loadReturn(db, scope, found.id);
+  }
 
   // DEV-825: every balance the dispatch writes, locked once in the global key order.
   await lockStockBalances(

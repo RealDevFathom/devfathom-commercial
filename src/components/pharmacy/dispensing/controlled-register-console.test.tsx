@@ -167,6 +167,25 @@ describe('DEV-672 controlled register branch list', () => {
     expect(card).toHaveTextContent('balance 0');
   });
 
+  it('shows the original dispatch date and the separate recording date on a late register entry', () => {
+    h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
+    h.entries = [
+      {
+        ...entry,
+        entryKind: 'RETURN_TO_SUPPLIER',
+        sourcePurchase: { serial: 1 },
+        lateDispatchAt: new Date('2026-09-03T11:47:00Z'),
+      },
+    ];
+    render(<ControlledRegisterConsole />);
+    expect(screen.getByRole('article')).toHaveTextContent(
+      'dispatched 2026-09-03 16:47 PKT · recorded late 2026-11-01 11:00 PKT'
+    );
+    expect(screen.getByRole('table')).toHaveTextContent(
+      'dispatched 2026-09-03 16:47 PKT · recorded late 2026-11-01 11:00 PKT'
+    );
+  });
+
   it('prints the register table with the branch name', async () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
     const windows = installFakePrintWindows();

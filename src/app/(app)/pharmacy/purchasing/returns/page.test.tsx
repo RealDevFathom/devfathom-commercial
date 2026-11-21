@@ -22,6 +22,7 @@ const reads = {
   workspace: vi.fn(),
   purchaseReturns: vi.fn(),
   supplierCredits: vi.fn(),
+  legacySupplierDispatches: vi.fn().mockResolvedValue(null),
   returnableLots: vi.fn(),
 };
 const params = () => Promise.resolve({ branch: 'branch' });

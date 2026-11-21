@@ -14130,6 +14130,8 @@ model PharmacyControlledRegisterEntry {
   restorationMovementId  String?
   refEntryId             String?
   createdAt              DateTime                          @default(now())
+  /// Original movement time for a witnessed entry recorded after the dispatch.
+  lateDispatchAt           DateTime?
   sourcePurchaseEntryId    String?
   supplierReturnLineId     String?
   sourcePurchase           PharmacyControlledRegisterEntry? @relation("SupplierReturnPurchase", fields: [organizationId, sourcePurchaseEntryId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_register_return_purchase_fk")
@@ -14498,6 +14500,8 @@ model PharmacyPurchaseReturn {
   submittedByUserId  String?
   submittedAt        DateTime?
   dispatchedByUserId String?
+  /// True only for documents dispatched under the witnessed register policy.
+  dispatchedWithRegisterPolicy Boolean @default(false)
   dispatchedAt       DateTime?
   settledAt          DateTime?
   cancelledAt        DateTime?

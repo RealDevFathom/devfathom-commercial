@@ -114,6 +114,20 @@ describe('DEV-751 SOP occurrences in the inspection pack', () => {
     );
   });
 
+  it('keeps the register kind and exports its human-readable supplier-return label', async () => {
+    const { db, queryRawUnsafe } = database([]);
+    queryRawUnsafe.mockImplementation(async (sql: string) =>
+      sql.includes('FROM "pharmacy_controlled_register_entries" t')
+        ? [{ record: { entryKind: 'RETURN_TO_SUPPLIER', serial: 3 } }]
+        : []
+    );
+    const manifest = await createInspectionPack(db, input);
+    const register = manifest.files.find((f) => f.path === 'controlled-register.json')!;
+    expect(JSON.parse(register.content)).toEqual([
+      { entryKind: 'RETURN_TO_SUPPLIER', entryKindLabel: 'Returned to supplier', serial: 3 },
+    ]);
+  });
+
   it('is an empty section for a branch without an SOP site', async () => {
     const { db } = database([]);
     const manifest = await createInspectionPack(db, input);

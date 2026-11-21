@@ -1,8 +1,15 @@
 BEGIN;
+SET LOCAL lock_timeout = '10s';
 
 ALTER TYPE "PharmacyControlledRegisterKind" ADD VALUE IF NOT EXISTS 'RETURN_TO_SUPPLIER';
 
+-- Existing closed documents retain the old policy. Every subsequent dispatch
+-- is stamped by the database, even when an older application posts it.
+ALTER TABLE pharmacy_purchase_returns
+  ADD COLUMN IF NOT EXISTS "dispatchedWithRegisterPolicy" boolean NOT NULL DEFAULT false;
+
 ALTER TABLE pharmacy_controlled_register_entries
+  ADD COLUMN IF NOT EXISTS "lateDispatchAt" timestamp(3),
   ADD COLUMN IF NOT EXISTS "sourcePurchaseEntryId" text,
   ADD COLUMN IF NOT EXISTS "supplierReturnLineId" text;
 
@@ -30,6 +37,12 @@ BEGIN
       ADD CONSTRAINT pharmacy_register_return_source CHECK (
         ("entryKind"::text = 'RETURN_TO_SUPPLIER') = ("sourcePurchaseEntryId" IS NOT NULL) AND
         ("entryKind"::text = 'RETURN_TO_SUPPLIER') = ("supplierReturnLineId" IS NOT NULL)
+      );
+  END IF;
+  IF NOT EXISTS (SELECT FROM pg_constraint WHERE conrelid = register_table AND conname = 'pharmacy_register_late_supplier_dispatch') THEN
+    ALTER TABLE pharmacy_controlled_register_entries
+      ADD CONSTRAINT pharmacy_register_late_supplier_dispatch CHECK (
+        "lateDispatchAt" IS NULL OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" <= "createdAt")
       );
   END IF;
 END $constraints$;
@@ -80,6 +93,86 @@ ALTER TABLE pharmacy_controlled_register_entries
           AND "prescriptionId" IS NULL AND "patientId" IS NULL AND NOT emergency
         )
       );
+
+-- Older clients supplied the prefix, but always posted an indexed out/returned
+-- pair together. Match the document date, original sender, location, lot, both
+-- quantities and line ordinal. Prefer the document-bound purchasing screen key;
+-- for another client's key, return NULL if the evidence is ambiguous.
+CREATE OR REPLACE FUNCTION pharmacy_legacy_supplier_outgoing(org text, branch text, target_line text)
+RETURNS text LANGUAGE sql STABLE SECURITY INVOKER AS $legacy$
+  WITH line AS (
+    SELECT l.*, d."dispatchedAt", d."dispatchedByUserId",
+           (SELECT count(*) FROM pharmacy_purchase_return_lines prior
+            WHERE prior."organizationId" = org AND prior."purchaseReturnId" = d.id
+              AND prior."lineNumber" < l."lineNumber") AS ordinal
+    FROM pharmacy_purchase_return_lines l
+    JOIN pharmacy_purchase_returns d ON d."organizationId" = org AND d.id = l."purchaseReturnId"
+    WHERE l."organizationId" = org AND l.id = target_line AND d."branchId" = branch
+      AND d.status IN ('DISPATCHED', 'SETTLED') AND NOT d."dispatchedWithRegisterPolicy"
+  ), candidates AS (
+    SELECT m.id,
+           m."idempotencyKey" = 'return-dispatch:' || l."purchaseReturnId" || ':' || l.ordinal || ':out' AS exact
+    FROM line l
+    JOIN pharmacy_stock_movements m ON m."organizationId" = org AND m."branchId" = branch
+      AND m."inventoryLotId" = l."inventoryLotId" AND m."stockLocationId" = l."stockLocationId"
+      AND m."actorId" = l."dispatchedByUserId" AND m."occurredAt" = l."dispatchedAt"
+      AND m.kind = 'ADJUSTMENT' AND m.disposition = 'AVAILABLE' AND m."quantityUnits" = -l."quantityUnits"
+      AND (m."idempotencyKey" NOT LIKE 'return-dispatch:%'
+        OR m."idempotencyKey" = 'return-dispatch:' || l."purchaseReturnId" || ':' || l.ordinal || ':out')
+      AND m."idempotencyKey" LIKE '%:' || l.ordinal || ':out'
+    JOIN pharmacy_stock_movements incoming ON incoming."organizationId" = org AND incoming."branchId" = branch
+      AND incoming."idempotencyKey" = left(m."idempotencyKey", -3) || 'returned'
+      AND incoming."inventoryLotId" = m."inventoryLotId" AND incoming."stockLocationId" = m."stockLocationId"
+      AND incoming."actorId" = m."actorId" AND incoming."occurredAt" = m."occurredAt"
+      AND incoming.kind = 'ADJUSTMENT' AND incoming.disposition = 'RETURN_TO_SUPPLIER'
+      AND incoming."quantityUnits" = -m."quantityUnits"
+  )
+  SELECT CASE WHEN count(*) FILTER (WHERE exact) = 1 THEN min(id) FILTER (WHERE exact)
+              WHEN count(*) = 1 THEN min(id) END FROM candidates
+$legacy$;
+
+-- The stock ledger keeps dispatched units in a separate disposition. Develop
+-- counted those units. Deduct only returns for which a register line exists,
+-- including the current line in the AFTER INSERT reconciliation trigger.
+CREATE OR REPLACE FUNCTION pharmacy_controlled_stock_for_register(org text, branch text, lot text)
+RETURNS bigint LANGUAGE sql STABLE SECURITY INVOKER AS $balance$
+  SELECT (SELECT COALESCE(sum("onHandUnits"), 0) FROM pharmacy_stock_balances
+          WHERE "organizationId" = org AND "branchId" = branch AND "inventoryLotId" = lot
+            AND disposition <> 'QUARANTINE')
+       - (SELECT COALESCE(sum("quantityCanonicalUnits"), 0) FROM pharmacy_controlled_register_entries
+          WHERE "organizationId" = org AND "branchId" = branch AND "inventoryLotId" = lot
+            AND "entryKind"::text = 'RETURN_TO_SUPPLIER')
+$balance$;
+
+-- A document dispatched by an older client after upgrade must also have its
+-- witnessed entries. Historical documents are never updated by the migration.
+CREATE OR REPLACE FUNCTION pharmacy_require_controlled_dispatch_entries() RETURNS trigger
+LANGUAGE plpgsql AS $guard$
+BEGIN
+  IF TG_OP = 'INSERT' THEN
+    NEW."dispatchedWithRegisterPolicy" := NEW.status IN ('DISPATCHED', 'SETTLED');
+    RETURN NEW;
+  END IF;
+  NEW."dispatchedWithRegisterPolicy" := OLD."dispatchedWithRegisterPolicy";
+  IF NEW.status <> 'DISPATCHED' OR OLD.status = NEW.status THEN RETURN NEW; END IF;
+  NEW."dispatchedWithRegisterPolicy" := true;
+  IF EXISTS (
+    SELECT FROM pharmacy_purchase_return_lines l
+    JOIN pharmacy_inventory_lots lot ON lot."organizationId" = l."organizationId" AND lot.id = l."inventoryLotId"
+    JOIN pharmacy_manufacturing_batches b ON b."organizationId" = lot."organizationId" AND b.id = lot."manufacturingBatchId"
+    JOIN pharmacy_medicines m ON m."organizationId" = b."organizationId" AND m.id = b."medicineId"
+    WHERE l."organizationId" = NEW."organizationId" AND l."purchaseReturnId" = NEW.id AND m.controlled
+      AND NOT EXISTS (SELECT FROM pharmacy_controlled_register_entries e
+        WHERE e."organizationId" = l."organizationId" AND e."supplierReturnLineId" = l.id)
+  ) THEN
+    RAISE EXCEPTION 'A controlled supplier dispatch requires a witnessed register entry.' USING ERRCODE = '23514';
+  END IF;
+  RETURN NEW;
+END $guard$;
+DROP TRIGGER IF EXISTS pharmacy_controlled_dispatch_entries ON pharmacy_purchase_returns;
+CREATE TRIGGER pharmacy_controlled_dispatch_entries BEFORE INSERT OR UPDATE OF status, "dispatchedWithRegisterPolicy" ON pharmacy_purchase_returns
+FOR EACH ROW
+EXECUTE FUNCTION pharmacy_require_controlled_dispatch_entries();
 
 CREATE OR REPLACE FUNCTION pharmacy_rx_reconcile_controlled_register() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE actual integer; movement record; lot_batch text; original record; previous_balance bigint; derived_delta bigint; restored bigint;
@@ -171,9 +264,7 @@ BEGIN
       WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId"
         AND "inventoryLotId"=NEW."inventoryLotId" AND "medicineId"=NEW."medicineId" AND "id"<>NEW."id"
       ORDER BY "serial" DESC LIMIT 1;
-    SELECT COALESCE(sum("onHandUnits"),0) INTO actual FROM "pharmacy_stock_balances"
-      WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId"
-        AND "inventoryLotId"=NEW."inventoryLotId" AND "disposition" NOT IN ('QUARANTINE', 'RETURN_TO_SUPPLIER');
+    actual := pharmacy_controlled_stock_for_register(NEW."organizationId", NEW."branchId", NEW."inventoryLotId");
     IF NEW."runningBalance"::bigint IS DISTINCT FROM previous_balance + NEW."balanceDelta"
        OR NEW."runningBalance" IS DISTINCT FROM actual THEN
       RAISE EXCEPTION 'correction balance must equal sellable on-hand and prior balance plus delta' USING ERRCODE='23514';
@@ -204,14 +295,22 @@ BEGIN
       JOIN pharmacy_purchase_returns doc ON doc."organizationId" = line."organizationId" AND doc.id = line."purchaseReturnId"
       JOIN pharmacy_suppliers supplier ON supplier."organizationId" = doc."organizationId" AND supplier.id = doc."supplierId"
       WHERE purchase."organizationId" = NEW."organizationId" AND purchase.id = NEW."sourcePurchaseEntryId"
-        AND purchase."entryKind" = 'PURCHASE' AND gr.status = 'POSTED' AND doc.status = 'SUBMITTED'
+        AND purchase."entryKind" = 'PURCHASE' AND gr.status = 'POSTED'
         AND gr."supplierId" = doc."supplierId" AND NEW."counterpartyName" = supplier.name
         AND NEW."branchId" = purchase."branchId" AND doc."branchId" = NEW."branchId"
         AND purchase."medicineId" = NEW."medicineId" AND purchase."inventoryLotId" = NEW."inventoryLotId"
         AND line."inventoryLotId" = NEW."inventoryLotId" AND line."stockLocationId" = movement."stockLocationId"
         AND movement."branchId" = NEW."branchId" AND movement."inventoryLotId" = NEW."inventoryLotId"
         AND movement.kind = 'ADJUSTMENT' AND movement.disposition = 'AVAILABLE'
-        AND movement."idempotencyKey" = 'supplier-return:' || line.id || ':out'
+        AND (
+          (NEW."lateDispatchAt" IS NULL AND doc.status = 'SUBMITTED'
+           AND movement."idempotencyKey" = 'supplier-return:' || line.id || ':out')
+          OR (NEW."lateDispatchAt" IS NOT NULL AND doc.status IN ('DISPATCHED','SETTLED')
+              AND NEW."lateDispatchAt" = doc."dispatchedAt" AND movement."occurredAt" = doc."dispatchedAt"
+              AND movement."actorId" = doc."dispatchedByUserId" AND receipt."occurredAt" <= movement."occurredAt"
+              AND NEW."createdAt"::date = (CURRENT_TIMESTAMP AT TIME ZONE 'UTC')::date
+              AND movement.id = pharmacy_legacy_supplier_outgoing(NEW."organizationId", NEW."branchId", line.id))
+        )
         AND movement."actorId" = NEW."recordedByUserId" AND movement."quantityUnits" = -line."quantityUnits"
         AND NEW."quantityCanonicalUnits" = line."quantityUnits" AND NEW."balanceDelta" = movement."quantityUnits"
         AND purchase."quantityCanonicalUnits" >= (SELECT sum(r."quantityCanonicalUnits") FROM pharmacy_controlled_register_entries r
@@ -240,10 +339,7 @@ BEGIN
   IF lot_batch IS DISTINCT FROM NEW."batchNumber" THEN
     RAISE EXCEPTION 'controlled register batch does not match stock lot' USING ERRCODE='23514';
   END IF;
-  SELECT COALESCE(sum("onHandUnits"),0)::integer INTO actual FROM "pharmacy_stock_balances"
-    WHERE "organizationId"=NEW."organizationId" AND "branchId"=NEW."branchId"
-      AND "inventoryLotId"=NEW."inventoryLotId"
-      AND "disposition" NOT IN ('QUARANTINE', 'RETURN_TO_SUPPLIER');
+  actual := pharmacy_controlled_stock_for_register(NEW."organizationId", NEW."branchId", NEW."inventoryLotId");
   IF NEW."runningBalance"<>actual THEN
     IF NEW."entryKind" = 'RETURN_TO_SUPPLIER' THEN
       RAISE EXCEPTION 'controlled supplier return must reconcile with stock on hand' USING ERRCODE='23514';

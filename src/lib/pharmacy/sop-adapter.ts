@@ -1,3 +1,4 @@
+import { REGISTER_KIND_WORDS } from './plain-language';
 import 'server-only';
 
 import { Prisma, type PharmacySopRecordType } from '@/generated/prisma/client';
@@ -1094,11 +1095,6 @@ const TEMPERATURE_ZONE_MESSAGE: Record<PharmacySopTemperatureZone, string> = {
   AMBIENT: 'This step needs an ambient storage reading, not a refrigerator one.',
 };
 
-const REGISTER_KIND_WORDS: Record<string, string> = {
-  SALE: 'Sale',
-  PURCHASE: 'Purchase',
-  CORRECTION: 'Correction',
-};
 const RECEIPT_STATUS_WORDS: Record<string, string> = {
   DRAFT: 'Draft',
   POSTED: 'Posted',

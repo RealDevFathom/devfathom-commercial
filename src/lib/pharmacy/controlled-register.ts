@@ -94,7 +94,10 @@ export async function lockRegister(db: ScopedDb, organizationId: string, branchI
   await lockControlledRegister(db, organizationId, branchId);
 }
 
-/** On-hand units that can still be sold. Quarantine is not part of the register balance. */
+/** Reconciliation retains the old balance for unwitnessed historical dispatches.
+ * The stock projection moves units between two non-quarantine buckets. Each
+ * witnessed outgoing entry removes its units exactly once from this total.
+ */
 export async function sellableOnHand(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string; inventoryLotId: string }
@@ -105,11 +108,19 @@ export async function sellableOnHand(
       branchId: scope.branchId,
       inventoryLotId: scope.inventoryLotId,
       disposition: { not: 'QUARANTINE' },
-      NOT: { disposition: 'RETURN_TO_SUPPLIER' },
     },
     _sum: { onHandUnits: true },
   });
-  return balance._sum.onHandUnits ?? 0;
+  const outgoing = await db.pharmacyControlledRegisterEntry.aggregate({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId: scope.inventoryLotId,
+      entryKind: 'RETURN_TO_SUPPLIER',
+    },
+    _sum: { quantityCanonicalUnits: true },
+  });
+  return (balance._sum.onHandUnits ?? 0) - (outgoing._sum.quantityCanonicalUnits ?? 0);
 }
 
 async function runningFromLot(
@@ -392,6 +403,7 @@ export async function appendControlledSupplierReturn(
     lineId: string;
     inventoryLotId: string;
     movementId: string;
+    lateDispatchAt?: Date;
     quantity: number;
     witness: import('./controlled-restoration-authorization').ControlledRestorationWitness;
   }
@@ -409,6 +421,7 @@ export async function appendControlledSupplierReturn(
       AND l."inventoryLotId" = p."inventoryLotId" AND m."idempotencyKey" = 'pharmacy-receipt:' || l.id || ':accepted'
     JOIN pharmacy_goods_receipts r ON r."organizationId" = l."organizationId" AND r.id = l."goodsReceiptId"
     WHERE p."organizationId" = ${organizationId} AND p."branchId" = ${branchId}
+      AND (${input.lateDispatchAt ?? null}::timestamp IS NULL OR m."occurredAt" <= ${input.lateDispatchAt ?? null}::timestamp)
       AND p."inventoryLotId" = ${input.inventoryLotId} AND p."entryKind" = 'PURCHASE'
       AND r.status = 'POSTED' AND r."supplierId" = ${input.supplierId}
       AND p."quantityCanonicalUnits" - COALESCE((SELECT sum(sent."quantityCanonicalUnits")
@@ -429,7 +442,7 @@ export async function appendControlledSupplierReturn(
   };
   const balanceDelta = -input.quantity;
   const runningBalance = await runningFromLot(db, lot, balanceDelta);
-  if (runningBalance !== (await sellableOnHand(db, lot))) {
+  if (runningBalance !== (await sellableOnHand(db, lot)) - input.quantity) {
     throw new Error(
       'The controlled register and stock balance disagree. Reconcile this batch before dispatch.'
     );
@@ -440,6 +453,7 @@ export async function appendControlledSupplierReturn(
     entryKind: 'RETURN_TO_SUPPLIER',
     sourcePurchaseEntryId: purchase.id,
     supplierReturnLineId: input.lineId,
+    lateDispatchAt: input.lateDispatchAt,
     stockMovementId: input.movementId,
     manufacturer: purchase.manufacturer,
     batchNumber: purchase.batchNumber,

@@ -1,3 +1,4 @@
+import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { PharmacyReceivingError, receiptReversalRefusals } from '@/lib/pharmacy/receiving';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
@@ -218,7 +219,9 @@ export function purchasingOutcome() {
             : '';
       const known =
         (!writeStarted && error instanceof PurchasingValidationError) ||
-        (error instanceof Error && error.cause instanceof ControlledRestorationDenied) ||
+        (error instanceof Error &&
+          (error.cause instanceof ControlledRestorationDenied ||
+            error.cause instanceof PharmacySupplierReturnError)) ||
         zodFailure(error) !== null ||
         KNOWN_REJECTIONS.has(raw) ||
         uniqueViolation(error, raw);

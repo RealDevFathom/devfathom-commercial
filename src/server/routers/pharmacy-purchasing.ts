@@ -118,6 +118,7 @@ import {
   issueDebitNote,
   recordSupplierCredit,
   submitPurchaseReturn,
+  legacySupplierDispatches,
 } from '@/lib/pharmacy/supplier-returns-operations';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import {
@@ -245,13 +246,15 @@ function domainError(error: unknown): never {
           ? 'NOT_FOUND'
           : error.reason === 'CROSS_TENANT_REFERENCE' ||
               error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'LATE_OWNER_REQUIRED' ||
               error.reason === 'SELF_APPROVAL'
             ? 'FORBIDDEN'
             : // ALREADY_CLAIMED, RETURN_WINDOW_CLOSED, OVER_ALLOCATION and the
               // transition refusals are all "you asked for something the current
               // state does not allow", not authorization failures.
               'BAD_REQUEST',
-      message: error.reason,
+      message: error.message,
+      cause: error,
     });
   }
   if (serialUniqueViolation(error)) {
@@ -2500,6 +2503,7 @@ const purchasingRouter = router({
         .object({
           branchId,
           purchaseReturnId: z.string().min(1).max(200),
+          recordLateLineId: z.string().min(1).max(200).optional(),
           controlledWitness: z
             .object({
               staffProfileId: z.string().min(1).max(200),
@@ -2520,6 +2524,7 @@ const purchasingRouter = router({
             at: new Date(),
             idempotencyKeyPrefix: input.idempotencyKey,
             controlledWitness: input.controlledWitness,
+            recordLateLineId: input.recordLateLineId,
           })
         );
       } catch (error) {
@@ -2755,6 +2760,13 @@ const purchasingRouter = router({
     .input(z.object({ branchId, goodsReceiptId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) =>
       lotsFromReceipt(ctx.db, await receivingScope(ctx, input.branchId), input.goodsReceiptId)
+    ),
+
+  legacySupplierDispatches: purchasing
+    .meta(PROCUREMENT_AND_FINANCE)
+    .input(z.object({ branchId, after: z.string().min(1).max(200).optional() }).strict())
+    .query(async ({ ctx, input }) =>
+      legacySupplierDispatches(ctx.db, await receivingScope(ctx, input.branchId), input.after)
     ),
 
   /** PUR-06 — returns and claims with their window state and credit position. */

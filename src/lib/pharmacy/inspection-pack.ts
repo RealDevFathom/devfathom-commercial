@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { REGISTER_KIND_WORDS } from './plain-language';
 import { createHash } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -116,13 +117,20 @@ export async function createInspectionPack(
       name === 'controlled-register'
         ? `SELECT (to_jsonb(t) - 'organizationId' - 'witnessedByUserId') || jsonb_build_object('witnessName', w."name") AS record FROM "${table}" t LEFT JOIN "users" w ON w."id" = t."witnessedByUserId" AND w."organizationId" = t."organizationId" WHERE t."${timestamp}" >= $1 AND t."${timestamp}" <= $2 AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3) ORDER BY t."${timestamp}", t."id"`
         : `SELECT to_jsonb(t) - 'organizationId' AS record FROM "${table}" t WHERE "${timestamp}" >= $1 AND "${timestamp}" <= $2 AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3) ORDER BY "${timestamp}", "id"`;
-    const records = await db.$queryRawUnsafe<JsonRecord[]>(
+    const records = await db.$queryRawUnsafe<{ record: JsonRecord }[]>(
       query,
       input.from,
       input.to,
       input.branchId
     );
-    sections.push({ name, records: records.map((row) => row.record as JsonRecord) });
+    sections.push({
+      name,
+      records: records.map(({ record }) =>
+        name === 'controlled-register' && typeof record.entryKind === 'string'
+          ? { ...record, entryKindLabel: REGISTER_KIND_WORDS[record.entryKind] ?? record.entryKind }
+          : record
+      ),
+    });
   }
   sections.push({
     name: INSPECTION_PACK_SOP_SECTION,

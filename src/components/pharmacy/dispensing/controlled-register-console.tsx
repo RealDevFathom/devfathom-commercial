@@ -472,6 +472,7 @@ type ShownEntry = {
   prescriber: { name: string; registrationNumber: string } | null;
   line: { medicine: { productName: string } } | null;
   correctsEntry: { serial: number } | null;
+  lateDispatchAt?: Date | null;
   sourcePurchase: { serial: number } | null;
   refEntry: { serial: number } | null;
 };
@@ -493,8 +494,13 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
   );
 }
 
-function supplierReturnLabel(entry: Pick<ShownEntry, 'sourcePurchase'>) {
-  return `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
+function supplierReturnLabel(
+  entry: Pick<ShownEntry, 'sourcePurchase' | 'lateDispatchAt' | 'createdAt'>
+) {
+  const label = `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
+  return entry.lateDispatchAt
+    ? `${label} · dispatched ${formatKarachiDateTime(entry.lateDispatchAt)} · recorded late ${formatKarachiDateTime(entry.createdAt)}`
+    : label;
 }
 
 function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {

@@ -195,7 +195,7 @@ function correctionDb(options: {
       }),
       aggregate: vi.fn(async () => {
         calls.push('serial');
-        return { _max: { serial: 4 } };
+        return { _sum: { quantityCanonicalUnits: null }, _max: { serial: 4 } };
       }),
       create,
       update: vi.fn(),
@@ -347,7 +347,9 @@ describe('appendControlledPurchaseReversals', () => {
       pharmacyControlledRegisterEntry: {
         findMany: vi.fn().mockResolvedValue([purchase]),
         findFirst: vi.fn().mockResolvedValue({ runningBalance: 2 }),
-        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        aggregate: vi
+          .fn()
+          .mockResolvedValue({ _sum: { quantityCanonicalUnits: null }, _max: { serial: 1 } }),
         create,
       },
       pharmacyStockBalance: {
@@ -400,7 +402,7 @@ describe('appendControlledSaleEntries', () => {
       pharmacyControlledRegisterEntry: {
         aggregate: vi.fn(async () => {
           calls.push('serial');
-          return { _max: { serial: 3 } };
+          return { _sum: { quantityCanonicalUnits: null }, _max: { serial: 3 } };
         }),
         findFirst: vi.fn(async () => null),
         create,
@@ -461,7 +463,9 @@ describe('appendControlledSaleEntries', () => {
     const db = {
       $queryRaw: vi.fn(),
       pharmacyControlledRegisterEntry: {
-        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        aggregate: vi
+          .fn()
+          .mockResolvedValue({ _sum: { quantityCanonicalUnits: null }, _max: { serial: 1 } }),
         findFirst: vi.fn(async ({ where }: { where: { medicineId?: string } }) => {
           expect(where.medicineId).toBe('med');
           return { runningBalance: 10 };
@@ -515,7 +519,9 @@ describe('appendControlledPurchaseEntries', () => {
     const db = {
       $queryRaw: vi.fn(),
       pharmacyControlledRegisterEntry: {
-        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 0 } }),
+        aggregate: vi
+          .fn()
+          .mockResolvedValue({ _sum: { quantityCanonicalUnits: null }, _max: { serial: 0 } }),
         findFirst: vi.fn(async () => ({ runningBalance: 3 })),
         create,
       },

@@ -18,6 +18,14 @@
  * rounding.
  */
 
+const dispatchRefusals = {
+  ALREADY_DISPATCHED: 'This return has already been dispatched.',
+  LATE_OWNER_REQUIRED: 'Only the pharmacy owner can record a late supplier return.',
+  LATE_DISPATCH_UNAVAILABLE: 'This line has no unrecorded controlled supplier dispatch.',
+  LATE_MOVEMENT_UNCLEAR:
+    'The original stock movement could not be identified uniquely. The register was left unchanged.',
+} as const;
+
 export class PharmacySupplierReturnError extends Error {
   constructor(
     readonly reason:
@@ -26,13 +34,18 @@ export class PharmacySupplierReturnError extends Error {
       | 'INVALID_TRANSITION'
       | 'RETURN_WINDOW_CLOSED'
       | 'OVER_ALLOCATION'
+      | keyof typeof dispatchRefusals
       | 'ALREADY_CLAIMED'
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
       | 'CROSS_BRANCH_REFERENCE'
       | 'SELF_APPROVAL'
   ) {
-    super(reason);
+    super(
+      Object.hasOwn(dispatchRefusals, reason)
+        ? dispatchRefusals[reason as keyof typeof dispatchRefusals]
+        : reason
+    );
   }
 }
 
