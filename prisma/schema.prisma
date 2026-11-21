@@ -13073,7 +13073,8 @@ model PharmacyStagedMedicineLink {
   batchId            String
   rowId              String
   editId             String
-  medicineId         String
+  /// Null exactly when `outcome` is NOT_CREATED (DEV-1002).
+  medicineId         String?
   packLevelId        String?
   unitsPerPack       Int?
   mrpMinor           Int?
@@ -13083,8 +13084,12 @@ model PharmacyStagedMedicineLink {
   barcodeAttached    Boolean?
   /// Old code, or name + units per pack + pack cell; computed in the application. Null: never matched.
   matchKey           String?
-  /// CREATED, or MATCHED when an earlier staged file already created this medicine.
+  /// CREATED, or MATCHED when an earlier staged file already created this medicine, or
+  /// NOT_CREATED when the database refused the row (DEV-1002): no medicine, a plain reason.
   outcome            String   @default("CREATED")
+  notCreatedReason   String?
+  /// Old code or generic name left off because the catalogue cannot search its characters.
+  aliasesNotAdded    String[] @default([])
   /// The supplier cell as read; `supplierId` is the existing supplier with exactly that
   /// normalised name, null when none or several match (reported, never created).
   supplierName       String?

@@ -390,6 +390,8 @@ const soloTemplate = [
             purchasePriceMinor: 80_000,
             unitsPerPack: 100,
             outcome: 'CREATED',
+            notCreatedReason: null,
+            aliasesNotAdded: [],
             barcode: BARCODE,
             barcodeAttached: true,
             supplierName: null,
@@ -555,7 +557,7 @@ const soloTemplate = [
             )!;
             assert.equal(strengthLink.outcome, 'MATCHED');
             const presentation = await solodb.presentation.findFirstOrThrow({
-              where: { medicineId: strengthLink.medicineId },
+              where: { medicineId: strengthLink.medicineId! },
             });
             assert.equal(presentation.presentation, strengthRow.packLabel);
           }
@@ -652,7 +654,7 @@ const soloTemplate = [
           assert.deepEqual(pick('none'), [null, null, null, null]);
           const safety = await solodb.pharmacySafetyStock.findMany({
             where: {
-              medicineId: { in: [...templateLinks.values()].map((link) => link.medicineId) },
+              medicineId: { in: [...templateLinks.values()].map((link) => link.medicineId!) },
             },
             orderBy: { safetyStockUnits: 'desc' },
           });
@@ -670,7 +672,7 @@ const soloTemplate = [
             ]
           );
           // The owner sees the purchase price on the medicine's own detail, with its supplier.
-          const known = await solo.get({ id: templateLinks.get('T-1')!.medicineId });
+          const known = await solo.get({ id: templateLinks.get('T-1')!.medicineId! });
           assert.equal(known.purchasePriceVisible, true);
           assert.deepEqual(
             known.purchasePrice && [
@@ -681,7 +683,7 @@ const soloTemplate = [
             [8_000, 'solo DISTRIBUTORS', true]
           );
           assert.equal(
-            (await solo.get({ id: templateLinks.get('none')!.medicineId })).purchasePrice,
+            (await solo.get({ id: templateLinks.get('none')!.medicineId! })).purchasePrice,
             null
           );
         } finally {
