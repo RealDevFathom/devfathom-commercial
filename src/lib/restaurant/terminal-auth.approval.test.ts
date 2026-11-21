@@ -63,6 +63,7 @@ describe('authenticateOperator approvals (DEV-879)', () => {
         now,
         approval: {
           action: 'restaurant.terminal.coAuthorize',
+          approverRight: 'coauth:approve',
           requestedByStaffProfileId: 'staff-cashier',
         },
       })
@@ -71,8 +72,10 @@ describe('authenticateOperator approvals (DEV-879)', () => {
       organizationId: 'org',
       approverUserId: 'manager',
       credentialHash: 'hash',
+      credentialType: 'PIN',
       secret: '123456',
       action: 'restaurant.terminal.coAuthorize',
+      approverRight: 'coauth:approve',
       requestedByStaffProfileId: 'staff-cashier',
       now,
     });
@@ -88,7 +91,7 @@ describe('authenticateOperator approvals (DEV-879)', () => {
         type: 'PIN',
         secret: '123456',
         now,
-        approval: { action: 'restaurant.terminal.orderApproval' },
+        approval: { action: 'restaurant.terminal.orderApproval', approverRight: 'coauth:approve' },
       })
     ).resolves.toEqual({ ok: false, reason: 'INVALID' });
     expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({

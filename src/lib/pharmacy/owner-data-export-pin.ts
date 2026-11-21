@@ -74,6 +74,7 @@ export async function verifyOwnerExportPin(
           credentialHash: credential.credentialHash,
           secret: pin,
           action,
+          approverRight: 'OWNER',
           requestedById: userId,
           now,
         }))

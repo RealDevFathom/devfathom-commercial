@@ -8,6 +8,9 @@ const state = vi.hoisted(() => ({
   placeholderActive: false,
   latestProfile: null as any,
   lifecycleEvents: [] as any[],
+  // DEV-961: one sole owner's approval authenticator and recovery codes.
+  approvalAuthenticators: [] as any[],
+  recoveryCodes: [] as any[],
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
@@ -32,6 +35,35 @@ const db = {
       role: 'ADMIN',
     })),
     findMany: vi.fn(async () => [{ id: 'user_1' }, { id: 'admin_2' }]),
+    findUnique: vi.fn(async ({ where }: any) =>
+      where.id === 'user_1'
+        ? { id: 'user_1', organizationId: 'org_1', email: 'owner@tenant.test', role: 'ADMIN' }
+        : null
+    ),
+  },
+  approvalAuthenticator: {
+    deleteMany: vi.fn(async ({ where }: any) => {
+      const before = state.approvalAuthenticators.length;
+      state.approvalAuthenticators = state.approvalAuthenticators.filter(
+        (row) => !(row.organizationId === where.organizationId && row.userId === where.userId)
+      );
+      return { count: before - state.approvalAuthenticators.length };
+    }),
+    findFirst: vi.fn(
+      async ({ where }: any) =>
+        state.approvalAuthenticators.find(
+          (row) => row.organizationId === where.organizationId && row.userId === where.userId
+        ) ?? null
+    ),
+  },
+  approvalAuthenticatorRecoveryCode: {
+    deleteMany: vi.fn(async ({ where }: any) => {
+      const before = state.recoveryCodes.length;
+      state.recoveryCodes = state.recoveryCodes.filter(
+        (row) => !(row.organizationId === where.organizationId && row.userId === where.userId)
+      );
+      return { count: before - state.recoveryCodes.length };
+    }),
   },
   notification: { createMany: vi.fn(async ({ data }: any) => ({ count: data.length })) },
   organization: {
@@ -89,11 +121,14 @@ const db = {
 };
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: (fn: any) => fn(db) }));
 import { executePlatformCommand } from '@/lib/platform/commands';
+import { approvalAuthenticatorGate } from '@/lib/approval-authenticator-gate';
 const req = new Request('http://admin.localhost/api/platform/control');
 const execute = (action: string, payload: unknown, role = 'SUPER_ADMIN', id = 'actor_1') =>
   executePlatformCommand({ id, role } as any, action, payload, req);
 const actions = [
   'organization.user.password',
+  // DEV-961: resetting a member's approval authenticator.
+  'organization.user.approvalauthenticator.reset',
   'organization.scim.token',
   'organization.scim.revoke',
   'organization.identity',
@@ -119,6 +154,8 @@ beforeEach(() => {
   state.placeholderActive = false;
   state.latestProfile = null;
   state.lifecycleEvents = [];
+  state.approvalAuthenticators = [];
+  state.recoveryCodes = [];
 });
 
 describe('pharmacy placeholder commands', () => {
@@ -655,5 +692,79 @@ describe('operator safety', () => {
       mfaRequired: true,
     });
     expect(db.platformUser.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DEV-961 platform reset of an approval authenticator', () => {
+  const reason = 'Sole owner lost phone and recovery codes; identity verified by call-back';
+
+  it('lets a sole owner who lost his phone and his recovery codes set up again, audited', async () => {
+    state.approvalAuthenticators = [
+      { id: 'auth_owner', organizationId: 'org_1', userId: 'user_1', enabledAt: new Date() },
+    ];
+    state.recoveryCodes = [
+      { organizationId: 'org_1', userId: 'user_1', codeHash: 'a'.repeat(64), usedAt: null },
+    ];
+    const gate = () =>
+      approvalAuthenticatorGate(
+        {
+          organization: { findFirst: async () => ({ requireApprovalAuthenticator: true }) },
+          approvalAuthenticator: db.approvalAuthenticator,
+        } as never,
+        { organizationId: 'org_1', userId: 'user_1', approver: true }
+      );
+    // Enrolled: his account works, but the phone is gone and nobody else in the
+    // organization can reset it.
+    await expect(gate()).resolves.toMatchObject({ setupRequired: false });
+
+    await executePlatformCommand(
+      { id: 'actor_1', role: 'SUPER_ADMIN', name: 'Platform Operator' } as any,
+      'organization.user.approvalauthenticator.reset',
+      { id: 'user_1', reason },
+      req
+    );
+    expect(state.approvalAuthenticators).toEqual([]);
+    expect(state.recoveryCodes).toEqual([]);
+    // The next request takes him to the set-up screen, where he enrols a new phone.
+    await expect(gate()).resolves.toMatchObject({ setupRequired: true });
+    expect(state.audits.at(-1)).toMatchObject({
+      action: 'organization.user.approvalauthenticator.reset',
+      actorPlatformUserId: 'actor_1',
+      targetId: 'user_1',
+      organizationId: 'org_1',
+      success: true,
+      after: {
+        approvalAuthenticatorReset: true,
+        recoveryCodesRemoved: 1,
+        notifiedUserIds: ['user_1', 'admin_2'],
+        reason,
+      },
+    });
+    const rows = db.notification.createMany.mock.calls.at(-1)![0].data;
+    expect(rows.map((row: any) => row.userId)).toEqual(['user_1', 'admin_2']);
+    for (const row of rows) {
+      expect(row.type).toBe('platform_approval_authenticator_reset');
+      expect(row.message).toContain('Platform Operator');
+      expect(row.message).toContain(reason);
+    }
+  });
+
+  it('needs the security permission and a reason, and never touches a secret', async () => {
+    state.approvalAuthenticators = [
+      { id: 'auth_owner', organizationId: 'org_1', userId: 'user_1', enabledAt: new Date() },
+    ];
+    for (const role of ['OPERATIONS', 'SUPPORT', 'SALES', 'FINANCE', 'AUDITOR'])
+      await expect(
+        execute('organization.user.approvalauthenticator.reset', { id: 'user_1', reason }, role)
+      ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      execute('organization.user.approvalauthenticator.reset', {
+        id: 'user_1',
+        reason,
+        encryptedSecret: 'v1.attacker.chosen',
+      })
+    ).rejects.toThrow();
+    expect(state.approvalAuthenticators).toHaveLength(1);
+    expect(db.approvalAuthenticator.deleteMany).not.toHaveBeenCalled();
   });
 });

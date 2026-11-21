@@ -241,6 +241,8 @@ beforeAll(async () => {
         legalName: 'WHA-143 Rollback Co',
         displayName: 'WHA-143 Rollback',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await tx.organization.create({
@@ -250,6 +252,8 @@ beforeAll(async () => {
         legalName: 'WHA-143 Foreign Co',
         displayName: 'WHA-143 Foreign',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await seedDepartments(tx, [orgId], ['LEADERSHIP']);

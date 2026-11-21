@@ -122,8 +122,9 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
     await owner.query(`SELECT set_config('app.current_organization_id', $1, false)`, [orgA]);
     for (const organizationId of [orgA, orgB])
       await owner.query(
-        `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "updatedAt")
-         VALUES ($1, $1, 'Legacy class fixture', 'Legacy class fixture', 'ACTIVE', now())`,
+        // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+        `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "updatedAt", "requireApprovalAuthenticator")
+         VALUES ($1, $1, 'Legacy class fixture', 'Legacy class fixture', 'ACTIVE', now(), false)`,
         [organizationId]
       );
     await owner.query(
@@ -332,8 +333,9 @@ suite('DEV-925 legacy NARCOTICS class on PostgreSQL', () => {
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     // An owner-only pharmacy: nobody else can review, so the owner approves with a fresh PIN.
     await owner.query(
-      `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "updatedAt")
-       VALUES ($1, $1, 'Legacy class fixture', 'Legacy class fixture', 'ACTIVE', now())`,
+      // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", status, "updatedAt", "requireApprovalAuthenticator")
+       VALUES ($1, $1, 'Legacy class fixture', 'Legacy class fixture', 'ACTIVE', now(), false)`,
       [orgSolo]
     );
     await owner.query(
