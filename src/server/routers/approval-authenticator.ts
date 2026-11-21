@@ -358,9 +358,9 @@ export const approvalAuthenticatorRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
+      annotateAudit(ctx, { skipInput: true });
       if (!(await rateLimit(`approval-authenticator-recovery:${userId}`, 5, 15 * 60_000)).ok)
         throw tooManyAttempts();
-      annotateAudit(ctx, { skipInput: true });
       await requireSetupReauthentication(ctx, organizationId, input.currentPassword);
       const spent = await ctx.db.approvalAuthenticatorRecoveryCode.updateMany({
         where: { organizationId, userId, codeHash: hashRecoveryCode(input.code), usedAt: null },
