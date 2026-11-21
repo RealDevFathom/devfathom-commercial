@@ -1,3 +1,4 @@
+import { rollForwardDueDate } from '@/lib/finance/recurring-expense';
 /**
  * FINANCE tools for the DevFathom assistant — invoices, transactions, recurring
  * expenses and financial summaries.
@@ -54,23 +55,6 @@ const EXPENSE_CATEGORIES = [
   'UTILITIES',
   'MISCELLANEOUS',
 ] as const;
-
-// A recurring expense's stored nextDueDate doesn't advance on its own, so once a
-// due date passes it goes stale. Roll it forward by its interval until it lands
-// today or later, so we always surface the genuine *next* occurrence. Computed
-// on read — we never mutate the row. Mirrors src/server/routers/finance.ts.
-const INTERVAL_MONTHS: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
-
-function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
-  const stepMonths = INTERVAL_MONTHS[interval.toLowerCase()] ?? 1;
-  const next = new Date(due);
-  const anchorDay = next.getDate();
-  for (let i = 0; next < now && i < 600; i++) {
-    next.setDate(anchorDay);
-    next.setMonth(next.getMonth() + stepMonths);
-  }
-  return next;
-}
 
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
@@ -470,7 +454,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       return expenses
         .map((exp) => ({
           ...exp,
-          nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today),
+          nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone),
         }))
         .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime())
         .map((exp) => ({

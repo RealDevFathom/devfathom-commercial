@@ -1,4 +1,6 @@
 import type { AssistantHelpers } from '@/lib/ai/context';
+import { buildInsightsTools } from '@/lib/ai/tools/insights';
+import { dashboardRouter } from './dashboard';
 import { buildFinanceTools } from '@/lib/ai/tools/finance';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -25,8 +27,8 @@ vi.mock('../audit', () => ({
 import type { TRPCContext } from '../trpc';
 import { financeRouter } from './finance';
 
-function caller(timezone?: string) {
-  return financeRouter.createCaller({
+function context(timezone?: string) {
+  return {
     db: {
       $queryRaw: mocks.queryRaw,
       transaction: { groupBy: mocks.transactionGroupBy },
@@ -42,7 +44,11 @@ function caller(timezone?: string) {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as unknown as TRPCContext);
+  } as unknown as TRPCContext;
+}
+
+function caller(timezone?: string) {
+  return financeRouter.createCaller(context(timezone));
 }
 
 describe('finance.getFinancialSummary', () => {
@@ -95,6 +101,115 @@ describe('finance.getFinancialSummary', () => {
       }
     }
   );
+  it.each(['summary', 'stats', 'chart', 'assistant'] as const)(
+    'counts the first 00:30 Karachi income in January on the %s surface',
+    async (surface) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const event = new Date('2027-01-01T00:30:00+05:00');
+        const previous = new Date('2026-12-31T23:59:59+05:00');
+        const now = new Date('2027-01-01T00:31:00+05:00');
+        vi.setSystemTime(now);
+        type Filter = { where: { type: string; date: { gte: Date; lte?: Date; lt?: Date } } };
+        const amount = ({ where: { date, type } }: Filter) =>
+          type === 'INCOME'
+            ? [previous, event].filter(
+                (d) => d >= date.gte && (!date.lte || d <= date.lte) && (!date.lt || d < date.lt)
+              ).length
+            : 0;
+        mocks.transactionGroupBy.mockImplementation((q: Filter) => [
+          { currency: 'PKR', _sum: { amount: amount(q) } },
+        ]);
+        const ctx = context('Asia/Karachi');
+        const count = vi.fn().mockResolvedValue(0);
+        const db = {
+          ...ctx.db,
+          project: { count },
+          task: { count },
+          leaveRequest: { count },
+          invoice: { ...ctx.db.invoice, count },
+          organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+          transaction: {
+            ...ctx.db.transaction,
+            aggregate: vi.fn((q: Filter) => ({ _sum: { amount: amount(q) } })),
+          },
+        };
+        const dashboard = dashboardRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
+        if (surface === 'summary') {
+          const result = await caller('Asia/Karachi').getFinancialSummary();
+          expect(result.monthlyIncome).toEqual([{ currency: 'PKR', amount: 1 }]);
+          expect(result.yearlyIncome).toEqual([{ currency: 'PKR', amount: 1 }]);
+        } else if (surface === 'stats') {
+          expect((await dashboard.getStats()).revenue).toEqual([{ currency: 'PKR', amount: 1 }]);
+        } else if (surface === 'chart') {
+          const chart = await dashboard.getRevenueChart();
+          expect(chart.byCurrency.PKR?.slice(-2)).toMatchObject([
+            { month: 'Dec 2026', income: 1 },
+            { month: 'Jan 2027', income: 1 },
+          ]);
+        } else {
+          const tools = buildInsightsTools({
+            db,
+            ctx: { organizationId: 'org-1', userId: 'admin-1' },
+            isAdmin: true,
+            now: () => now,
+          } as unknown as AssistantHelpers) as unknown as {
+            getDashboardStats: { execute(): Promise<{ revenueThisMonth: number }> };
+          };
+          expect((await tools.getDashboardStats.execute()).revenueThisMonth).toBe(1);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it.each(['router', 'post', 'assistant'])(
+    'advances the Karachi May 1 charge to June 1 at 00:30 for %s',
+    async (surface) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      try {
+        const now = new Date('2026-06-01T00:30:00+05:00');
+        vi.setSystemTime(now);
+        const due = new Date('2026-05-01T00:00:00+05:00');
+        mocks.recurringFindMany.mockResolvedValue([
+          { id: 'r', name: 'Subscription', interval: 'monthly', nextDueDate: due },
+        ]);
+        const ctx = context('Asia/Karachi');
+        const createMany = vi.fn();
+        const db = {
+          ...ctx.db,
+          organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
+          transaction: { ...ctx.db.transaction, createMany },
+          recurringExpense: { ...ctx.db.recurringExpense, update: vi.fn() },
+          $transaction: vi.fn(),
+        };
+        const router = financeRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
+        const june = new Date('2026-05-31T19:00Z');
+        if (surface === 'post') {
+          await router.postDueRecurringExpenses();
+          expect(createMany.mock.calls[0]?.[0].data.map((row: { date: Date }) => row.date)).toEqual(
+            [due, june]
+          );
+        } else if (surface === 'router') {
+          expect((await router.getRecurringExpenses())[0]?.nextDueDate).toEqual(june);
+        } else {
+          const tools = buildFinanceTools({
+            db,
+            ctx: { organizationId: 'org-1' },
+            isAdmin: true,
+            now: () => now,
+          } as unknown as AssistantHelpers) as unknown as {
+            listRecurringExpenses: { execute(input: object): Promise<{ nextDueDate: Date }[]> };
+          };
+          expect((await tools.listRecurringExpenses.execute({}))[0]?.nextDueDate).toEqual(june);
+        }
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
+
   it('subtracts partial payments from outstanding invoices by currency', async () => {
     mocks.queryRaw.mockResolvedValue([
       { currency: 'PKR', amount: 15_000, count: BigInt(1) },

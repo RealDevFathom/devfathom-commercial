@@ -1,3 +1,4 @@
+import { recurringExpenseSchedule, rollForwardDueDate } from '@/lib/finance/recurring-expense';
 import {
   workspaceDateRange,
   workspaceMonthRange,
@@ -120,24 +121,6 @@ const round2 = roundMoney;
 // so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
 // never leaves a fully-paid invoice a hair short of PAID.
 const PAYMENT_EPSILON = 0.005;
-
-// A recurring expense's stored nextDueDate doesn't advance on its own, so once a
-// due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
-// it forward by its interval until it lands today or later so the UI always shows
-// the genuine *next* occurrence. Computed on read — we don't mutate the row here.
-const INTERVAL_MONTHS: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
-
-function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
-  const stepMonths = INTERVAL_MONTHS[interval.toLowerCase()] ?? 1;
-  const next = new Date(due);
-  const anchorDay = next.getDate();
-  // Cap iterations so an unrecognized interval can never spin forever.
-  for (let i = 0; next < now && i < 600; i++) {
-    next.setDate(anchorDay);
-    next.setMonth(next.getMonth() + stepMonths);
-  }
-  return next;
-}
 
 export const financeRouter = router({
   getTransactions: adminProcedure
@@ -842,7 +825,7 @@ export const financeRouter = router({
     return expenses
       .map((exp) => ({
         ...exp,
-        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today),
+        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone),
       }))
       .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime());
   }),
@@ -896,14 +879,16 @@ export const financeRouter = router({
     const details: Array<{ id: string; name: string; cycles: number }> = [];
 
     for (const exp of expenses) {
-      const stepMonths = INTERVAL_MONTHS[exp.interval.toLowerCase()] ?? 1;
-      const anchorDay = new Date(exp.nextDueDate).getDate();
-      const due = new Date(exp.nextDueDate);
+      const advance = recurringExpenseSchedule(
+        exp.nextDueDate,
+        exp.interval,
+        ctx.organization?.timezone
+      );
+      let due = exp.nextDueDate;
       const toPost: Date[] = [];
       for (let i = 0; due <= now && i < 36; i++) {
         toPost.push(new Date(due));
-        due.setDate(anchorDay);
-        due.setMonth(due.getMonth() + stepMonths);
+        due = advance(due);
       }
       if (toPost.length === 0) continue;
 
