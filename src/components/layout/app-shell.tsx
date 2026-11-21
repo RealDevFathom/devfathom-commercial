@@ -21,6 +21,7 @@ import { AdministratorStaffProfileCallout } from '@/components/restaurant/admini
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { PrintWindowNotice } from '@/components/ui/print-window-notice';
+import { useBrowserOnline } from '@/components/pharmacy/counter/use-browser-online';
 import { dismissedNoticeKey, useDismissedNotice } from './use-dismissed-notice';
 import { routeOwnsChrome, ShellChromeProvider, type ShellChrome } from './shell-chrome';
 
@@ -242,6 +243,7 @@ export function AppShell({
   const pathname = usePathname();
   const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
+  const browserOnline = useBrowserOnline();
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
     !currentModule ||
@@ -384,8 +386,16 @@ export function AppShell({
           <div className="flex min-h-10 items-center justify-between gap-3 border-b border-warning/40 bg-warning/10 px-4 py-2 text-xs text-foreground">
             <span className="flex items-center gap-2">
               <ShieldAlert className="h-4 w-4 shrink-0" />
-              Audited support access · acting as {session.user.name}
-              {session.user.supportReason ? ` · ${session.user.supportReason}` : ''}
+              {browserOnline ? (
+                <>
+                  Audited support access · acting as {session.user.name}
+                  {session.user.supportReason ? ` · ${session.user.supportReason}` : ''}
+                </>
+              ) : (
+                // DEV-957 phase 2 (shared till): offline, the stored page cannot check who
+                // is signed in, so it names nobody.
+                'Audited support access · Offline: who is signed in is checked again when the connection returns.'
+              )}
             </span>
             <EndSupportAccessButton />
           </div>

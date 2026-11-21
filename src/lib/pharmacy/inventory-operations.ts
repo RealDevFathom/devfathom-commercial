@@ -7,6 +7,12 @@ import {
   postInterbranchTransferEntry,
   postInterbranchTransferReceiptEntry,
 } from './finance-postings';
+import {
+  assertNotHeldForCounter,
+  releaseCounterQuotasAffectedBy,
+  releaseCounterQuotasForSafety,
+  type CounterQuotaSafetyCause,
+} from './counter-stock-holds';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
@@ -57,7 +63,9 @@ export async function setManufacturingBatchState(
     manufacturingBatchId: string;
     state: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
     reason?: string;
-  }
+  },
+  /** DEV-957: who is acting, for the audit row of any counter quota this releases. */
+  actorId: string | null = null
 ) {
   // Callers run this inside a scoped interactive transaction. The lock is held
   // through commit, closing the READ COMMITTED check/write race with recalls.
@@ -78,7 +86,7 @@ export async function setManufacturingBatchState(
     if (openRecalls) throw new OpenRecallConflictError();
   }
 
-  return db.pharmacyManufacturingBatch.update({
+  const updated = await db.pharmacyManufacturingBatch.update({
     where: { id: batch.id },
     data: {
       state: input.state,
@@ -86,6 +94,16 @@ export async function setManufacturingBatchState(
       stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
     },
   });
+  // DEV-957: a recalled or quarantined batch is off sale everywhere, so no counter may
+  // keep selling it offline. Safety wins: its open quotas go, never the other way round.
+  if (input.state !== 'ACTIVE')
+    await releaseCounterQuotasForSafety(
+      db,
+      { organizationId, actorId },
+      { batchIds: [batch.id] },
+      input.state === 'RECALLED' ? 'RECALL' : 'QUARANTINE'
+    );
+  return updated;
 }
 
 function assertPositive(units: number) {
@@ -591,6 +609,42 @@ export async function writeOff(
     lot.unitsPerPack,
     input.disposition
   );
+  // DEV-957: units set aside for an offline counter. Writing off good stock is an
+  // ordinary removal and leaves them alone; writing off recalled, quarantined or expired
+  // stock is a safety removal, never refused, and it releases the counters' quotas.
+  let safetyCause: CounterQuotaSafetyCause | null = null;
+  if ((input.disposition ?? 'AVAILABLE') === 'AVAILABLE') {
+    const batch = await db.pharmacyManufacturingBatch.findFirst({
+      where: { id: lot.manufacturingBatchId, organizationId: scope.organizationId },
+      select: { state: true, expiresAt: true },
+    });
+    safetyCause =
+      batch?.state === 'RECALLED'
+        ? 'RECALL'
+        : batch?.state === 'QUARANTINED'
+          ? 'QUARANTINE'
+          : batch && hasKnownExpiryPassed(batch.expiresAt, new Date())
+            ? 'EXPIRY'
+            : null;
+    if (!safetyCause) {
+      const balance = await db.pharmacyStockBalance.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          inventoryLotId: input.inventoryLotId,
+          stockLocationId: input.stockLocationId,
+          disposition: 'AVAILABLE',
+        },
+        select: { onHandUnits: true },
+      });
+      await assertNotHeldForCounter(
+        db,
+        scope,
+        { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+        { freeUnits: balance?.onHandUnits ?? 0, units: input.units, action: 'written off' }
+      );
+    }
+  }
   const movement = await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -618,6 +672,13 @@ export async function writeOff(
       evidenceRef: input.evidenceRef,
     },
   });
+  if (safetyCause)
+    await releaseCounterQuotasAffectedBy(
+      db,
+      scope,
+      { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+      safetyCause
+    );
   return { movement, custody };
 }
 
@@ -631,6 +692,8 @@ export async function quarantinePart(
     damaged?: boolean;
     reason: string;
     idempotencyKeyPrefix: string;
+    /** DEV-957: why stock leaves sale, for the audit of any counter quota released. */
+    cause?: CounterQuotaSafetyCause;
   }
 ) {
   assertPositive(input.units);
@@ -690,6 +753,14 @@ export async function quarantinePart(
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
     },
   });
+  // DEV-957: a quarantine is a safety move and is never refused because a counter holds
+  // units. When it took units a counter held, that counter's quota here is released.
+  await releaseCounterQuotasAffectedBy(
+    db,
+    scope,
+    { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+    input.cause ?? 'QUARANTINE'
+  );
   return { removed, held };
 }
 
@@ -928,6 +999,13 @@ export async function dispatchTransfer(
     // DEV-853: an unrecorded expiry is never treated as expired.
     if (balance.state !== 'ACTIVE' || hasKnownExpiryPassed(balance.expiresAt, new Date()))
       throw new PharmacyInventoryError('BLOCKED_STOCK');
+    // DEV-957: units set aside for an offline counter do not leave the branch.
+    await assertNotHeldForCounter(
+      db,
+      scope,
+      { inventoryLotId: line.sourceLotId, stockLocationId: line.sourceStockLocationId },
+      { freeUnits: Number(balance.onHandUnits), units: line.quantityUnits, action: 'dispatched' }
+    );
     const a = arrangementFor(line.quantityUnits, balance.unitsPerPack);
     const common = {
       organizationId: scope.organizationId,
@@ -1093,6 +1171,13 @@ export async function createRecall(
     data: { state: 'RECALLED', stateReason: input.reason, stateChangedAt: new Date() },
   });
   if (!result.count) throw new PharmacyInventoryError('NOT_FOUND');
+  // DEV-957: no counter may keep selling a recalled batch offline; its quotas go now.
+  await releaseCounterQuotasForSafety(
+    db,
+    scope,
+    { batchIds: lockedBatches.map((batch) => batch.id) },
+    'RECALL'
+  );
   return db.pharmacyRecallNotice.create({
     data: {
       organizationId: scope.organizationId,
@@ -1337,6 +1422,17 @@ export async function reserveSupplierClaim(
   });
   if (onHand - (already._sum.reservedUnits ?? 0) < input.reservedUnits)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  // DEV-957: units set aside for an offline counter are not claimed for the supplier.
+  await assertNotHeldForCounter(
+    db,
+    scope,
+    { inventoryLotId: input.inventoryLotId },
+    {
+      freeUnits: onHand - (already._sum.reservedUnits ?? 0),
+      units: input.reservedUnits,
+      action: 'reserved for the supplier',
+    }
+  );
   return db.pharmacySupplierClaim.create({
     data: {
       organizationId: scope.organizationId,

@@ -181,9 +181,12 @@ function makeDb(options: Options = {}) {
       })),
     },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
-    $queryRaw: vi.fn(async () => [
-      { onHandUnits: 40, unitsPerPack: 10, state: 'ACTIVE', expiresAt: new Date(NOW + 1e10) },
-    ]),
+    // DEV-957: no counter holds units of this lot (the device-quota read finds none).
+    $queryRaw: vi.fn(async (query?: { sql?: string }) =>
+      query?.sql?.includes('"counterName"')
+        ? []
+        : [{ onHandUnits: 40, unitsPerPack: 10, state: 'ACTIVE', expiresAt: new Date(NOW + 1e10) }]
+    ),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),

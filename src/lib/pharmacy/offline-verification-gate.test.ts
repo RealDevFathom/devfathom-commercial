@@ -76,7 +76,8 @@ async function readyCounter(
       await counter.installSnapshot({
         envelope,
         signature: 'valid',
-        payload: { kind },
+        // Offline cash selling forced ON in the signed RULES (it is off in the product).
+        payload: kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind },
         payloadHash: HASH,
         nowMs: Date.now(),
       })

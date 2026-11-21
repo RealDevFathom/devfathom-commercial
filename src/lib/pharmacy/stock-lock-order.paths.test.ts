@@ -10,6 +10,12 @@ import { Prisma } from '@/generated/prisma/client';
  * business order would fail.
  */
 
+// DEV-957 phase 2: set-asides hold stock only while offline cash selling is in force; it
+// is forced on here so the lock order of that read is checked.
+vi.mock('./offline-cash-selling', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./offline-cash-selling')>()),
+  counterSetAsidesInForce: vi.fn(async () => true),
+}));
 vi.mock('./finance-postings', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./finance-postings')>()),
   postCountAdjustmentEntry: vi.fn(async () => undefined),
@@ -57,6 +63,8 @@ function recorder(reads: (text: string) => unknown[] = () => []) {
     const { text, values } = sqlOf(args);
     const kind = classify(text);
     events.push({ kind, values, text });
+    // DEV-957: no counter holds units in these paths (the device-quota read finds none).
+    if (text.includes('"counterName"')) return [];
     return kind === 'read' ? reads(text) : [];
   });
   const write = (values: Record<string, unknown>) =>
@@ -292,7 +300,16 @@ describe('write-off takes stock locks in the global order', () => {
       const db = {
         $queryRaw: trace.$queryRaw,
         user: { findFirst: vi.fn(async () => ({ id: witnessId })) },
-        pharmacyInventoryLot: { findFirst: vi.fn(async () => ({ id: 'lot-a', unitsPerPack: 1 })) },
+        pharmacyInventoryLot: {
+          findFirst: vi.fn(async () => ({
+            id: 'lot-a',
+            unitsPerPack: 1,
+            manufacturingBatchId: 'batch-a',
+          })),
+        },
+        pharmacyManufacturingBatch: {
+          findFirst: vi.fn(async () => ({ state: 'ACTIVE', expiresAt: new Date('2100-01-01') })),
+        },
         pharmacyStockBalance: {
           findFirst: vi.fn(async () => {
             trace.events.push({ kind: 'read', values: [], text: 'balance read' });
@@ -320,6 +337,9 @@ describe('write-off takes stock locks in the global order', () => {
       const lockAt = trace.events.findIndex((event) => event.kind === 'balance');
       const readAt = trace.events.findIndex((event) => event.text === 'balance read');
       expect(lockAt).toBeLessThan(readAt);
+      // DEV-957: the counter holds are read after the balance is locked, never before.
+      const holdsAt = trace.events.findIndex((event) => event.text.includes('"counterName"'));
+      expect(holdsAt).toBeGreaterThan(lockAt);
       expectLockedBeforeWrites(trace);
     }
   );
