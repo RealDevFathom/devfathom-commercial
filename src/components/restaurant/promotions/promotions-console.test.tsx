@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -166,12 +167,23 @@ describe('PromotionsConsole', () => {
       target: { value: 'Chai ten' },
     });
     fireEvent.change(within(dialog).getByLabelText(/Offer code/), { target: { value: 'chai10' } });
-    fireEvent.change(within(dialog).getByLabelText('Target type'), { target: { value: 'ITEM' } });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Target type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'ITEM' } }
+    );
     const products = within(dialog).getByLabelText('Products') as HTMLSelectElement;
-    within(products).getByRole('option', { name: 'Karak chai' }).setAttribute('selected', '');
+    within(products)
+      .getByRole('option', { hidden: true, name: 'Karak chai' })
+      .setAttribute('selected', '');
     fireEvent.change(products);
     const branches = within(dialog).getByLabelText(/Branches/) as HTMLSelectElement;
-    within(branches).getByRole('option', { name: 'Gulberg' }).setAttribute('selected', '');
+    within(branches)
+      .getByRole('option', { hidden: true, name: 'Gulberg' })
+      .setAttribute('selected', '');
     fireEvent.change(branches);
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Create offer' }).closest('form')!);
     expect(mocks.create).toHaveBeenCalledWith(
@@ -214,7 +226,13 @@ describe('offer preservation and feedback', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Edit draft' }));
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByLabelText('Starts (UTC)')).toHaveValue('2026-09-01T13:14');
-    expect(within(dialog).getByLabelText('Timezone')).toHaveValue('Europe/London');
+    expect(
+      selectFieldControl(
+        within(dialog).getByLabelText('Timezone', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).toHaveValue('Europe/London');
     fireEvent.submit(within(dialog).getByRole('button', { name: 'Save changes' }).closest('form')!);
     expect(mocks.edit).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -393,10 +411,24 @@ describe('ordered bundle draft authoring', () => {
     fireEvent.change(within(dialog).getByLabelText(/Offer code/), {
       target: { value: 'tea_bundle' },
     });
-    fireEvent.change(within(dialog).getByLabelText('Target type'), { target: { value: 'ORDER' } });
-    fireEvent.change(within(dialog).getByLabelText('Benefit type'), {
-      target: { value: 'BUNDLE_PRICE' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Target type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'ORDER' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Benefit type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'BUNDLE_PRICE' },
+      }
+    );
     fireEvent.change(within(dialog).getByLabelText('Benefit amount'), {
       target: { value: '450.00' },
     });
@@ -542,13 +574,27 @@ describe('ordered bundle draft authoring', () => {
   it('retains bundle rows while switching benefit type temporarily', () => {
     const dialog = openBundle();
     fireEvent.click(bundleRow(3).getByRole('button', { name: 'Move component 3 up' }));
-    fireEvent.change(within(dialog).getByLabelText('Benefit type'), {
-      target: { value: 'PERCENT_OFF' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Benefit type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'PERCENT_OFF' },
+      }
+    );
     expect(screen.queryByRole('group', { name: 'Bundle component 1' })).not.toBeInTheDocument();
-    fireEvent.change(within(dialog).getByLabelText('Benefit type'), {
-      target: { value: 'BUNDLE_PRICE' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(dialog).getByLabelText('Benefit type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'BUNDLE_PRICE' },
+      }
+    );
     expect(submittedBundle(dialog).rule.components).toEqual([
       bundleRows[0],
       bundleRows[2],
@@ -559,7 +605,14 @@ describe('ordered bundle draft authoring', () => {
     'clears only incompatible target arrays on explicit transition to %s',
     (target) => {
       const dialog = openBundle();
-      fireEvent.change(within(dialog).getByLabelText('Target type'), { target: { value: target } });
+      fireEvent.change(
+        selectFieldControl(
+          within(dialog).getByLabelText('Target type', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        ),
+        { target: { value: target } }
+      );
       if (target === 'CATEGORY')
         selectIds(within(dialog).getByLabelText('Categories'), ['category_1']);
       const input = submittedBundle(dialog);

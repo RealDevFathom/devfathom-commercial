@@ -1,9 +1,12 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
+import { useOwnerSelfApprovalCopy } from '@/components/pharmacy/own-approval-copy';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Input } from '@/components/ui/input';
@@ -115,6 +118,8 @@ export function CatalogueApprovalQueue() {
   const [medicineId, setMedicineId] = useState('');
   const [productName, setProductName] = useState('');
   const [decisionNotice, setDecisionNotice] = useState('');
+  // DEV-961: the owner's own approval follows the "Authenticator for approvals" setting.
+  const ownApproval = useOwnerSelfApprovalCopy();
   const search = trpc.pharmacyMedicine.search.useQuery(
     { query: query || ' ', limit: 25 },
     { enabled: query.trim().length > 1, retry: false }
@@ -146,8 +151,8 @@ export function CatalogueApprovalQueue() {
   );
   const showPin = canDecide && pinEdits.length > 0;
   const pinReason = pinEdits.some((edit) => edit.ownEdit)
-    ? 'Nobody else can review, so you approve with your own PIN.'
-    : 'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.';
+    ? ownApproval.ownEditReason
+    : ownApproval.ownerFallbackReason;
   const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
     onSuccess: async (result) => {
       setPin('');
@@ -171,10 +176,7 @@ export function CatalogueApprovalQueue() {
   });
   return (
     <SectionCard title="Catalogue edits awaiting approval" titleLevel={2}>
-      <p className="mb-4 text-sm text-text-muted">
-        Edits stay pending until a catalogue reviewer approves them. A solo owner may approve by
-        entering their own fresh PIN. Every approval is audited.
-      </p>
+      <p className="mb-4 text-sm text-text-muted">{ownApproval.catalogueIntro}</p>
       {canEdit && !canDecide ? (
         <p role="note" className="mb-4 text-sm">
           {access.data?.isOwner
@@ -212,7 +214,7 @@ export function CatalogueApprovalQueue() {
           {search.data?.length ? (
             <label className="block max-w-sm space-y-2 text-sm">
               <span>Catalogue item</span>
-              <select
+              <StudioSelect
                 className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
                 required
                 value={medicineId}
@@ -224,7 +226,7 @@ export function CatalogueApprovalQueue() {
                     {item.productName}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
           ) : null}
           <label className="block max-w-sm space-y-2 text-sm">
@@ -259,7 +261,7 @@ export function CatalogueApprovalQueue() {
       {showPin ? (
         <div className="mb-4 max-w-sm space-y-2 text-sm">
           <label className="block space-y-2">
-            <span>Solo owner PIN (for self-approval)</span>
+            <span>{ownApproval.catalogueLabel}</span>
             <Input
               className="min-h-11"
               type="password"

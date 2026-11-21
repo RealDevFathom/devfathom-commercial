@@ -89,6 +89,8 @@ beforeAll(async () => {
         legalName: `Refill job ${id}`,
         displayName: `Refill job ${id}`,
         status: 'ACTIVE' as const,
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
         vertical: 'PHARMACY' as const,
         timezone: 'Asia/Karachi',
       })),

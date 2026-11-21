@@ -1,4 +1,6 @@
 'use client';
+
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { useEffect, type ReactNode } from 'react';
 import { usePosRuntime, type PosNotice } from './use-pos-runtime';
 import { CheckoutPanel } from './checkout-panel';
@@ -95,7 +97,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
             <form onSubmit={workspace.unlock} className="space-y-4">
               <div className="space-y-1.5">
                 <Label htmlFor="operator-id">Operator</Label>
-                <select
+                <StudioSelect
                   {...controls.operatorIdProps}
                   className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                 >
@@ -111,7 +113,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                       {operator.displayName} — {operator.role}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
                 {pos.operatorDirectoryState === 'error' ? (
                   <div className="flex items-center justify-between gap-3 text-sm text-text-muted">
                     <span role="alert">Operators could not be loaded.</span>
@@ -260,7 +262,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
                   <div className="space-y-1.5">
                     <Label htmlFor="order-channel">Channel</Label>
-                    <select
+                    <StudioSelect
                       {...controls.orderChannelProps}
                       className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                     >
@@ -273,7 +275,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                               : 'Delivery'}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </div>
                   {pos.channel === 'DELIVERY' ? (
                     <fieldset
@@ -327,7 +329,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                       </div>
                       <div className="space-y-1.5">
                         <Label htmlFor="delivery-address">Saved address</Label>
-                        <select
+                        <StudioSelect
                           {...controls.deliveryAddressProps}
                           className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
                         >
@@ -337,11 +339,11 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                               {address.label} · {address.recipientName}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </div>
                       <div className="space-y-1.5">
                         <Label htmlFor="delivery-zone">Delivery zone</Label>
-                        <select
+                        <StudioSelect
                           {...controls.deliveryZoneProps}
                           className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50"
                         >
@@ -351,7 +353,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                               {zone.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                         {pos.selectedDeliveryZone ? (
                           <p className="text-sm text-text-muted">
                             Minimum {pos.selectedDeliveryZone!.minimumSubtotal} · Fee{' '}
@@ -426,7 +428,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                     {pos.channel === 'DINE_IN' ? (
                       <div className="space-y-1.5">
                         <Label htmlFor="order-section">Floor section</Label>
-                        <select
+                        <StudioSelect
                           {...controls.orderSectionProps}
                           className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                         >
@@ -436,7 +438,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                               {section.name}
                             </option>
                           ))}
-                        </select>
+                        </StudioSelect>
                       </div>
                     ) : (
                       <div />

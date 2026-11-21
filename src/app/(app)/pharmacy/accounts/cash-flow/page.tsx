@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { PHARMACY_COPY, SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
 import type { Metadata } from 'next';
@@ -139,7 +140,7 @@ export default async function CashFlowPage({
         <form className="flex flex-wrap items-end gap-3">
           <label className="grid min-w-64 gap-2 text-sm">
             {screenCopy.cashFlow.activeBranch}
-            <select
+            <StudioSelect
               className="min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               name="branch"
               defaultValue={query.branch ?? branches[0]?.id ?? ''}
@@ -153,7 +154,7 @@ export default async function CashFlowPage({
                   {branch.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <label className="grid gap-2 text-sm">
             {screenCopy.dateWindow.from} ({zone})

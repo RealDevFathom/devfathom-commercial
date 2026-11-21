@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { type FormEvent, useMemo, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -362,7 +363,7 @@ export function OrderTicketPanel({
                   <div className="grid grid-cols-2 gap-2">
                     <div>
                       <Label htmlFor="move-from">Current table</Label>
-                      <select
+                      <StudioSelect
                         id="move-from"
                         value={fromTableId}
                         onChange={(event) => setFromTableId(event.target.value)}
@@ -374,11 +375,11 @@ export function OrderTicketPanel({
                             {tableLabel(id)}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </div>
                     <div>
                       <Label htmlFor="move-to">Destination table</Label>
-                      <select
+                      <StudioSelect
                         id="move-to"
                         value={toTableId}
                         onChange={(event) => setToTableId(event.target.value)}
@@ -390,7 +391,7 @@ export function OrderTicketPanel({
                             {table.label}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </div>
                   </div>
                   <Button
@@ -531,7 +532,7 @@ export function OrderTicketPanel({
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="wastage-disposition">Wastage disposition</Label>
-                    <select
+                    <StudioSelect
                       id="wastage-disposition"
                       value={disposition}
                       onChange={(event) =>
@@ -542,7 +543,7 @@ export function OrderTicketPanel({
                       <option value="WASTE">Waste</option>
                       <option value="RESTOCK">Restock</option>
                       <option value="NONE">None</option>
-                    </select>
+                    </StudioSelect>
                   </div>
                 </>
               ) : null}

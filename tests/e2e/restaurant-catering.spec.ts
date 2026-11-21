@@ -1,3 +1,4 @@
+import { chooseSelectField } from './fixtures/select-field';
 import { expect, test, type Page } from '@playwright/test';
 import pg from 'pg';
 
@@ -223,7 +224,10 @@ async function createOrder(
 ) {
   await page.getByRole('button', { name: 'New order' }).click();
   const dialog = page.getByRole('dialog', { name: 'Create catering order' });
-  await dialog.getByLabel('Order branch').selectOption(fixture.branchId);
+  await chooseSelectField(
+    dialog.getByRole('combobox', { name: 'Order branch', exact: true }),
+    fixture.branchId
+  );
   await dialog.getByLabel('Customer').selectOption(fixture.customer.id);
   await dialog.getByLabel('Event name').fill(input.eventName);
   await dialog.getByLabel('Event date').fill(input.eventDate);
@@ -545,7 +549,7 @@ async function enrollBrowser(page: Page, branch: string = fixture.branchId) {
   await page.getByRole('button', { name: 'Enroll device', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Enroll this browser' });
   await dialog.getByLabel('Device name').fill('Acceptance catering browser');
-  await dialog.getByLabel('Branch', { exact: true }).selectOption(branch);
+  await chooseSelectField(dialog.getByRole('combobox', { name: 'Branch', exact: true }), branch);
   await dialog.getByLabel('Device kind').selectOption('POS');
   await dialog.getByRole('checkbox').check();
   await dialog.getByRole('button', { name: 'Enroll this browser' }).click();

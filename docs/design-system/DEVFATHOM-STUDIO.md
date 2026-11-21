@@ -234,17 +234,19 @@ cycle. `src/app/font-tokens.test.ts` guards both rules.
 
 Reuse these components before writing new markup:
 
-| Need                                 | Source                                       |
-| ------------------------------------ | -------------------------------------------- |
-| Tenant shell                         | `src/components/layout/app-shell.tsx`        |
-| Platform shell                       | `src/components/platform/platform-shell.tsx` |
-| Page title and actions               | `src/components/ui/page-header.tsx`          |
-| Section surface                      | `src/components/ui/section-card.tsx`         |
-| Primary/secondary/destructive action | `src/components/ui/button.tsx`               |
-| KPI or ledger figure                 | `src/components/ui/stat.tsx`                 |
-| Status chip                          | `src/components/ui/status-pill.tsx`          |
-| Route animation                      | `src/components/motion/page-transition.tsx`  |
-| Platform heading/status adapters     | `src/components/platform/platform-ui.tsx`    |
+| Need                                  | Source                                       |
+| ------------------------------------- | -------------------------------------------- |
+| Tenant shell                          | `src/components/layout/app-shell.tsx`        |
+| Platform shell                        | `src/components/platform/platform-shell.tsx` |
+| Page title and actions                | `src/components/ui/page-header.tsx`          |
+| Section surface                       | `src/components/ui/section-card.tsx`         |
+| Primary/secondary/destructive action  | `src/components/ui/button.tsx`               |
+| Composed selection control            | `src/components/ui/select.tsx`               |
+| Native-style single-select form field | `src/components/ui/select-field.tsx`         |
+| KPI or ledger figure                  | `src/components/ui/stat.tsx`                 |
+| Status chip                           | `src/components/ui/status-pill.tsx`          |
+| Route animation                       | `src/components/motion/page-transition.tsx`  |
+| Platform heading/status adapters      | `src/components/platform/platform-ui.tsx`    |
 
 ### Component rules
 
@@ -269,6 +271,26 @@ should represent a real content group, not wrap every sentence or field.
 - Every interactive element needs hover, focus-visible, active, disabled, and loading behavior
   where applicable.
 - Do not place competing primary buttons in the same action group.
+
+#### Select and SelectField
+
+Use `SelectField` when a single-select field needs the native form contract: existing
+`<option>`/`<optgroup>` children, `name`, `value` or `defaultValue`, native change events,
+required validation, form reset, external form association, or an imperative select ref.
+It composes the shared `Select` primitives for its visible control. A native form bridge
+remains the successful named control and the functional server-rendered fallback; after
+hydration, the shared trigger owns visible keyboard interaction and focus. Do not add a
+second hidden input with the same name.
+
+Use the plain `Select` primitives when building a composed selection interface that owns
+its value through `onValueChange` and does not require that native-select compatibility
+contract. Both choices reuse Studio tokens and shared popup/item styles. Preserve the
+field's visible label, accessible description, errors and at least a 44px touch target.
+
+`SelectField` is for single-selection dropdowns. Keep native multiple-selection listboxes
+until their modifier-key selection and repeated form values have an equivalent shared
+interaction. Long-list native exceptions need a documented user interaction reason and
+a removal condition; demo or test locators are not a reason to retain a native control.
 
 #### Status
 

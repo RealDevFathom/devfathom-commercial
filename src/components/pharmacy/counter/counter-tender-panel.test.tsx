@@ -742,17 +742,18 @@ describe('family Khata tender', () => {
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });
-    expect(screen.getByLabelText('Approver PIN')).toBeDisabled();
-    expect(screen.getByLabelText('Approver PIN')).toHaveAccessibleDescription(
-      /authenticator for approvals, enter its 6-digit code/
+    expect(screen.getByLabelText('Approval code')).toBeDisabled();
+    expect(screen.getByLabelText('Approval code')).toHaveAccessibleDescription(
+      // DEV-961: on by default, the approver enters the current code from their app.
+      /6-digit code from their authenticator app/
     );
     fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
       target: { value: 'staff-manager' },
     });
-    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '12a' } });
-    expect(screen.getByLabelText('Approver PIN')).toHaveValue('12');
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '12a' } });
+    expect(screen.getByLabelText('Approval code')).toHaveValue('12');
     expect(take).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Approver PIN'), { target: { value: '2468' } });
+    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '246813' } });
     expect(take).toBeEnabled();
     fireEvent.click(take);
     await screen.findByText('Payment recorded.');
@@ -764,11 +765,11 @@ describe('family Khata tender', () => {
         familyAccountId: 'family-a',
         ownerOverride: true,
         overrideReason: 'Paying on Friday',
-        overLimitApproval: { staffProfileId: 'staff-manager', pin: '2468' },
+        overLimitApproval: { staffProfileId: 'staff-manager', pin: '246813' },
       },
       { amount: '', cashReceived: '' }
     );
-    expect(screen.getByLabelText('Approver PIN')).toHaveValue('');
+    expect(screen.getByLabelText('Approval code')).toHaveValue('');
   });
   it('DEV-290: offers a solo owner their own profile and explains a missing approver', async () => {
     const loadKhataApprovers = vi
@@ -1516,5 +1517,44 @@ describe('DEV-977 phase 2B: the Counter v2 payment sheet arrangement', () => {
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '100' } });
     expect(within(limit).getByRole('img')).toHaveAccessibleName('400.00 of 500.00 limit used');
     expect(screen.queryByText(/exceeds the family credit limit/)).toBeNull();
+  });
+});
+
+describe('DEV-977 phase 3: "Paid so far" in the Take payment summary (A2)', () => {
+  it('adds up the payments the server recorded on a split bill, above their list', () => {
+    setup({
+      balanceMinor: 29400,
+      tenders: [
+        { tenderId: 'cash-a', type: 'CASH', amountMinor: 60000 },
+        { tenderId: 'jazz-a', type: 'JAZZCASH', amountMinor: 12550 },
+      ],
+    });
+    const summary = screen.getByRole('region', { name: 'Payment summary' });
+    const paid = within(summary).getByRole('group', { name: 'Paid so far' });
+    // The figure is the sum of the recorded payments, to the paisa: 600.00 + 125.50.
+    expect(within(paid).getByText('Paid so far').parentElement).toHaveTextContent(
+      /Paid so far\s*725\.50/
+    );
+    // The list it sums stays as it was, inside the same group.
+    expect(within(paid).getByRole('list', { name: 'Recorded payments' })).toHaveTextContent(
+      /1\. Cash · Recorded\s*600\.00\s*2\. JazzCash · Recorded\s*125\.50/
+    );
+    expect(within(summary).getByText('Balance due').parentElement).toHaveTextContent('294.00');
+  });
+
+  it('shows it for a part-paid bill reopened with one payment', () => {
+    setup({
+      balanceMinor: 15000,
+      tenders: [{ tenderId: 'cash-a', type: 'CASH', amountMinor: 10000 }],
+    });
+    expect(screen.getByRole('group', { name: 'Paid so far' })).toHaveTextContent(
+      /Paid so far\s*100\.00/
+    );
+  });
+
+  it('shows no "Paid so far" before any payment is recorded', () => {
+    setup({ balanceMinor: 25000, tenders: [] });
+    expect(screen.queryByRole('group', { name: 'Paid so far' })).toBeNull();
+    expect(screen.queryByText('Paid so far')).toBeNull();
   });
 });

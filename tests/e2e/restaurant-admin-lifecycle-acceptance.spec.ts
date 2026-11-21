@@ -1,3 +1,4 @@
+import { chooseSelectField, selectFieldNative } from './fixtures/select-field';
 /**
  * WHA-1236 — Restaurant admin lifecycle acceptance (staff seat administration and
  * branch configuration persistence).
@@ -151,11 +152,14 @@ const SHIFT_RULE_LABEL = /Require an active scheduled shift for terminal sign-in
  * exact label is read from the live option instead of hard-coding a database value.
  */
 async function selectBranchByName(select: Locator, branchName: string) {
-  const option = select.locator('option').filter({ hasText: branchName }).first();
+  const option = (await selectFieldNative(select))
+    .locator('option')
+    .filter({ hasText: branchName })
+    .first();
   await expect(option, `branch option "${branchName}" must be offered`).toHaveCount(1);
   const label = (await option.textContent())?.trim();
   if (!label) throw new Error(`Branch option "${branchName}" rendered no label.`);
-  await select.selectOption({ label });
+  await chooseSelectField(select, { label });
   return label;
 }
 

@@ -151,7 +151,7 @@ describe('tax profile review page', () => {
     profiles[1].status = 'DRAFT';
     await show();
     expect(screen.getByRole('button', { name: 'Compare recorded evidence' })).toBeDisabled();
-    expect(screen.queryByRole('option', { name: /v2/ })).toBeNull();
+    expect(screen.queryByRole('option', { hidden: true, name: /v2/ })).toBeNull();
     noDownload();
   });
 
@@ -349,4 +349,13 @@ describe('tax profile evidence export', () => {
     expect(response.status).toBe(503);
     expect(await response.text()).not.toContain('APPROVED');
   });
+});
+
+it('explains a finance refusal and who can grant access', async () => {
+  mocks.workspace.mockRejectedValueOnce(
+    new TRPCError({ code: 'FORBIDDEN', message: 'private detail' })
+  );
+  await show();
+  expect(screen.getByText(/Ask your workspace owner for finance access/)).toBeVisible();
+  expect(screen.queryByText(/private detail/)).toBeNull();
 });

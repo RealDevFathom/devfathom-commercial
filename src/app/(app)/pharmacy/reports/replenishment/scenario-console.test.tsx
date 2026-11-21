@@ -64,7 +64,9 @@ describe('replenishment medicine picker', () => {
       { signal: expect.anything() }
     );
     const results = screen.getByRole('listbox', { name: 'Medicine results' });
-    fireEvent.click(within(results).getByRole('option', { name: 'Paracetamol 500 mg' }));
+    fireEvent.click(
+      within(results).getByRole('option', { hidden: true, name: 'Paracetamol 500 mg' })
+    );
 
     expect(picker).toHaveValue('Paracetamol 500 mg');
     expect(screen.getByText('Selected Paracetamol 500 mg.')).toBeVisible();
@@ -106,11 +108,11 @@ it('selects with arrow keys and Enter while focus stays in the only medicine inp
   render(<ScenarioConsole {...props} />);
   const input = await typeAndSearch();
   fireEvent.keyDown(input, { key: 'ArrowDown' });
-  const first = screen.getByRole('option', { name: 'Paracetamol 500 mg' });
+  const first = screen.getByRole('option', { hidden: true, name: 'Paracetamol 500 mg' });
   expect(first).toHaveAttribute('aria-selected', 'true');
   expect(input).toHaveAttribute('aria-activedescendant', first.id);
   fireEvent.keyDown(input, { key: 'ArrowDown' });
-  const second = screen.getByRole('option', { name: 'Paracetamol syrup' });
+  const second = screen.getByRole('option', { hidden: true, name: 'Paracetamol syrup' });
   expect(second).toHaveAttribute('aria-selected', 'true');
   fireEvent.keyDown(input, { key: 'Enter' });
   expect(input).toHaveValue('Paracetamol syrup');
@@ -130,17 +132,17 @@ it('supports reverse navigation, Home/End and IME without prematurely selecting'
   render(<ScenarioConsole {...props} />);
   const input = await typeAndSearch();
   fireEvent.keyDown(input, { key: 'ArrowUp' });
-  expect(screen.getByRole('option', { name: 'Paracetamol syrup' })).toHaveAttribute(
+  expect(screen.getByRole('option', { hidden: true, name: 'Paracetamol syrup' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
   fireEvent.keyDown(input, { key: 'Home' });
-  expect(screen.getByRole('option', { name: 'Paracetamol 500 mg' })).toHaveAttribute(
+  expect(screen.getByRole('option', { hidden: true, name: 'Paracetamol 500 mg' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
   fireEvent.keyDown(input, { key: 'End' });
-  expect(screen.getByRole('option', { name: 'Paracetamol syrup' })).toHaveAttribute(
+  expect(screen.getByRole('option', { hidden: true, name: 'Paracetamol syrup' })).toHaveAttribute(
     'aria-selected',
     'true'
   );
@@ -185,8 +187,12 @@ it('cancels the prior request and rejects late results when the query changes', 
     await vi.advanceTimersByTimeAsync(300);
   });
   await act(async () => resolveOld([{ id: 'stale', productName: 'Old private result' }]));
-  expect(screen.queryByRole('option', { name: 'Old private result' })).not.toBeInTheDocument();
-  expect(within(screen.getByRole('listbox')).getAllByRole('option')).toHaveLength(2);
+  expect(
+    screen.queryByRole('option', { hidden: true, name: 'Old private result' })
+  ).not.toBeInTheDocument();
+  expect(within(screen.getByRole('listbox')).getAllByRole('option', { hidden: true })).toHaveLength(
+    2
+  );
 });
 it('keeps a late response closed after Escape and clears selection on edits', async () => {
   let resolve!: (value: Array<{ id: string; productName: string }>) => void;

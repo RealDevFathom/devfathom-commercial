@@ -592,6 +592,20 @@ export function auditRequestBranchIds(input: unknown): string[] {
 }
 
 /** Called by the tRPC audit middleware after each procedure resolves. */
+/**
+ * DEV-961: procedures whose input carries an approval secret under a key the redaction above
+ * does not cover (a recovery code, an authenticator code), and whose input is recorded even
+ * when the call is refused before its resolver runs (session checks, the set-up gate, input
+ * validation, a rate limit). Their input is never recorded, whatever the outcome.
+ */
+const SECRET_INPUT_PATHS: ReadonlySet<string> = new Set([
+  'approvalAuthenticator.beginEnrollment',
+  'approvalAuthenticator.confirmEnrollment',
+  'approvalAuthenticator.useRecoveryCode',
+  'approvalAuthenticator.resetForMember',
+  'approvalAuthenticator.setRequired',
+]);
+
 export function recordTrpcAudit(args: {
   ctx: AuditContext;
   path: string;
@@ -630,7 +644,10 @@ export function recordTrpcAudit(args: {
       targetType: detail.targetType ?? null,
       targetId: detail.targetId ?? null,
       targetLabel: detail.targetLabel ?? null,
-      input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
+      input:
+        detail.skipInput || SECRET_INPUT_PATHS.has(args.path)
+          ? '[skipped]'
+          : toAuditJson(args.input),
       changes: detail.changes ? toAuditJson(detail.changes) : undefined,
       result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
       metadata: toAuditJson({

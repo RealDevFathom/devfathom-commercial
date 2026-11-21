@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => {
@@ -97,15 +98,35 @@ beforeEach(() => {
   h.retire.mockResolvedValue(retirementResult());
 });
 async function chooseBranch(id = 'a') {
-  await waitFor(() => expect(screen.getByLabelText('Inventory branch')).toBeEnabled());
-  fireEvent.change(screen.getByLabelText('Inventory branch'), { target: { value: id } });
+  await waitFor(() =>
+    expect(
+      screen.getByLabelText('Inventory branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeEnabled()
+  );
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Inventory branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: id } }
+  );
 }
 async function openRegistration() {
   await waitFor(() =>
     expect(screen.getByRole('button', { name: 'Register printers' })).toBeEnabled()
   );
   fireEvent.click(screen.getByRole('button', { name: 'Register printers' }));
-  fireEvent.change(screen.getByLabelText('Print bridge'), { target: { value: 'bridge' } });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Print bridge', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    { target: { value: 'bridge' } }
+  );
   fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
   fireEvent.change(screen.getByLabelText('Printer 1 name'), { target: { value: ' Receipt ' } });
   fireEvent.change(screen.getByLabelText('Printer 1 target'), {
@@ -154,7 +175,7 @@ it('requires an active branch, reads management inventory independently, and doe
   render(<PrinterInventoryPanel ownerKey="org:admin" />);
   expect(screen.getByRole('button', { name: 'Register printers' })).toBeDisabled();
   await chooseBranch();
-  expect(screen.queryByRole('option', { name: 'Closed' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('option', { hidden: true, name: 'Closed' })).not.toBeInTheDocument();
   await screen.findByText('Receipt');
   expect(h.printers).toHaveBeenCalledExactlyOnceWith({ branchId: 'a' });
   expect(h.devices).toHaveBeenCalledOnce();
@@ -181,8 +202,14 @@ it('offers only active non-revoked print bridges in the selected branch', async 
   await chooseBranch();
   await openRegistration();
   expect(
-    within(screen.getByLabelText('Print bridge'))
-      .getAllByRole('option')
+    within(
+      selectFieldControl(
+        screen.getByLabelText('Print bridge', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    )
+      .getAllByRole('option', { hidden: true })
       .map((option) => option.textContent)
   ).toEqual(['Select a print bridge', 'Kitchen host']);
 });
@@ -302,7 +329,11 @@ it('hides prior-owner inventory immediately and requires a fresh directory', asy
   h.branches.mockReturnValueOnce(next.promise);
   view.rerender(<PrinterInventoryPanel ownerKey="org:other" />);
   expect(screen.queryByText('Receipt')).not.toBeInTheDocument();
-  expect(screen.getByLabelText('Inventory branch')).toBeDisabled();
+  expect(
+    screen.getByLabelText('Inventory branch', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    })
+  ).toBeDisabled();
   await act(async () => {
     next.resolve([]);
   });
@@ -825,7 +856,11 @@ it('blocks duplicate clicks, cross-mutations, branch changes, and dismissal whil
   expect(h.retire).toHaveBeenCalledOnce();
   expect(screen.getByRole('button', { name: 'Cancel retirement' })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Retiring…' })).toBeDisabled();
-  expect(screen.getByLabelText('Inventory branch')).toBeDisabled();
+  expect(
+    screen.getByLabelText('Inventory branch', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    })
+  ).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Register printers', hidden: true })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Rename Receipt', hidden: true })).toBeDisabled();
   fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
@@ -971,7 +1006,11 @@ it.each(['register', 'rename'] as const)(
     expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Refresh printers' })).toBeEnabled();
-    expect(screen.getByLabelText('Inventory branch')).toBeEnabled();
+    expect(
+      screen.getByLabelText('Inventory branch', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeEnabled();
     fireEvent.click(screen.getByRole('button', { name: 'I reviewed the current inventory' }));
     expect(screen.getByRole('button', { name: 'Register printers' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled();

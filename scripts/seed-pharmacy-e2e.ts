@@ -161,7 +161,11 @@ async function seedCatalog() {
   });
 }
 
-async function seedWorkspace(email: string, passwordHash: string) {
+async function seedWorkspace(
+  email: string,
+  passwordHash: string,
+  options: { disposableLane: boolean }
+) {
   await asPlatform(async (tx) => {
     await tx.$executeRawUnsafe(
       `SELECT set_config('app.current_organization_id', $1, true)`,
@@ -178,6 +182,10 @@ async function seedWorkspace(email: string, passwordHash: string) {
       currency: 'PKR',
       seatLimit: 10,
       activatedAt: FIXED_AT,
+      // DEV-961: the disposable browser lane signs approvers in with a password and approves with
+      // the seeded fixed PINs, which apply while the owner has the authenticator for approvals
+      // turned off. Disposable lane only: the staging demo keeps the default.
+      ...(options.disposableLane ? { requireApprovalAuthenticator: false } : {}),
     };
     await tx.organization.upsert({
       where: { id: PHARMACY_E2E.organizationId },
@@ -730,6 +738,7 @@ function medicineSeeds(): MedicineSeed[] {
     ],
     batchId: controlled.batchId,
     batchNumber: controlled.batchNumber,
+    barcode: controlled.gtin,
     unitsPerPack: controlled.unitsPerPack,
     printedMrpMinor: controlled.printedMrpMinor,
     onHandUnits: controlled.onHandUnits,
@@ -1182,7 +1191,7 @@ async function main() {
     const passwordHash = hashSync(process.env.PHARMACY_E2E_ADMIN_PASSWORD!, 10);
 
     await seedCatalog();
-    await seedWorkspace(email, passwordHash);
+    await seedWorkspace(email, passwordHash, { disposableLane: !stagingDemo });
     await seedAdminPin();
     await seedBranch();
     await seedCashier(passwordHash);

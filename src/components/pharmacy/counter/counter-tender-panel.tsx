@@ -8,7 +8,7 @@ import { Check, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { COUNTER_APPROVAL_CODE_HINT } from './counter-approval-copy';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
 import { KhataLimitMeter } from './counter-khata-limit';
@@ -222,6 +222,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     },
     ref
   ) {
+    const approvalCopy = useCounterApprovalCopy();
     const [accounts, setAccounts] = useState<KhataAccount[]>([]);
     const [accountId, setAccountId] = useState('');
     const [khataLoading, setKhataLoading] = useState(false);
@@ -1357,7 +1358,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                               creates their own under Settings, Your PIN. <OwnPinLink />
                             </p>
                           ) : null}
-                          <Label htmlFor="khata-approver-pin">Approver PIN</Label>
+                          <Label htmlFor="khata-approver-pin">{approvalCopy.approverLabel}</Label>
                           <Input
                             id="khata-approver-pin"
                             type="password"
@@ -1373,7 +1374,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             className="h-11 rounded-sm"
                           />
                           <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
-                            {COUNTER_APPROVAL_CODE_HINT}
+                            {approvalCopy.hint}
                           </p>
                         </>
                       ) : (
@@ -1524,26 +1525,44 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           className="grid min-w-0 gap-3 rounded-md bg-surface-sunken p-4 max-lg:order-first lg:col-start-3 lg:row-start-1"
         >
           {tenders.length > 0 ? (
-            <ol aria-label={copy.tender.payments} className="grid gap-1.5">
-              {tenders.map((tender, index) => (
-                <li
-                  key={tender.tenderId}
-                  className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-card px-3 py-2 text-[13px]"
-                >
-                  <span className="text-text-body">
-                    {index + 1}.{' '}
-                    {tender.type === 'CREDIT' || tender.type === 'KHATA'
-                      ? 'Khata'
-                      : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
-                        tender.type)}{' '}
-                    · Recorded
-                  </span>
-                  <span className="font-mono tabular-nums text-text-strong">
-                    {formatMinor(tender.amountMinor)}
-                  </span>
-                </li>
-              ))}
-            </ol>
+            // DEV-977 phase 3 (Counter v2 A2): what the bill has taken so far, added up from the
+            // payments the server recorded, above the list it sums. Nothing is worked out here
+            // beyond that sum; the balance below is still the server's.
+            <div
+              role="group"
+              aria-label={copy.tender.paidSoFar}
+              data-counter-paid-so-far=""
+              className="grid gap-2"
+            >
+              <p className="flex flex-wrap items-baseline justify-between gap-2">
+                <span className="font-mono text-xs tracking-wide text-text-muted uppercase">
+                  {copy.tender.paidSoFar}
+                </span>
+                <span className="font-mono text-[15px] font-semibold tabular-nums text-text-strong">
+                  {formatMinor(tenders.reduce((sum, tender) => sum + tender.amountMinor, 0))}
+                </span>
+              </p>
+              <ol aria-label={copy.tender.payments} className="grid gap-1.5">
+                {tenders.map((tender, index) => (
+                  <li
+                    key={tender.tenderId}
+                    className="flex min-h-11 flex-wrap items-center justify-between gap-2 rounded-sm bg-surface-card px-3 py-2 text-[13px]"
+                  >
+                    <span className="text-text-body">
+                      {index + 1}.{' '}
+                      {tender.type === 'CREDIT' || tender.type === 'KHATA'
+                        ? 'Khata'
+                        : (TENDER_TYPES.find((entry) => entry.value === tender.type)?.label ??
+                          tender.type)}{' '}
+                      · Recorded
+                    </span>
+                    <span className="font-mono tabular-nums text-text-strong">
+                      {formatMinor(tender.amountMinor)}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
           ) : null}
 
           <div className="flex flex-wrap items-start justify-between gap-3">

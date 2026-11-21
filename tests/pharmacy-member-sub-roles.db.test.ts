@@ -136,8 +136,10 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       await c.connect();
       await c.query("SELECT set_config('app.is_platform_admin','true',false)");
       for (const org of ORGS) {
+        // DEV-961: these changes are confirmed with fixed PINs, which apply while the owner has
+        // the authenticator for approvals turned off.
         await c.query(
-          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"seatLimit","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',50,now(),now())`,
+          `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"seatLimit","requireApprovalAuthenticator","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',50,false,now(),now())`,
           [org]
         );
         await c.query(
@@ -786,6 +788,79 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
       await callers.team('managerc').adminUpdateMember({ id: id('cashierc'), title: 'Counter' });
     });
 
+    it.each([
+      ['read-finance-accounts', 'finance:read'],
+      ['manage-finance-accounts', 'finance:manage'],
+    ] as const)(
+      'requires the owner’s fresh approval to grant or remove %s',
+      async (subRoleKey, action) => {
+        const { canAccessPharmacyFinance } = await import('@/lib/pharmacy/finance-access');
+        const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+        const target = 'cashier2';
+        const memberId = id(target);
+        const access = () =>
+          canAccessPharmacyFinance(
+            { id: memberId, role: 'EMPLOYEE', status: 'ACTIVE' },
+            { db: createTenantDb(orgA, memberId) },
+            action
+          );
+        const tick = (editor: string, ticked: boolean, pin?: string) =>
+          callers.admin(editor).setMemberSubRole({ userId: memberId, subRoleKey, ticked, pin });
+        expect(await access()).toBe(false);
+        await expect(tick('manager', true, PIN)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        await expect(tick('owner', true)).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+        await tick('owner', true, PIN);
+        expect(await access()).toBe(true);
+        await tick('owner', false, PIN);
+        expect(await access()).toBe(false);
+      }
+    );
+
+    it.each([
+      [false, 'PIN'],
+      [true, 'approval code'],
+    ] as const)(
+      'names the configured approval secret when authenticator approval is %s',
+      async (required, secret) => {
+        await rows('UPDATE organizations SET "requireApprovalAuthenticator"=$1 WHERE id=$2', [
+          required,
+          orgA,
+        ]);
+        try {
+          await expect(
+            callers.admin('owner').setMemberSubRole({
+              userId: id('cashier2'),
+              subRoleKey: 'read-finance-accounts',
+              ticked: true,
+            })
+          ).rejects.toMatchObject({
+            code: 'PRECONDITION_FAILED',
+            message: `Enter your ${secret} to change See accounts. It carries extra weight.`,
+          });
+        } finally {
+          await rows('UPDATE organizations SET "requireApprovalAuthenticator"=false WHERE id=$1', [
+            orgA,
+          ]);
+        }
+      }
+    );
+
+    it('requires owner approval for finance rules even on an empty custom role', async () => {
+      const role = { key: 'finance-fixture', name: 'Finance fixture', description: null };
+      const permissions = [{ capability: 'finance:read', effect: 'ALLOW' as const }];
+      await expect(
+        callers.admin('manager').upsertRole({ ...role, permissions, pin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        callers.admin('owner').upsertRole({ ...role, permissions })
+      ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      const saved = await callers.admin('owner').upsertRole({ ...role, permissions, pin: PIN });
+      await expect(
+        callers.admin('manager').upsertRole({ ...role, id: saved.id, permissions: [] })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await callers.admin('owner').upsertRole({ ...role, id: saved.id, permissions: [], pin: PIN });
+    });
+
     it('organizationAdmin.upsertRole: editing a custom role checks everyone who holds it', async () => {
       const save = (who: string, capabilities: string[], pin?: string) =>
         callers.admin(who).upsertRole({
@@ -925,6 +1000,22 @@ const member = (key: string) => MEMBERS.find((candidate) => candidate.key === ke
         mfaEnabled: true,
       } as never;
       const request = new Request('https://platform.test/command');
+      const deniedGrant = executePlatformCommand(
+        actor,
+        'organization.role',
+        {
+          organizationId: orgC,
+          key: 'unassigned-finance',
+          name: 'Unassigned finance',
+          permissions: [{ capability: 'finance:*', effect: 'ALLOW' }],
+        },
+        request
+      );
+      await expect(deniedGrant).rejects.toThrow(/workspace owner/);
+      await expect(deniedGrant).rejects.toMatchObject({
+        name: 'PlatformSecurityError',
+        status: 403,
+      });
       await expect(
         executePlatformCommand(
           actor,

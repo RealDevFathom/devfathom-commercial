@@ -123,6 +123,7 @@ async function verifyWitnessPin(
       credentialHash: credential.credentialHash,
       secret: input.witnessPin,
       action: 'pharmacy.writeOffWitness',
+      approverRight: 'pharmacy:dispense',
       requestedById: scope.actorId,
       now,
     }))

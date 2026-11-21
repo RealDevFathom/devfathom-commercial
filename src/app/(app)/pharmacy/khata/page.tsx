@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import Link from 'next/link';
 import { redirect, unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
@@ -191,13 +192,13 @@ export default async function KhataPage({
         <form action="/pharmacy/khata" method="get" className="flex flex-wrap items-end gap-3">
           <label className="grid w-full gap-2 text-sm sm:w-auto">
             Branch
-            <select name="branchId" defaultValue={branchId} className={selectClass}>
+            <StudioSelect name="branchId" defaultValue={branchId} className={selectClass}>
               {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <Button type="submit" className="min-h-11">
             Show branch

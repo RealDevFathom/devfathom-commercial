@@ -1,7 +1,25 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import {
+  cleanup,
+  fireEvent,
+  render as renderUi,
+  screen,
+  waitFor,
+  within,
+} from '@testing-library/react';
+import type { ReactElement, ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApprovalSecretKindContext } from './counter-approval-copy';
 import { CounterReturnPanel, parseReceiptNumber, ReturnForm } from './counter-return-panel';
 import { MESSAGES, ROWS, type Shared } from './counter-amount-input.fixtures';
+
+// DEV-961: these returns are approved with the manager's permanent PIN (the owner turned the
+// authenticator off); the default wording is checked on its own below.
+function PinMode({ children }: { children: ReactNode }) {
+  return (
+    <ApprovalSecretKindContext.Provider value="PIN">{children}</ApprovalSecretKindContext.Provider>
+  );
+}
+const render = (ui: ReactElement) => renderUi(ui, { wrapper: PinMode });
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
   returnAndRefund: vi.fn(),
@@ -138,6 +156,24 @@ beforeEach(() => {
   };
 });
 afterEach(() => vi.restoreAllMocks());
+describe('DEV-961 the manager’s own field follows the authenticator setting', () => {
+  it('asks for the manager’s current app code while it is on (the default)', () => {
+    renderUi(<ReturnForm {...props} />);
+    chooseReceipt();
+    const field = screen.getByLabelText('Your approval code');
+    expect(field).toHaveAccessibleDescription(/6-digit code from your authenticator app/);
+    expect(screen.queryByLabelText('Your manager or owner PIN')).not.toBeInTheDocument();
+  });
+
+  it('asks for the manager’s permanent PIN while the owner has it off', () => {
+    render(<ReturnForm {...props} />);
+    chooseReceipt();
+    expect(screen.getByLabelText('Your manager or owner PIN')).toHaveAccessibleDescription(
+      /your permanent PIN/
+    );
+  });
+});
+
 describe('DEV-732 explicit return choices', () => {
   function chooseReason() {
     chooseReturnReason('Damaged');
@@ -833,6 +869,24 @@ describe('controlled medicine returns', () => {
     chooseReceipt();
     fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
     expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+  });
+
+  it('DEV-961: asks the witness for their app code while the setting is on, their PIN while off', () => {
+    controlledHistory();
+    renderUi(<ReturnForm {...props} />);
+    chooseReceipt();
+    fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+    expect(screen.getByLabelText('Witness approval code')).toHaveAttribute('type', 'password');
+    expect(
+      screen.getByText(/witness this return with the current code from their authenticator app/)
+    ).toBeInTheDocument();
+    expect(screen.queryByLabelText('Witness PIN')).toBeNull();
+    cleanup();
+    render(<ReturnForm {...props} />);
+    fillControlledReturn();
+    expect(screen.getByLabelText('Witness PIN')).toBeInTheDocument();
+    expect(screen.getByText(/witness this return with a fresh PIN/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Witness approval code')).toBeNull();
   });
 
   it('requires a fresh witness PIN and sends it without persisting it', async () => {
@@ -1595,5 +1649,32 @@ describe('DEV-977 phase 2B: returns and no-permission in the Counter v2 sheets (
     render(<ReturnForm {...props} />);
     chooseReceipt();
     expect(document.querySelector('[data-counter-no-permission]')).toBeNull();
+  });
+});
+
+describe('DEV-977 phase 3: "Got it" closes the returns sheet for a member without refund access (C6)', () => {
+  it('closes the sheet and records nothing', () => {
+    mocks.refundAccess = { data: { authorized: false } };
+    render(<CounterReturnPanel {...base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Returns' }));
+    const sheet = screen.getByRole('dialog', { name: 'Returns' });
+    chooseReceipt();
+    const card = within(sheet).getByRole('heading', {
+      name: 'Ask a manager or owner to record this return',
+    }).parentElement!;
+    expect(within(card).queryByRole('button')).toBeNull();
+    fireEvent.click(within(sheet).getByRole('button', { name: 'Got it' }));
+    expect(screen.queryByRole('dialog', { name: 'Returns' })).not.toBeInTheDocument();
+    expect(mocks.returnLine).not.toHaveBeenCalled();
+    expect(mocks.returnAndRefund).not.toHaveBeenCalled();
+    expect(mocks.refund).not.toHaveBeenCalled();
+  });
+
+  it('offers no "Got it" to a manager or owner, who records the return', () => {
+    mocks.refundAccess = { data: { authorized: true } };
+    render(<CounterReturnPanel {...base} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Returns & refunds' }));
+    chooseReceipt();
+    expect(screen.queryByRole('button', { name: 'Got it' })).toBeNull();
   });
 });

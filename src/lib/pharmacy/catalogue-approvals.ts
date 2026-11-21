@@ -7,6 +7,7 @@ import type { Prisma } from '@/generated/prisma/client';
 import { PharmacyProductClassError, validateRetailFields } from './product-class';
 import { isSoloPharmacyOwner } from './solo-owner';
 import { verifyOwnerExportPin } from './owner-data-export-pin';
+import { approvalSecretKindFor } from '@/lib/approval-authenticator';
 import { NO_PIN_SET_MESSAGE } from './own-pin-policy';
 import { actorIsPharmacyOwner } from './procurement-access';
 import { can, subjectFromSession, ACTIVE_STATUSES } from '@/lib/abac';
@@ -118,12 +119,21 @@ export async function requireIndependentCatalogueReviewer(
           actorId: scope.actorId,
           actorOrganizationId: scope.actorOrganizationId,
         });
+  // DEV-961: the refusals name what the owner's own approval takes in this organization: the
+  // current code from their authenticator app while the setting is on, their PIN while it is off.
+  // Wording only: a refusal stays a refusal even when the setting cannot be read.
+  const secretKind = () =>
+    approvalSecretKindFor(db, scope.organizationId).catch(() => 'CODE' as const);
   if (!soloPin || !(await eligible())) {
+    const own =
+      (await secretKind()) === 'CODE'
+        ? 'the current code from their authenticator app'
+        : 'their own fresh PIN';
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: options.ownerWithoutOtherReviewer
-        ? 'Another reviewer must approve this edit. When nobody else can review, the owner may enter their own fresh PIN.'
-        : 'Another reviewer must approve this edit. A solo owner may enter their own fresh PIN.',
+        ? `Another reviewer must approve this edit. When nobody else can review, the owner may enter ${own}.`
+        : `Another reviewer must approve this edit. A solo owner may enter ${own}.`,
     });
   }
   // A separate transaction commits failed guesses and their durable lockout.
@@ -133,15 +143,21 @@ export async function requireIndependentCatalogueReviewer(
     pin: soloPin,
   });
   if (verified !== 'OK') {
+    // DEV-931: an owner who has not created a PIN yet is sent to "Your PIN" (the PIN credential
+    // carries the lockout in both modes). DEV-976: a lock says so, rather than reading as a
+    // wrong entry.
+    if (verified === 'NO_PIN')
+      throw new TRPCError({ code: 'FORBIDDEN', message: NO_PIN_SET_MESSAGE });
+    const code = (await secretKind()) === 'CODE';
     throw new TRPCError({
       code: 'FORBIDDEN',
-      // DEV-931: an owner who has not created a PIN yet is sent to "Your PIN". DEV-976: a
-      // locked PIN says so, rather than reading as a wrong PIN.
       message:
-        verified === 'NO_PIN'
-          ? NO_PIN_SET_MESSAGE
-          : verified === 'LOCKED'
-            ? 'Your PIN is locked after too many wrong tries. Wait and try again.'
+        verified === 'LOCKED'
+          ? code
+            ? 'Your approvals are locked after too many wrong tries. Wait and try again.'
+            : 'Your PIN is locked after too many wrong tries. Wait and try again.'
+          : code
+            ? 'That approval code is not right or was already used. Enter the current code from your authenticator app.'
             : 'Fresh owner PIN verification failed.',
     });
   }

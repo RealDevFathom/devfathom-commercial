@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { PendingLegalReviewNotice } from '../pending-legal-review-notice';
@@ -159,7 +161,7 @@ export function ControlledRegisterConsole() {
       {branches.data && branches.data.length > 1 ? (
         <label className="block text-xs text-text-muted" htmlFor="register-branch">
           Branch
-          <select
+          <StudioSelect
             id="register-branch"
             className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
             value={selected}
@@ -170,7 +172,7 @@ export function ControlledRegisterConsole() {
                 {branch.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
       ) : null}
       {branches.error ? (
@@ -350,7 +352,7 @@ export function ControlledRegisterConsole() {
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="text-xs text-text-muted" htmlFor="correct-entry">
                   Entry to correct
-                  <select
+                  <StudioSelect
                     id="correct-entry"
                     className="mt-1 h-9 w-full rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
                     value={correctsEntryId}
@@ -369,11 +371,11 @@ export function ControlledRegisterConsole() {
                           {entry.serial} · {entry.entryKind} · {batchNumberLabel(entry.batchNumber)}
                         </option>
                       ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="text-xs text-text-muted" htmlFor="correct-pharmacist">
                   Qualified person
-                  <select
+                  <StudioSelect
                     id="correct-pharmacist"
                     className="mt-1 h-9 w-full rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
                     value={staffProfileId}
@@ -386,7 +388,7 @@ export function ControlledRegisterConsole() {
                         {staff.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="text-xs text-text-muted sm:col-span-2" htmlFor="correct-reason">
                   Reason

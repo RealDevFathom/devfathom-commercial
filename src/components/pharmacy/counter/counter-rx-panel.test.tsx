@@ -35,7 +35,12 @@ vi.mock('@/lib/trpc', () => ({
   },
 }));
 
-import { CounterRxPanel, type CounterRxPanelProps } from './counter-rx-panel';
+import { ApprovalSecretKindContext } from './counter-approval-copy';
+import {
+  CounterControlledAuthorization,
+  CounterRxPanel,
+  type CounterRxPanelProps,
+} from './counter-rx-panel';
 
 const patient: CounterPatientPanel = {
   patientId: 'patient-1',
@@ -311,12 +316,39 @@ describe('CounterRxPanel checks', () => {
     expect(link).toHaveAttribute('target', '_blank');
   });
 
+  it('DEV-961: words the pharmacist step for the approval setting', () => {
+    const controlled = { ...authorization(), staffProfileId: 'pharmacist-1' };
+    // On (the default): the pharmacist's current app code.
+    const { unmount } = render(<CounterRxPanel {...props({ patient, controlled })} />);
+    expect(screen.getByLabelText('Pharmacist’s approval code')).toHaveAccessibleDescription(
+      /6-digit code from their authenticator app/
+    );
+    expect(
+      screen.getByText(/Patient address and the pharmacist’s approval code are required/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/The code is cleared after each attempt/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pharmacist PIN')).toBeNull();
+    unmount();
+    // Off: the pharmacist's permanent PIN.
+    render(
+      <ApprovalSecretKindContext.Provider value="PIN">
+        <CounterRxPanel {...props({ patient, controlled })} />
+      </ApprovalSecretKindContext.Provider>
+    );
+    expect(screen.getByLabelText('Pharmacist PIN')).toHaveAccessibleDescription(/permanent PIN/);
+    expect(
+      screen.getByText(/Patient address and a pharmacist PIN are required/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/PIN is cleared after each attempt/)).toBeInTheDocument();
+    expect(screen.queryByLabelText('Pharmacist’s approval code')).toBeNull();
+  });
+
   it('preserves pharmacist witness requirements and emergency authorization callbacks', () => {
     const controlled = authorization();
     const { rerender } = render(<CounterRxPanel {...props({ controlled })} />);
     expect(screen.getByLabelText('Patient address')).toBeDisabled();
     expect(screen.getByLabelText('Prescription line')).toBeDisabled();
-    expect(screen.getByLabelText('Pharmacist PIN')).toBeDisabled();
+    expect(screen.getByLabelText('Pharmacist’s approval code')).toBeDisabled();
 
     rerender(
       <CounterRxPanel
@@ -326,15 +358,16 @@ describe('CounterRxPanel checks', () => {
         })}
       />
     );
-    const pin = screen.getByLabelText('Pharmacist PIN');
+    const pin = screen.getByLabelText('Pharmacist’s approval code');
     expect(pin).toHaveAttribute('type', 'password');
     expect(pin).toHaveAttribute('autocomplete', 'off');
-    expect(pin).toHaveAccessibleDescription(/authenticator for approvals, enter its 6-digit code/);
+    // DEV-961: on by default, the pharmacist enters the current code from their app.
+    expect(pin).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
     for (const [label, field, value] of [
       ['Patient address', 'patientAddress', 'Model Town'],
       ['Prescription line', 'prescriptionLineId', 'rx-line-1'],
       ['Approving pharmacist', 'staffProfileId', 'pharmacist-1'],
-      ['Pharmacist PIN', 'pin', '123456'],
+      ['Pharmacist’s approval code', 'pin', '123456'],
       ['Prescriber name', 'prescriberName', 'Dr. Ahmed'],
       ['Prescriber registration', 'prescriberRegNo', 'REG-123'],
       ['Earlier register serial', 'refSerial', '42'],
@@ -406,9 +439,9 @@ describe('DEV-977 phase 2B: controlled medicine authorisation in the Counter v2 
     ).toBeInTheDocument();
     expect(within(rxStep).getByLabelText('Earlier register serial')).toBeInTheDocument();
     expect(within(pharmacistStep).getByLabelText('Approving pharmacist')).toBeInTheDocument();
-    expect(within(pharmacistStep).getByLabelText('Pharmacist PIN')).toHaveAccessibleDescription(
-      /./
-    );
+    expect(
+      within(pharmacistStep).getByLabelText('Pharmacist’s approval code')
+    ).toHaveAccessibleDescription(/./);
     // Document order follows the steps, so Tab walks them in turn.
     expect(
       patientStep.compareDocumentPosition(rxStep) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -463,4 +496,48 @@ describe('DEV-977 phase 2B: controlled medicine authorisation in the Counter v2 
       'Pharmacist, done:done',
     ]);
   });
+});
+
+describe('DEV-977 phase 3: the authorization inside the "Authorise" sheet', () => {
+  it.each([
+    ['CODE', 'Pharmacist’s approval code', /approval code are required/],
+    ['PIN', 'Pharmacist PIN', /a pharmacist PIN are required/],
+  ] as const)(
+    'drops the heading the sheet already shows, keeping the region, steps and fields (%s)',
+    (mode, label, intro) => {
+      render(
+        <ApprovalSecretKindContext.Provider value={mode}>
+          <CounterControlledAuthorization
+            inSheet
+            patient={null}
+            controlled={{
+              prescriptionLineId: '',
+              staffProfileId: '',
+              pin: '',
+              pharmacists: [],
+              loading: false,
+              error: false,
+              patientAddress: '',
+              rxSerialWritten: false,
+              emergency: false,
+              prescriberName: '',
+              prescriberRegNo: '',
+              refSerial: '',
+              onChange: () => {},
+            }}
+          />
+        </ApprovalSecretKindContext.Provider>
+      );
+      const region = screen.getByRole('region', { name: 'Controlled medicine authorization' });
+      expect(
+        within(region).queryByRole('heading', { name: 'Controlled medicine authorization' })
+      ).toBeNull();
+      expect(within(region).queryByText('Controlled medicine · online only')).toBeNull();
+      // The approvals setting still decides the wording inside the sheet.
+      expect(region).toHaveTextContent(intro);
+      expect(within(region).getByRole('list', { name: 'Authorization steps' })).toBeInTheDocument();
+      expect(within(region).getByLabelText('Patient address')).toBeDisabled();
+      expect(within(region).getByLabelText(label)).toBeInTheDocument();
+    }
+  );
 });
