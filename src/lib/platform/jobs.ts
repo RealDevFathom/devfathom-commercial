@@ -1,5 +1,8 @@
 import 'server-only';
 
+import { discoverOidc } from '@/lib/oidc-discovery';
+import { deleteSpentSsoStates, SSO_CLEANUP_BATCH_SIZE } from '@/lib/sso-state';
+
 import { resolveTxt } from 'node:dns/promises';
 import { createHash } from 'node:crypto';
 import {
@@ -458,27 +461,8 @@ async function syncIdentity(
   if (!connection) throw new Error('Identity connection no longer exists.');
   try {
     if (connection.protocol === 'OIDC') {
-      const discoveryUrl =
-        connection.discoveryUrl ??
-        (connection.issuer
-          ? `${connection.issuer.replace(/\/$/, '')}/.well-known/openid-configuration`
-          : null);
-      if (!discoveryUrl || !connection.clientId) {
-        throw new Error('OIDC issuer/discovery URL and client ID are required.');
-      }
-      const response = await fetch(discoveryUrl, {
-        signal: AbortSignal.timeout(10_000),
-        headers: { accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`OIDC discovery returned HTTP ${response.status}.`);
-      const metadata = (await response.json()) as Record<string, unknown>;
-      if (
-        typeof metadata.authorization_endpoint !== 'string' ||
-        typeof metadata.token_endpoint !== 'string' ||
-        typeof metadata.jwks_uri !== 'string'
-      ) {
-        throw new Error('OIDC discovery metadata is incomplete.');
-      }
+      if (!connection.clientId) throw new Error('OIDC client ID is required.');
+      await discoverOidc(connection, connection.clientId, undefined, true);
     } else if (!connection.ssoUrl || !connection.entityId || !connection.certificate) {
       throw new Error('SAML SSO URL, entity ID, and signing certificate are required.');
     }
@@ -1013,6 +997,11 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  // Each five-minute worker pass can retire more rows than both protocols
+  // together can admit in that interval, without holding one large lock set.
+  for (let batch = 0; batch < 16; batch++) {
+    if ((await withPlatformDb(deleteSpentSsoStates)) < SSO_CLEANUP_BATCH_SIZE) break;
+  }
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await withPlatformDb((db) => purgeExpiredOwnerDataExports(db));
   await enqueueCameraEvidenceJobs(new Date());

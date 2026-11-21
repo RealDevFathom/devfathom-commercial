@@ -17,6 +17,7 @@ vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
 vi.mock('@/lib/secret-crypto', () => ({ decryptSecret: () => 'totp-secret' }));
 vi.mock('@/lib/totp', () => ({ verifyTotp: (_secret: string, code: string) => code === '123456' }));
 const db = {
+  organizationIdentityConnection: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
   $queryRawUnsafe: vi.fn(async (sql: string) =>
     sql.startsWith('SELECT id FROM organizations') ? [{ id: state.organization.id }] : []
   ),
@@ -156,6 +157,45 @@ beforeEach(() => {
   state.lifecycleEvents = [];
   state.approvalAuthenticators = [];
   state.recoveryCodes = [];
+});
+
+describe('OIDC connection saves', () => {
+  const payload = {
+    organizationId: 'org_1',
+    name: 'Synthetic identity',
+    protocol: 'OIDC',
+    reason: 'Validate identity settings',
+    authenticationCode: '123456',
+  };
+
+  it('saves a syntactically valid public destination without fetching a document', async () => {
+    db.organizationIdentityConnection.create.mockResolvedValueOnce({
+      id: 'fixture',
+      organizationId: 'org_1',
+    });
+    await execute('organization.identity', { ...payload, issuer: 'https://8.8.8.8/tenant' });
+    expect(db.organizationIdentityConnection.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ issuer: 'https://8.8.8.8/tenant' }),
+    });
+  });
+
+  it('refuses a forbidden discovery address before creating a connection', async () => {
+    await expect(
+      execute('organization.identity', { ...payload, discoveryUrl: 'https://192.0.2.1/document' })
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('public HTTPS') });
+    expect(db.organizationIdentityConnection.create).not.toHaveBeenCalled();
+  });
+
+  it('validates the effective stored issuer on a partial update', async () => {
+    db.organizationIdentityConnection.findUnique.mockResolvedValue({
+      issuer: 'http://idp.example',
+      discoveryUrl: null,
+    });
+    await expect(
+      execute('organization.identity', { ...payload, id: 'connection' })
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('public HTTPS') });
+    expect(db.organizationIdentityConnection.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('pharmacy placeholder commands', () => {

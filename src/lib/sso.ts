@@ -97,15 +97,23 @@ export async function requireIdentityConnection(
   protocol: 'OIDC' | 'SAML'
 ): Promise<ActiveIdentityConnection> {
   const organization = await requireOrganizationForRequest(request);
-  return withTenantDb(organization.id, async (db) => {
-    const entitlements = await resolveOrganizationEntitlements(organization.id, db);
+  return identityConnectionForOrganization(organization.id, connectionId, protocol);
+}
+
+export async function identityConnectionForOrganization(
+  organizationId: string,
+  connectionId: string,
+  protocol: 'OIDC' | 'SAML'
+): Promise<ActiveIdentityConnection> {
+  return withTenantDb(organizationId, async (db) => {
+    const entitlements = await resolveOrganizationEntitlements(organizationId, db);
     if (!hasModule(entitlements, 'identity')) {
       throw new Error('Enterprise identity is not licensed for this organization.');
     }
     const connection = await db.organizationIdentityConnection.findFirst({
       where: {
         id: connectionId,
-        organizationId: organization.id,
+        organizationId,
         protocol,
         status: 'ACTIVE',
       },

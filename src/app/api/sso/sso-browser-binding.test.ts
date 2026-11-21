@@ -32,11 +32,19 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/secret-crypto', () => ({ decryptSecret: vi.fn(() => undefined) }));
 // The real proxy-aware origin helpers: the binding cookie's attributes follow
 // the scheme the browser used (DEV-849).
-vi.mock('@/lib/tenancy/host', () => ({ requireOrganizationForRequest: vi.fn() }));
+vi.mock('@/lib/tenancy/host', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/tenancy/host')>()),
+  requireOrganizationForRequest: vi.fn(async () => ({ id: 'org_1' })),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: vi.fn(async (_organizationId: string, run: (db: unknown) => Promise<unknown>) =>
     run({
+      $executeRaw: vi.fn(),
       organizationSsoState: {
+        count: vi.fn(
+          async () =>
+            states.filter((row) => row.usedAt === null && row.expiresAt > new Date()).length
+        ),
         create: vi.fn(async ({ data }: { data: Omit<StateRow, 'id' | 'usedAt'> }) => {
           const row = { id: `s${states.length + 1}`, usedAt: null, ...data };
           states.push(row);
@@ -85,13 +93,14 @@ vi.mock('@/lib/sso', async () => {
   return {
     ...actual,
     requireIdentityConnection: mocks.requireIdentityConnection,
+    identityConnectionForOrganization: mocks.requireIdentityConnection,
     provisionIdentityUser: mocks.provisionIdentityUser,
     issueSsoTicket: mocks.issueSsoTicket,
   };
 });
 
+vi.mock('@/lib/oidc-discovery', () => ({ discoverOidc: vi.fn(async () => ({})) }));
 vi.mock('openid-client', () => ({
-  discovery: vi.fn(async () => ({})),
   randomPKCECodeVerifier: () => 'pkce-verifier',
   calculatePKCECodeChallenge: async () => 'pkce-challenge',
   randomNonce: () => 'oidc-nonce',
@@ -392,6 +401,7 @@ describe('browser binding cookie attributes (DEV-849)', () => {
 
   it('stays SameSite=None; Secure in production regardless of the request scheme', async () => {
     vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('RATE_LIMIT_HMAC_SECRET', 'synthetic-cookie-test');
     for (const url of [
       'https://acme.example/api/sso/saml/conn_saml/start',
       'http://internal:3000/api/sso/saml/conn_saml/start',
@@ -424,5 +434,60 @@ describe('browser binding cookie attributes (DEV-849)', () => {
     expect(cleared).toContain('samesite=none');
     expect(cleared).toMatch(/;\s*secure/);
     expect(cleared).toMatch(/max-age=0|expires=thu, 01 jan 1970/);
+  });
+});
+
+describe('start admission', () => {
+  it.each([
+    ['OIDC', oidcStart],
+    ['SAML', samlStart],
+  ] as const)(
+    'refuses an exhausted %s budget before tenant lookup, discovery or state writes',
+    async (_protocol, start) => {
+      const { clearRateLimit, rateLimit, clientIp } = await import('@/lib/rate-limit');
+      const { discoverOidc } = await import('@/lib/oidc-discovery');
+      const request = new Request('https://acme.example/start', {
+        headers: { host: 'acme.example' },
+      });
+      const { requireOrganizationForRequest } = await import('@/lib/tenancy/host');
+      for (const [key, limit] of [
+        ['overall', 600],
+        [`ip:${clientIp(request)}`, 60],
+        ['host:acme.example', 180],
+        ['connection:fixture', 120],
+      ] as const) {
+        const name = 'sso:start:' + key;
+        try {
+          for (let i = 0; i < limit; i++) await rateLimit(name, limit, 60_000);
+          const response = await start(request, route('fixture'));
+          expect(response.status).toBe(429);
+          expect(Number(response.headers.get('retry-after'))).toBeGreaterThan(0);
+          expect(requireOrganizationForRequest).not.toHaveBeenCalled();
+          expect(mocks.requireIdentityConnection).not.toHaveBeenCalled();
+          expect(discoverOidc).not.toHaveBeenCalled();
+          expect(states).toHaveLength(0);
+        } finally {
+          await clearRateLimit(name);
+        }
+      }
+    }
+  );
+  it('charges the same business on both verified aliases before reading entitlements or the connection', async () => {
+    const { rateLimit, clearRateLimit } = await import('@/lib/rate-limit');
+    const key = 'sso:start:organization:org_1';
+    try {
+      for (let i = 0; i < 180; i++) await rateLimit(key, 180, 60_000);
+      for (const host of ['tenant.example', 'alias.example']) {
+        const response = await oidcStart(
+          new Request('https://' + host + '/start', { headers: { host } }),
+          route('fixture')
+        );
+        expect(response.status).toBe(429);
+      }
+      expect(mocks.requireIdentityConnection).not.toHaveBeenCalled();
+      expect(states).toHaveLength(0);
+    } finally {
+      await clearRateLimit(key);
+    }
   });
 });
