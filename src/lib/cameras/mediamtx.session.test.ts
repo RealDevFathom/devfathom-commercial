@@ -11,7 +11,12 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
 
-import { CameraTransportError, cameraVideoCodec, createMediaMtxTransport } from './mediamtx';
+import {
+  CAMERA_READ_DEADLINE_MS,
+  CameraTransportError,
+  cameraVideoCodec,
+  createMediaMtxTransport,
+} from './mediamtx';
 
 const BASE = 'https://camera-gateway.example.internal/';
 const READER = 'dedicated-hls-reader';
@@ -528,5 +533,212 @@ describe('connection check and codec', () => {
     ['BANDWIDTH=1', 'unknown'],
   ])('reads %s as %s', (attributes, codec) => {
     expect(cameraVideoCodec(`#EXTM3U\n#EXT-X-STREAM-INF:${attributes}\nv.m3u8\n`)).toBe(codec);
+  });
+});
+
+describe('DEV-1004: one deadline per read', () => {
+  /** A relay that answers every request after `delayMs`, with the v1.18+ session step. */
+  function slowRelay(delayMs: number) {
+    const paths: string[] = [];
+    const request = vi.fn(
+      (url: URL, _options: Record<string, unknown>, callback: (res: EventEmitter) => void) => {
+        paths.push(url.pathname + url.search);
+        const req = new EventEmitter() as EventEmitter & {
+          end: () => void;
+          destroy: (error?: Error) => void;
+        };
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        req.destroy = (error?: Error) => {
+          clearTimeout(timer);
+          if (error) req.emit('error', error);
+          req.emit('close');
+        };
+        req.end = () => {
+          timer = setTimeout(() => {
+            const res = new EventEmitter() as EventEmitter & {
+              statusCode: number;
+              headers: Record<string, string | string[]>;
+              destroy: () => void;
+            };
+            const first = url.search === '';
+            res.statusCode = first ? 302 : 200;
+            res.headers = first
+              ? { location: '/pharmacy-counter-1/index.m3u8?cookieCheck=1' }
+              : { 'set-cookie': [`hlsSession=${SECRET_A}; HttpOnly; Secure`] };
+            res.destroy = () => {};
+            callback(res);
+            if (!first) res.emit('data', Buffer.from(MASTER));
+            res.emit('end');
+            req.emit('close');
+          }, delayMs);
+        };
+        return req;
+      }
+    );
+    return { request, paths };
+  }
+
+  it('refuses a read whose requests together pass the deadline, though each one is under it', async () => {
+    vi.useFakeTimers();
+    try {
+      // Each answer takes 60% of the deadline: the session step's second request ends past it.
+      const { request, paths } = slowRelay(CAMERA_READ_DEADLINE_MS * 0.6);
+      const outcome = transportWith(request)
+        .read(scope())
+        .then(
+          () => 'read',
+          (error: unknown) => (error as CameraTransportError).code
+        );
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS + 1);
+      await expect(outcome).resolves.toBe('gateway-unreachable');
+      expect(paths).toEqual([
+        '/pharmacy-counter-1/index.m3u8',
+        '/pharmacy-counter-1/index.m3u8?cookieCheck=1',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('lets a read that joins a shared renewal wait until its own deadline, not the starter’s', async () => {
+    vi.useFakeTimers();
+    try {
+      // Each request is answered after the next delay in this list, in the order requests are
+      // made: read A's segment (9 s), read B's segment (1.5 s), the renewal's two playlist
+      // requests (2 s each), then B's retry.
+      const delays = [9_000, 1_500, 2_000, 2_000, 100];
+      const paths: string[] = [];
+      const request = vi.fn(
+        (url: URL, options: Record<string, unknown>, callback: (res: EventEmitter) => void) => {
+          const headers = options.headers as Record<string, string>;
+          paths.push(url.pathname + url.search);
+          const req = new EventEmitter() as EventEmitter & {
+            end: () => void;
+            destroy: (error?: Error) => void;
+          };
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          req.destroy = (error?: Error) => {
+            clearTimeout(timer);
+            if (error) req.emit('error', error);
+            req.emit('close');
+          };
+          req.end = () => {
+            timer = setTimeout(() => {
+              const res = new EventEmitter() as EventEmitter & {
+                statusCode: number;
+                headers: Record<string, string | string[]>;
+                destroy: () => void;
+              };
+              const master = url.pathname.endsWith('index.m3u8');
+              const live = cookieOf(headers, 'hlsSession') === SECRET_A;
+              let body = '';
+              if (master && url.search === '') {
+                res.statusCode = 302;
+                res.headers = { location: '/pharmacy-counter-1/index.m3u8?cookieCheck=1' };
+              } else if (master) {
+                res.statusCode = 200;
+                res.headers = { 'set-cookie': [`hlsSession=${SECRET_A}; HttpOnly; Secure`] };
+                body = MASTER;
+              } else {
+                res.statusCode = live ? 200 : 401;
+                res.headers = {};
+                body = live ? 'segment' : '';
+              }
+              res.destroy = () => {};
+              callback(res);
+              res.emit('data', Buffer.from(body));
+              res.emit('end');
+              req.emit('close');
+            }, delays.shift() ?? 100);
+          };
+          return req;
+        }
+      );
+      const transport = transportWith(request);
+      const settle = (promise: Promise<unknown>) =>
+        promise.then(
+          () => 'read',
+          (error: unknown) => (error as CameraTransportError).code
+        );
+      const a = settle(transport.read(scope(), 'abc_video1_seg0.mp4'));
+      await vi.advanceTimersByTimeAsync(8_000);
+      const b = settle(transport.read(scope(), 'abc_video1_seg0.mp4'));
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS + 2_000);
+      // A's own ten seconds ran out while the renewal it started was still going.
+      await expect(a).resolves.toBe('gateway-unreachable');
+      // B joined that renewal with most of its own time left, and its read completes.
+      await expect(b).resolves.toBe('read');
+      expect(paths).toEqual([
+        '/pharmacy-counter-1/abc_video1_seg0.mp4',
+        '/pharmacy-counter-1/abc_video1_seg0.mp4',
+        '/pharmacy-counter-1/index.m3u8',
+        '/pharmacy-counter-1/index.m3u8?cookieCheck=1',
+        '/pharmacy-counter-1/abc_video1_seg0.mp4',
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts no renewal when the read’s own time is already up as the relay answers 401', async () => {
+    vi.useFakeTimers();
+    try {
+      const paths: string[] = [];
+      const request = vi.fn(
+        (url: URL, _options: Record<string, unknown>, callback: (res: EventEmitter) => void) => {
+          paths.push(url.pathname + url.search);
+          const req = new EventEmitter() as EventEmitter & {
+            end: () => void;
+            destroy: (error?: Error) => void;
+          };
+          req.destroy = (error?: Error) => {
+            if (error) req.emit('error', error);
+            req.emit('close');
+          };
+          req.end = () => {
+            queueMicrotask(() => {
+              // The 401 arrives just as the read's ten seconds run out.
+              vi.setSystemTime(Date.now() + CAMERA_READ_DEADLINE_MS);
+              const res = new EventEmitter() as EventEmitter & {
+                statusCode: number;
+                headers: Record<string, string | string[]>;
+                destroy: () => void;
+              };
+              res.statusCode = 401;
+              res.headers = {};
+              res.destroy = () => {};
+              callback(res);
+              res.emit('end');
+              req.emit('close');
+            });
+          };
+          return req;
+        }
+      );
+      const outcome = transportWith(request)
+        .read(scope(), 'abc_video1_seg0.mp4')
+        .then(
+          () => 'read',
+          (error: unknown) => (error as CameraTransportError).code
+        );
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS * 2);
+      await expect(outcome).resolves.toBe('gateway-unreachable');
+      // Only the segment was asked for: no playlist request opened a renewal.
+      expect(paths).toEqual(['/pharmacy-counter-1/abc_video1_seg0.mp4']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still reads within the deadline when the relay is quick enough', async () => {
+    vi.useFakeTimers();
+    try {
+      const { request } = slowRelay(CAMERA_READ_DEADLINE_MS * 0.4);
+      const outcome = transportWith(request).read(scope());
+      await vi.advanceTimersByTimeAsync(CAMERA_READ_DEADLINE_MS);
+      await expect(outcome).resolves.toMatchObject({ manifest: true });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

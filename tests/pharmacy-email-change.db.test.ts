@@ -329,6 +329,27 @@ function codeAt(secretB32: string, at: Date): string {
       expect(sent).toEqual([]);
     });
 
+    it('a refusal of a role change made with an email change keeps its own words (DEV-1004)', async () => {
+      const before = (
+        await rows(`SELECT email, status, role FROM users WHERE id=$1`, [id('helper')])
+      )[0];
+      await expect(
+        team('manager').adminUpdateMember({
+          id: id('helper'),
+          email: 'helper.admin@example.test',
+          role: 'ADMIN',
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        // Making the helper an administrator gives weighty access: that is what is refused.
+        message: expect.stringMatching(/^Only the owner can change .*carries extra weight\.$/),
+      });
+      expect(
+        (await rows(`SELECT email, status, role FROM users WHERE id=$1`, [id('helper')]))[0]
+      ).toEqual(before);
+      expect(sent).toEqual([]);
+    });
+
     it('a directory cannot change an active pharmacy member’s email: it could not be confirmed', async () => {
       const { PATCH } = await import('@/app/api/scim/v2/Users/[id]/route');
       const response = await PATCH(
@@ -349,6 +370,71 @@ function codeAt(secretB32: string, at: Date): string {
       expect(((await response.json()) as { detail: string }).detail).toMatch(/team screen/);
       expect((await userRow('helper')).email).not.toBe('helper.scim@example.test');
       expect(sent).toEqual([]);
+    });
+
+    it('an administrator cannot correct a deactivated pharmacist’s email: the owner’s call (DEV-1004, unchanged)', async () => {
+      await rows(`UPDATE users SET status='INACTIVE' WHERE id=$1`, [id('pharmacist')]);
+      try {
+        const before = await userRow('pharmacist');
+        await expect(
+          team('manager').adminUpdateMember({
+            id: id('pharmacist'),
+            email: 'pharmacist.corrected@example.test',
+            pin: PIN,
+          })
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: expect.stringMatching(/^Only the owner can change this person's sign-in email/),
+        });
+        expect(await userRow('pharmacist')).toEqual(before);
+        expect(sent).toEqual([]);
+      } finally {
+        await rows(`UPDATE users SET status='ACTIVE' WHERE id=$1`, [id('pharmacist')]);
+      }
+    });
+
+    it('a change the pharmacy guard refuses still leaves a FAILED directory event (DEV-1004)', async () => {
+      const { PATCH } = await import('@/app/api/scim/v2/Users/[id]/route');
+      const before = await rows(
+        `SELECT count(*)::int AS n FROM organization_scim_events WHERE "organizationId"=$1`,
+        [org]
+      );
+      const response = await PATCH(
+        new Request(`https://test.invalid/api/scim/v2/Users/${id('cashier')}`, {
+          method: 'PATCH',
+          headers: {
+            authorization: `Bearer ${SCIM_TOKEN}`,
+            'content-type': 'application/scim+json',
+            'idempotency-key': `${prefix}-refused`,
+          },
+          body: JSON.stringify({
+            schemas: ['urn:ietf:params:scim:api:messages:2.0:PatchOp'],
+            // Making someone an administrator is the owner's call: the access guard refuses it.
+            Operations: [{ op: 'replace', path: 'roles', value: [{ value: 'ADMIN' }] }],
+          }),
+        }),
+        { params: Promise.resolve({ id: id('cashier') }) }
+      );
+      expect(response.status).toBe(403);
+      const { detail } = (await response.json()) as { detail: string };
+      const events = await rows(
+        `SELECT operation, "resourceType", status, error, payload, "idempotencyKey"
+           FROM organization_scim_events WHERE "organizationId"=$1 ORDER BY "createdAt"`,
+        [org]
+      );
+      expect(events).toHaveLength(before[0].n + 1);
+      expect(events.at(-1)).toEqual({
+        operation: 'PATCH',
+        resourceType: 'User',
+        status: 'FAILED',
+        error: detail,
+        payload: { userId: id('cashier') },
+        idempotencyKey: `${prefix}-refused`,
+      });
+      expect(detail).toMatch(/only the owner can give it, on the team screen/);
+      expect((await rows(`SELECT role FROM users WHERE id=$1`, [id('cashier')]))[0]).toEqual({
+        role: 'EMPLOYEE',
+      });
     });
 
     it('DEV-961: with the authenticator on, the owner confirms with the app code; the PIN is refused', async () => {

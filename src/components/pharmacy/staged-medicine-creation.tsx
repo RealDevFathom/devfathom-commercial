@@ -185,8 +185,14 @@ export function StagedMedicineCreation({
         {state.barcodesNotAttached > 0 && (
           <p>
             {count(state.barcodesNotAttached)} barcodes were not added: they already belong to
-            another pack, or the medicine already existed. Open a row to see which barcode.
+            another pack, the medicine already existed, they are longer than 64 characters, or
+            they have characters a scan would not match. Open a row to see which barcode.
           </p>
+        )}
+        {review && state.aliasesNotAdded + state.barcodesNotAttached > 0 && (
+          <Link className={linkClass} href={reviewHref(review.path, 'filter', 'codes-not-added')}>
+            Show the rows whose codes or barcodes were not added
+          </Link>
         )}
         {state.suppliersNotMatched > 0 && (
           <p>

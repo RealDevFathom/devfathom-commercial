@@ -7,6 +7,7 @@ import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { useOwnerSelfApprovalCopy } from '@/components/pharmacy/own-approval-copy';
+import { askReviewers } from '@/components/pharmacy/catalogue-approval-queue';
 
 import { MedicinePackSetup } from './medicine-pack-setup';
 
@@ -306,6 +307,19 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
   const [soloReviewPin, setSoloReviewPin] = useState('');
   // DEV-961: the owner's own approval follows the "Authenticator for approvals" setting.
   const ownApproval = useOwnerSelfApprovalCopy();
+  // DEV-1004: the same treatment as the catalogue queue (DEV-976). The PIN box shows only when
+  // the server's rule lets this member approve with their own PIN; otherwise the screen names
+  // who else can approve. Both come from the rules the review decision applies.
+  const queueAccess = trpc.pharmacyMedicine.catalogueQueueAccess.useQuery(undefined, {
+    retry: false,
+  });
+  const canDecide = queueAccess.data?.canDecide === true;
+  const ownerPinApproval = queueAccess.data?.ownerPinApproval === true;
+  const selfApproval = trpc.pharmacyMedicine.catalogueSelfApproval.useQuery(undefined, {
+    enabled: canDecide,
+    retry: false,
+  });
+  const showSoloPin = canDecide && (ownerPinApproval || selfApproval.data?.canSelfApprove === true);
   const candidates = trpc.pharmacyMedicine.referenceCandidates.useQuery(undefined, {
     retry: false,
   });
@@ -473,18 +487,33 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
 
   return (
     <div className="space-y-6">
-      <label className="block max-w-sm space-y-2 text-sm text-text-body">
-        <span>{ownApproval.referenceLabel}</span>
-        <input
-          className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
-          type="password"
-          inputMode="numeric"
-          autoComplete="off"
-          maxLength={64}
-          value={soloReviewPin}
-          onChange={(event) => setSoloReviewPin(event.target.value)}
-        />
-      </label>
+      {showSoloPin ? (
+        <div className="max-w-sm space-y-2 text-sm text-text-body">
+          <label className="block space-y-2">
+            <span>{ownApproval.referenceLabel}</span>
+            <input
+              className="min-h-11 w-full rounded-sm border border-border bg-surface-card px-3 focus-visible:outline-ring"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={64}
+              aria-describedby="reference-solo-pin-help"
+              value={soloReviewPin}
+              onChange={(event) => setSoloReviewPin(event.target.value)}
+            />
+          </label>
+          <p id="reference-solo-pin-help" className="text-text-muted">
+            {ownerPinApproval
+              ? ownApproval.ownerFallbackReason
+              : ownApproval.referenceOwnRowsReason}
+          </p>
+        </div>
+      ) : canDecide && selfApproval.data ? (
+        <p role="note" className="max-w-2xl text-sm text-text-body">
+          Rows you imported or edited yourself need another reviewer.{' '}
+          {askReviewers(selfApproval.data.reviewers)}
+        </p>
+      ) : null}
       <section aria-label="Connector health" className="grid gap-3 md:grid-cols-3">
         {health.map((connector) => (
           <SectionCard key={connector.id} title={connector.label} titleLevel={2}>

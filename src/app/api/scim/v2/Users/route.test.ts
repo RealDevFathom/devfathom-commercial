@@ -12,6 +12,10 @@ const mocks = vi.hoisted(() => ({
   // instead of hardcoding an agency-era key.
   organizationFindUnique: vi.fn(async () => ({ vertical: 'AGENCY' })),
   departmentFindMany: vi.fn(async () => [{ key: 'LEADERSHIP' }, { key: 'ENGINEERING' }]),
+  // DEV-1004: outside a pharmacy the write takes the organisation row lock.
+  queryRaw: vi.fn<(sql: TemplateStringsArray, ...values: unknown[]) => Promise<unknown[]>>(
+    async () => []
+  ),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -34,6 +38,7 @@ vi.mock('@/lib/scim', async () => {
           user: { findFirst: mocks.findFirst, create: mocks.create },
           organization: { findUnique: mocks.organizationFindUnique },
           organizationDepartment: { findMany: mocks.departmentFindMany },
+          $queryRaw: mocks.queryRaw,
         },
       }),
   };
@@ -97,6 +102,11 @@ describe('SCIM Users POST', () => {
       expect.objectContaining({
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
+    );
+    // DEV-1004: the organisation row is locked before the member is written.
+    expect(String(mocks.queryRaw.mock.calls[0]?.[0])).toMatch(/FROM "organizations".*FOR UPDATE/);
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.create.mock.invocationCallOrder[0]!
     );
   });
 

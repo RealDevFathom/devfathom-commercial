@@ -571,6 +571,9 @@ function stagedCreationStopped(ctx: TRPCContext, batchId: string, error: unknown
   });
 }
 
+/** Members read per query when naming who else can approve (DEV-1004). */
+const REVIEWER_PAGE = 500;
+
 export const pharmacyMedicineRouter = router({
   // DEV-19: reviewers and the owner with no other reviewer read the queue they decide; editors read
   // the queue they submit to. Everyone else is refused.
@@ -608,28 +611,34 @@ export const pharmacyMedicineRouter = router({
       countOtherOwners: true,
     });
     if (canSelfApprove) return { canSelfApprove, reviewers: [] as string[] };
-    const others = await ctx.db.user.findMany({
-      where: {
-        organizationId,
-        id: { not: user.id },
-        status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
-      },
-      select: {
-        id: true,
-        name: true,
-        role: true,
-        department: true,
-        status: true,
-        organizationId: true,
-      },
-      orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      take: 500,
-    });
     const reviewers: string[] = [];
-    for (const member of others) {
-      const memberAccess = await catalogueAccessFor(ctx, member);
-      // Who decideCatalogueEdit admits for an edit someone else submitted.
-      if (memberAccess.reviewer || memberAccess.ownerFallback) reviewers.push(member.name);
+    // DEV-1004: every active member is checked, a page at a time, so an organisation with more
+    // than one page of members never reads "Nobody else can approve it yet" by mistake.
+    for (let skip = 0; ; skip += REVIEWER_PAGE) {
+      const others = await ctx.db.user.findMany({
+        where: {
+          organizationId,
+          id: { not: user.id },
+          status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
+        },
+        select: {
+          id: true,
+          name: true,
+          role: true,
+          department: true,
+          status: true,
+          organizationId: true,
+        },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        skip,
+        take: REVIEWER_PAGE,
+      });
+      for (const member of others) {
+        const memberAccess = await catalogueAccessFor(ctx, member);
+        // Who decideCatalogueEdit admits for an edit someone else submitted.
+        if (memberAccess.reviewer || memberAccess.ownerFallback) reviewers.push(member.name);
+      }
+      if (others.length < REVIEWER_PAGE) break;
     }
     return { canSelfApprove, reviewers };
   }),

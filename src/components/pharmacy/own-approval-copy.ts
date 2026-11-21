@@ -28,6 +28,8 @@ export type OwnerSelfApprovalCopy = {
   ownerFallbackReason: string;
   /** Medicine reference review: the field for the owner's own approval. */
   referenceLabel: string;
+  /** Medicine reference review: why the field is shown (rows the owner imported or edited). */
+  referenceOwnRowsReason: string;
 };
 
 /** DEV-976 × DEV-961: the solo owner's own approval of a catalogue or reference change. */
@@ -41,6 +43,8 @@ export const OWNER_SELF_APPROVAL_COPY: Record<ApprovalSecretKind, OwnerSelfAppro
     ownerFallbackReason:
       'Nobody holds the catalogue review permission, so you approve as the owner with the current 6-digit code from your authenticator app.',
     referenceLabel: 'Your approval code for reference self-approval',
+    referenceOwnRowsReason:
+      'Nobody else can review, so you approve the rows you imported or edited yourself with the current 6-digit code from your authenticator app.',
   },
   PIN: {
     catalogueLabel: 'Solo owner PIN (for self-approval)',
@@ -50,6 +54,8 @@ export const OWNER_SELF_APPROVAL_COPY: Record<ApprovalSecretKind, OwnerSelfAppro
     ownerFallbackReason:
       'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.',
     referenceLabel: 'Solo owner PIN for reference self-approval',
+    referenceOwnRowsReason:
+      'Nobody else can review, so you approve the rows you imported or edited yourself with your own PIN.',
   },
 };
 

@@ -330,14 +330,16 @@ function ownerFile() {
             ['①', ['½', '①']]
           );
           assert.equal(last.aliasesNotAdded, 1);
-          const fraction = await runtime.medicineBarcode.findFirstOrThrow({
-            where: { code: 'AB½12' },
-          });
+          // DEV-1004: the database reads "AB½12" differently from a scan at the counter, so it
+          // could be stored but never scanned: the medicine is created, the barcode reported.
+          assert.equal(await runtime.medicineBarcode.count({ where: { code: 'AB½12' } }), 0);
           const fractionLink = await runtime.pharmacyStagedMedicineLink.findFirstOrThrow({
             where: { barcode: 'AB½12' },
           });
-          assert.equal(fractionLink.barcodeAttached, true);
-          assert.equal(fraction.type, 'MANUFACTURER');
+          assert.deepEqual(
+            [fractionLink.outcome, fractionLink.barcodeAttached],
+            ['CREATED', false]
+          );
           const long = await runtime.medicine.findFirstOrThrow({
             where: { productName: { startsWith: 'LLLL' } },
             include: { provenance: true },

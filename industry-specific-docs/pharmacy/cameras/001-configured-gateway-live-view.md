@@ -201,7 +201,8 @@ What the app does (`src/lib/cameras/mediamtx.ts`):
   check reports the relay as unsupported.
 - The app does **not** use `hlsCDNSecret`. That setting turns the relay's login check off.
 - Limits are unchanged: at most one session per binding in memory, sixteen concurrent reads per
-  app server, ten seconds per request, 256 KiB per playlist and 16 MiB per segment.
+  app server, ten seconds per read (shared by every request of the read, the session step and a
+  renewal included: DEV-1004), 256 KiB per playlist and 16 MiB per segment.
 
 **Check configured connection** now reads the master playlist and the first media playlist, so
 `ok` also proves the session step works. It still does not prove that frames decode in a browser.
@@ -219,8 +220,9 @@ delete the `moq` line**, or the relay refuses to start. The integration test
 (`src/lib/cameras/mediamtx.relay.integration.test.ts`) starts the real relay from this exact
 block, with only the placeholders replaced.
 
-Replace the placeholders: reader password, private address and port, certificate files, path
-name and the DVR source. The DVR login lives only in this protected file. Restrict the file to
+Replace the placeholders: reader password, the app server's address in the reader's `ips`
+(the address the relay sees the app server connect from, as a `/32`), private address and
+port, certificate files, path name and the DVR source. The DVR login lives only in this protected file. Restrict the file to
 the relay's service account.
 
 <!-- mediamtx-reference-config -->
@@ -233,7 +235,9 @@ authInternalUsers:
   # The app's dedicated reader. No anonymous "any" user, no publish, API, metrics or pprof.
   - user: devfathom-hls-reader
     pass: REPLACE_WITH_READER_PASSWORD
-    ips: []
+    # Only the app server may use this login: its address as the relay sees it, as a /32.
+    # An empty list lets any address that reaches the relay try the password.
+    ips: ['10.20.30.50/32']
     permissions:
       - action: read
         path: pharmacy-counter-1
