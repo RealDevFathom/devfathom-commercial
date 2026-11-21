@@ -1,7 +1,8 @@
 import 'server-only';
 
+import { after } from 'next/server';
 import { createHmac } from 'node:crypto';
-import type { PlatformJob } from '@/generated/prisma/client';
+import type { PlatformJob, Prisma } from '@/generated/prisma/client';
 import { PASSWORD_RESET_TTL_MS } from '@/lib/auth/admin-password-reset';
 import { findLoginCandidates } from '@/lib/auth/login-candidates';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
@@ -11,21 +12,79 @@ import { isTenantLifecycleAccessible, resolveOrganizationByHost } from '@/lib/te
 import { isSharedHost } from '@/lib/tenancy/host-routing';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
+// Match the existing per-address and per-source admission limits, including across retries.
+const MAX_PENDING_PER_ACCOUNT = 5;
+const MAX_PENDING_PER_SOURCE = 10;
+
 /** A shared host has no tenant to own an outbox row until discovery runs. */
 export async function enqueuePasswordReset(
   email: string,
-  target: { host: string } | { organizationId: string }
+  target: { host: string } | { organizationId: string },
+  source: string
 ) {
-  await withPlatformDb((db) =>
-    db.platformJob.create({
+  const sourceHash = hashInviteToken(source);
+  const job = await withPlatformDb(async (db) => {
+    // Every admission takes these transaction locks in the same order. Counts
+    // cover queued retries and running jobs across both public entry points.
+    await db.$executeRaw`SELECT pg_advisory_xact_lock(101401, hashtext(${email}))`;
+    await db.$executeRaw`SELECT pg_advisory_xact_lock(101402, hashtext(${sourceHash}))`;
+    const outstanding: Prisma.PlatformJobWhereInput = {
+      type: 'PASSWORD_RESET_REQUEST_V1',
+      status: { in: ['QUEUED', 'RUNNING'] },
+    };
+    const accountCount = await db.platformJob.count({
+      where: { ...outstanding, payload: { path: ['email'], equals: email } },
+      take: MAX_PENDING_PER_ACCOUNT,
+    });
+    const sourceCount = await db.platformJob.count({
+      where: { ...outstanding, payload: { path: ['sourceHash'], equals: sourceHash } },
+      take: MAX_PENDING_PER_SOURCE,
+    });
+    if (accountCount >= MAX_PENDING_PER_ACCOUNT || sourceCount >= MAX_PENDING_PER_SOURCE)
+      return null;
+    return db.platformJob.create({
       data: {
         type: 'PASSWORD_RESET_REQUEST_V1',
         organizationId: 'organizationId' in target ? target.organizationId : null,
-        payload: 'host' in target ? { email, host: target.host } : { email },
+        payload: { email, sourceHash, ...('host' in target ? { host: target.host } : {}) },
       },
       select: { id: true },
-    })
-  );
+    });
+  });
+  try {
+    after(async () => {
+      if (!job) return;
+      try {
+        const { processPasswordResetJob } = await import('@/lib/platform/jobs');
+        await processPasswordResetJob(job.id);
+      } catch {
+        console.warn('[password-reset] immediate worker unavailable');
+      }
+    });
+  } catch {
+    // Non-HTTP callers and a shutting-down server can lack a request context.
+    // The scheduled worker can still claim the committed row.
+    console.warn('[password-reset] post-response scheduling unavailable');
+  }
+}
+
+async function countSendFailure(organizationId: string) {
+  console.warn('[password-reset] email delivery failed', { organizationId });
+  const periodStart = new Date();
+  periodStart.setUTCHours(0, 0, 0, 0);
+  const periodEnd = new Date(periodStart.getTime() + 86_400_000);
+  const counter = { organizationId, key: 'password_reset_send_failures', periodStart, periodEnd };
+  try {
+    await withTenantDb(organizationId, (db) =>
+      db.organizationUsageCounter.upsert({
+        where: { organizationId_key_periodStart_periodEnd: counter },
+        create: { ...counter, value: 1 },
+        update: { value: { increment: 1 } },
+      })
+    );
+  } catch {
+    console.warn('[password-reset] delivery failure counter unavailable', { organizationId });
+  }
 }
 
 async function deliverTenantPasswordReset(
@@ -97,7 +156,13 @@ async function deliverTenantPasswordReset(
     resetUrl: `${appUrl()}/reset-password/${target.token}`,
     expiresLabel: 'in 1 hour',
   });
-  await sendEmail({ to: { email: target.email, name: target.name }, ...mail });
+  try {
+    await sendEmail({ to: { email: target.email, name: target.name }, ...mail });
+  } catch {
+    // Provider errors can echo the submitted message, including its link.
+    await countSendFailure(organizationId);
+    throw new Error('Password reset delivery failed.');
+  }
 }
 
 export async function runPasswordResetJob(

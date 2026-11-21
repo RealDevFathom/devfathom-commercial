@@ -13,6 +13,11 @@ import { compare, hash } from 'bcryptjs';
 import pg from 'pg';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const postResponse = vi.hoisted(() => vi.fn<(work: () => Promise<void>) => void>());
+vi.mock('next/server', async (original) => ({
+  ...(await original<typeof import('next/server')>()),
+  after: postResponse,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/server/audit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/audit')>()),
@@ -28,8 +33,10 @@ vi.mock('@/lib/email', async (importOriginal) => ({
 }));
 vi.mock('@/lib/notifications', () => ({ notify: vi.fn() }));
 
+import { sendEmail } from '@/lib/email';
+import { processPasswordResetJob } from '@/lib/platform/jobs';
 import { hashInviteToken } from '@/lib/invite-token';
-import { runPasswordResetJob } from '@/lib/auth/password-reset-request';
+import { enqueuePasswordReset, runPasswordResetJob } from '@/lib/auth/password-reset-request';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { router, type TRPCContext } from '../trpc';
@@ -185,6 +192,7 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
 
   beforeEach(async () => {
     sent.length = 0;
+    postResponse.mockClear();
     organizationId = `email_${suffix}_${organizations.length}`;
     organizations.push(organizationId);
     await client.query(
@@ -237,6 +245,172 @@ describe.skipIf(!databaseUrl)('DEV-974 email change takeover against PostgreSQL'
       await client.end();
       vi.unstubAllEnvs();
     }
+  });
+
+  it('delivers and settles an admitted reset after the response, with only one successful claim', async () => {
+    await withTenantDb(organizationId, (db) =>
+      app.createCaller(context(db, null)).passwordReset.request({ email: 'staff@test.invalid' })
+    );
+    expect(sent).toHaveLength(0);
+    expect(postResponse).toHaveBeenCalledTimes(1);
+    const callback = postResponse.mock.calls[0]![0];
+    await Promise.all([callback(), callback()]);
+    expect(deliveredResetTokens()).toHaveLength(1);
+    expect(await validateReset(deliveredResetTokens()[0]!)).toEqual({ valid: true });
+    const job = await withPlatformDb((db) =>
+      db.platformJob.findFirstOrThrow({
+        where: { organizationId, type: 'PASSWORD_RESET_REQUEST_V1' },
+      })
+    );
+    expect(job).toMatchObject({ status: 'SUCCEEDED', attempts: 1, payload: null });
+  }, 60_000);
+
+  it('records a safe workspace counter and keeps a failed post-response delivery available to retry', async () => {
+    await enqueuePasswordReset('staff@test.invalid', { organizationId }, organizationId);
+    const callback = postResponse.mock.calls[0]![0];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      vi.mocked(sendEmail).mockImplementationOnce(async (mail) => {
+        throw new Error('synthetic provider echoed ' + mail.text);
+      });
+      await callback();
+      expect(warn.mock.calls).toEqual([
+        ['[password-reset] email delivery failed', { organizationId }],
+      ]);
+      const job = await withPlatformDb((db) =>
+        db.platformJob.findFirstOrThrow({
+          where: { organizationId, type: 'PASSWORD_RESET_REQUEST_V1' },
+        })
+      );
+      expect(job).toMatchObject({
+        attempts: 1,
+        status: 'QUEUED',
+        error: 'Password reset delivery failed.',
+      });
+      const counter = await withTenantDb(organizationId, (db) =>
+        db.organizationUsageCounter.findFirstOrThrow({
+          where: { organizationId, key: 'password_reset_send_failures' },
+        })
+      );
+      expect(counter.value).toBe(1n);
+      await withPlatformDb((db) =>
+        db.platformJob.update({ where: { id: job.id }, data: { scheduledAt: new Date(0) } })
+      );
+      await processPasswordResetJob(job.id);
+      expect(deliveredResetTokens()).toHaveLength(1);
+      expect(
+        await withPlatformDb((db) => db.platformJob.findUniqueOrThrow({ where: { id: job.id } }))
+      ).toMatchObject({ status: 'SUCCEEDED', attempts: 2, payload: null });
+    } finally {
+      warn.mockRestore();
+    }
+  }, 60_000);
+
+  it('a worker that lost its lease cannot overwrite the recovered reset job', async () => {
+    await enqueuePasswordReset('staff@test.invalid', { organizationId }, organizationId);
+    const job = await withPlatformDb((db) =>
+      db.platformJob.findFirstOrThrow({
+        where: { organizationId, type: 'PASSWORD_RESET_REQUEST_V1' },
+      })
+    );
+    vi.mocked(sendEmail).mockImplementationOnce(async () => {
+      await withPlatformDb((db) =>
+        db.platformJob.update({ where: { id: job.id }, data: { status: 'RUNNING', attempts: 2 } })
+      );
+      return { messageId: 'synthetic' };
+    });
+    await postResponse.mock.calls[0]![0]();
+    expect(
+      await withPlatformDb((db) => db.platformJob.findUniqueOrThrow({ where: { id: job.id } }))
+    ).toMatchObject({ status: 'RUNNING', attempts: 2, payload: job.payload });
+  });
+
+  it.each(['source', 'account'] as const)(
+    'serializes the last available %s backlog slot',
+    async (dimension) => {
+      const email = `${organizationId}@example.test`;
+      const source = organizationId + '-source';
+      const cap = dimension === 'source' ? 10 : 5;
+      await withPlatformDb((db) =>
+        db.platformJob.createMany({
+          data: Array.from({ length: cap - 1 }, (_, i) => ({
+            type: 'PASSWORD_RESET_REQUEST_V1' as const,
+            organizationId,
+            status: i % 2 ? ('RUNNING' as const) : ('QUEUED' as const),
+            payload: {
+              email: dimension === 'account' ? email : i + email,
+              sourceHash: hashInviteToken(dimension === 'source' ? source : source + i),
+            },
+          })),
+        })
+      );
+      await Promise.all(
+        [0, 1].map((i) =>
+          enqueuePasswordReset(
+            dimension === 'account' ? email : 'new' + i + email,
+            { organizationId },
+            dimension === 'source' ? source : source + 'new' + i
+          )
+        )
+      );
+      expect(
+        await withPlatformDb((db) =>
+          db.platformJob.count({ where: { organizationId, type: 'PASSWORD_RESET_REQUEST_V1' } })
+        )
+      ).toBe(cap);
+      expect(sent).toHaveLength(0);
+    }
+  );
+
+  it.each([
+    ['deactivation', { status: 'INACTIVE' as const }],
+    ['email change', { email: 'replacement@test.invalid' }],
+    ['MFA secret reset', { twoFactorSecret: null }],
+    ['MFA requirement enabled', { twoFactorEnabledAt: new Date() }],
+    ['MFA requirement disabled', { twoFactorEnabledAt: null }],
+  ] as const)('retires outstanding links on %s', async (change, data) => {
+    const user = { id: ids().staff };
+    await withTenantDb(organizationId, (db) =>
+      db.user.update({
+        where: user,
+        data: {
+          twoFactorSecret: 'synthetic',
+          twoFactorEnabledAt: change === 'MFA requirement disabled' ? new Date() : null,
+        },
+      })
+    );
+    await runPasswordResetJob(resetJob('lifecycle'));
+    const [token] = deliveredResetTokens();
+    expect(await validateReset(token!)).toEqual({ valid: true });
+    await withTenantDb(organizationId, (db) => db.user.update({ where: user, data }));
+    expect(
+      await withTenantDb(organizationId, (db) =>
+        db.passwordResetToken.count({ where: { userId: user.id, usedAt: null } })
+      )
+    ).toBe(0);
+    if (change === 'deactivation') {
+      await withTenantDb(organizationId, (db) =>
+        db.user.update({ where: user, data: { status: 'ACTIVE' } })
+      );
+    }
+    expect(await validateReset(token!)).toEqual({ valid: false });
+    await expect(completeReset(token!)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('refuses an unused legacy token belonging to an inactive member', async () => {
+    const token = 'synthetic-legacy-' + organizationId;
+    await withTenantDb(organizationId, async (db) => {
+      await db.user.update({ where: { id: ids().staff }, data: { status: 'INACTIVE' } });
+      await db.passwordResetToken.create({
+        data: {
+          userId: ids().staff,
+          tokenHash: hashInviteToken(token),
+          expiresAt: new Date(Date.now() + 60_000),
+        },
+      });
+    });
+    expect(await validateReset(token)).toEqual({ valid: false });
+    await expect(completeReset(token)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('concurrent issuers leave exactly one current link, including after stale job retries', async () => {

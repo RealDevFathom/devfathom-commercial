@@ -1,4 +1,5 @@
 // @vitest-environment node
+import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
@@ -58,7 +59,7 @@ const db = {
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
   platformAuditLog: { create: m.platformAudit, createMany: m.supportAudits },
-  organizationDeployment: { updateMany: m.deployment },
+  organizationDeployment: { updateMany: m.deployment, upsert: vi.fn() },
   platformSupportSession: { updateManyAndReturn: m.support },
   pharmacyCustomer: { findMany: m.consent },
   pharmacyWhatsAppConsentArchive: { createMany: m.archiveCreate, deleteMany: m.archiveDelete },
@@ -96,6 +97,7 @@ function queue(
       claimed = true;
       return [{ id: item.id }];
     }
+    if (text.includes("AND status = 'RUNNING' AND attempts =")) return [{ id: item.id }];
     if (text.includes('WITH tenant_tables')) return dependencies;
     if (text.includes('FROM "audit_logs"')) return [auditSummary];
     return [];
@@ -178,6 +180,45 @@ describe('composed platform worker boundaries', () => {
       })
     );
   });
+
+  it.skipIf(!process.env.TEST_DATABASE_URL)(
+    'claims provisioning ahead of older queued reset mail with one available slot',
+    async () => {
+      vi.useRealTimers();
+      const client = new pg.Client({ connectionString: process.env.TEST_DATABASE_URL });
+      await client.connect();
+      try {
+        // Keep the worker's actual claim SQL and isolate its queue from every other suite.
+        await client.query(
+          'CREATE TEMP TABLE platform_jobs (id text, type text, status text, "scheduledAt" timestamptz, "createdAt" timestamptz)'
+        );
+        await client.query(`INSERT INTO pg_temp.platform_jobs VALUES
+        ('older-reset','password.reset.request.v1','QUEUED',now() - interval '1 hour',now()),
+        ('another-reset','password.reset.request.v1','QUEUED',now() - interval '5 minutes',now()),
+        ('provision','PROVISION_SHARED','QUEUED',now(),now())`);
+        m.query.mockImplementation(async (sql: Prisma.Sql) => {
+          if (!sql.text.includes('FOR UPDATE SKIP LOCKED')) return [];
+          return (await client.query(sql.text, sql.values)).rows;
+        });
+        m.update.mockImplementation(async ({ where, data }) => {
+          if (data.status !== 'RUNNING') return data;
+          return job(where.id === 'provision' ? 'PROVISION_SHARED' : 'PASSWORD_RESET_REQUEST_V1', {
+            id: where.id,
+          });
+        });
+        m.organization.mockResolvedValue({ slug: 'synthetic' });
+        db.organizationDeployment.upsert.mockResolvedValue({
+          id: 'synthetic-deployment',
+          status: 'READY',
+        });
+        await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+        expect(db.organizationDeployment.upsert).toHaveBeenCalledOnce();
+        expect(m.resetRequest).not.toHaveBeenCalled();
+      } finally {
+        await client.end();
+      }
+    }
+  );
 
   it('runs the retention purge as its own job with the long timeout', async () => {
     queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));

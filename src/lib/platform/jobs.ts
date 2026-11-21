@@ -79,14 +79,15 @@ function requiredString(payload: JobPayload, key: string): string {
   return value.trim();
 }
 
-async function claimJob(): Promise<PlatformJob | null> {
+async function claimJob(resetJobId?: string): Promise<PlatformJob | null> {
   return withPlatformDb(async (db) => {
     const candidates = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT "id"
       FROM "platform_jobs"
       WHERE "status" = 'QUEUED'
         AND "scheduledAt" <= NOW()
-      ORDER BY "scheduledAt" ASC, "createdAt" ASC
+        ${resetJobId === undefined ? Prisma.empty : Prisma.sql`AND "id" = ${resetJobId} AND "type" = 'password.reset.request.v1'`}
+      ORDER BY ("type" = 'password.reset.request.v1') ASC, "scheduledAt" ASC, "createdAt" ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
     `);
@@ -904,13 +905,27 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
   );
 }
 
+async function canSettleJob(db: PrismaClient, job: PlatformJob): Promise<boolean> {
+  if (job.type === 'PASSWORD_RESET_REQUEST_V1') {
+    // A slow provider can outlive the worker lease. Only the current claim may
+    // scrub the payload or reschedule this row after a recovery or cancellation.
+    const current = await db.$queryRaw<{ id: string }[]>(Prisma.sql`
+      SELECT id FROM platform_jobs
+      WHERE id = ${job.id} AND status = 'RUNNING' AND attempts = ${job.attempts}
+      FOR UPDATE
+    `);
+    return current.length === 1;
+  }
+  const current = await db.platformJob.findUnique({
+    where: { id: job.id },
+    select: { status: true },
+  });
+  return !!current && current.status !== 'CANCELLED';
+}
+
 async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
   await withPlatformDb(async (db) => {
-    const current = await db.platformJob.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
-    if (!current || current.status === 'CANCELLED') return;
+    if (!(await canSettleJob(db, job))) return;
     await db.platformJob.update({
       where: { id: job.id },
       data: {
@@ -933,11 +948,7 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
     !(error instanceof OwnerDataExportTimeLimitError) &&
     job.attempts < job.maxAttempts;
   await withPlatformDb(async (db) => {
-    const current = await db.platformJob.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
-    if (!current || current.status === 'CANCELLED') return;
+    if (!(await canSettleJob(db, job))) return;
     await db.platformJob.update({
       where: { id: job.id },
       data: retry
@@ -1025,6 +1036,21 @@ export type ProcessJobsResult = {
   failed: number;
 };
 
+async function runClaimedJob(job: PlatformJob): Promise<'succeeded' | 'retried' | 'failed'> {
+  try {
+    await completeJob(job, await executeJob(job));
+    return 'succeeded';
+  } catch (error) {
+    return failJob(job, error);
+  }
+}
+
+/** The immediate worker may claim only its own due reset row. */
+export async function processPasswordResetJob(id: string): Promise<void> {
+  const job = await claimJob(id);
+  if (job) await runClaimedJob(job);
+}
+
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
@@ -1041,13 +1067,8 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
     const job = await claimJob();
     if (!job) break;
     result.claimed += 1;
-    try {
-      await completeJob(job, await executeJob(job));
-      result.succeeded += 1;
-    } catch (error) {
-      const status = await failJob(job, error);
-      result[status] += 1;
-    }
+    const status = await runClaimedJob(job);
+    result[status] += 1;
   }
   return result;
 }

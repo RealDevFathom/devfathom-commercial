@@ -4,6 +4,10 @@ import { beforeEach, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
   rateLimit: vi.fn(),
   createJob: vi.fn(),
+  count: vi.fn(),
+  lock: vi.fn(),
+  after: vi.fn(),
+  countFailure: vi.fn(),
   tenant: vi.fn(),
   discovery: vi.fn(),
   send: vi.fn(),
@@ -11,11 +15,15 @@ const m = vi.hoisted(() => ({
   mint: vi.fn(),
   retire: vi.fn(),
 }));
+vi.mock('next/server', async (original) => ({
+  ...(await original<typeof import('next/server')>()),
+  after: m.after,
+}));
 vi.mock('@/server/audit', () => ({ ipFromHeaders: () => '192.0.2.1' }));
 vi.mock('@/lib/rate-limit', () => ({ rateLimit: m.rateLimit }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: (work: (db: unknown) => unknown) =>
-    work({ platformJob: { create: m.createJob } }),
+    work({ $executeRaw: m.lock, platformJob: { create: m.createJob, count: m.count } }),
   withTenantDb: m.tenant,
 }));
 vi.mock('@/lib/auth/login-candidates', () => ({ findLoginCandidates: m.discovery }));
@@ -44,6 +52,7 @@ function post(email: string) {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  m.count.mockResolvedValue(0);
   m.rateLimit.mockResolvedValue({ ok: true });
   m.createJob.mockResolvedValue({ id: 'synthetic-job' });
 });
@@ -70,7 +79,7 @@ it('admits known and unknown addresses with the same two throttles and one durab
         data: {
           organizationId: null,
           type: 'PASSWORD_RESET_REQUEST_V1',
-          payload: { email, host: 'app.localhost' },
+          payload: { email, host: 'app.localhost', sourceHash: hashInviteToken('192.0.2.1') },
         },
         select: { id: true },
       },
@@ -79,6 +88,23 @@ it('admits known and unknown addresses with the same two throttles and one durab
   expect(m.discovery).not.toHaveBeenCalled();
   expect(m.lookupHost).not.toHaveBeenCalled();
   expect(m.tenant).not.toHaveBeenCalled();
+  expect(m.send).not.toHaveBeenCalled();
+});
+
+it.each([
+  [5, 0],
+  [0, 10],
+])('returns the identical response at either pending cap (%i, %i)', async (accounts, sources) => {
+  for (const email of [known, unknown]) {
+    m.count.mockResolvedValueOnce(accounts).mockResolvedValueOnce(sources);
+    const reply = await post(email);
+    expect([reply.status, await reply.text()]).toEqual([200, '{"ok":true}']);
+  }
+  expect(m.count).toHaveBeenCalledTimes(4);
+  expect(m.lock).toHaveBeenCalledTimes(4);
+  expect(m.after).toHaveBeenCalledTimes(2);
+  expect(m.createJob).not.toHaveBeenCalled();
+  expect(m.discovery).not.toHaveBeenCalled();
   expect(m.send).not.toHaveBeenCalled();
 });
 
@@ -110,6 +136,7 @@ it('dispatches only eligible members and retries the same usable link without re
             organization: { status: 'ACTIVE', isDemo: id === 'demo' },
           }),
         },
+        organizationUsageCounter: { upsert: m.countFailure },
         passwordResetToken: { upsert: m.mint, updateMany: m.retire },
       })
     );
@@ -119,8 +146,25 @@ it('dispatches only eligible members and retries the same usable link without re
       organizationId: null,
       payload: { host: 'app.localhost', email: known },
     };
-    m.send.mockRejectedValueOnce(new Error('temporary failure'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    m.send.mockImplementationOnce(async (mail) => {
+      throw new Error('provider echoed: ' + mail.text);
+    });
     await expect(runPasswordResetJob(job)).rejects.toThrow('Password reset delivery failed.');
+    expect(warn.mock.calls).toEqual([
+      ['[password-reset] email delivery failed', { organizationId: 'member' }],
+    ]);
+    expect(m.countFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          organizationId: 'member',
+          key: 'password_reset_send_failures',
+          value: 1,
+        }),
+        update: { value: { increment: 1 } },
+      })
+    );
+    warn.mockRestore();
     await runPasswordResetJob(job);
     expect(m.send).toHaveBeenCalledTimes(2);
     const sent = m.send.mock.calls[0]![0];

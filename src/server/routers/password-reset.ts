@@ -8,6 +8,7 @@ import {
   passwordResetRequestInput,
 } from '@/lib/auth/anonymous-inputs';
 import { enqueuePasswordReset } from '@/lib/auth/password-reset-request';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { afterTenantCommit } from '@/lib/side-effects/scope';
 import { hashInviteToken } from '@/lib/invite-token';
 import { rateLimit } from '@/lib/rate-limit';
@@ -46,7 +47,13 @@ async function loadUsableToken(db: PrismaClient, token: string) {
     },
   });
 
-  if (!record || record.usedAt || record.user.organization.isDemo) return null;
+  if (
+    !record ||
+    record.usedAt ||
+    record.user.organization.isDemo ||
+    !ACTIVE_STATUSES.has(record.user.status)
+  )
+    return null;
   if (record.expiresAt.getTime() < Date.now()) return null;
   return record;
 }
@@ -78,7 +85,7 @@ export const passwordResetRouter = router({
 
       const organizationId = ctx.organization?.id ?? ctx.session?.user.organizationId;
       if (organizationId) {
-        await afterTenantCommit(() => enqueuePasswordReset(email, { organizationId }));
+        await afterTenantCommit(() => enqueuePasswordReset(email, { organizationId }, ip));
       }
 
       return { success: true };

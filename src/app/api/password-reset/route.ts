@@ -24,6 +24,6 @@ export async function POST(request: Request) {
   const emailGate = await rateLimit(`pwreset:email:${email}`, 5, 15 * 60_000);
   if (!ipGate.ok || !emailGate.ok) return Response.json(NEUTRAL);
 
-  await enqueuePasswordReset(email, { host: requestHost(request) });
+  await enqueuePasswordReset(email, { host: requestHost(request) }, ip);
   return Response.json(NEUTRAL);
 }
