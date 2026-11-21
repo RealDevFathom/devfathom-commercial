@@ -203,7 +203,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   },
   'organizationAdmin.pharmacySettings.refundMapping': {
     gate: 'protectedProcedure + pharmacy-core + pharmacy-finance + finance:read for a live owner or explicitly granted reader',
-    none: 'Finance readers and owners with finance access can view the account.',
+    lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyCardTerminal.resolveReview': {
     gate: 'pharmacyAccountMutation (admin:access + finance:manage) + requireCounterReceiptAccess(pharmacy:counter) AND actorMayRefund (pharmacy:manage) + own fresh approval code; not own charge unless no other reviewer',

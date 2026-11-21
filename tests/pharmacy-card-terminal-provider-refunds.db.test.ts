@@ -159,7 +159,8 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
       previousId: string,
       kind: 'DECLINED' | 'OWED' | 'SETTLED',
       commandKey: string,
-      actorId = scope.actorId
+      actorId = scope.actorId,
+      declareSelfApproval = false
     ) =>
       run((db) =>
         changeProviderRefund(
@@ -172,12 +173,16 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
             reason: 'Checked provider statement',
             slipRef: 'SLIP-' + suffix,
           },
-          { pinVerified: true }
+          { pinVerified: true, declareSelfApproval }
         )
       );
     await expect(submit(owed!.id, 'DECLINED', 'correct-first')).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
+    await expect(
+      submit(owed!.id, 'DECLINED', 'unauthorized-solo', scope.actorId, true)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await balance()).toEqual({ count: 1, liability: 1601 });
     const declined = await submit(owed!.id, 'DECLINED', 'correct-first', 'peer' + suffix);
     expect(await balance()).toEqual({ count: 2, liability: 0 });
     const restored = await submit(declined.id, 'OWED', 'correct-again', 'third' + suffix);

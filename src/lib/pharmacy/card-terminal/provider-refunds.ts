@@ -1,3 +1,4 @@
+import { pharmacyCalendarDay } from '../business-day';
 import 'server-only';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { randomUUID } from 'node:crypto';
@@ -316,12 +317,12 @@ export async function changeProviderRefund(
     ? (input.settlementAmountMinor ?? previous.remainingMinor)
     : (input.verifiedAmountMinor ?? previous.amountMinor);
   const settledOn = settling
-    ? new Date((input.settledOn ?? new Date().toISOString().slice(0, 10)) + 'T00:00:00Z')
+    ? new Date((input.settledOn ?? pharmacyCalendarDay('UTC')) + 'T00:00:00Z')
     : null;
   if (
     settledOn &&
     (!Number.isFinite(settledOn.getTime()) ||
-      (input.settledOn && settledOn.toISOString().slice(0, 10) !== input.settledOn))
+      (input.settledOn && pharmacyCalendarDay('UTC', settledOn) !== input.settledOn))
   )
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter a valid settlement date.' });
   if (
