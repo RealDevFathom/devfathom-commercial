@@ -4381,7 +4381,6 @@ describe('PharmacyCounterConsole barcode safety', () => {
       mocks.queries.counterPatientPanel = query({
         patientId: 'patient-a',
         displayName: 'Patient A',
-        address: 'Patient address',
         dispensingConsent: true,
         prescriptions: [],
         cnic: null,
@@ -4393,6 +4392,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       if (!mocks.queries.counterPatientPanel?.data) choosePatient();
       act(() => {
         const controlled = mocks.controlledProps.mock.lastCall![0].controlled;
+        controlled.onChange('patientAddress', 'Patient address');
         controlled.onChange('staffProfileId', 'pharmacist-a');
         controlled.onChange('pin', '1234');
         controlled.onChange('emergency', true);
@@ -4902,7 +4902,6 @@ describe('PharmacyCounterConsole barcode safety', () => {
       mocks.queries.counterPatientPanel = query({
         patientId: 'patient-a',
         displayName: 'Patient',
-        address: 'Patient address',
         dispensingConsent: true,
         prescriptions: [],
         cnic: null,
@@ -4913,6 +4912,10 @@ describe('PharmacyCounterConsole barcode safety', () => {
       act(() => {
         const props = mocks.rxPanelProps.mock.lastCall![0];
         props.onSelectPatient('patient-a');
+        mocks.controlledProps.mock.lastCall![0].controlled.onChange(
+          'patientAddress',
+          'Patient address'
+        );
         mocks.controlledProps.mock.lastCall![0].controlled.onChange(
           'staffProfileId',
           'pharmacist-a'
@@ -4989,7 +4992,6 @@ describe('PharmacyCounterConsole barcode safety', () => {
     mocks.queries.counterPatientPanel = query({
       patientId: 'patient-a',
       displayName: 'Patient',
-      address: 'Patient address',
       dispensingConsent: true,
       prescriptions: [
         { inDate: false, lines: [rxLine('rx-line-expired', row.presentationId)] },
@@ -5196,7 +5198,6 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     return query({
       patientId,
       displayName: `Patient ${patientId}`,
-      address: 'Patient address',
       dispensingConsent: true,
       prescriptions: [],
       cnic: null,
@@ -5225,7 +5226,10 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         saleId: 'sale-b',
-        controlledAuthorization: expect.objectContaining({ patientId: 'patient-b' }),
+        controlledAuthorization: expect.objectContaining({
+          patientId: 'patient-b',
+          patientAddress: { useAddressOnFile: true },
+        }),
       })
     );
   });
