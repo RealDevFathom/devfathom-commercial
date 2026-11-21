@@ -144,6 +144,7 @@ export async function createSupportSession(input: {
       'Replaced by a new support session.'
     );
     const created = await platformDb.platformSupportSession.create({
+      select: { id: true },
       data: {
         organizationId: organization.id,
         platformUserId: input.actor.id,
