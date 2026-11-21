@@ -71,7 +71,12 @@ import {
 } from '@/lib/pharmacy/migration/legacy-controlled';
 import {
   createStagedMedicinesChunk,
+  failureDetail,
+  isPassingFailure,
+  STAGED_CREATION_BUSY,
   STAGED_CREATION_OPERATION,
+  STAGED_CREATION_STOPPED,
+  StagedCreationSystemicRefusal,
   stagedCreationProgress,
 } from '@/lib/pharmacy/migration/staged-creation';
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
@@ -533,6 +538,38 @@ const reviewerProcedure = auditedProtectedProcedure.use(async ({ ctx, next }) =>
 const DUPLICATE_INGREDIENT_MESSAGE = 'This ingredient already exists. Use the existing one.';
 const DUPLICATE_PACK_MESSAGE =
   'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
+
+/**
+ * DEV-1002: a creation step that stopped for a reason other than a row of the file (rows are
+ * recorded one by one). The screen gets plain words and a next step; the server log and the
+ * audit record get the codes, never a cell value.
+ */
+function stagedCreationStopped(ctx: TRPCContext, batchId: string, error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof StagedCreationSystemicRefusal) {
+    // Many rows refused for one reason: the step was undone and nothing was recorded.
+    const failure = { systemic: true, rows: error.rows, ...failureDetail(error.refusal) };
+    console.error('[pharmacy] staged medicine creation step stopped', { batchId, ...failure });
+    annotateAudit(ctx, {
+      targetType: 'PharmacyMigrationBatch',
+      targetId: batchId,
+      metadata: { stopped: failure },
+    });
+    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message });
+  }
+  const passing = isPassingFailure(error);
+  const failure = { passing, ...failureDetail(error) };
+  console.error('[pharmacy] staged medicine creation step stopped', { batchId, ...failure });
+  annotateAudit(ctx, {
+    targetType: 'PharmacyMigrationBatch',
+    targetId: batchId,
+    metadata: { stopped: failure },
+  });
+  throw new TRPCError({
+    code: 'INTERNAL_SERVER_ERROR',
+    message: passing ? STAGED_CREATION_BUSY : STAGED_CREATION_STOPPED,
+  });
+}
 
 export const pharmacyMedicineRouter = router({
   // DEV-19: reviewers and the owner with no other reviewer read the queue they decide; editors read
@@ -1440,6 +1477,10 @@ export const pharmacyMedicineRouter = router({
   /**
    * DEV-912: create the next chunk of medicines from an approved staged file. Running it again,
    * or for a second batch of the same file, creates nothing twice.
+   *
+   * DEV-1002: a row the database refuses is recorded on its link with a plain reason and the
+   * rest of the chunk is created. Any other failure undoes the step and is answered in plain
+   * words; its codes (never a cell value) go to the server log and the audit record.
    */
   runStagedMedicineCreation: auditedProtectedProcedure
     .input(z.object({ batchId: boundedId }).strict())
@@ -1450,7 +1491,8 @@ export const pharmacyMedicineRouter = router({
           code: 'FORBIDDEN',
           message: 'You do not have permission for this action.',
         });
-      const result = await ctx.db.$transaction(
+      // A row the database refuses never throws here (it is recorded); anything else does.
+      const step = ctx.db.$transaction(
         async (tx) => {
           const approved = await tx.pharmacyCatalogueEdit.findFirst({
             where: {
@@ -1483,11 +1525,25 @@ export const pharmacyMedicineRouter = router({
         },
         { maxWait: 10_000, timeout: 120_000 }
       );
-      const { medicineIds, ...summary } = result;
+      const result = await step.catch((error: unknown) =>
+        stagedCreationStopped(ctx, input.batchId, error)
+      );
+      const { medicineIds, refusals, ...summary } = result;
+      if (refusals.length)
+        console.warn('[pharmacy] staged medicine rows not created', {
+          batchId: input.batchId,
+          rows: refusals.slice(0, 50),
+          more: Math.max(0, refusals.length - 50),
+        });
       annotateAudit(ctx, {
         targetType: 'PharmacyMigrationBatch',
         targetId: input.batchId,
-        metadata: { ...summary, firstMedicineId: medicineIds[0] ?? null },
+        metadata: {
+          ...summary,
+          firstMedicineId: medicineIds[0] ?? null,
+          // Row numbers and database codes only: a refused row's cells stay in the staged file.
+          ...(refusals.length ? { notCreatedRows: refusals.slice(0, 50) } : {}),
+        },
       });
       return summary;
     }),

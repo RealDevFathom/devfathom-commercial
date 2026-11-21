@@ -5,11 +5,10 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import {
-  counterDeviceCookieSecure,
+  counterDeviceCookieOptions,
   exactSameOrigin,
   PHARMACY_COUNTER_DEVICE_COOKIE,
   PHARMACY_COUNTER_DEVICE_COOKIE_MAX_AGE,
-  PHARMACY_COUNTER_DEVICE_COOKIE_PATH,
 } from '@/lib/pharmacy/counter-device-cookie';
 import { resolvePharmacyCounterBySecret } from '@/lib/pharmacy/offline-devices';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -35,16 +34,7 @@ function refuse(error: string, status: number) {
   return NextResponse.json({ error }, { status, headers: { 'Cache-Control': 'no-store' } });
 }
 
-function cookieOptions(request: Request, maxAge: number) {
-  return {
-    httpOnly: true,
-    sameSite: 'strict' as const,
-    secure: counterDeviceCookieSecure(request),
-    path: PHARMACY_COUNTER_DEVICE_COOKIE_PATH,
-    maxAge,
-    ...(maxAge === 0 ? { expires: new Date(0) } : {}),
-  };
-}
+const cookieOptions = counterDeviceCookieOptions;
 
 export async function bindPharmacyCounterBrowser(request: Request): Promise<Response> {
   if (!(await rateLimit(`pharmacy-counter-bind:${clientIp(request)}`, 20, 60_000)).ok)

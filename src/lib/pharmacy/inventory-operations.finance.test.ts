@@ -114,14 +114,19 @@ describe('inter-branch transfers journal dispatch and receipt', () => {
 
   it('moves every dispatched line into transit in the same transaction', async () => {
     const db = {
-      $queryRaw: vi.fn().mockResolvedValue([
-        {
-          onHandUnits: 40,
-          unitsPerPack: 10,
-          state: 'ACTIVE',
-          expiresAt: new Date('2099-01-01T00:00:00.000Z'),
-        },
-      ]),
+      // DEV-957: no counter holds units of this lot (the device-quota read finds none).
+      $queryRaw: vi.fn(async (query: { sql?: string }) =>
+        query?.sql?.includes('"counterName"')
+          ? []
+          : [
+              {
+                onHandUnits: 40,
+                unitsPerPack: 10,
+                state: 'ACTIVE',
+                expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+              },
+            ]
+      ),
       pharmacyInterbranchTransfer: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'transfer_1',

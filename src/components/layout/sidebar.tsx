@@ -66,6 +66,7 @@ import { useEntitlements } from '@/components/entitlements-provider';
 import { usePharmacyNavigationAccess } from '@/components/pharmacy/use-navigation-access';
 import { trpc } from '@/lib/trpc';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
+import { useBrowserOnline } from '@/components/pharmacy/counter/use-browser-online';
 import type { TenantBrand } from '@/lib/tenant-brand';
 import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -943,6 +944,10 @@ export function Sidebar({
   const [localCollapsed, setLocalCollapsed] = useState(false);
   const collapsed = controlledCollapsed ?? localCollapsed;
   const { data: session } = useSession();
+  // DEV-957 phase 2 (shared till): the stored offline counter page opens this drawer from
+  // its own bar; with no connection nobody's sign-in can be checked, so the chip never
+  // presents the last person as the one at the computer.
+  const browserOnline = useBrowserOnline();
   const { icons } = usePreferences();
   const { bestMatch, filteredNav, indexByHref, pharmacy } = useVisibleNavigation();
   const numbered = icons !== 'architectural' && !pharmacy;
@@ -1148,7 +1153,31 @@ export function Sidebar({
       <div
         className={cn('border-t border-sidebar-border p-4', collapsed ? 'flex justify-center' : '')}
       >
-        {session?.user && (
+        {session?.user && !browserOnline ? (
+          <div
+            className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}
+            data-sidebar-identity="offline"
+          >
+            <Avatar aria-hidden="true" className="h-9 w-9 shrink-0">
+              <AvatarFallback className="bg-sidebar-primary/20 text-xs font-medium text-sidebar-primary">
+                –
+              </AvatarFallback>
+            </Avatar>
+            {collapsed ? (
+              <span className="sr-only">Offline. Sign-in not checked.</span>
+            ) : (
+              <div className="flex flex-col overflow-hidden">
+                <span className="truncate text-sm font-medium text-sidebar-accent-foreground">
+                  Offline
+                </span>
+                <span className="truncate font-mono text-[11px] text-sidebar-foreground/50">
+                  Sign-in not checked
+                </span>
+              </div>
+            )}
+          </div>
+        ) : null}
+        {session?.user && browserOnline ? (
           <div className={cn('flex items-center gap-3', collapsed ? 'justify-center' : '')}>
             <Avatar className="h-9 w-9 shrink-0">
               <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
@@ -1167,7 +1196,7 @@ export function Sidebar({
               </div>
             )}
           </div>
-        )}
+        ) : null}
       </div>
     </aside>
   );

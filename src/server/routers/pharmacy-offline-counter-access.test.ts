@@ -140,6 +140,8 @@ beforeEach(() => {
     organizationId: ORG,
     status: 'ACTIVE',
     revokedAt: null,
+    // DEV-957 phase 2: the device row now carries its credential expiry.
+    secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
   });
   mocks.reserveReceiptNumberBlock.mockResolvedValue({ id: 'lease_1', blockStart: 1 });
   mocks.recordOfflineCommand.mockRejectedValue(new Error('REACHED_COMMAND_LOG'));
@@ -288,6 +290,8 @@ describe('DEV-767 background receipt-lease renewal by the counter operator', () 
       organizationId: ORG,
       status: 'ACTIVE',
       revokedAt: null,
+      // DEV-957 phase 2: the device row now carries its credential expiry.
+      secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
     });
   };
 
