@@ -232,6 +232,7 @@ export const pharmacySafetyRouter = router({
               credentialHash: credential.credentialHash,
               secret: input.pin,
               action: 'pharmacySafety.recordCorrection',
+              approverRight: 'pharmacy:dispense',
               requestedById: actorId,
               now,
             }))

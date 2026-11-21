@@ -35,6 +35,8 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const ORG_A = `org_wha1171_a_${suffix}`;
 const ORG_B = `org_wha1171_b_${suffix}`;
+const ORG_RETURN = `org_controlled_return_${suffix}`;
+const BRANCH_RETURN = `branch_controlled_return_${suffix}`;
 const BRANCH_A = `branch_a_${suffix}`;
 const BRANCH_B = `branch_b_${suffix}`;
 const RECEIVER = 'user_receiver';
@@ -336,12 +338,14 @@ beforeAll(async () => {
   // key requires the organization itself to exist before any tenant fixtures.
   await scopedDb.withPlatformDb((db) =>
     db.organization.createMany({
-      data: [ORG_A, ORG_B].map((id) => ({
+      data: [ORG_A, ORG_B, ORG_RETURN].map((id) => ({
         id,
         slug: id,
         legalName: `Goods receipt ${id}`,
         displayName: `Goods receipt ${id}`,
         status: 'ACTIVE' as const,
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       })),
       skipDuplicates: true,
     })
@@ -1163,29 +1167,34 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
 });
 
 describeIfDatabase('PUR-04 — reversal creates linked movements and never edits', () => {
-  async function controlledReceipt(label: string, line: LineOverrides) {
-    const f = await fixture(ORG_A, BRANCH_A, label);
+  async function controlledReceipt(
+    label: string,
+    line: LineOverrides,
+    organizationId = ORG_A,
+    branchId = BRANCH_A
+  ) {
+    const f = await fixture(organizationId, branchId, label);
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     const pin = String(randomInt(100_000, 1_000_000));
     const credentialHash = await hashOperatorCredential('PIN', pin);
     // Commit the people and credential before reversal: its fresh witness PIN
     // is verified in an independent tenant transaction.
-    const { actor, witness, staff, receipt } = await inOrg(ORG_A, async (db) => {
+    const { actor, witness, staff, receipt } = await inOrg(organizationId, async (db) => {
       const department = await db.organizationDepartment.create({
-        data: { organizationId: ORG_A, key: tag('controlled'), name: tag('Pharmacy') },
+        data: { organizationId: organizationId, key: tag('controlled'), name: tag('Pharmacy') },
       });
       async function member(capability: string) {
         const label = tag('pharmacist');
         return db.user.create({
           data: {
-            organizationId: ORG_A,
+            organizationId: organizationId,
             name: label,
             email: `${label}@example.test`,
             department: department.key,
             title: 'Pharmacist',
             permissionOverrides: {
               create: {
-                organizationId: ORG_A,
+                organizationId: organizationId,
                 capability,
                 effect: 'ALLOW',
                 reason: 'Test fixture',
@@ -1197,7 +1206,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       const actor = await member('pharmacy:safety');
       await db.userPermissionOverride.create({
         data: {
-          organizationId: ORG_A,
+          organizationId: organizationId,
           userId: actor.id,
           capability: 'pharmacy:dispense',
           effect: 'ALLOW',
@@ -1206,14 +1215,14 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       });
       const witness = await member('pharmacy:dispense');
       await db.pharmacyBranchAssignment.create({
-        data: { organizationId: ORG_A, branchId: BRANCH_A, userId: actor.id },
+        data: { organizationId: organizationId, branchId: branchId, userId: actor.id },
       });
       const staff = await db.restaurantStaffProfile.create({
         data: {
-          organizationId: ORG_A,
+          organizationId: organizationId,
           userId: witness.id,
           displayName: witness.name,
-          credentials: { create: { organizationId: ORG_A, type: 'PIN', credentialHash } },
+          credentials: { create: { organizationId: organizationId, type: 'PIN', credentialHash } },
         },
       });
       await db.medicine.update({ where: { id: f.medicineId }, data: { controlled: true } });
@@ -1225,7 +1234,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       return { actor, witness, staff, receipt };
     });
     const scope = { ...scopeOf(f), actorId: actor.id };
-    const posted = await inOrg(ORG_A, (db) =>
+    const posted = await inOrg(organizationId, (db) =>
       deps.receipts.postGoodsReceipt(db, scope, {
         goodsReceiptId: receipt.id,
         at: RECEIVED_AT,
@@ -1235,16 +1244,16 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     );
     const lotId = posted.lines[0]!.inventoryLotId;
     async function snapshot() {
-      return inOrg(ORG_A, async (db) => ({
+      return inOrg(organizationId, async (db) => ({
         entries: await db.pharmacyControlledRegisterEntry.findMany({
-          where: { organizationId: ORG_A, branchId: BRANCH_A, inventoryLotId: lotId },
+          where: { organizationId: organizationId, branchId: branchId, inventoryLotId: lotId },
           orderBy: { serial: 'asc' },
         }),
-        balances: await balancesFor(db, ORG_A, lotId),
+        balances: await balancesFor(db, organizationId, lotId),
         sellable: await db.pharmacyStockBalance.aggregate({
           where: {
-            organizationId: ORG_A,
-            branchId: BRANCH_A,
+            organizationId: organizationId,
+            branchId: branchId,
             inventoryLotId: lotId,
             disposition: 'AVAILABLE',
           },
@@ -1315,23 +1324,28 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
 
   it('keeps the controlled batch in balance after a sale, a refused reversal and supplier dispatch', async () => {
     const { f, actor, witness, staff, receipt, scope, pin, lotId, snapshot } =
-      await controlledReceipt('controlled-return', { receivedPacks: 10, bonusPacks: 0 });
+      await controlledReceipt(
+        'controlled-return',
+        { receivedPacks: 10, bonusPacks: 0 },
+        ORG_RETURN,
+        BRANCH_RETURN
+      );
     const { appendControlledSaleEntries } = await import('./controlled-register');
     const returns = await import('./supplier-returns-operations');
     const received = await snapshot();
     expect(received.balances.AVAILABLE).toBe(100);
     expect(received.entries.at(-1)?.runningBalance).toBe(received.balances.AVAILABLE);
-    await inOrg(ORG_A, async (db) => {
+    await inOrg(ORG_RETURN, async (db) => {
       const patient = await db.pharmacyPatient.create({
-        data: { organizationId: ORG_A, displayName: tag('patient') },
+        data: { organizationId: ORG_RETURN, displayName: tag('patient') },
       });
       const prescriber = await db.pharmacyPrescriber.create({
-        data: { organizationId: ORG_A, name: tag('doctor'), registrationNumber: tag('reg') },
+        data: { organizationId: ORG_RETURN, name: tag('doctor'), registrationNumber: tag('reg') },
       });
       const pack = await db.packLevel.findUniqueOrThrow({ where: { id: f.packLevelId } });
       const rx = await db.prescription.create({
         data: {
-          organizationId: ORG_A,
+          organizationId: ORG_RETURN,
           patientId: patient.id,
           prescriberId: prescriber.id,
           sourceKind: 'PAPER_IMAGE',
@@ -1358,8 +1372,8 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         idempotencyKeyPrefix: tag('sale'),
       });
       await appendControlledSaleEntries(db, {
-        organizationId: ORG_A,
-        branchId: BRANCH_A,
+        organizationId: ORG_RETURN,
+        branchId: BRANCH_RETURN,
         movementIds: sale.movementIds,
         patientId: patient.id,
         patientAddress: 'Test address',
@@ -1382,7 +1396,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     expect(sold.balances.AVAILABLE).toBe(80);
     expect(sold.entries.at(-1)?.runningBalance).toBe(sold.balances.AVAILABLE);
     await expect(
-      inOrg(ORG_A, (db) =>
+      inOrg(ORG_RETURN, (db) =>
         deps.receipts.reverseGoodsReceipt(db, scope, {
           goodsReceiptId: receipt.id,
           at: RECEIVED_AT,
@@ -1393,7 +1407,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     ).rejects.toMatchObject({ reason: 'REVERSAL_STOCK_MOVED' });
     expect(await snapshot()).toEqual(sold);
 
-    const document = await inOrg(ORG_A, (db) =>
+    const document = await inOrg(ORG_RETURN, (db) =>
       returns.createPurchaseReturn(db, scope, {
         supplierId: f.supplierId,
         kind: 'PURCHASE_RETURN',
@@ -1410,14 +1424,14 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         ],
       })
     );
-    await inOrg(ORG_A, (db) =>
+    await inOrg(ORG_RETURN, (db) =>
       returns.submitPurchaseReturn(db, scope, { purchaseReturnId: document.id, at: RECEIVED_AT })
     );
     const dispatch = (
       sender: string,
       controlledWitness?: { staffProfileId: string; pin: string }
     ) =>
-      inOrg(ORG_A, (db) =>
+      inOrg(ORG_RETURN, (db) =>
         returns.dispatchPurchaseReturn(
           db,
           { ...scope, actorId: sender },
@@ -1436,7 +1450,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       dispatch(actor.id, { ...proof, pin: pin === '111111' ? '222222' : '111111' })
     ).rejects.toThrow(/different pharmacist/);
     expect(
-      await inOrg(ORG_A, (db) =>
+      await inOrg(ORG_RETURN, (db) =>
         db.restaurantOperatorCredential.findFirstOrThrow({
           where: { staffProfileId: staff.id },
           select: { failedAttempts: true },
@@ -1446,7 +1460,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     expect(await snapshot()).toEqual(sold);
     // Force a transaction failure after both entries are visible, then read in a new transaction.
     await expect(
-      inOrg(ORG_A, async (db) => {
+      inOrg(ORG_RETURN, async (db) => {
         await returns.dispatchPurchaseReturn(db, scope, {
           purchaseReturnId: document.id,
           at: RECEIVED_AT,
@@ -1457,19 +1471,26 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
           where: { supplierReturnLineId: document.lines[0]!.id },
         });
         expect(outgoing.balanceDelta).toBe(-80);
-        expect((await balancesFor(db, ORG_A, lotId)).AVAILABLE).toBe(0);
+        expect((await balancesFor(db, ORG_RETURN, lotId)).AVAILABLE).toBe(0);
         throw new Error('fixture rollback');
       })
     ).rejects.toThrow('fixture rollback');
     expect(await snapshot()).toEqual(sold);
     // Enrol the independent witness before the real dispatch. The approved
     // code must be consumed once even when two submissions arrive together.
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await withPlatformDb((db) =>
+      db.organization.update({
+        where: { id: ORG_RETURN },
+        data: { requireApprovalAuthenticator: true },
+      })
+    );
     const { encryptSecret } = await import('@/lib/secret-crypto');
     const rfcSecret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
-    await inOrg(ORG_A, (db) =>
+    await inOrg(ORG_RETURN, (db) =>
       db.approvalAuthenticator.create({
         data: {
-          organizationId: ORG_A,
+          organizationId: ORG_RETURN,
           userId: witness.id,
           enabledAt: new Date(),
           encryptedSecret: encryptSecret(rfcSecret),
@@ -1498,7 +1519,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       balanceDelta: -80,
       runningBalance: dispatched.balances.AVAILABLE,
     });
-    const out = await inOrg(ORG_A, (db) =>
+    const out = await inOrg(ORG_RETURN, (db) =>
       db.pharmacyStockMovement.findUniqueOrThrow({
         where: { id: dispatched.entries[2]!.stockMovementId! },
       })

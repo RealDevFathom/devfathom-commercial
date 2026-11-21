@@ -761,6 +761,7 @@ describe('void/cancel approver authentication (H5)', () => {
       // DEV-879: an approval, so an enrolled approver must use their authenticator code.
       approval: {
         action: 'restaurant.backOfficeApproval.coauth:approve',
+        approverRight: 'coauth:approve',
         requestedByStaffProfileId: 'staff_1',
       },
     });

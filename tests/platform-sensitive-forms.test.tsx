@@ -9,6 +9,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn() } }));
 describe('sensitive command forms', () => {
   it.each([
     'organization.user.password',
+    'organization.user.approvalauthenticator.reset',
     'organization.identity',
     'organization.identity.test',
     'organization.identity.remove',

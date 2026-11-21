@@ -167,6 +167,7 @@ async function verifyRestorationPin(
     action: options.supplierDispatch
       ? 'pharmacyPurchasing.dispatchPurchaseReturn'
       : 'pharmacy.controlledRestorationWitness',
+    approverRight: 'pharmacy:dispense',
     requestedById: scope.actorId,
     now,
   });
