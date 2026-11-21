@@ -870,6 +870,9 @@ function ScopedPharmacyCounterConsole({
   // scanned serialised pack of a controlled medicine waiting there. The pack is kept as scanned
   // (its payload, so the server pins its own lot) and nothing is on the bill until it is added.
   const [controlledOpen, setControlledOpen] = useState(false);
+  // DEV-977 phase 3 review: the server's refusal of an "Authorise line", said inside the open
+  // sheet (it is also the counter's notice, which the sheet covers). Never holds the PIN.
+  const [controlledError, setControlledError] = useState<string | null>(null);
   const [pendingPack, setPendingPack] = useState<{
     row: CounterSearchRow;
     pack: { payload: string; serial: string };
@@ -1593,6 +1596,8 @@ function ScopedPharmacyCounterConsole({
           error: pharmacistsQuery.isError,
           patientAddress,
           onChange: (field, value) => {
+            // A field being corrected is a new attempt: the last refusal no longer applies.
+            setControlledError(null);
             if (field === 'patientAddress') {
               setPatientAddressDraft(typeof value === 'string' ? value : '');
               return;
@@ -1609,6 +1614,15 @@ function ScopedPharmacyCounterConsole({
         }
       : null;
   const controlledMissing = controlledAuthMissing(patient, patientAddress, controlledAuth, online);
+  // DEV-977 phase 3 review: after a refusal, focus stays in the sheet, on the (cleared) PIN when
+  // it can take it, so the pharmacist can enter it again straight away.
+  useEffect(() => {
+    if (!controlledError || !controlledOpen) return;
+    const panel = controlledPanelRef.current;
+    const pin = panel?.querySelector<HTMLInputElement>('#controlled-pin');
+    if (pin && !pin.disabled) pin.focus();
+    else panel?.focus();
+  }, [controlledError, controlledOpen]);
   const describeBusy = (billReadRequired: boolean) =>
     unknownTender || attempt !== null || checkingOutcome
       ? 'Check the payment outcome before changing this bill or branch.'
@@ -2250,6 +2264,7 @@ function ScopedPharmacyCounterConsole({
           // sheet's "Authorise line" is pressed. No line is added before that.
           if (scannedPack && scannedRow) setPendingPack({ row: scannedRow, pack: scannedPack });
           setChecksOpen(false);
+          setControlledError(null);
           setControlledOpen(true);
           return;
         }
@@ -2451,6 +2466,7 @@ function ScopedPharmacyCounterConsole({
         if ('blocked' in added) {
           catalogueCache.clear();
           setNotice({ tone: 'warning', message: added.blocked });
+          if (controlled) setControlledError(added.blocked);
           return;
         }
         for (const selection of attemptKeys) lineAttempts.current.delete(selection);
@@ -2467,7 +2483,10 @@ function ScopedPharmacyCounterConsole({
         // DEV-977B: a one-step add (a scan or a result) leaves no line form behind.
         if (scannedRow) setActiveRow(null);
         // DEV-977 phase 3: an authorised controlled line closes its sheet; a waiting pack is done.
-        if (controlled) setControlledOpen(false);
+        if (controlled) {
+          setControlledOpen(false);
+          setControlledError(null);
+        }
         if (scannedPack) setPendingPack(null);
         // DEV-66: a promotion the owner's maximum skipped is said, never silent.
         const discountNotice =
@@ -2504,6 +2523,7 @@ function ScopedPharmacyCounterConsole({
           void utils.pharmacySales.tradingDayStatus.invalidate();
         catalogueCache.clear();
         const message = counterSaleErrorMessage(error);
+        if (row.restriction.controlled) setControlledError(message);
         setNotice({
           tone: counterErrorTone(error),
           message,
@@ -5716,6 +5736,7 @@ function ScopedPharmacyCounterConsole({
         open={controlledOpen}
         onOpenChange={(open) => {
           setControlledOpen(open);
+          setControlledError(null);
           if (open || !pendingPack) return;
           // Closed without adding: the waiting pack is let go, and the cashier is told.
           setPendingPack(null);
@@ -5745,6 +5766,7 @@ function ScopedPharmacyCounterConsole({
                 aria-describedby="controlled-sheet-help"
                 disabled={busy || controlledMissing.length > 0}
                 onClick={() => {
+                  setControlledError(null);
                   if (pendingPack) void addToCart(pendingPack.row, undefined, pendingPack.pack);
                   else void addToCart();
                 }}
@@ -5761,6 +5783,15 @@ function ScopedPharmacyCounterConsole({
           data-counter-controlled-sheet=""
           className="grid gap-4 outline-none"
         >
+          {controlledError ? (
+            <p
+              role="alert"
+              data-counter-controlled-error=""
+              className="rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-destructive"
+            >
+              {controlledError}
+            </p>
+          ) : null}
           {controlledFields ? (
             <>
               {patient ? (

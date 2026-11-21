@@ -1994,6 +1994,24 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
     dir: QA3_DIR,
   });
 
+  // DEV-977 phase 3 review: a wrong PIN is refused by the server, and the refusal is said inside
+  // the open sheet; the PIN is cleared and takes the focus, and nothing is added.
+  await pin.fill('0000');
+  await pressControl(authorise);
+  const refusal = sheet.getByRole('alert');
+  await expect(refusal).toBeVisible({ timeout: 15_000 });
+  await expect(refusal).not.toContainText('0000');
+  await expect(pin).toHaveValue('');
+  await expect(pin).toBeFocused();
+  await expect(billLine(page, controlled.name)).toHaveCount(0);
+  await qaShots(page, 'controlled-sheet-refused', {
+    focus: pin,
+    widths: QA_STATE_WIDTHS,
+    dir: QA3_DIR,
+  });
+  await pin.fill(PHARMACY_E2E.pharmacistPin);
+  await expect(refusal).toBeHidden();
+
   await pressControl(authorise);
   await expect(page.getByText(`1 × ${controlled.name} added.`)).toBeVisible({ timeout: 15_000 });
   await expect(sheet).toBeHidden();

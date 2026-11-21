@@ -4424,6 +4424,40 @@ describe('PharmacyCounterConsole barcode safety', () => {
       );
     });
 
+    // DEV-977 phase 3 review: a refusal is said inside the open sheet, not only behind it.
+    it("shows the server's refusal inside the Authorise sheet, clears the PIN and keeps the pack", async () => {
+      const row = controlledPack();
+      mocks.mutations.addLine!.mockRejectedValueOnce(
+        refused('FORBIDDEN', 'The pharmacist PIN was not accepted.')
+      );
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      const sheet = await screen.findByRole('dialog', { name: `Authorise ${row.displayName}` });
+      expect(within(sheet).queryByRole('alert')).toBeNull();
+      fillAuthorization();
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Authorise line' }));
+      const alert = await within(sheet).findByRole('alert');
+      expect(alert).toHaveTextContent('The pharmacist PIN was not accepted.');
+      expect(alert.className).toContain('text-destructive');
+      // The PIN is never echoed, and is cleared for the next attempt.
+      expect(alert).not.toHaveTextContent('1234');
+      expect(mocks.controlledProps.mock.lastCall![0].controlled.pin).toBe('');
+      // The sheet stays open with focus inside it, and the pack still waits as scanned.
+      expect(screen.getByRole('dialog', { name: `Authorise ${row.displayName}` })).toBe(sheet);
+      await waitFor(() => expect(sheet.contains(document.activeElement)).toBe(true));
+      act(() => mocks.controlledProps.mock.lastCall![0].controlled.onChange('pin', '5678'));
+      // A new attempt clears the old refusal.
+      expect(within(sheet).queryByRole('alert')).toBeNull();
+      fireEvent.click(within(sheet).getByRole('button', { name: 'Authorise line' }));
+      await screen.findByText('1 × Paracetamol added.');
+      expect(mocks.mutations.addLine).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          scannedPack: { payload },
+          controlledAuthorization: expect.objectContaining({ pin: '5678' }),
+        })
+      );
+    });
+
     it('lets the waiting pack go, and says so, when the sheet is closed without adding it', async () => {
       const row = controlledPack();
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
