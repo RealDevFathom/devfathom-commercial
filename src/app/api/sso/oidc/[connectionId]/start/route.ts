@@ -1,3 +1,4 @@
+import { discoverOidc } from '@/lib/oidc-discovery';
 import * as client from 'openid-client';
 import { NextResponse } from 'next/server';
 import {
@@ -5,21 +6,23 @@ import {
   createAuthorizationState,
   createSsoBrowserBinding,
   oidcClientSecret,
-  requireIdentityConnection,
   SSO_BROWSER_BINDING_COOKIE,
   ssoBrowserBindingCookieOptions,
 } from '@/lib/sso';
+import { admitSsoStart } from '@/lib/sso-start-limit';
+import { reserveSsoStateCapacity, SsoStateCapacityError } from '@/lib/sso-state';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export async function GET(request: Request, route: { params: Promise<{ connectionId: string }> }) {
   try {
     const { connectionId } = await route.params;
-    const connection = await requireIdentityConnection(request, connectionId, 'OIDC');
+    const connection = await admitSsoStart(request, connectionId, 'OIDC');
+    if (connection instanceof Response) return connection;
     if (!connection.issuer || !connection.clientId) {
       return Response.json({ error: 'OIDC issuer and client ID are required.' }, { status: 409 });
     }
-    const config = await client.discovery(
-      new URL(connection.issuer),
+    const config = await discoverOidc(
+      connection,
       connection.clientId,
       oidcClientSecret(connection)
     );
@@ -29,14 +32,16 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     const redirectUri = callbackUrl(request, 'oidc', connection.id);
     // F10: bind the transaction to this browser; the callback requires it.
     const binding = createSsoBrowserBinding();
-    const state = await withTenantDb(connection.organizationId, (db) =>
-      createAuthorizationState(db, {
+    const state = await withTenantDb(connection.organizationId, async (db) => {
+      const sourceKey = await reserveSsoStateCapacity(db, connection.id, request, 1);
+      return createAuthorizationState(db, {
         organizationId: connection.organizationId,
         identityConnectionId: connection.id,
+        sourceKey,
         kind: 'OIDC',
         payload: { verifier, nonce, redirectUri, browserBindingHash: binding.hash },
-      })
-    );
+      });
+    });
     const authorizationUrl = client.buildAuthorizationUrl(config, {
       redirect_uri: redirectUri,
       scope: 'openid email profile',
@@ -53,6 +58,8 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     );
     return response;
   } catch (error) {
+    if (error instanceof SsoStateCapacityError)
+      return Response.json({ error: 'Too many pending sign-ins.' }, { status: 429 });
     console.error('[sso:oidc:start]', error);
     return Response.json({ error: 'OIDC sign-in could not be started.' }, { status: 400 });
   }

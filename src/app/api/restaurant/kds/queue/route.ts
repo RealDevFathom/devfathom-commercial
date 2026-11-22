@@ -6,7 +6,7 @@ import {
   requireKdsStation,
   resolveStationBusinessDate,
 } from '@/lib/restaurant/kds';
-import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
+import { withKdsReadAuth } from '@/lib/restaurant/terminal-auth';
 
 const query = z.object({
   businessDate: z
@@ -22,11 +22,11 @@ const query = z.object({
  *
  * The bound station's queue for the KDS device (C10, consumed by L5c): the durable
  * open tickets + their lines' display statuses, a ticket-number sequence cursor, and
- * a gap flag for bounded polling (§12.5). `withDeviceAuth` rejects a revoked device
+ * a gap flag for bounded polling (§12.5). `withKdsReadAuth` rejects a revoked device
  * on every call; `requireKdsStation` enforces `kind = KDS` + a station binding (C8).
  * The business date defaults to the branch's current one (server-time, DST-safe, C5).
  */
-export const GET = withDeviceAuth(async (ctx, request) => {
+export const GET = withKdsReadAuth(async (ctx, request) => {
   const station = requireKdsStation(ctx.device);
   if (!station.ok) return station.response;
 

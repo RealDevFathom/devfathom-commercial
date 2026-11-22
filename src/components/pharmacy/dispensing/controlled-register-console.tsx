@@ -101,7 +101,7 @@ export function ControlledRegisterConsole() {
         <PageHeader
           eyebrow="Pharmacy"
           heading="Controlled register"
-          description="Append-only sales, purchases and corrections for this branch."
+          description="Append-only sales, purchases, supplier returns and corrections for this branch."
         />
         <AccessDeniedState title="You do not have controlled-register access">
           The controlled register is restricted to users holding the pharmacy safety permission.
@@ -126,7 +126,7 @@ export function ControlledRegisterConsole() {
         }
         eyebrow="Pharmacy"
         heading="Controlled register"
-        description="Append-only sales, purchases and corrections for this branch."
+        description="Append-only sales, purchases, supplier returns and corrections for this branch."
       />
       {printError ? (
         <p className="text-xs text-destructive" role="alert">
@@ -248,9 +248,11 @@ export function ControlledRegisterConsole() {
                                 ? 'Purchase'
                                 : entry.entryKind === 'CORRECTION'
                                   ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
-                                  : entry.emergency
-                                    ? 'Emergency sale'
-                                    : 'Sale'}
+                                  : entry.entryKind === 'RETURN_TO_SUPPLIER'
+                                    ? supplierReturnLabel(entry, timeZone)
+                                    : entry.emergency
+                                      ? 'Emergency sale'
+                                      : 'Sale'}
                               {entry.refEntry ? ` · repeats ${entry.refEntry.serial}` : ''}
                             </span>
                           </td>
@@ -303,9 +305,18 @@ export function ControlledRegisterConsole() {
                             {batchNumberLabel(entry.batchNumber)}
                           </td>
                           <td className={cell}>
-                            {entry.witnessName ?? '—'}
+                            {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')}
                             {entry.signatureRef ? (
-                              <span className="mt-0.5 block text-text-muted">PIN witnessed</span>
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.lateDispatchAt
+                                  ? 'Owner confirmed'
+                                  : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
+                                      entry.signatureRef.startsWith('solo-')
+                                    ? 'Sender confirmed'
+                                    : entry.signatureRef.startsWith('authenticator:')
+                                      ? 'Approval code witnessed'
+                                      : 'PIN witnessed'}
+                              </span>
                             ) : null}
                             {open ? (
                               <span className="mt-0.5 block text-destructive">
@@ -365,7 +376,7 @@ export function ControlledRegisterConsole() {
                     {register.data.entries
                       .filter(
                         (entry) =>
-                          entry.entryKind !== 'CORRECTION' &&
+                          (entry.entryKind === 'PURCHASE' || entry.entryKind === 'SALE') &&
                           !register.data.entries.some((other) => other.correctsEntryId === entry.id)
                       )
                       .map((entry) => (
@@ -472,6 +483,12 @@ type ShownEntry = {
   prescriber: { name: string; registrationNumber: string } | null;
   line: { medicine: { productName: string } } | null;
   correctsEntry: { serial: number } | null;
+  lateDispatchAt?: Date | null;
+  sentByName?: string | null;
+  recordedByName?: string | null;
+  supplierReturnReason?: string | null;
+  signatureRef?: string | null;
+  sourcePurchase: { serial: number } | null;
   refEntry: { serial: number } | null;
 };
 
@@ -492,6 +509,27 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
   );
 }
 
+function supplierReturnLabel(
+  entry: Pick<
+    ShownEntry,
+    | 'sourcePurchase'
+    | 'lateDispatchAt'
+    | 'createdAt'
+    | 'sentByName'
+    | 'recordedByName'
+    | 'supplierReturnReason'
+    | 'signatureRef'
+  >,
+  timeZone: string
+) {
+  const label = `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
+  if (entry.lateDispatchAt)
+    return `${label} · Recorded late, no witness · Sent by ${entry.sentByName ?? 'Name unavailable'} on ${formatWorkspaceDateTime(entry.lateDispatchAt, timeZone)} · Recorded by ${entry.recordedByName ?? 'Name unavailable'} on ${formatWorkspaceDateTime(entry.createdAt, timeZone)} · Reason: ${entry.supplierReturnReason ?? '—'}`;
+  if (entry.signatureRef?.startsWith('solo-'))
+    return `${label} · No second person available · Reason: ${entry.supplierReturnReason ?? '—'}`;
+  return label;
+}
+
 function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
   const timeZone = useWorkspaceTimeZone();
   const totals = registerPrintTotals(entries);
@@ -504,12 +542,16 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
             <p className="font-mono text-text-strong">
               {entry.serial} · {formatWorkspaceDateTime(entry.createdAt, timeZone)}
             </p>
+            {entry.entryKind === 'RETURN_TO_SUPPLIER' && (
+              <p className="mt-1 text-text-muted">{supplierReturnLabel(entry, timeZone)}</p>
+            )}
             <p className="mt-1 text-text-body">
               {drug} · {batchNumberLabel(entry.batchNumber)} · qty {entry.quantityCanonicalUnits}
             </p>
             <p className="mt-1 text-text-muted">
               {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
-              {entry.witnessName ?? '—'} · balance {entry.runningBalance}
+              {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')} · balance{' '}
+              {entry.runningBalance}
             </p>
           </article>
         );

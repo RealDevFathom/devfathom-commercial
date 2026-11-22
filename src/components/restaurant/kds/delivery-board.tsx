@@ -39,7 +39,8 @@ type QueuePayload = { serverTime: string; deliveries: Delivery[] };
 class DeliveryRequestError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    readonly terminalAccessDenied = false
   ) {
     super(message);
   }
@@ -62,7 +63,12 @@ async function deliveryRequest<T>(path: string, init: RequestInit): Promise<T> {
     signal: AbortSignal.timeout(10_000),
   });
   const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new DeliveryRequestError(response.status, safeMessage(body));
+  if (!response.ok)
+    throw new DeliveryRequestError(
+      response.status,
+      safeMessage(body),
+      response.headers.get('X-Terminal-Access') === 'denied'
+    );
   return body as T;
 }
 
@@ -75,7 +81,7 @@ export function DeliveryBoard({
 }: {
   sessionToken: string;
   operatorStaffProfileId: string;
-  onAuthorizationFailure: () => void;
+  onAuthorizationFailure: (reason: string) => void;
 }) {
   const [queue, setQueue] = useState<QueuePayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,8 +103,11 @@ export function DeliveryBoard({
       setQueue(next);
       setError(null);
     } catch (caught) {
-      if (caught instanceof DeliveryRequestError && [401, 403].includes(caught.status)) {
-        onAuthorizationFailure();
+      if (
+        caught instanceof DeliveryRequestError &&
+        (caught.status === 401 || caught.terminalAccessDenied)
+      ) {
+        onAuthorizationFailure(caught.message);
         return;
       }
       setError(caught instanceof Error ? caught.message : 'Delivery handoff refresh failed.');
@@ -152,8 +161,11 @@ export function DeliveryBoard({
     } catch (caught) {
       if (caught instanceof DeliveryRequestError && caught.status < 500)
         retryKeys.current.delete(intent);
-      if (caught instanceof DeliveryRequestError && [401, 403].includes(caught.status)) {
-        onAuthorizationFailure();
+      if (
+        caught instanceof DeliveryRequestError &&
+        (caught.status === 401 || caught.terminalAccessDenied)
+      ) {
+        onAuthorizationFailure(caught.message);
       } else {
         setError(
           caught instanceof DeliveryRequestError

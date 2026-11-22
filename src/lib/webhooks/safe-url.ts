@@ -143,6 +143,17 @@ const defaultLookup: WebhookLookup = async (hostname) => {
   return records.map((record) => ({ address: record.address, family: record.family }));
 };
 
+function pinnedRequestOptions(url: URL, target: ResolvedAddress): https.RequestOptions {
+  return {
+    hostname: hostnameOf(url),
+    port: url.port || (url.protocol === 'https:' ? 443 : 80),
+    path: url.pathname + url.search,
+    agent: false,
+    family: target.family,
+    lookup: (_hostname, _options, done) => done(null, target.address, target.family),
+  };
+}
+
 function defaultRequest(input: {
   url: URL;
   address: string;
@@ -152,15 +163,11 @@ function defaultRequest(input: {
   timeoutMs: number;
 }): Promise<{ statusCode: number }> {
   const lib = input.url.protocol === 'https:' ? https : http;
-  const port = input.url.port ? Number(input.url.port) : input.url.protocol === 'https:' ? 443 : 80;
   return new Promise((resolve, reject) => {
     const req = lib.request(
       {
-        host: input.address,
-        port,
-        servername: input.url.hostname,
+        ...pinnedRequestOptions(input.url, input),
         method: 'POST',
-        path: `${input.url.pathname}${input.url.search}`,
         headers: { ...input.headers, Host: input.url.host },
         timeout: input.timeoutMs,
       },
@@ -217,4 +224,98 @@ export async function deliverWebhookRequest(
       error: timedOut ? 'Delivery timed out' : 'Delivery failed',
     };
   }
+}
+
+// OIDC uses HTTPS on its standard port. Restrict IPv6 destinations to global
+// unicast and exclude special-purpose and documentation prefixes within it.
+const globalUnicast = new BlockList();
+globalUnicast.addSubnet('2000::', 3, 'ipv6');
+const specialUnicast = new BlockList();
+specialUnicast.addSubnet('2001::', 23, 'ipv6');
+specialUnicast.addSubnet('3fff::', 20, 'ipv6');
+
+function assertPublicDestination(address: string) {
+  if (
+    isIP(address) === 6 &&
+    (!globalUnicast.check(address, 'ipv6') || specialUnicast.check(address, 'ipv6'))
+  ) {
+    throw new WebhookUrlError();
+  }
+}
+
+export function assertPublicHttpsUrl(raw: string): URL {
+  const url = assertWebhookUrl(raw);
+  if (url.protocol !== 'https:' || url.port || url.hash) throw new WebhookUrlError();
+  assertPublicDestination(hostnameOf(url));
+  return url;
+}
+
+export async function resolvePublicHttpsUrl(raw: string, signal = AbortSignal.timeout(10_000)) {
+  const url = assertPublicHttpsUrl(raw);
+  signal.throwIfAborted();
+  let abort!: () => void;
+  const aborted = new Promise<never>((_, reject) => {
+    abort = () => reject(signal.reason);
+    signal.addEventListener('abort', abort, { once: true });
+  });
+  const answers = await Promise.race([resolveWebhookAddresses(url), aborted]).finally(() =>
+    signal.removeEventListener('abort', abort)
+  );
+  for (const answer of answers) assertPublicDestination(answer.address);
+  return { url, target: answers[0]! };
+}
+
+/** One pinned TLS connection. Original Host and certificate identity are
+ * preserved. Node does not follow redirects or decompress the response. */
+export async function fetchPublicHttps(
+  raw: string,
+  options: {
+    method: 'GET' | 'POST';
+    headers: Record<string, string>;
+    body?: string;
+    maxBytes: number;
+    signal?: AbortSignal;
+  }
+): Promise<Response> {
+  const deadline = AbortSignal.timeout(10_000);
+  const signal = options.signal ? AbortSignal.any([deadline, options.signal]) : deadline;
+  const { url, target } = await resolvePublicHttpsUrl(raw, signal);
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        ...pinnedRequestOptions(url, target),
+        method: options.method,
+        headers: { ...options.headers, host: url.host, 'accept-encoding': 'identity' },
+        signal,
+      },
+      async (res) => {
+        try {
+          const status = res.statusCode ?? 0;
+          if (status < 200 || status >= 300) throw new Error('Identity provider request failed.');
+          if (Number(res.headers['content-length']) > options.maxBytes)
+            throw new Error('Identity provider response too large.');
+          const chunks: Buffer[] = [];
+          let bytes = 0;
+          for await (const chunk of res) {
+            bytes += chunk.length;
+            if (bytes > options.maxBytes) throw new Error('Identity provider response too large.');
+            chunks.push(chunk);
+          }
+          resolve(
+            new Response(Buffer.concat(chunks), {
+              status,
+              headers: {
+                'content-type': res.headers['content-type'] ?? 'application/octet-stream',
+              },
+            })
+          );
+        } catch (error) {
+          res.destroy();
+          reject(error);
+        }
+      }
+    );
+    req.on('error', reject);
+    req.end(options.body);
+  });
 }

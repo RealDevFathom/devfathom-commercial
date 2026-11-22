@@ -111,7 +111,9 @@ function fixture() {
           where.inventoryLotId ? { runningBalance: 2 } : purchase
         ),
       findMany: vi.fn().mockResolvedValue([purchase]),
-      aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+      aggregate: vi
+        .fn()
+        .mockResolvedValue({ _max: { serial: 1 }, _sum: { quantityCanonicalUnits: 0 } }),
       create: vi.fn(),
     },
     pharmacyStockMovement: {

@@ -372,14 +372,15 @@ function freshControlledAuth(
  */
 function controlledAuthMissing(
   patient: unknown,
-  patientAddress: string,
+  patientAddress: string | null,
   auth: typeof EMPTY_CONTROLLED_AUTH,
   online: boolean,
   copy: CounterApprovalCopy
 ): string[] {
   const missing: string[] = [];
   if (!patient) missing.push('the patient');
-  if (patientAddress.trim().length < 3) missing.push("the patient's address");
+  if (patientAddress !== null && patientAddress.trim().length < 3)
+    missing.push("the patient's address");
   if (!auth.emergency && !auth.prescriptionLineId)
     missing.push('a prescription or an emergency supply');
   if (auth.emergency && auth.prescriberName.trim().length === 0)
@@ -1400,7 +1401,7 @@ function ScopedPharmacyCounterConsole({
 
   const cart = cartQuery.data ?? null;
   const patient = patientPanelQuery.data ?? null;
-  const patientAddress = patientAddressDraft ?? patient?.address ?? '';
+  const patientAddress = patient ? patientAddressDraft : '';
   const locationName = activeRow?.storage.locationName?.trim() || activeRow?.storage.locationKind;
   const locationCode = activeRow?.storage.locationCode;
   const locationLabel =
@@ -1651,7 +1652,7 @@ function ScopedPharmacyCounterConsole({
             // A field being corrected is a new attempt: the last refusal no longer applies.
             setControlledError(null);
             if (field === 'patientAddress') {
-              setPatientAddressDraft(typeof value === 'string' ? value : '');
+              if (typeof value === 'string') setPatientAddressDraft(value === '' ? null : value);
               return;
             }
             closedBillPatient.current?.editedAuth.add(field);
@@ -2387,7 +2388,8 @@ function ScopedPharmacyCounterConsole({
               controlled && patient && !checkOff
                 ? {
                     patientId: patient.patientId,
-                    patientAddress: patientAddress.trim(),
+                    patientAddress:
+                      patientAddress === null ? { useAddressOnFile: true } : patientAddress.trim(),
                     staffProfileId: billAuth.staffProfileId,
                     pin: billAuth.pin,
                     rxSerialWritten: billAuth.rxSerialWritten,

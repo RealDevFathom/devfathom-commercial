@@ -47,7 +47,6 @@ const patient: CounterPatientPanel = {
   displayName: 'Sana Tariq',
   phone: '******0147',
   cnic: '*********1234',
-  address: 'Model Town',
   dispensingConsent: true,
   prescriptions: [
     {
