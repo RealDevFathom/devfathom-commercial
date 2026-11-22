@@ -157,3 +157,12 @@ test('retains the automatic method responses and their CSP', () => {
   expect(unsupported.status).toBe(405);
   expect(unsupported.headers.get('Content-Security-Policy')).toContain("'nonce-");
 });
+
+test('refuses a large upload for the signed-in user when both slots are occupied', async () => {
+  mocks.acquireSlot.mockResolvedValueOnce(null);
+  const response = await POST(multipartUpload('/api/upload', 9));
+  expect(response.status).toBe(429);
+  expect((await response.json()).error).toContain('Wait for one to finish');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-a');
+  expect(mocks.put).not.toHaveBeenCalled();
+});

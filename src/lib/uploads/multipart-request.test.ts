@@ -6,7 +6,9 @@ import { multipartUpload } from '../../../tests/fixtures/multipart-upload';
 
 vi.mock('./large-upload-slot', () => ({ acquireLargeUploadSlot: vi.fn() }));
 const acquire = vi.mocked(acquireLargeUploadSlot);
-beforeEach(() => acquire.mockReset());
+beforeEach(() => {
+  acquire.mockReset();
+});
 
 it.each([null, '512', String(9 * 1024 * 1024)])(
   'refuses a large transfer at capacity with declared length %s',

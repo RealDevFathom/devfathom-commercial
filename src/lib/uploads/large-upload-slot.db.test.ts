@@ -12,6 +12,7 @@ it.skipIf(!databaseUrl)(
     const target = new URL(databaseUrl!);
     expect(['127.0.0.1', 'localhost', '[::1]']).toContain(target.hostname);
     expect(target.pathname).toMatch(/[_-]test$/);
+    expect(target.search).toBe('');
     vi.stubEnv('DATABASE_URL', databaseUrl);
     const user = randomUUID();
     const releases: Array<() => Promise<void>> = [];
