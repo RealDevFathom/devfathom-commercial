@@ -765,7 +765,7 @@ describe('Trello import HTTP preflight', () => {
 
 it.each([
   ['passwordReset.request', 256 * 1024],
-  ['pharmacySupplierLinks.uploadDocument', 16 * 1024 * 1024],
+  ['pharmacySupplierLinks.uploadDocument', 8 * 1024 * 1024],
 ] as const)('stops reading at the anonymous tRPC cap for %s', async (procedure, limit) => {
   mocks.resolveTenantActor.mockResolvedValue(null);
   const input = oversizedRequest(limit, {
@@ -779,7 +779,26 @@ it.each([
   expect(harness.scopeTenants).toEqual([]);
 });
 
-it('replays a bounded anonymous upload for both tenant lookup and the tRPC parser', async () => {
+it('rejects an over-cap anonymous upload declaration even with a short delivered body', async () => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const limit = 8 * 1024 * 1024;
+  const request = new Request(url('pharmacySupplierLinks.uploadDocument', '?batch=1'), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'content-length': String(limit + 1),
+    },
+    body: '{}',
+  });
+  const reader = vi.spyOn(request.body!, 'getReader');
+
+  expect((await POST(request)).status).toBe(413);
+  expect(reader).not.toHaveBeenCalled();
+  expect(request.bodyUsed).toBe(false);
+  expect(organizationForAnonymousToken).not.toHaveBeenCalled();
+});
+
+it('replays an anonymous upload at exactly 8 MiB for tenant lookup and the tRPC parser', async () => {
   const payload = { token: 'supplier-link', contentBase64: 'A'.repeat(300 * 1024) };
   mocks.resolveTenantActor.mockResolvedValue(null);
   mocks.resolveOrganizationById.mockResolvedValueOnce(ORGANIZATION);
@@ -789,7 +808,7 @@ it('replays a bounded anonymous upload for both tenant lookup and the tRPC parse
     new Request(url('pharmacySupplierLinks.uploadDocument', '?batch=1'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ '0': { json: payload } }),
+      body: JSON.stringify({ '0': { json: payload } }).padEnd(8 * 1024 * 1024),
     })
   );
 

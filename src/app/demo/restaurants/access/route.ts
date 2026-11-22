@@ -16,6 +16,7 @@ import {
   loginIntentCookieOptions,
 } from '@/lib/auth/login-intent';
 import { rateLimit } from '@/lib/rate-limit';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import {
   PlatformSecurityError,
   assertPlatformMutationOrigin,
@@ -38,18 +39,6 @@ function json(body: unknown, status = 200, headers?: HeadersInit) {
   return NextResponse.json(body, { status, headers: { ...PRIVATE_HEADERS, ...headers } });
 }
 
-async function readInput(request: Request) {
-  const declared = Number(request.headers.get('content-length') ?? 0);
-  if (declared > MAX_BODY_BYTES) return null;
-  const raw = await request.text();
-  if (Buffer.byteLength(raw) > MAX_BODY_BYTES) return null;
-  try {
-    return inputSchema.safeParse(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-
 export async function POST(request: Request) {
   const host = requestHost(request);
   if (!isDemoEnabled() || !isSharedHost(host)) return json({ error: 'Not found.' }, 404);
@@ -60,8 +49,10 @@ export async function POST(request: Request) {
     return json({ error: 'Not allowed.' }, status);
   }
 
-  const parsed = await readInput(request);
-  if (!parsed?.success) return json({ error: 'Invalid request.' }, 400);
+  const body = await readBoundedJson(request, MAX_BODY_BYTES).catch(() => null);
+  if (body?.tooLarge) return json({ error: 'Invalid request.' }, 413);
+  const parsed = inputSchema.safeParse(body?.value);
+  if (!parsed.success) return json({ error: 'Invalid request.' }, 400);
   const seat = await resolveDemoSeat(parsed.data.seat, parsed.data.persona);
   if (!seat) return json({ error: 'Demo seat is not ready.' }, 409);
 

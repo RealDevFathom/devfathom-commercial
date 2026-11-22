@@ -418,9 +418,9 @@ function servable(organization: TenantOrganization | null): TenantOrganization |
 async function boundAnonymousPost(req: Request, procedures: string[]): Promise<Request | Response> {
   if (req.method !== 'POST' || !req.body) return req;
 
-  // Allow the supplier document's 14 million base64 characters plus its JSON envelope.
+  // Keep the anonymous supplier upload cap aligned with the Next.js proxy buffer.
   const limit = procedures.includes('pharmacySupplierLinks.uploadDocument')
-    ? 16 * 1024 * 1024
+    ? 8 * 1024 * 1024
     : 256 * 1024;
   const body = await readBoundedBody(req, limit);
   if (body === null) {
