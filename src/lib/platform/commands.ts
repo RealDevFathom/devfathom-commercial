@@ -1,6 +1,8 @@
 import { changesPharmacyFinanceRules } from '@/lib/abac/pharmacy-sub-roles';
 import 'server-only';
 
+import { validateOidcSettings } from '@/lib/oidc-discovery';
+
 import { hash } from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
@@ -2947,6 +2949,22 @@ async function runCommand(
       const before = connectionId
         ? await db.organizationIdentityConnection.findUnique({ where: { id: connectionId } })
         : null;
+      if (connection.protocol === 'OIDC') {
+        try {
+          await validateOidcSettings({
+            issuer: connection.issuer === undefined ? before?.issuer : connection.issuer,
+            discoveryUrl:
+              connection.discoveryUrl === undefined
+                ? before?.discoveryUrl
+                : connection.discoveryUrl,
+          });
+        } catch {
+          throw new PlatformSecurityError(
+            'OIDC settings require a public HTTPS address on port 443.',
+            400
+          );
+        }
+      }
       const saved = connectionId
         ? await db.organizationIdentityConnection.update({
             where: { id: connectionId },

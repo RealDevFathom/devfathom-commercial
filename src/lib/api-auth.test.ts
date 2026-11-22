@@ -179,6 +179,40 @@ describe('withApiAuth error logging', () => {
     ]);
   });
 
+  it.each(['projects:read', 'spec:read'])(
+    'audits an entitlement lookup failure and denies %s',
+    async (scope) => {
+      const failure = new Error('fixture entitlement store unavailable');
+      mocks.resolveEntitlements.mockRejectedValueOnce(failure);
+      const handler = vi.fn(() => new Response('fixture data'));
+      const route =
+        scope === 'spec:read'
+          ? (await import('@/app/api/v1/spec/route')).GET
+          : withApiAuth(scope, handler);
+      const request = new Request(
+        'https://example.test/api/v1/' + (scope === 'spec:read' ? 'spec' : 'projects'),
+        {
+          headers: { Authorization: 'Bearer df_test_fixture' },
+        }
+      );
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const response = await route(request);
+        expect(response.status).toBe(500);
+        await expect(response.json()).resolves.toEqual({ error: 'Internal server error' });
+        expect(mocks.resolveEntitlements).toHaveBeenCalledWith('org_1', expect.anything());
+        expect(mocks.recordRestAudit).toHaveBeenCalledTimes(1);
+        expect(mocks.recordRestAudit).toHaveBeenCalledWith(
+          expect.objectContaining({ request, scope, status: 500, error: failure })
+        );
+        expect(mocks.createTenantDb).not.toHaveBeenCalled();
+        expect(handler).not.toHaveBeenCalled();
+      } finally {
+        spy.mockRestore();
+      }
+    }
+  );
+
   it('logs with a constant format string, the scope and the full error, and returns a generic 500', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const failure = new Error('prisma internals: relation "secret" does not exist');
