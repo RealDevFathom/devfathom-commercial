@@ -1,4 +1,5 @@
 import { can, subjectFromSession } from '@/lib/abac';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import { pharmacyRefundPostingMutation } from '@/server/pharmacy-finance-gate';
 import {
@@ -10,7 +11,7 @@ import {
   providerRefundAccounts,
   changeProviderRefund,
   loadOriginalReview,
-  maySignOwnRefundCorrection,
+  otherRefundCorrectionApprovers,
   refundCalendarDay,
 } from '@/lib/pharmacy/card-terminal/provider-refunds';
 import { TRPCError } from '@trpc/server';
@@ -230,13 +231,17 @@ export const pharmacyCardTerminalRouter = router({
       SELECT 'review:'||a.id AS id,a.id AS "attemptId",a."attemptKey",a.status,a."resolvedAt" AS "createdAt",a."resolvedById" AS "originalActorId",a."resolutionRef" AS reference,COALESCE(a."approvedAmountMinor", CASE WHEN a."reviewReason" IS DISTINCT FROM 'Terminal approved a different amount' THEN a."amountMinor" END) AS "amountMinor"
       FROM pharmacy_card_terminal_attempts a WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a.status IN ('REVERSED','DECLINED') AND a."resolvedById" IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM pharmacy_terminal_refund_events e WHERE e."attemptId"=a.id)`;
+      const db = ctx.db as ScopedDb;
+      const peers = await otherRefundCorrectionApprovers(db, scope);
       return {
         booked: records.filter((row) => row.remainingMinor > 0),
         records,
         historical,
         actorId: scope.actorId,
-        peers: await otherCardTerminalReviewers(ctx.db as ScopedDb, scope),
-        owner: await maySignOwnRefundCorrection(ctx.db as ScopedDb, scope),
+        peers,
+        owner:
+          peers.length === 0 &&
+          (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId)),
         today: await refundCalendarDay(ctx.db as ScopedDb, scope.organizationId),
         canWrite: await mayPostRefund(ctx),
       };
@@ -372,21 +377,24 @@ export const pharmacyCardTerminalRouter = router({
       const needsPeer =
         (input.kind === 'DECLINED' || input.kind === 'OWED') &&
         (previous?.actorId === scope.actorId || originalActorId === scope.actorId);
-      if (attempt.actorId === scope.actorId || needsPeer || input.secondApproval) {
+      if (attempt.actorId === scope.actorId) {
         const others = await otherCardTerminalReviewers(db, scope);
-        if (attempt.actorId === scope.actorId && others.length)
+        if (others.length)
           throw new TRPCError({
             code: 'FORBIDDEN',
             message: cardTerminalOwnChargeMessage(others[0].name),
           });
+      }
+      if (needsPeer || input.secondApproval) {
+        const peers = await otherRefundCorrectionApprovers(db, scope);
         if (
-          (needsPeer || input.secondApproval) &&
-          !others.some((p) => p.id === input.secondApproval?.userId) &&
+          !peers.some((p) => p.id === input.secondApproval?.userId) &&
           !(
             needsPeer &&
             !input.secondApproval &&
             input.declareSelfApproval &&
-            (await maySignOwnRefundCorrection(db, scope))
+            peers.length === 0 &&
+            (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))
           )
         )
           throw new TRPCError({

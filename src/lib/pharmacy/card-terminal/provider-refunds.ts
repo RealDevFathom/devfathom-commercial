@@ -9,9 +9,6 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { actorIsPharmacyOwner } from '../procurement-access';
 import type { LedgerScope } from '../stock-ledger';
 import { assertNoCardholderData } from './cardholder-data';
-import { can, subjectFromSession } from '@/lib/abac';
-import { PHARMACY_FINANCE_MANAGE } from '@/lib/abac/pharmacy-finance-actions';
-import { canAccessPharmacyFinance } from '../finance-access';
 import { otherCardTerminalReviewers } from './review-approvers';
 import type { CardTerminalAttempt } from './store';
 
@@ -260,25 +257,8 @@ export async function reversedTenderRefundIds(
   return new Set(events.map((e) => e.refundId));
 }
 
-export async function maySignOwnRefundCorrection(db: ScopedDb, scope: Scope) {
-  if (!(await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))) return false;
-  const others = await db.user.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      id: { not: scope.actorId },
-      status: 'ACTIVE',
-    },
-    select: { id: true, role: true, department: true, status: true },
-  });
-  const options = { db, source: 'TRPC' as const };
-  for (const member of others) {
-    if (
-      (await can(subjectFromSession(member), 'admin:access', undefined, options)) &&
-      (await canAccessPharmacyFinance(member, options, PHARMACY_FINANCE_MANAGE))
-    )
-      return false;
-  }
-  return true;
+export function otherRefundCorrectionApprovers(db: ScopedDb, scope: Scope) {
+  return otherCardTerminalReviewers(db, scope, new Date(), { gate: 'refund-correction' });
 }
 
 export async function refundCalendarDay(db: ScopedDb, organizationId: string) {
@@ -324,7 +304,7 @@ export async function changeProviderRefund(
         message: 'A voided bill requires its terminal payment to remain refunded.',
       });
   }
-  let selfApproved = false;
+  let needsPeer = false;
   const authority = await reviewAuthority(db, scope, scope.actorId);
   if (input.kind !== 'SETTLED') {
     const original = await db.pharmacyTerminalRefundEvent.findUniqueOrThrow({
@@ -335,20 +315,23 @@ export async function changeProviderRefund(
         code: 'FORBIDDEN',
         message: 'This correction requires the same or higher review authority.',
       });
-    if (scope.actorId === previous.actorId || scope.actorId === original.actorId) {
-      const peers = await otherCardTerminalReviewers(db, scope);
-      selfApproved =
-        authority.ownerAuthority &&
-        approval.declareSelfApproval === true &&
-        !approval.secondApproverId &&
-        (await maySignOwnRefundCorrection(db, scope));
-      if (!selfApproved && !peers.some((peer) => peer.id === approval.secondApproverId))
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message:
-            'Independent approval is required. A sole owner must explicitly sign off with their own approval code.',
-        });
-    }
+    needsPeer = scope.actorId === previous.actorId || scope.actorId === original.actorId;
+  }
+  let selfApproved = false;
+  if (needsPeer || approval.secondApproverId) {
+    const peers = await otherRefundCorrectionApprovers(db, scope);
+    selfApproved =
+      needsPeer &&
+      authority.ownerAuthority &&
+      peers.length === 0 &&
+      approval.declareSelfApproval === true &&
+      !approval.secondApproverId;
+    if (!selfApproved && !peers.some((peer) => peer.id === approval.secondApproverId))
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          'Independent approval is required. A sole owner must explicitly sign off with their own approval code.',
+      });
   }
   const settling = input.kind === 'SETTLED';
   const amountMinor = settling

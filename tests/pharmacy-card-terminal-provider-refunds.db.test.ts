@@ -584,22 +584,33 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     await expect(
       change(root, 'OWED', { pinVerified: true, declareSelfApproval: true }, '')
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    const secondOwner = await run((db) =>
-      db.user.findUniqueOrThrow({
-        where: { id: reviewerId },
-        select: { organizationRoleId: true, role: true },
-      })
-    );
-    const soleOwner = await run((db) =>
-      db.user.findUniqueOrThrow({ where: { id: ownerId }, select: { organizationRoleId: true } })
-    );
-    await run((db) =>
-      db.user.update({ where: { id: reviewerId }, data: { ...soleOwner, role: 'ADMIN' } })
-    );
-    await expect(
-      change(root, 'OWED', { pinVerified: true, declareSelfApproval: true })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await run((db) => db.user.update({ where: { id: reviewerId }, data: secondOwner }));
+    await run(async (db) => {
+      const accountantId = 'accountant-' + suffix;
+      await db.user.create({
+        data: {
+          id: accountantId,
+          name: 'Synthetic accountant',
+          email: accountantId + '@example.test',
+          department: 'Pharmacy',
+          title: 'Accountant',
+          role: 'ADMIN',
+        },
+      });
+      for (const capability of [
+        'admin:access',
+        'finance:manage',
+        'pharmacy:counter',
+        'pharmacy:manage',
+      ])
+        await db.userPermissionOverride.create({
+          data: {
+            userId: accountantId,
+            capability,
+            effect: 'ALLOW',
+            reason: 'Synthetic accountant without a counter PIN',
+          },
+        });
+    });
     await run((db) =>
       db.userPermissionOverride.create({
         data: {
@@ -645,15 +656,14 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
           reason: 'Independent branch review',
         },
       });
-      for (const capability of ['admin:access', 'finance:manage'])
-        await db.userPermissionOverride.create({
-          data: {
-            userId: reviewerId,
-            capability,
-            effect: 'ALLOW',
-            reason: 'Synthetic finance approver',
-          },
-        });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: reviewerId,
+          capability: 'admin:access',
+          effect: 'ALLOW',
+          reason: 'Synthetic reviewer accounts access',
+        },
+      });
       const profile = await db.restaurantStaffProfile.create({
         data: { userId: reviewerId, displayName: 'Independent reviewer' },
       });
@@ -667,19 +677,41 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
       });
     });
     await expect(
-      change(self.id, 'DECLINED', { pinVerified: true, declareSelfApproval: true })
+      change(self.id, 'DECLINED', { pinVerified: true, secondApproverId: reviewerId })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const withoutFinance = await change(self.id, 'DECLINED', {
+      pinVerified: true,
+      declareSelfApproval: true,
+    });
+    expect(withoutFinance).toMatchObject({
+      previousId: self.id,
+      selfApproved: true,
+      secondApproverId: null,
+    });
+    await run((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: reviewerId,
+          capability: 'finance:manage',
+          effect: 'ALLOW',
+          reason: 'Synthetic finance approver',
+        },
+      })
+    );
+    await expect(
+      change(withoutFinance.id, 'OWED', { pinVerified: true, declareSelfApproval: true })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(
-      change(self.id, 'DECLINED', { pinVerified: true, secondApproverId: ownerId })
+      change(withoutFinance.id, 'OWED', { pinVerified: true, secondApproverId: ownerId })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    const peer = await change(self.id, 'DECLINED', {
+    const peer = await change(withoutFinance.id, 'OWED', {
       pinVerified: true,
       secondApproverId: reviewerId,
     });
     expect(peer).toMatchObject({
       selfApproved: false,
       secondApproverId: reviewerId,
-      previousId: self.id,
+      previousId: withoutFinance.id,
     });
     expect(
       await run((db) => db.auditLog.findFirstOrThrow({ where: { targetId: peer.id } }))

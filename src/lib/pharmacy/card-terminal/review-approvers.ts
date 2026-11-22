@@ -1,8 +1,10 @@
 import 'server-only';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { PHARMACY_FINANCE_MANAGE } from '@/lib/abac/pharmacy-finance-actions';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { counterBranchAssignmentDenial, counterOperatorDenial } from '../counter-capability';
+import { canAccessPharmacyFinance } from '../finance-access';
 import type { LedgerScope } from '../stock-ledger';
 
 /**
@@ -26,9 +28,10 @@ import type { LedgerScope } from '../stock-ledger';
  * gate passes `gate: 'branch'`: then the operator gate is only the branch rule the counter gate
  * ends with (`counterBranchAssignmentDenial`: an active assignment to this branch, or an
  * organization ADMIN), without the `pharmacy:counter` grant. The default is the card-terminal
- * rule above, unchanged.
+ * rule above. Refund corrections use the counter gate and also require accounts administration
+ * and finance management access.
  */
-export type ReviewerGate = 'counter' | 'branch';
+export type ReviewerGate = 'counter' | 'branch' | 'refund-correction';
 
 export async function otherCardTerminalReviewers(
   db: ScopedDb,
@@ -76,12 +79,13 @@ export async function otherCardTerminalReviewers(
             source: 'TRPC',
           });
     if (denial) continue;
+    const subject = subjectFromSession(other);
+    const access = { db, now, source: 'TRPC' as const };
+    if (!(await can(subject, 'pharmacy:manage', undefined, access))) continue;
     if (
-      !(await can(subjectFromSession(other), 'pharmacy:manage', undefined, {
-        db,
-        now,
-        source: 'TRPC',
-      }))
+      options.gate === 'refund-correction' &&
+      (!(await can(subject, 'admin:access', undefined, access)) ||
+        !(await canAccessPharmacyFinance(other, access, PHARMACY_FINANCE_MANAGE)))
     )
       continue;
     reviewers.push({ id: other.id, name: other.name });
