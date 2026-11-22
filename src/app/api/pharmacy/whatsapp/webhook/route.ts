@@ -1,3 +1,4 @@
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { z } from 'zod';
 import { recordMarketingCallback } from '@/lib/pharmacy/marketing-delivery';
 import { evaluateMarketingBlockRate } from '@/lib/pharmacy/marketing-send-policy';
@@ -27,6 +28,7 @@ import {
  */
 
 const PRIVATE_HEADERS = { 'cache-control': 'no-store' };
+const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
 
@@ -71,7 +73,8 @@ export async function POST(request: Request) {
 
   const config = readWhatsAppConfig();
   const provider = createWhatsAppProvider(config);
-  const rawBody = await request.text();
+  const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
+  if (rawBody === null) return json({ error: 'Body too large.' }, 413);
   if (!provider.verifyWebhook(rawBody, request.headers.get('x-hub-signature-256'))) {
     return json({ error: 'Invalid signature.' }, 401);
   }
@@ -92,7 +95,7 @@ export async function POST(request: Request) {
 
   let payload: unknown;
   try {
-    payload = JSON.parse(rawBody) as unknown;
+    payload = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
   } catch {
     return json({ error: 'Invalid JSON body.' }, 400);
   }

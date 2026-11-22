@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * DEV-751 — the evidence route authorises through the REAL pharmacy SOP router
  * mounted under its `pharmacySop` namespace, so the tRPC module gate sees the
@@ -77,11 +78,11 @@ function request() {
   form.set('pharmacyBranchId', 'pbranch_1');
   form.set('occurrenceId', 'occ_1');
   form.set('file', new File(['proof'], 'proof.png', { type: 'image/png' }));
-  return {
-    formData: async () => form,
-    headers: new Headers({ origin: 'https://devfathom.test' }),
-    url: 'https://devfathom.test/api/pharmacy/sop/evidence',
-  } as Request;
+  return new Request('https://devfathom.test/api/pharmacy/sop/evidence', {
+    method: 'POST',
+    headers: { origin: 'https://devfathom.test' },
+    body: form,
+  });
 }
 
 function context(enabledModules: string[]) {

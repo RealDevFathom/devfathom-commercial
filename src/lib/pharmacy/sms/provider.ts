@@ -33,7 +33,7 @@ export interface SmsProvider {
   readonly name: 'mock' | 'disabled';
   send(input: { to: string; body: string }): Promise<SmsSendResult>;
   /** Verifies `sha256=<hex>` HMAC over the raw callback body. Fails closed. */
-  verifyWebhook(rawBody: string, signatureHeader: string | null): boolean;
+  verifyWebhook(rawBody: string | Uint8Array, signatureHeader: string | null): boolean;
   parseInbound(payload: unknown): SmsInboundMessage[];
 }
 
@@ -122,7 +122,7 @@ export class MockSmsProvider implements SmsProvider {
     return { providerMessageId: `mock-sms-${this.sequence}`, acceptedByProvider: false };
   }
 
-  verifyWebhook(rawBody: string, signatureHeader: string | null) {
+  verifyWebhook(rawBody: string | Uint8Array, signatureHeader: string | null) {
     return verifyMetaSignature(this.config.webhookSecret, rawBody, signatureHeader);
   }
 

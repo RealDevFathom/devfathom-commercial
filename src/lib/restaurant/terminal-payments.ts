@@ -37,7 +37,7 @@ export const TERMINAL_SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
  */
 export function verifyTerminalSignature(
   source: string,
-  rawBody: string,
+  rawBody: string | Uint8Array,
   signature: string | null,
   timestamp: string | null,
   now: number = Date.now()
@@ -47,8 +47,10 @@ export function verifyTerminalSignature(
   const issuedMs = Number(timestamp) * 1000;
   if (Math.abs(now - issuedMs) > TERMINAL_SIGNATURE_WINDOW_MS) return 'FAILED';
   const encoded = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+  if (!/^[0-9a-f]{64}$/i.test(encoded)) return 'FAILED';
   const expected = createHmac('sha256', secret)
-    .update(`${timestamp}.${source}.${rawBody}`)
+    .update(`${timestamp}.${source}.`)
+    .update(rawBody)
     .digest();
   const actual = Buffer.from(encoded, 'hex');
   if (expected.length !== actual.length) return 'FAILED';

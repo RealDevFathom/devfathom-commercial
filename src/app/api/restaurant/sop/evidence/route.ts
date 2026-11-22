@@ -1,3 +1,6 @@
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import { requireSopActor } from '@/lib/restaurant/sop-actor';
 
 import crypto from 'node:crypto';
@@ -78,7 +81,7 @@ function destination(request: Request, form: FormData, notice: string, kind: 'su
   return url;
 }
 
-export async function POST(request: Request) {
+export const POST = uploadPost(async (request, readUploadForm) => {
   const origin = request.headers.get('origin');
   const fetchSite = request.headers.get('sec-fetch-site');
   let sameOrigin = false;
@@ -94,9 +97,31 @@ export async function POST(request: Request) {
     return new Response('Forbidden', { status: 403 });
   }
 
+  let actor: Awaited<ReturnType<typeof resolveTenantActor>>;
+  try {
+    actor = await resolveTenantActor({ request });
+  } catch (error) {
+    warnEvidenceCaptureFailure('context', error);
+    return (
+      responseForPasswordChange(error) ??
+      NextResponse.redirect(
+        destination(
+          request,
+          new FormData(),
+          'Proof capture failed. Check the file and try again.',
+          'error'
+        ),
+        303
+      )
+    );
+  }
+  if (!actor?.session.user?.id) return new Response('Sign in to capture proof.', { status: 401 });
   let form: FormData;
   try {
-    form = await request.formData();
+    const result = await readUploadForm(actor.session.user.id, 'text');
+    if (result instanceof Response) return result;
+    if (!result) return new Response(UPLOAD_SIZE_MESSAGE, { status: 413 });
+    form = result;
   } catch {
     return new Response('Invalid multipart form.', { status: 400 });
   }
@@ -106,6 +131,12 @@ export async function POST(request: Request) {
   let stage: EvidenceCaptureStage = 'file_validation';
   try {
     const file = form.get('file');
+    if (file && typeof file === 'object' && file.size > MAX_ATTACHMENT_BYTES) {
+      return NextResponse.redirect(
+        destination(request, form, `Proof capture failed. ${UPLOAD_SIZE_MESSAGE}`, 'error'),
+        303
+      );
+    }
     const purpose = String(form.get('evidencePurpose') ?? '').trim();
     const occurrenceId = String(form.get('occurrenceId') ?? '').trim();
     const occurrenceStepId = String(form.get('occurrenceStepId') ?? '').trim();
@@ -118,7 +149,12 @@ export async function POST(request: Request) {
     }
 
     stage = 'context';
-    const ctx = await createTRPCContext({ req: request });
+    const ctx = await createTRPCContext({
+      req: request,
+      session: actor.session,
+      organization: actor.organization,
+      support: actor.support,
+    });
     organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId ?? null;
     if (!organizationId || !ctx.session?.user) throw new Error('Workspace not found.');
     stage = 'authorization';
@@ -203,4 +239,13 @@ export async function POST(request: Request) {
       303
     );
   }
-}
+});
+
+export {
+  uploadMethodResponse as GET,
+  uploadMethodResponse as HEAD,
+  uploadMethodResponse as PUT,
+  uploadMethodResponse as PATCH,
+  uploadMethodResponse as DELETE,
+  uploadMethodResponse as OPTIONS,
+} from '@/lib/uploads/multipart-request';

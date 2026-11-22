@@ -9893,6 +9893,7 @@ model RestaurantWebhookInbox {
   externalEventId    String
   eventType          String?
   payload            Json                                @default("{}")
+  providerHmacVerified Boolean                          @default(false)
   verificationStatus RestaurantWebhookVerificationStatus @default(PENDING)
   status             RestaurantWebhookInboxStatus        @default(PENDING)
   attempts           Int                                 @default(0)
