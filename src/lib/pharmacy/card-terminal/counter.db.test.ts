@@ -1107,9 +1107,9 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         data: [actorId, managerId].map((userId) => ({ userId, branchId: nonPostingBranch })),
       })
     );
-    async function declineUncharged(slipRef: string) {
-      const saleId = await openSale(nonPostingBranch);
-      const testScope = scopeOf(nonPostingBranch);
+    async function declineUncharged(branchId: string, slipRef: string) {
+      const saleId = await openSale(branchId);
+      const testScope = scopeOf(branchId);
       const { store } = depsFor(gatedTerminal());
       const { attempt } = await store.create(testScope, {
         ...chargeInput(saleId),
@@ -1127,7 +1127,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         organizationId,
         (db) =>
           counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).attempt({
-            branchId: nonPostingBranch,
+            branchId,
             saleId,
           }),
         { userId: managerId }
@@ -1137,7 +1137,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
           organizationId,
           (db) =>
             counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
-              branchId: nonPostingBranch,
+              branchId,
               attemptKey: attempt.attemptKey,
               outcome: 'DECLINED',
               slipRef,
@@ -1154,10 +1154,15 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       ).toMatchObject({ kind: 'DECLINED', journalId: null, remainingMinor: 0 });
       return read?.reviewAccess;
     }
-    expect(await declineUncharged('NO-CHARGE-A')).toMatchObject({
+    expect(await declineUncharged(nonPostingBranch, 'NO-CHARGE-A')).toMatchObject({
       mayResolve: true,
       mayPostRefund: false,
     });
+    await expect(
+      tenant((db) =>
+        settlement.cutPharmacyDailyClose(db, scopeOf(nonPostingBranch), { businessDate })
+      )
+    ).resolves.toMatchObject({ branchId: nonPostingBranch, sequence: 1 });
     await tenant((db) =>
       db.userPermissionOverride.create({
         data: {
@@ -1190,15 +1195,10 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         },
       })
     );
-    expect(await declineUncharged('NO-CHARGE-B')).toMatchObject({
+    expect(await declineUncharged(branchMain, 'NO-CHARGE-B')).toMatchObject({
       mayResolve: true,
       mayPostRefund: true,
     });
-    await expect(
-      tenant((db) =>
-        settlement.cutPharmacyDailyClose(db, scopeOf(nonPostingBranch), { businessDate })
-      )
-    ).resolves.toMatchObject({ branchId: nonPostingBranch, sequence: 1 });
     // The other manager resolves it with their own PIN.
     await expect(
       withTenantDb(

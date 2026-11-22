@@ -165,6 +165,7 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
   it('allows booking a provider obligation when the stored tender is a card and the manager reauthenticates', async () => {
     const f = fixture([
       ...ROLES.manager!,
+      { capability: 'finance:read', effect: 'ALLOW' },
       { capability: 'finance:manage', effect: 'ALLOW' },
       { capability: 'admin:access', effect: 'ALLOW' },
     ]);
@@ -198,6 +199,26 @@ describe('DEV-647 refunds need a manager or owner PIN', () => {
     });
     expect(refundPharmacyTender).not.toHaveBeenCalled();
   });
+  it.each(['finance:read', 'finance:manage'])(
+    'refuses a terminal posting with only %s and accounts administration',
+    async (capability) => {
+      const f = fixture([
+        ...ROLES.manager!,
+        { capability, effect: 'ALLOW' },
+        { capability: 'admin:access', effect: 'ALLOW' },
+      ]);
+      f.db.pharmacyTender.findFirst.mockResolvedValue({
+        id: 'tender-a',
+        type: 'CARD',
+        provider: 'FAKE_TERMINAL',
+      });
+      await expect(f.caller.refundTender({ ...settlement, managerPin: PIN })).rejects.toMatchObject(
+        { code: 'FORBIDDEN' }
+      );
+      expect(refundPharmacyTender).not.toHaveBeenCalled();
+    }
+  );
+
   it.each(['cashier', 'pharmacist'])('refuses a %s before any PIN or money work', async (role) => {
     const f = fixture(ROLES[role]!);
     await expect(f.caller.refundTender({ ...settlement, managerPin: PIN })).rejects.toMatchObject({
