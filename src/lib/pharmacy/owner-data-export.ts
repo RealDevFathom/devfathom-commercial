@@ -931,7 +931,11 @@ export function ownerDataExportSources(
       )) {
         // Names resolve exactly as the register screen does: staff profile first.
         const personIds = [
-          ...new Set(page.flatMap((entry) => [entry.recordedByUserId, entry.witnessedByUserId])),
+          ...new Set(
+            page
+              .flatMap((entry) => [entry.recordedByUserId, entry.witnessedByUserId])
+              .filter((id): id is string => id !== null)
+          ),
         ];
         const [users, staff] = await Promise.all([
           db.user.findMany({
@@ -977,7 +981,7 @@ export function ownerDataExportSources(
             corrects_serial: entry.correctsEntry?.serial,
             correction_reason: entry.correctionReason,
             recorded_by: personName(entry.recordedByUserId),
-            witnessed_by: personName(entry.witnessedByUserId),
+            witnessed_by: entry.witnessedByUserId ? personName(entry.witnessedByUserId) : null,
           };
         });
       }

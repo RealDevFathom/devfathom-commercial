@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { authenticateApiRequest } from '@/lib/api-auth';
+import { authenticateApiRequest, auditedApiError } from '@/lib/api-auth';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { recordRestAudit } from '@/server/audit';
 
@@ -20,7 +20,12 @@ export async function GET(request: Request) {
   // REST-02: this route bypasses withApiAuth, so record the audit manually —
   // reads of the full API map (and 401 attempts) must leave an audit trail.
   const start = Date.now();
-  const auth = await authenticateApiRequest(request);
+  let auth;
+  try {
+    auth = await authenticateApiRequest(request);
+  } catch (err) {
+    return auditedApiError(request, 'spec:read', start, null, err);
+  }
   if (auth instanceof NextResponse) {
     recordRestAudit({
       request,
@@ -248,7 +253,7 @@ Create a project. Auto-creates a default Kanban board with columns: Backlog, To 
 Get project with boards, milestones, and members.
 
 - **Scope:** \`projects:read\`
-- **Response:** \`{ data: Project }\` with included \`client\`, \`members\`, \`boards\`, \`milestones\`
+- **Response:** \`{ data: Project }\` with \`members\`, \`boards\` and \`milestones\`. A linked \`client\` contains only \`{ id, name }\`.
 
 ### \`DELETE /projects/:id\`
 Delete a project and all its boards/tasks (cascades).
@@ -270,7 +275,7 @@ Get a board with all columns, tasks, labels, and column default assignees.
 List all clients.
 
 - **Scope:** \`clients:read\`
-- **Response:** \`{ data: Client[] }\` with primary contact
+- **Response:** \`{ data: Client[] }\` with contacts. \`_count.projects\` requires \`projects:read\` and the Projects module. \`_count.invoices\` requires \`finance:read\` and the Finance module.
 
 ### \`POST /clients\`
 Create a client.
@@ -290,7 +295,7 @@ Create a client.
 - **Side effects:** logs \`client_created\` activity
 
 ### \`GET /clients/:id\`
-Get client with contacts, projects, invoices, documents.
+Get the client with contacts. The \`projects\` field requires \`projects:read\` and the Projects module. The \`invoices\` field requires \`finance:read\` and the Finance module.
 
 - **Scope:** \`clients:read\`
 
@@ -396,6 +401,7 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 
 ### \`GET /invoices/:id\` / \`PATCH /invoices/:id\`
 Get or update invoice status. \`finance:read\` / \`finance:write\`.
+GET returns the linked client as \`{ id, name }\`. With \`clients:read\` and the Clients module it returns the full client with contacts.
 PATCH body: \`{ "status": "DRAFT | SENT | OVERDUE | CANCELLED" }\`.
 The PATCH endpoint enforces valid status transitions and logs \`invoice_sent\` activity. To mark an
 invoice PAID, record its payment through the mark-paid workflow instead.

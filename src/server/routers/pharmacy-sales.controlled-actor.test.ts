@@ -21,6 +21,7 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   annotateAudit: vi.fn(),
+  recordAudit: vi.fn(),
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
@@ -45,7 +46,7 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
 
 import { addSaleLine } from '@/lib/pharmacy/sales';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
-import { annotateAudit } from '@/server/audit';
+import { annotateAudit, recordAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 
@@ -481,6 +482,42 @@ describe('pharmacySales.addLine controlled actor', () => {
       message: 'DAY_CLOSED',
     });
     expect(verifyOperatorCredential).toHaveBeenCalledOnce();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('requires a usable saved address for a witnessed emergency supply', async () => {
+    const { caller, db, register, consent } = emergencyCallerFor(null);
+    consent.mockResolvedValue({ granted: true, revokedAt: null });
+    const findPatient = vi
+      .fn()
+      .mockResolvedValueOnce({ cnic: '00000-0000000-0' })
+      .mockResolvedValueOnce({ address: '  ' });
+    Object.assign(db, { pharmacyPatient: { findFirst: findPatient } });
+
+    await expect(
+      caller.addLine({
+        ...line,
+        controlledAuthorization: {
+          ...line.controlledAuthorization,
+          patientAddress: { useAddressOnFile: true },
+        },
+      })
+    ).resolves.toMatchObject({ blocked: expect.stringContaining('Enter the patient address') });
+    expect(findPatient).toHaveBeenNthCalledWith(2, {
+      where: { id: line.controlledAuthorization.patientId, organizationId: 'org-1' },
+      select: { address: true },
+    });
+    expect(consent.mock.invocationCallOrder[0]).toBeLessThan(
+      findPatient.mock.invocationCallOrder[1]!
+    );
+    expect(recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'pharmacy.patient.controlledAddress.read',
+        targetId: line.controlledAuthorization.patientId,
+      }),
+      db
+    );
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });

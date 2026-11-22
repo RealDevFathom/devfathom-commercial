@@ -84,7 +84,8 @@ const POLL_DELAYS = [5_000, 10_000, 20_000, 30_000] as const;
 class RequestError extends Error {
   constructor(
     readonly status: number,
-    message: string
+    message: string,
+    readonly terminalAccessDenied = false
   ) {
     super(message);
   }
@@ -110,7 +111,12 @@ async function request<T>(path: string, init: RequestInit): Promise<T> {
     signal: AbortSignal.timeout(10_000),
   });
   const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new RequestError(response.status, messageFrom(body));
+  if (!response.ok)
+    throw new RequestError(
+      response.status,
+      messageFrom(body),
+      response.headers.get('X-Terminal-Access') === 'denied'
+    );
   return body as T;
 }
 
@@ -163,10 +169,6 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
     setNotice(message ? { tone: 'danger', message } : null);
   }, []);
 
-  const deliveryAuthorizationFailure = useCallback(() => {
-    disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
-  }, [disconnect]);
-
   const loadQueue = useCallback(
     async (activeRuntime: Runtime, sinceCursor?: number) => {
       if (queueFlight.current) return queueFlight.current;
@@ -186,8 +188,11 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
           return true;
         } catch (error) {
           if (requestEpoch !== epoch.current) return false;
-          if (error instanceof RequestError && (error.status === 401 || error.status === 403)) {
-            disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
+          if (
+            error instanceof RequestError &&
+            (error.status === 401 || error.terminalAccessDenied)
+          ) {
+            disconnect(error.message);
             return false;
           }
           setQueueError(
@@ -317,7 +322,8 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
       );
       setOperators(data.operators);
       setOperatorsState('ready');
-    } catch {
+    } catch (error) {
+      if (error instanceof RequestError) setNotice({ tone: 'danger', message: error.message });
       setOperators([]);
       setOperatorsState('error');
     } finally {
@@ -365,8 +371,8 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
       if (error instanceof RequestError && error.status < 500) {
         idempotencyKeys.current.delete(intent);
       }
-      if (error instanceof RequestError && (error.status === 401 || error.status === 403)) {
-        disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
+      if (error instanceof RequestError && (error.status === 401 || error.terminalAccessDenied)) {
+        disconnect(error.message);
       } else {
         setNotice({
           tone: error instanceof RequestError ? 'danger' : 'warning',
@@ -403,8 +409,8 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
     } catch (error) {
       if (error instanceof RequestError && error.status < 500)
         idempotencyKeys.current.delete(intent);
-      if (error instanceof RequestError && (error.status === 401 || error.status === 403)) {
-        disconnect('Device authorization failed. Reconnect with valid KDS credentials.');
+      if (error instanceof RequestError && (error.status === 401 || error.terminalAccessDenied)) {
+        disconnect(error.message);
       } else {
         setNotice({
           tone: error instanceof RequestError ? 'danger' : 'warning',
@@ -611,7 +617,7 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
         <DeliveryBoard
           sessionToken={runtime.sessionToken}
           operatorStaffProfileId={runtime.operatorStaffProfileId}
-          onAuthorizationFailure={deliveryAuthorizationFailure}
+          onAuthorizationFailure={disconnect}
         />
 
         {loading ? (

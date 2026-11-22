@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { withApiAuth, hasScope } from '@/lib/api-auth';
+import { withApiAuth, canIncludeAdminResource } from '@/lib/api-auth';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
@@ -15,13 +15,22 @@ export const GET = withApiAuth('clients:read', async (ctx, request) => {
   const url = new URL(request.url);
   const limitParam = url.searchParams.get('limit');
   const limit = limitParam ? Math.min(Math.max(parseInt(limitParam, 10) || 1, 1), 1000) : undefined;
-  // REST-01: only surface the invoice count to tokens that also hold finance:read.
-  const includeFinance = hasScope(ctx, 'finance:read');
+  const includeProjects = canIncludeAdminResource(ctx, 'projects:read');
+  const includeFinance = canIncludeAdminResource(ctx, 'finance:read');
   const clients = await ctx.db.client.findMany({
     take: limit,
     include: {
       contacts: true,
-      _count: { select: { projects: true, ...(includeFinance ? { invoices: true } : {}) } },
+      ...(includeProjects || includeFinance
+        ? {
+            _count: {
+              select: {
+                ...(includeProjects ? { projects: true } : {}),
+                ...(includeFinance ? { invoices: true } : {}),
+              },
+            },
+          }
+        : {}),
     },
     orderBy: { name: 'asc' },
   });

@@ -1,3 +1,6 @@
+import { isSolePharmacist } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { approvalSecretKindFor } from '@/lib/approval-authenticator';
+import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { FollowUpQueue } from './follow-up-queue';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
@@ -171,14 +174,19 @@ export default async function PharmacyReturnsPage({
   }
 
   const branchId = scope.branch.id;
+  let legacy: Awaited<ReturnType<typeof caller.legacySupplierDispatches>>;
   let returns: PurchaseReturnDetail[];
   let lots: Awaited<ReturnType<typeof caller.returnableLots>>;
   let credits: Awaited<ReturnType<typeof caller.supplierCredits>>;
   try {
-    [returns, lots, credits] = await Promise.all([
+    [returns, lots, credits, legacy] = await Promise.all([
       caller.purchaseReturns({ branchId }),
       caller.returnableLots({ branchId }),
       caller.supplierCredits({ branchId }),
+      caller.legacySupplierDispatches({
+        branchId,
+        after: param(query, 'afterLegacy') || undefined,
+      }),
     ]);
   } catch {
     return (
@@ -191,8 +199,71 @@ export default async function PharmacyReturnsPage({
     );
   }
 
-  const selected = returns.find((row) => row.id === param(query, 'return')) ?? null;
+  const lateLine = legacy?.rows.find((line) => line.lineId === param(query, 'legacyLine'));
+  const selected = !lateLine
+    ? (returns.find((row) => row.id === param(query, 'return')) ?? null)
+    : null;
+  const dispatchWitness =
+    selected?.status === 'SUBMITTED' &&
+    selected.lines.some((line) => line.lot.batch.medicine.controlled);
 
+  const needsWitness = dispatchWitness || Boolean(lateLine);
+  const credentialKind = needsWitness
+    ? await approvalSecretKindFor(ctx.db, ctx.entitlements.organizationId)
+    : 'PIN';
+  let selfApproval: 'late' | 'solo' | null = lateLine ? 'late' : null;
+  let witnesses: { id: string; name: string }[] = [];
+  let witnessHint = 'A different pharmacist must approve this dispatch.';
+  if (needsWitness) {
+    const orgId = ctx.entitlements.organizationId;
+    const userId = ctx.session.user.id;
+    try {
+      if (lateLine) {
+        // The historical list is owner-only. This credential identifies its recorder.
+        const ownerProfiles = await ctx.db.restaurantStaffProfile.findMany({
+          where: {
+            organizationId: orgId,
+            userId,
+            status: 'ACTIVE',
+            user: { organizationId: orgId, status: 'ACTIVE' },
+            credentials: {
+              some: {
+                type: 'PIN',
+                revokedAt: null,
+                deviceId: null,
+                OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }],
+              },
+            },
+          },
+          select: { id: true, displayName: true },
+          orderBy: { id: 'asc' },
+        });
+        witnesses = ownerProfiles.map((profile) => ({ id: profile.id, name: profile.displayName }));
+      } else if (
+        await can(subjectFromSession(ctx.session.user), 'pharmacy:dispense', undefined, {
+          db: ctx.db,
+        })
+      ) {
+        witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId);
+        if (!witnesses.length && (await isSolePharmacist(ctx.db, orgId, userId))) {
+          selfApproval = 'solo';
+          witnesses = await listControlledPinWitnesses(ctx.db, orgId, userId, userId);
+        }
+        if (!witnesses.length)
+          witnessHint = 'No eligible independent pharmacist is available to witness this dispatch.';
+      } else {
+        witnessHint = 'A pharmacist with dispensing access must dispatch controlled stock.';
+      }
+      if (selfApproval)
+        witnessHint = witnesses.length
+          ? 'Confirm with your own credential.'
+          : 'Your approval credential is unavailable. Check your approval settings.';
+    } catch {
+      witnessHint =
+        'Approval credentials could not be loaded. Reload this return before continuing.';
+    }
+  }
+  const witnessLabel = `${selfApproval ? 'Your' : 'Witness'} ${credentialKind === 'PIN' ? 'PIN' : 'approval code'}`;
   // The credit position across the branch, kept as two separately sourced
   // numbers rather than one that has been overwritten.
   const expectedMinor = returns
@@ -295,16 +366,31 @@ export default async function PharmacyReturnsPage({
           purchaseReturnId,
         });
         message = 'Return submitted. The quantity is reserved and can no longer be sold.';
-      } else if (action === 'dispatch') {
+      } else if (action === 'dispatch' || action === 'record-late') {
         await outcome.write(actionCaller.dispatchPurchaseReturn)({
           branchId: branch,
           purchaseReturnId,
+          controlledWitness: optionalField(form, 'witnessStaffProfileId')
+            ? {
+                staffProfileId: field(form, 'witnessStaffProfileId'),
+                pin: field(form, 'witnessPin'),
+              }
+            : undefined,
+          ...(optionalField(form, 'approvalReason')
+            ? { approvalReason: field(form, 'approvalReason') }
+            : {}),
+          ...(action === 'record-late'
+            ? { recordLateLineId: field(form, 'recordLateLineId') }
+            : {}),
           // The reservation is already unique per return, so the document's own
           // id is a stable idempotency key: a retried dispatch cannot post the
           // movements twice.
           idempotencyKey: `return-dispatch:${purchaseReturnId}`,
         });
-        message = 'Return dispatched. The stock has left and the reservation is released.';
+        message =
+          action === 'record-late'
+            ? 'Late register entry recorded for the original dispatch.'
+            : 'Return dispatched. The stock has left and the reservation is released.';
       } else if (action === 'debit') {
         await outcome.write(actionCaller.issueDebitNote)({
           branchId: branch,
@@ -393,6 +479,87 @@ export default async function PharmacyReturnsPage({
 
   return (
     <Frame assignedOnly={assignedOnly} branch={scope} notice={notice}>
+      {legacy && (
+        <SectionCard
+          title="Controlled stock sent back to a supplier before the register recorded returns"
+          titleLevel={2}
+        >
+          {legacy.rows.length === 0 ? (
+            <p>No unrecorded controlled supplier returns on this page.</p>
+          ) : (
+            <ul className="divide-y divide-border-subtle">
+              {legacy.rows.map((line) => (
+                <li key={line.lineId} className="space-y-2 py-3">
+                  <p className="text-sm text-text-body">
+                    Batch {line.batch ?? 'not recorded'} · {units(line.quantity)} · {line.supplier}
+                  </p>
+                  <p className="text-sm text-text-muted">
+                    Sent by {line.sender} on{' '}
+                    {dateTime(line.dispatchedAt, ctx.organization?.timezone)}
+                  </p>
+                  {lateLine?.lineId === line.lineId ? (
+                    <PurchasingActionForm
+                      operation={{ resource: 'return-line:' + line.lineId, action: 'record-late' }}
+                      action={advanceReturn}
+                      className="space-y-3"
+                    >
+                      <input type="hidden" name="branchId" value={branchId} />
+                      <input type="hidden" name="action" value="record-late" />
+                      <input type="hidden" name="purchaseReturnId" value={line.purchaseReturnId} />
+                      <input type="hidden" name="recordLateLineId" value={line.lineId} />
+                      <p className="text-sm text-text-body">
+                        This entry will be dated today and linked to the original dispatch. Stock
+                        has already moved.
+                      </p>
+                      <DispatchWitnessFields
+                        selfApproval={selfApproval}
+                        witnesses={witnesses}
+                        witnessLabel={witnessLabel}
+                        witnessHint={witnessHint}
+                        notice={notice}
+                      />
+                      <SubmitButton disabled={witnesses.length === 0}>
+                        Record late entry
+                      </SubmitButton>
+                    </PurchasingActionForm>
+                  ) : (
+                    <a
+                      className="inline-flex min-h-11 items-center text-sm underline"
+                      href={
+                        ROUTE +
+                        '?' +
+                        new URLSearchParams({
+                          branch: branchId,
+                          legacyLine: line.lineId,
+                          ...(param(query, 'afterLegacy')
+                            ? { afterLegacy: param(query, 'afterLegacy')! }
+                            : {}),
+                        })
+                      }
+                    >
+                      Review late entry
+                    </a>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+          {legacy.next && (
+            <a
+              className="text-sm underline"
+              href={
+                ROUTE +
+                '?branch=' +
+                encodeURIComponent(branchId) +
+                '&afterLegacy=' +
+                encodeURIComponent(legacy.next)
+              }
+            >
+              Next returns
+            </a>
+          )}
+        </SectionCard>
+      )}
       <div className="grid gap-6 sm:grid-cols-4">
         <Stat label="Expected credit" value={money(expectedMinor)} sub="Frozen at issue" />
         <Stat label="Received credit" value={money(receivedMinor)} sub="Allocated from suppliers" />
@@ -516,6 +683,10 @@ export default async function PharmacyReturnsPage({
               timeZone={ctx.organization?.timezone}
               onAdvance={advanceReturn}
               onAllocate={allocateCredit}
+              selfApproval={selfApproval}
+              witnesses={dispatchWitness ? witnesses : null}
+              witnessHint={witnessHint}
+              witnessLabel={witnessLabel}
               purchaseReturn={selected}
             />
           ) : (
@@ -788,7 +959,69 @@ function Frame({
   );
 }
 
+function DispatchWitnessFields({
+  selfApproval,
+  witnesses,
+  witnessLabel,
+  witnessHint,
+  notice,
+}: {
+  selfApproval: 'late' | 'solo' | null;
+  witnesses: { id: string; name: string }[];
+  witnessLabel: string;
+  witnessHint: string;
+  notice: Notice | null;
+}) {
+  return (
+    <div className="grid w-full gap-3 sm:grid-cols-2">
+      {selfApproval ? (
+        <>
+          <input type="hidden" name="witnessStaffProfileId" value={witnesses[0]?.id ?? ''} />
+          <p className="text-sm text-text-body">
+            {selfApproval === 'late' ? 'Recorded late, no witness' : 'No second person available'}
+          </p>
+          {!witnesses.length && <p className="text-sm text-text-muted">{witnessHint}</p>}
+          <TextAreaField
+            name="approvalReason"
+            label={
+              selfApproval === 'late'
+                ? 'Reason for recording late'
+                : 'Reason for sending without a second person'
+            }
+            notice={notice}
+            required
+          />
+        </>
+      ) : (
+        <SelectField
+          label="Dispatch witness"
+          name="witnessStaffProfileId"
+          notice={notice}
+          placeholder="Select a pharmacist"
+          emptyHint={witnessHint}
+          hint={witnessHint}
+          options={witnesses.map(({ id, name }) => ({ value: id, label: name }))}
+          required
+        />
+      )}
+      <TextField
+        label={witnessLabel}
+        name="witnessPin"
+        notice={notice}
+        type="password"
+        inputMode="numeric"
+        autoComplete="off"
+        required
+      />
+    </div>
+  );
+}
+
 function ReturnDetail({
+  selfApproval,
+  witnesses,
+  witnessHint,
+  witnessLabel,
   purchaseReturn,
   credits,
   branchId,
@@ -797,6 +1030,10 @@ function ReturnDetail({
   onAdvance,
   onAllocate,
 }: {
+  selfApproval: 'late' | 'solo' | null;
+  witnesses: { id: string; name: string }[] | null;
+  witnessHint: string;
+  witnessLabel: string;
   purchaseReturn: PurchaseReturnDetail;
   credits: {
     id: string;
@@ -960,7 +1197,16 @@ function ReturnDetail({
               <input name="branchId" type="hidden" value={branchId} />
               <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
               <input name="action" type="hidden" value="dispatch" />
-              <SubmitButton>Dispatch to supplier</SubmitButton>
+              {witnesses && (
+                <DispatchWitnessFields
+                  selfApproval={selfApproval}
+                  witnesses={witnesses}
+                  witnessLabel={witnessLabel}
+                  witnessHint={witnessHint}
+                  notice={notice}
+                />
+              )}
+              <SubmitButton disabled={witnesses?.length === 0}>Dispatch to supplier</SubmitButton>
             </PurchasingActionForm>
           )
         ) : null}

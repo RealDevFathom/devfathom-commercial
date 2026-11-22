@@ -1416,6 +1416,28 @@ describe('temperature steps take only their own storage zone', () => {
 });
 
 describe('describePharmacySopRecords', () => {
+  it('names an outgoing supplier return in inspection evidence', async () => {
+    const { db, tables } = fixture();
+    tables.registerEntries.push({
+      id: 'supplier-return',
+      organizationId: ORG,
+      branchId: 'pb_main',
+      serial: 3,
+      entryKind: 'RETURN_TO_SUPPLIER',
+      batchNumber: 'B-7',
+      runningBalance: 0,
+      createdAt: at('2026-11-04T09:00:00Z'),
+      medicine: { productName: 'Controlled medicine' },
+    });
+    const details = await describePharmacySopRecords(db, {
+      organizationId: ORG,
+      pharmacyBranchId: 'pb_main',
+      timezone: 'Asia/Karachi',
+      records: [{ recordType: 'CONTROLLED_REGISTER_ENTRY', recordId: 'supplier-return' }],
+    });
+    expect([...details.values()][0]).toMatchObject({ statusLabel: 'Returned to supplier' });
+  });
+
   it('describes records in plain words, reading only this tenant and branch', async () => {
     const { db, tables } = fixture();
     tables.temperatureLogs.push({

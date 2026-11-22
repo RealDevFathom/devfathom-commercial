@@ -57,7 +57,6 @@ export type CounterPatientPanel = {
   phone: string | null;
   /** True when a current DISPENSING consent is on file for this patient. */
   dispensingConsent: boolean;
-  address: string | null;
   prescriptions: CounterPrescription[];
 };
 
@@ -115,7 +114,6 @@ export async function readCounterPatientPanel(
       displayName: true,
       cnic: true,
       phone: true,
-      address: true,
       dateOfBirth: true,
       consents: {
         where: { purpose: 'DISPENSING' },
@@ -174,7 +172,6 @@ export async function readCounterPatientPanel(
     displayName: masked.displayName,
     cnic: masked.cnic,
     phone: masked.phone,
-    address: patient.address,
     dispensingConsent: Boolean(consent?.granted) && consent?.revokedAt === null,
     prescriptions: patient.prescriptions.map((prescription) => ({
       prescriptionId: prescription.id,

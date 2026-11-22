@@ -1,4 +1,5 @@
 // @vitest-environment node
+import https from 'node:https';
 import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -47,6 +48,7 @@ import { OwnerDataExportTimeLimitError } from '@/lib/pharmacy/owner-data-export'
 import { processPlatformJobs } from './jobs';
 
 const db = {
+  $executeRaw: vi.fn().mockResolvedValue(0),
   $queryRaw: m.query,
   $executeRawUnsafe: m.execute,
   platformJob: {
@@ -60,7 +62,8 @@ const db = {
   organizationLifecycleEvent: { create: m.lifecycle },
   platformAuditLog: { create: m.platformAudit, createMany: m.supportAudits },
   organizationDeployment: { updateMany: m.deployment, upsert: vi.fn() },
-  platformSupportSession: { updateManyAndReturn: m.support },
+  organizationIdentityConnection: { findFirst: vi.fn(), update: vi.fn() },
+  platformSupportSession: { updateMany: m.support, updateManyAndReturn: m.support },
   pharmacyCustomer: { findMany: m.consent },
   pharmacyWhatsAppConsentArchive: { createMany: m.archiveCreate, deleteMany: m.archiveDelete },
 };
@@ -138,6 +141,40 @@ describe('composed platform worker boundaries', () => {
       where: { expiresAt: { lte: now } },
     });
     expect(m.archiveCreate).not.toHaveBeenCalled();
+  });
+
+  it('ends SSO cleanup on a partial batch and caps work per pass', async () => {
+    db.$executeRaw.mockResolvedValueOnce(500).mockResolvedValueOnce(2);
+    await processPlatformJobs();
+    expect(db.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(db.$executeRaw.mock.calls[0]?.[0].join('')).toContain(
+      'DELETE FROM "organization_sso_states"'
+    );
+    db.$executeRaw.mockClear().mockResolvedValue(500);
+    await processPlatformJobs();
+    expect(db.$executeRaw).toHaveBeenCalledTimes(16);
+  });
+
+  it('revalidates a stored discovery destination in the identity worker', async () => {
+    using fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected fetch'));
+    using transport = vi.spyOn(https, 'request').mockImplementation(() => {
+      throw new Error('Unexpected HTTPS request');
+    });
+    db.organizationIdentityConnection.findFirst.mockResolvedValue({
+      id: 'fixture',
+      protocol: 'OIDC',
+      clientId: 'client',
+      issuer: 'https://idp.example',
+      discoveryUrl: 'https://192.0.2.1/doc',
+    });
+    queue(job('SYNC_IDENTITY', { payload: { connectionId: 'fixture' } }));
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 0, retried: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(db.organizationIdentityConnection.update).toHaveBeenCalledWith({
+      where: { id: 'fixture' },
+      data: expect.objectContaining({ status: 'ERROR' }),
+    });
   });
 
   const purgeScans = () =>
