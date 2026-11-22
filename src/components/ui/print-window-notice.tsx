@@ -6,7 +6,7 @@ import { Printer } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   focusPrintWindows,
-  getOpenPrintWindowCount,
+  getConfirmedPrintWindowCount,
   subscribePrintWindows,
 } from '@/lib/browser-print/print-window';
 import { cn } from '@/lib/utils';
@@ -20,7 +20,11 @@ const noPrintWindows = () => 0;
  * announce the line when it appears.
  */
 export function PrintWindowNotice({ className }: { className?: string }) {
-  const open = useSyncExternalStore(subscribePrintWindows, getOpenPrintWindowCount, noPrintWindows);
+  const open = useSyncExternalStore(
+    subscribePrintWindows,
+    getConfirmedPrintWindowCount,
+    noPrintWindows
+  );
   return (
     <div role="status" className="print:hidden">
       {open > 0 ? (

@@ -1,7 +1,7 @@
 'use client';
 
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
-
+import { formatWorkspaceDate } from '@/lib/timezone';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -23,6 +23,7 @@ type PortalRequest = {
 export type PortalHomeData = {
   customer: { displayName: string };
   branchName: string;
+  timeZone?: string | null;
   currency: string;
   loyaltyPoints: number;
   receipts: Array<{
@@ -60,11 +61,8 @@ function money(minor: number, currency: string) {
   return new Intl.NumberFormat('en-PK', { style: 'currency', currency }).format(minor / 100);
 }
 
-function day(value: string | null) {
-  if (!value) return '';
-  return new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium', timeZone: 'Asia/Karachi' }).format(
-    new Date(value)
-  );
+function day(value: string | null, timeZone?: string | null) {
+  return value ? formatWorkspaceDate(value, timeZone) : '';
 }
 
 function majorToMinor(value: string): number | null {
@@ -302,7 +300,9 @@ export function PortalHome() {
               <li key={receipt.saleId} className="flex flex-wrap items-center gap-3 py-3">
                 <div className="min-w-0 flex-1">
                   <p className="font-mono text-sm text-text-strong">{receipt.receiptNumber}</p>
-                  <p className="text-xs text-text-muted">{day(receipt.completedAt)}</p>
+                  <p className="text-xs text-text-muted">
+                    {day(receipt.completedAt, home.timeZone)}
+                  </p>
                 </div>
                 <span className="font-mono text-sm tabular-nums text-text-strong">
                   {money(receipt.totalMinor, home.currency)}
@@ -445,7 +445,7 @@ export function PortalHome() {
                       ? ` · ${money(request.amountMinor, home.currency)}`
                       : ''}
                   </p>
-                  <p className="text-xs text-text-muted">{day(request.createdAt)}</p>
+                  <p className="text-xs text-text-muted">{day(request.createdAt, home.timeZone)}</p>
                   {request.decisionNote ? (
                     <p className="text-xs text-text-muted">{request.decisionNote}</p>
                   ) : null}

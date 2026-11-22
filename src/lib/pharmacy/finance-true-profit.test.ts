@@ -145,6 +145,18 @@ describe('DEV-77 — true profit ledger read', () => {
     );
   });
 
+  it('uses each workspace clock to group the hour containing 00:30 Karachi', () => {
+    const at = new Date('2026-11-02T00:30:00+05:00');
+    for (const zone of ['Asia/Karachi', 'UTC']) {
+      const query = trueProfitFactsQuery(scope, {
+        from: at,
+        to: new Date(at.getTime() + 3600000),
+        timeZone: zone,
+      });
+      expect(query.values).toContain(zone);
+    }
+  });
+
   it('buckets hours on the Asia/Karachi clock and attributes staff to the sale', () => {
     const facts = trueProfitFactsQuery(scope, period);
     expect(TRUE_PROFIT_TIMEZONE).toBe('Asia/Karachi');

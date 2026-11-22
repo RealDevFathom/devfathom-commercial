@@ -427,3 +427,14 @@ describe('apAgingCsv', () => {
     expect(lines[1]).toContain('"76","DAYS_61_90","PKR","100000","0","100000"');
   });
 });
+
+it('keeps invoice date labels distinct from settlement instants on either side of UTC', () => {
+  const at = new Date('2026-11-02T00:30:00+05:00');
+  const row = invoice({ invoiceDate: new Date('2026-11-02'), dueDate: new Date('2026-11-02') });
+  expect(
+    computeApAging([row], apAgingWindow('2026-11-02', at, 'Asia/Karachi'), true).rows
+  ).toHaveLength(1);
+  expect(
+    computeApAging([row], apAgingWindow('2026-11-01', at, 'America/New_York'), true).rows
+  ).toHaveLength(0);
+});

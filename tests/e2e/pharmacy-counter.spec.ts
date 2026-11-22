@@ -965,7 +965,10 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
  */
 async function holdPrintDialogsOpen(page: Page) {
   await page.context().addInitScript(() => {
-    window.print = () => {};
+    window.print = () => {
+      const root = document.documentElement;
+      root.dataset.printRequests = String(Number(root.dataset.printRequests ?? 0) + 1);
+    };
   });
 }
 
@@ -1610,6 +1613,7 @@ test('Counter v2 — Enter adds one unit; quantity, unit and remove on the bill 
 test('Counter v2 — cash with change, the paid bill and its receipt, and a print window that leaves the counter working', async ({
   page,
 }) => {
+  test.setTimeout(test.info().timeout + 30_000);
   const otc = PHARMACY_E2E.medicines.otc;
   await holdPrintDialogsOpen(page);
   await openCounter(page);
@@ -1645,11 +1649,16 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
   const print = receiptSheet.getByRole('button', { name: 'Print receipt', exact: true });
   await qaShots(page, 'receipt', { focus: print });
 
+  const notice = page.getByText(/Finish or cancel printing in the print window/);
+
   // DEV-973: the print window is its own browsing context. While its print dialog is open
   // (held open here), the counter keeps working: the next search runs at once.
   const popupPromise = page.waitForEvent('popup');
   await pressControl(print);
   const popup = await popupPromise;
+  await expect(popup.locator('html')).toHaveAttribute('data-print-requests', '1');
+  await expect(notice).toBeVisible();
+  await expect(popup.locator('body')).not.toContainText('Reprint — not a new sale');
   await expect(popup.locator('body')).toContainText(otc.name);
   await expect(popup.locator('body')).toContainText(receiptNumber);
   await page.keyboard.press('Escape');
@@ -1667,7 +1676,73 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
     timeout: 5_000,
   });
   expect(popup.isClosed()).toBe(false);
-  await popup.close();
+  const cancelled = popup.waitForEvent('close');
+  await popup.evaluate(() => window.dispatchEvent(new Event('afterprint')));
+  await cancelled;
+  await expect(notice).toHaveCount(0);
+  expect(page.context().pages()).toEqual([page]);
+
+  await page.keyboard.press('Alt+r');
+  await expect(receiptSheet).toBeVisible();
+  const blocked = receiptSheet.getByText('Allow pop-ups for this site, then retry Print receipt.', {
+    exact: true,
+  });
+  // Simulate a browser blocking the first reprint attempt. No
+  // document may be sent and the cashier must explicitly retry.
+  await page.evaluate(() => {
+    const open = window.open;
+    window.open = (...args) => {
+      if (!String(args[0]).startsWith('/pharmacy/counter/print-window.html#'))
+        return open.apply(window, args);
+      window.open = open;
+      return null;
+    };
+  });
+  await pressControl(print);
+  await expect(blocked).toBeVisible({ timeout: 2_000 });
+  await expect(print).toBeEnabled();
+  await expect(notice).toHaveCount(0);
+  expect(page.context().pages()).toEqual([page]);
+
+  const slowPrintPage = '**/pharmacy/counter/print-window.html';
+  await page.context().route(slowPrintPage, async (route) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 8_000));
+    await route.continue();
+  });
+
+  const reprintPromise = page.waitForEvent('popup');
+  await pressControl(print);
+  const busyPrint = receiptSheet.getByRole('button', { name: 'Printing receipt…' });
+  await expect(busyPrint).toBeVisible();
+  await expect(busyPrint).toHaveAttribute('aria-busy', 'true');
+  await expect(busyPrint).toBeDisabled();
+  await expect(notice).toHaveCount(0);
+  await page.keyboard.press('F10');
+  const reprint = await reprintPromise;
+  await page.context().unroute(slowPrintPage);
+  await expect(blocked).toBeHidden();
+  await expect(notice).toBeVisible();
+  await expect(reprint.locator('html')).toHaveAttribute('data-print-requests', '1');
+  expect(page.context().pages()).toHaveLength(2);
+  await expect(reprint.locator('body')).toContainText(receiptNumber);
+  await expect(reprint.locator('body')).toContainText('Reprint — not a new sale');
+  const close = reprint.getByRole('button', { name: 'Close', exact: true });
+  await expect(close).toBeEnabled();
+  await close.focus();
+  await expect(close).toBeFocused();
+  await Promise.all([
+    reprint.waitForEvent('close'),
+    reprint.keyboard.press('Enter').catch((error: unknown) => {
+      // The Close button can dismiss the window before Playwright receives the key command's reply.
+      if (
+        !reprint.isClosed() ||
+        !String(error).includes('Target page, context or browser has been closed')
+      )
+        throw error;
+    }),
+  ]);
+  await expect(notice).toHaveCount(0);
+  expect(page.context().pages()).toEqual([page]);
 });
 
 test('Counter v2 — a wallet not set up, a payment not confirmed, then cash plus JazzCash with payer and reference', async ({
@@ -1922,6 +1997,17 @@ test('Counter v2 — Enter on a controlled medicine opens the authorisation it a
   await qaShots(page, 'status-strip-375', { focus: strip, widths: [375], dir: QA3_DIR });
   await page.setViewportSize({ width: 1440, height: 900 });
   await expect(strip).not.toHaveAttribute('tabindex');
+  await expect
+    .poll(() =>
+      strip.evaluate((element) => {
+        const edge = element.getBoundingClientRect().right;
+        const lastPillEdge = Math.max(
+          ...Array.from(element.children, (child) => child.getBoundingClientRect().right)
+        );
+        return edge - lastPillEdge;
+      })
+    )
+    .toBeGreaterThanOrEqual(8);
 });
 
 test('Counter v2 — controlled medicine: patient, prescription or emergency supply, approving pharmacist; then the line is locked', async ({

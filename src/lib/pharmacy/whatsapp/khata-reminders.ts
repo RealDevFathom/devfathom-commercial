@@ -1,3 +1,4 @@
+import { pharmacyCalendarDay } from '../business-day';
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -152,7 +153,7 @@ export function planKhataReminder(
   return {
     due,
     dueDate: candidate.oldestOverdueAt
-      ? candidate.oldestOverdueAt.toISOString().slice(0, 10)
+      ? pharmacyCalendarDay(timeZone, candidate.oldestOverdueAt)
       : null,
     dedupeKey: `khata:${candidate.familyAccountId}:${period}`,
   };
@@ -354,7 +355,7 @@ export async function processDueWhatsAppKhataReminders(
       continue;
     }
 
-    let dedupeKey = plan.dedupeKey;
+    let { dedupeKey, dueDate } = plan;
     // The pre-DEV-316 weekly key, claimed with the new one (mixed-version rollout).
     let aliases: MessageLogAliases | null = null;
     const recipient = await withTenantDb<KhataRecipientResult | null>(
@@ -390,7 +391,7 @@ export async function processDueWhatsAppKhataReminders(
         if (isUtilityReminderQuietHour(reminderLocalHour(now, timeZone)))
           return { kind: 'quiet-hours' };
         // The weekly period follows this workspace's calendar, known only here.
-        dedupeKey = planKhataReminder(
+        ({ dedupeKey, dueDate } = planKhataReminder(
           {
             familyAccountId: account.familyAccountId,
             balanceMinor,
@@ -400,7 +401,7 @@ export async function processDueWhatsAppKhataReminders(
           options.minBalanceMinor ?? account.minBalanceMinor ?? DEFAULT_MIN_BALANCE_MINOR,
           account.cadenceDays,
           timeZone
-        ).dedupeKey;
+        ));
         const customer = await db.pharmacyCustomer.findFirst({
           where: { organizationId: account.organizationId, id: account.payerCustomerId },
           select: {
@@ -528,7 +529,7 @@ export async function processDueWhatsAppKhataReminders(
             patientId: customer.patientId,
             phoneLast4: phoneLast4(to),
             templateName: config.khataTemplates[language],
-            dueDate: plan.dueDate,
+            dueDate,
           },
           aliases
         );
@@ -570,7 +571,7 @@ export async function processDueWhatsAppKhataReminders(
             dueDate: details.dueDate,
             payTo: details.payTo,
           },
-          dueDate: plan.dueDate,
+          dueDate,
         },
         smsConfig,
         smsProvider,
@@ -604,7 +605,7 @@ export async function processDueWhatsAppKhataReminders(
         patientId: recipient.patientId,
         phoneLast4: phoneLast4(recipient.to),
         templateName: config.khataTemplates[recipient.language],
-        dueDate: plan.dueDate,
+        dueDate,
       },
       recipient.logId,
       () =>

@@ -1,4 +1,5 @@
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { formatWorkspaceDate, workspaceInstantFromInput } from '@/lib/timezone';
 import { browserUuid } from '@/lib/browser-uuid';
 import { FinancialStatements } from './financial-statements';
 import { Suspense } from 'react';
@@ -53,8 +54,6 @@ const label = (value: string) =>
     .replace(/^./, (c) => c.toUpperCase());
 const money = (minor: number) =>
   `PKR ${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2 })}`;
-const dated = (value: Date | string) =>
-  new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium' }).format(new Date(value));
 const destination = (branchId: string, notice: string, kind: 'success' | 'error' = 'success') =>
   `${route}?${new URLSearchParams({ branch: branchId, notice, kind })}`;
 
@@ -164,6 +163,10 @@ export default async function PharmacyFinancePage({
       const actionCtx = await tenantContext();
       if (!actionCtx?.session?.user || actionCtx.session.user.role !== 'ADMIN')
         throw new Error('Administrator access is required.');
+      const localNoon = (key: string) =>
+        new Date(
+          workspaceInstantFromInput(`${field(data, key)}T12:00`, actionCtx.organization?.timezone)
+        );
       const actionCaller = pharmacyFinanceRouter.createCaller(actionCtx);
       if (action === 'post') {
         const kind = field(data, 'transactionKind') as
@@ -180,15 +183,13 @@ export default async function PharmacyFinancePage({
           reference: field(data, 'reference'),
           kind,
           amountMinor: typedAmount(financeAmountMinor(field(data, 'amount'))),
-          occurredAt: new Date(`${field(data, 'occurredAt')}T12:00:00Z`),
+          occurredAt: localNoon('occurredAt'),
           idempotencyKey: browserUuid(),
           counterpartyName: field(data, 'counterpartyName') || undefined,
           memo: field(data, 'memo') || undefined,
           bankReference: field(data, 'bankReference') || undefined,
           chequeNumber: field(data, 'chequeNumber') || undefined,
-          chequeDueAt: field(data, 'chequeDueAt')
-            ? new Date(`${field(data, 'chequeDueAt')}T12:00:00Z`)
-            : undefined,
+          chequeDueAt: field(data, 'chequeDueAt') ? localNoon('chequeDueAt') : undefined,
           fundingAccount: field(data, 'fundingAccount') === 'CASH' ? 'CASH' : 'BANK',
           allocations: [],
         });
@@ -209,8 +210,8 @@ export default async function PharmacyFinancePage({
       if (action === 'close') {
         await actionCaller.closePeriod({
           branchId,
-          startsAt: new Date(`${field(data, 'startsAt')}T00:00:00Z`),
-          endsAt: new Date(`${field(data, 'endsAt')}T00:00:00Z`),
+          startsAt: field(data, 'startsAt'),
+          endsAt: field(data, 'endsAt'),
         });
         redirect(destination(branchId, 'Period closed. Posting into that range is now blocked.'));
       }
@@ -227,7 +228,7 @@ export default async function PharmacyFinancePage({
           branchId,
           statementRef: field(data, 'statementRef'),
           lineReference: field(data, 'lineReference'),
-          bookedAt: new Date(`${field(data, 'bookedAt')}T12:00:00Z`),
+          bookedAt: localNoon('bookedAt'),
           amountMinor: typedAmount(bankLineAmountMinor(field(data, 'amount'))),
           description: field(data, 'description'),
         });
@@ -273,10 +274,8 @@ export default async function PharmacyFinancePage({
         await actionCaller.publishTaxProfile({
           branchId,
           name: field(data, 'profileName'),
-          effectiveFrom: new Date(`${field(data, 'effectiveFrom')}T00:00:00Z`),
-          effectiveTo: field(data, 'effectiveTo')
-            ? new Date(`${field(data, 'effectiveTo')}T00:00:00Z`)
-            : undefined,
+          effectiveFrom: field(data, 'effectiveFrom'),
+          effectiveTo: field(data, 'effectiveTo') || undefined,
           approvalReference: field(data, 'approvalReference'),
           idempotencyKey: browserUuid(),
           rules: [
@@ -305,6 +304,7 @@ export default async function PharmacyFinancePage({
 
   const now = new Date();
   const timeZone = ctx.organization?.timezone;
+  const dated = (value: Date | string) => formatWorkspaceDate(value, timeZone);
   // DEV-958A: the branch's clock, the organisation's zone and the hour the branch's business day
   // ends at (midnight by default: 00:00–04:59 PKT is already the new day there, not in UTC).
   const clock = { timeZone, dayEnd: branch.businessDayEndsAtHistory };
