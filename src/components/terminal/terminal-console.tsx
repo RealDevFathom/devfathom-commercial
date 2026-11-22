@@ -47,6 +47,7 @@ type TerminalRuntime = {
 };
 
 type ApprovalEvidence = {
+  orderNumber: number;
   id: string;
   capability: string;
   actingStaffProfileId: string;
@@ -130,6 +131,70 @@ function transportHeaders(runtime: TerminalRuntime, json = false): HeadersInit {
   };
 }
 
+type ApprovalOrder = { id: string; businessDate: string; orderNumber: number };
+
+function ApprovalOrderField({
+  runtime,
+  selected,
+  onSelect,
+  disabled,
+}: {
+  runtime: TerminalRuntime;
+  selected: ApprovalOrder | null;
+  onSelect: (order: ApprovalOrder | null) => void;
+  disabled: boolean;
+}) {
+  const [orders, setOrders] = useState<ApprovalOrder[] | null>(null);
+  const [error, setError] = useState(false);
+  const { deviceSecret, sessionToken } = runtime;
+  useEffect(() => {
+    let cancelled = false;
+    terminalRequest<{ orders: ApprovalOrder[] }>('/api/restaurant/orders/open-orders', {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${deviceSecret}`, 'X-Terminal-Session': sessionToken },
+    })
+      .then((data) => {
+        if (!cancelled) setOrders(data.orders);
+      })
+      .catch(() => {
+        if (!cancelled) setError(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceSecret, sessionToken]);
+  return (
+    <div className="space-y-2">
+      <Label htmlFor="approval-order">Order to void</Label>
+      <StudioSelect
+        id="approval-order"
+        className="h-11 rounded-control"
+        value={selected?.id ?? ''}
+        disabled={disabled || !orders?.length}
+        required
+        onChange={(event) =>
+          onSelect(orders?.find((order) => order.id === event.target.value) ?? null)
+        }
+      >
+        <option value="" disabled>
+          {error
+            ? 'Orders unavailable. Reopen manager approval to retry.'
+            : !orders
+              ? 'Loading orders…'
+              : orders.length
+                ? 'Select an open order'
+                : 'No open orders for this branch'}
+        </option>
+        {orders?.map((order) => (
+          <option key={order.id} value={order.id}>
+            Order {order.orderNumber} · {order.businessDate}
+          </option>
+        ))}
+      </StudioSelect>
+    </div>
+  );
+}
+
 function noticeTone(kind: Notice['kind']): 'success' | 'warning' | 'danger' | 'neutral' {
   if (kind === 'success') return 'success';
   if (kind === 'locked' || kind === 'network') return 'warning';
@@ -195,7 +260,7 @@ export function TerminalConsole() {
   const [actionMode, setActionMode] = useState<'switch' | 'approval'>('switch');
   const [approvingId, setApprovingId] = useState('');
   const [approvingPin, setApprovingPin] = useState('');
-  const [capability, setCapability] = useState('');
+  const [approvalOrder, setApprovalOrder] = useState<ApprovalOrder | null>(null);
   const [reason, setReason] = useState('');
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const [approval, setApproval] = useState<ApprovalEvidence | null>(null);
@@ -205,6 +270,7 @@ export function TerminalConsole() {
   );
 
   const clearCredentialInputs = () => {
+    setApprovalOrder(null);
     setOperatorId('');
     setOperatorPin('');
     setApprovingId('');
@@ -455,14 +521,15 @@ export function TerminalConsole() {
   const submitApproval = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!runtime || !runtime.activeStaffProfileId || pending || heartbeatPending) return;
+    if (!approvalOrder) return;
     const error = validateCoAuthorization({
       actingStaffProfileId: runtime.activeStaffProfileId,
       approvingStaffProfileId: approvingId,
       pin: approvingPin,
-      capability,
+      capability: 'orders:void',
       reason,
-      targetType: '',
-      targetId: '',
+      targetType: 'Order',
+      targetId: approvalOrder.id,
     });
     const pin = approvingPin;
     setApprovingPin('');
@@ -477,7 +544,9 @@ export function TerminalConsole() {
       approvingStaffProfileId: approvingId.trim(),
       type: 'PIN' as const,
       secret: pin,
-      capability: capability.trim(),
+      capability: 'orders:void',
+      targetType: 'Order',
+      targetId: approvalOrder.id,
       reason: reason.trim(),
     };
     try {
@@ -491,12 +560,13 @@ export function TerminalConsole() {
       );
       setApproval({
         ...data.coAuthorization,
+        orderNumber: approvalOrder.orderNumber,
         reason: payload.reason,
         deviceId: runtime.deviceId,
         terminalSessionId: runtime.sessionId,
       });
       setApprovingId('');
-      setCapability('');
+      setApprovalOrder(null);
       setReason('');
       setNotice({
         kind: 'success',
@@ -525,7 +595,7 @@ export function TerminalConsole() {
             ?.displayName ?? 'Manager name unavailable',
         ],
         ['Capability / action', approval.capability],
-        ['Target type', approval.targetType ?? 'None'],
+        ['Order', String(approval.orderNumber)],
         ['Reason', approval.reason],
         ['Server timestamp', approval.createdAt],
       ]
@@ -838,7 +908,10 @@ export function TerminalConsole() {
                               className="h-11"
                               aria-pressed={actionMode === 'switch'}
                               disabled={pending !== null || heartbeatPending || sessionInvalid}
-                              onClick={() => setActionMode('switch')}
+                              onClick={() => {
+                                setApprovalOrder(null);
+                                setActionMode('switch');
+                              }}
                             >
                               Switch operator
                             </Button>
@@ -1010,20 +1083,13 @@ export function TerminalConsole() {
                                   />
                                 </div>
                               </div>
-                              <div className="space-y-2">
-                                <Label htmlFor="capability">Capability / action</Label>
-                                <Input
-                                  id="capability"
-                                  value={capability}
-                                  onChange={(event) => setCapability(event.target.value)}
-                                  placeholder="orders:void"
-                                  autoComplete="off"
-                                  className="h-11 font-mono"
-                                  aria-invalid={approvalError ? true : undefined}
-                                  aria-describedby={approvalError ? 'approval-error' : undefined}
-                                  disabled={pending !== null || heartbeatPending || sessionInvalid}
-                                />
-                              </div>
+                              <ApprovalOrderField
+                                key={runtime.sessionId}
+                                runtime={runtime}
+                                selected={approvalOrder}
+                                onSelect={setApprovalOrder}
+                                disabled={pending !== null || heartbeatPending || sessionInvalid}
+                              />
                               <div className="space-y-2">
                                 <Label htmlFor="approval-reason">Reason</Label>
                                 <Textarea
@@ -1048,7 +1114,12 @@ export function TerminalConsole() {
                               <Button
                                 type="submit"
                                 className="h-11 w-full px-5 sm:w-auto"
-                                disabled={pending !== null || heartbeatPending || sessionInvalid}
+                                disabled={
+                                  !approvalOrder ||
+                                  pending !== null ||
+                                  heartbeatPending ||
+                                  sessionInvalid
+                                }
                               >
                                 {pending === 'approval' ? (
                                   <Loader2 aria-hidden className="animate-spin" />

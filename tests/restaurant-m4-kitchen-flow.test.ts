@@ -247,6 +247,7 @@ beforeAll(async () => {
         name: 'WHA-49 Kitchen Order Taking',
         permissions: {
           create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
             { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],

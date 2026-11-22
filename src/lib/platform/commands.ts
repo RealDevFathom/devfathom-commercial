@@ -27,7 +27,7 @@ import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
-import { organizationRolePermissionsSchema } from '@/lib/organization-role';
+import { organizationRolePermissionsSchema, replaceRolePermissions } from '@/lib/organization-role';
 import {
   AccessChangeError,
   guardPharmacyAccessChanges,
@@ -3129,18 +3129,13 @@ async function runCommand(
           const row = roleId
             ? await db.organizationRole.update({ where: { id: roleId }, data: role })
             : await db.organizationRole.create({ data: role });
-          await db.organizationRolePermission.deleteMany({
-            where: { organizationRoleId: row.id },
-          });
-          if (permissions.length) {
-            await db.organizationRolePermission.createMany({
-              data: permissions.map((permission) => ({
-                organizationId: input.organizationId,
-                organizationRoleId: row.id,
-                ...permission,
-              })),
-            });
-          }
+          await replaceRolePermissions(
+            db,
+            input.organizationId,
+            row.id,
+            existing?.permissions ?? [],
+            permissions
+          );
           return row;
         }
       );

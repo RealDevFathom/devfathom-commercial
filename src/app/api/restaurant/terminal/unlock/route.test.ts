@@ -106,13 +106,23 @@ describe('POST /api/restaurant/terminal/unlock on a kitchen display', () => {
     });
   });
 
-  it('does not require kitchen access to unlock a POS terminal', async () => {
+  it('checks only POS access for an authenticated register operator', async () => {
     mocks.ctx.device.kind = 'POS';
     mocks.authenticateOperator.mockResolvedValue({ ok: true, credentialId: 'credential-1' });
 
+    mocks.operatorHasCapability.mockImplementation(
+      async (_db, _staff, capability) => capability === 'pos:operate'
+    );
     const response = await unlock();
 
     expect(response.status).toBe(200);
-    expect(mocks.operatorHasCapability).not.toHaveBeenCalled();
+    expect(mocks.operatorHasCapability).toHaveBeenCalledWith(
+      mocks.ctx.db,
+      'staff-1',
+      'pos:operate',
+      expect.any(Date),
+      'branch-1'
+    );
+    expect(mocks.operatorHasCapability).toHaveBeenCalledTimes(1);
   });
 });
