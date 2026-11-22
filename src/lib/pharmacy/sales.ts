@@ -2578,13 +2578,14 @@ export async function captureDemand(
   } catch {
     throw new PharmacySaleError('CONSENT_REQUIRED');
   }
-  // Both counter entry points capture the same unmet request for a bill and medicine.
-  // The bill row serializes the first write, including concurrent calls from different tills.
-  if (shareBillDemand && input.saleId) {
-    const [bill] = await db.$queryRaw<
-      { id: string }[]
-    >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
-    if (!bill) throw new PharmacySaleError('NOT_FOUND');
+  // Check the bill's branch for every linked event. The bill lock serializes shared captures.
+  const [bill] = input.saleId
+    ? await db.$queryRaw<
+        { id: string }[]
+      >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+    : [];
+  if (input.saleId && !bill) throw new PharmacySaleError('NOT_FOUND');
+  if (shareBillDemand && bill) {
     const existing = await db.unfulfilledDemandEvent.findFirst({
       where: {
         organizationId: scope.organizationId,

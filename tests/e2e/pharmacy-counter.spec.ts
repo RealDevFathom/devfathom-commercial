@@ -2436,8 +2436,7 @@ test.describe('Counter server features', () => {
     await openCounter(page);
     await openDrawer(page);
     const otc = PHARMACY_E2E.medicines.otc;
-    await search(page, otc.brandName);
-    await addFirstResult(page, otc.name);
+    await scan(page, otc.barcode);
     await expect(billLine(page, otc.name)).toBeVisible();
     await pressControl(page.getByRole('button', { name: 'More', exact: true }));
     await pressControl(page.getByRole('button', { name: 'Pack check', exact: true }));
