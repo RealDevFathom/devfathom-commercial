@@ -1,3 +1,4 @@
+import { workspaceMonthRange, workspaceTimezone } from '@/lib/timezone';
 import { z } from 'zod';
 import { router, protectedProcedure, adminProcedure } from '../trpc';
 import { fromCurrencyGroups, currenciesPresent, type CurrencyAmount } from '@/lib/finance/currency';
@@ -145,7 +146,7 @@ export const dashboardRouter = router({
 
     if (isAdmin) {
       const now = new Date();
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      const startOfMonth = workspaceMonthRange(ctx.organization?.timezone, now).from;
 
       const [incomeResult, expenseResult, outstandingResult] = await Promise.all([
         ctx.db.transaction.groupBy({
@@ -357,31 +358,30 @@ export const dashboardRouter = router({
   getRevenueChart: adminProcedure.query(async ({ ctx }) => {
     const months = 6;
 
-    // FIN-03: anchor each month at day 1 — `new Date(); setMonth(m - i)` on the
-    // 29th–31st overflows into the wrong month. And extend endOfMonth to the
-    // final millisecond, otherwise `lte: endOfMonth` (at 00:00 on the last day)
-    // drops every transaction on the month's final day.
     const now = new Date();
-    const monthRanges = [];
-    for (let i = months - 1; i >= 0; i--) {
-      const startOfMonth = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const endOfMonth = new Date(now.getFullYear(), now.getMonth() - i + 1, 0, 23, 59, 59, 999);
-      monthRanges.push({ startOfMonth, endOfMonth });
-    }
+    const zone = workspaceTimezone(ctx.organization?.timezone);
+    const monthRanges = Array.from({ length: months }, (_, i) =>
+      workspaceMonthRange(zone, now, i + 1 - months)
+    );
+    const label = new Intl.DateTimeFormat('en-US', {
+      timeZone: zone,
+      month: 'short',
+      year: 'numeric',
+    });
 
     // FIN-02: group each month by currency so the chart never blends USD + PKR.
     // The client renders one currency series at a time (USD-first by default).
     const results = await Promise.all(
-      monthRanges.flatMap(({ startOfMonth, endOfMonth }) => [
+      monthRanges.flatMap(({ from, to }) => [
         ctx.db.transaction.groupBy({
           by: ['currency'],
           _sum: { amount: true },
-          where: { type: 'INCOME', date: { gte: startOfMonth, lte: endOfMonth } },
+          where: { type: 'INCOME', date: { gte: from, lt: to } },
         }),
         ctx.db.transaction.groupBy({
           by: ['currency'],
           _sum: { amount: true },
-          where: { type: 'EXPENSE', date: { gte: startOfMonth, lte: endOfMonth } },
+          where: { type: 'EXPENSE', date: { gte: from, lt: to } },
         }),
       ])
     );
@@ -402,11 +402,11 @@ export const dashboardRouter = router({
       Array<{ month: string; income: number; expense: number; profit: number }>
     > = {};
     for (const currency of currencies) {
-      byCurrency[currency] = monthRanges.map(({ startOfMonth }, idx) => {
+      byCurrency[currency] = monthRanges.map(({ from }, idx) => {
         const income = amountFor(results[idx * 2], currency);
         const expense = amountFor(results[idx * 2 + 1], currency);
         return {
-          month: startOfMonth.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          month: label.format(from),
           income,
           expense,
           profit: income - expense,

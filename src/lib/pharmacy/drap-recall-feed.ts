@@ -1,4 +1,4 @@
-import { inflateSync } from 'node:zlib';
+import { inflateSync, type Inflate } from 'node:zlib';
 
 import type { DrapNoticeSource, DrapRecallNotice } from './drap-monitoring';
 
@@ -26,6 +26,11 @@ const ALLOWED_HOSTS = new Set(['dra.gov.pk', 'www.dra.gov.pk']);
 const MAX_HTML_BYTES = 5 * 1024 * 1024;
 const MAX_PDF_BYTES = 10 * 1024 * 1024;
 const MAX_PDF_FETCHES = 5;
+const MAX_PDF_STREAMS = 500;
+const MAX_PDF_STREAM_BYTES = 2 * 1024 * 1024;
+const MAX_PDF_DECODED_BYTES = 8 * 1024 * 1024;
+const MAX_PDF_EXPANSION_RATIO = 256;
+const PDF_EXPANSION_FLOOR_BYTES = 64 * 1024;
 const FETCH_TIMEOUT_MS = 20_000;
 const MAX_REASON_LENGTH = 500;
 
@@ -305,22 +310,50 @@ function contentStreamText(content: string) {
  * text simply yields no rows, and the alert still reaches the review queue.
  */
 export function extractPdfText(bytes: Uint8Array) {
-  const raw = Buffer.from(bytes).toString('latin1');
+  if (bytes.byteLength > MAX_PDF_BYTES) throw new Error('DRAP PDF exceeds the size limit.');
+  const raw = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('latin1');
   const pieces: string[] = [];
   const marker = />>\s*stream\r?\n/g;
-  for (let match = marker.exec(raw); match && pieces.length < 500; match = marker.exec(raw)) {
+  let streams = 0;
+  let decodedBytes = 0;
+  for (let match = marker.exec(raw); match; match = marker.exec(raw)) {
+    if (++streams > MAX_PDF_STREAMS) throw new Error('DRAP PDF has too many streams.');
     const dataStart = match.index + match[0].length;
     const end = raw.indexOf('endstream', dataStart);
     if (end < 0) break;
     marker.lastIndex = end + 9;
     const dictionary = raw.slice(Math.max(0, raw.lastIndexOf('<<', match.index)), match.index);
-    if (!/\/FlateDecode/.test(dictionary) || /\/Subtype\s*\/Image/.test(dictionary)) continue;
-    let decoded: string;
+    const singleFlateFilter = /\/Filter\s*(?:\/FlateDecode\b|\[\s*\/FlateDecode\s*\])/;
+    if (!singleFlateFilter.test(dictionary) || /\/Subtype\s*\/Image/.test(dictionary)) continue;
+    const remaining = MAX_PDF_DECODED_BYTES - decodedBytes;
+    // zlib requires a positive maximum, even when the only output we can accept is empty.
+    const maxOutputLength = Math.max(1, Math.min(MAX_PDF_STREAM_BYTES, remaining));
+    let result;
     try {
-      decoded = inflateSync(Buffer.from(raw.slice(dataStart, end), 'latin1')).toString('latin1');
-    } catch {
-      continue;
+      // Node returns the engine with `info: true`; the type declarations omit the overload.
+      result = inflateSync(bytes.subarray(dataStart, end), {
+        maxOutputLength,
+        info: true,
+      }) as unknown as { buffer: Buffer; engine: Inflate };
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ERR_BUFFER_TOO_LARGE') {
+        throw new Error('DRAP PDF exceeds the decoded stream budget.');
+      }
+      // zlib may have produced output before it failed. Stop instead of spending
+      // an unknown portion of the decode budget on each unreadable stream.
+      throw new Error('DRAP PDF has an unreadable compressed stream.');
     }
+    const { buffer, engine } = result;
+    if (buffer.length > remaining) throw new Error('DRAP PDF exceeds the decoded stream budget.');
+    // Count the compressed bytes consumed by zlib, excluding any stream delimiter or padding.
+    if (
+      buffer.length >
+      Math.max(PDF_EXPANSION_FLOOR_BYTES, engine.bytesWritten * MAX_PDF_EXPANSION_RATIO)
+    ) {
+      throw new Error('DRAP PDF stream expands beyond the permitted ratio.');
+    }
+    decodedBytes += buffer.length;
+    const decoded = buffer.toString('latin1');
     if (/\bBT\b/.test(decoded)) pieces.push(contentStreamText(decoded));
   }
   return pieces.join('\n');

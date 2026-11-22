@@ -362,12 +362,15 @@ export type TrueProfitRow = MarginRow;
  * Hour and staff come from the sale the leg belongs to. A return leg names the
  * original sale line, so it nets against the hour and seller of that sale.
  */
-export function trueProfitFactsQuery(scope: JournalReportScope, input: { from: Date; to: Date }) {
+export function trueProfitFactsQuery(
+  scope: JournalReportScope,
+  input: { from: Date; to: Date; timeZone?: string }
+) {
   return Prisma.sql`
     WITH signed AS (
       SELECT line."productId",
              medicine."productFamily"::text AS "category",
-             EXTRACT(HOUR FROM ((COALESCE(sale."completedAt", entry."occurredAt") AT TIME ZONE 'UTC') AT TIME ZONE ${TRUE_PROFIT_TIMEZONE}::text))::int AS "hour",
+             EXTRACT(HOUR FROM ((COALESCE(sale."completedAt", entry."occurredAt") AT TIME ZONE 'UTC') AT TIME ZONE ${input.timeZone ?? TRUE_PROFIT_TIMEZONE}::text))::int AS "hour",
              COALESCE(completion."actorId", sale."createdByUserId") AS "staffUserId",
              line."accountCode",
              CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END AS "debitMinor"
@@ -463,7 +466,7 @@ export function rollUpTrueProfit(
 export async function trueProfit(
   db: ScopedDb,
   scope: ReportScope,
-  input: { from: Date; to: Date; by: TrueProfitDimension }
+  input: { from: Date; to: Date; by: TrueProfitDimension; timeZone?: string }
 ): Promise<TrueProfitRow[]> {
   // The per-cell sums are bigint in SQL, so a large group never overflows a
   // 32-bit int; they are narrowed here only within JavaScript's safe range.

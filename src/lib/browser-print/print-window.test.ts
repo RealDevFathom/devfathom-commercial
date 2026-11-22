@@ -61,6 +61,37 @@ describe('DEV-973 isolated print window', () => {
     windows.closeAll();
   });
 
+  it('reports a Chromium popup block immediately when window.open leaves activation intact', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 Chrome/156.0.0.0',
+      userActivation: { isActive: true },
+    });
+    const windows = installFakePrintWindows({ blocked: true });
+    windows.open.mockReturnValueOnce(null);
+    const count = getOpenPrintWindowCount();
+    const failed = vi.fn();
+    void printInWindow(html, { features: 'popup', ...messages }).catch(failed);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(failed).toHaveBeenCalledExactlyOnceWith(new Error('Allow pop-ups'));
+    expect(getOpenPrintWindowCount()).toBe(count);
+  });
+
+  it('waits for a slow WebKit popup when activation stays active on success', async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('navigator', {
+      userAgent: 'Mozilla/5.0 Version/26.1 Safari/605.1.15',
+      userActivation: { isActive: true },
+    });
+    const windows = installFakePrintWindows({ ready: false });
+    const printing = printInWindow(html, { features: 'popup', ...messages });
+    await vi.advanceTimersByTimeAsync(8_000);
+    windows.last().ready();
+    await printing;
+    expect(windows.last().printRequests()).toBe(1);
+    windows.closeAll();
+  });
+
   it('reports a blocked pop-up once its print page fails to announce itself', async () => {
     vi.useFakeTimers();
     installFakePrintWindows({ blocked: true });
@@ -71,6 +102,48 @@ describe('DEV-973 isolated print window', () => {
     await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
     await outcome;
     expect(getOpenPrintWindowCount()).toBe(before);
+  });
+
+  it('hands the document over once when the print page takes eight seconds to load', async () => {
+    vi.useFakeTimers();
+    const windows = installFakePrintWindows({ ready: false });
+    const handle = openPrintWindow('popup');
+    const sent = sendToPrintWindow(handle, html, messages);
+    const outcome = sent.then(
+      () => 'sent',
+      (error: Error) => error.message
+    );
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(isPrintWindowOpen(handle)).toBe(true);
+    windows.last().ready();
+    await expect(outcome).resolves.toBe('sent');
+    expect(windows.last().printRequests()).toBe(1);
+    windows.closeAll();
+  });
+
+  it('keeps the blocked message when receipt data takes longer than the window timeout', async () => {
+    vi.useFakeTimers();
+    installFakePrintWindows({ blocked: true });
+    const handle = openPrintWindow('popup');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await expect(sendToPrintWindow(handle, html, messages)).rejects.toThrow('Allow pop-ups');
+  });
+
+  it('prints only in the new window when a cashier retries before the old page loads', async () => {
+    vi.useFakeTimers();
+    const windows = installFakePrintWindows({ ready: false });
+    const first = printInWindow(html, { features: 'popup', ...messages });
+    const blocked = expect(first).rejects.toThrow('Allow pop-ups');
+    await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
+    await blocked;
+    const old = windows.last();
+    const retry = printInWindow(html, { features: 'popup', ...messages });
+    old.ready();
+    windows.last().ready();
+    await retry;
+    expect(old.messages).toEqual([{ type: 'close' }]);
+    expect(windows.last().printRequests()).toBe(1);
+    windows.closeAll();
   });
 
   it('never calls print() on the window or this page; the window prints itself once loaded', async () => {

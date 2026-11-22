@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   branches: undefined as unknown,
   catalog: undefined as unknown,
   command: undefined as unknown,
+  commandInput: undefined as unknown,
+  zone: 'UTC',
   preferences: undefined as unknown,
   enabledModules: [] as string[],
 }));
@@ -28,7 +30,11 @@ const mounted = vi.hoisted(() => {
 });
 
 vi.mock('@/components/entitlements-provider', () => ({
-  useEntitlements: () => ({ organizationId: 'org', enabledModules: state.enabledModules }),
+  useEntitlements: () => ({
+    organizationId: 'org',
+    timeZone: state.zone,
+    enabledModules: state.enabledModules,
+  }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -45,7 +51,12 @@ vi.mock('@/lib/trpc', () => ({
             error: null,
           }),
       },
-      commandCentre: { useQuery: () => mounted.record('commandCentre', state.command) },
+      commandCentre: {
+        useQuery: (input: unknown) => {
+          state.commandInput = input;
+          return mounted.record('commandCentre', state.command);
+        },
+      },
     },
   },
 }));
@@ -365,4 +376,17 @@ describe('PharmacyDashboardContent states', () => {
       screen.queryByRole('link', { name: 'Draft POs per distributor' })
     ).not.toBeInTheDocument();
   });
+});
+
+it('requests the Karachi business date at 00:30', () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date('2026-11-02T00:30:00+05:00'));
+    state.zone = 'Asia/Karachi';
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(state.commandInput).toMatchObject({ from: '2026-11-02', to: '2026-11-02' });
+  } finally {
+    state.zone = 'UTC';
+    vi.useRealTimers();
+  }
 });
