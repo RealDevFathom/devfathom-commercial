@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
   createSale: vi.fn(),
 }));
 
+// Exercise booking with the live switch on. The live-off case has a separate DB test.
+vi.mock('@/lib/pharmacy/offline-cash-selling', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/offline-cash-selling')>()),
+  readOfflineCashSelling: async () => ({ enabled: true, available: true }),
+}));
+
 vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   authenticatePharmacyCommand: vi.fn(async () => undefined),

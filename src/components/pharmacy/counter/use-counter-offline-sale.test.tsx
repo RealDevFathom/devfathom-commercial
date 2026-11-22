@@ -350,3 +350,74 @@ describe('DEV-957 phase 2: the paid sale stays on screen when it ends offline se
     expect(screen.queryByText('Paid')).not.toBeInTheDocument();
   });
 });
+
+describe('DEV-957 replay on reconnect', () => {
+  async function waitingSales() {
+    await preparedOnline();
+    const offline = renderHook(() => useCounterOffline(props(false)));
+    await waitFor(() => expect(offline.result.current.actions).not.toBeNull());
+    await act(async () => {
+      expect(
+        (await offline.result.current.actions!.pay(oneTablet(offline.result.current), 500)).ok
+      ).toBe(true);
+      expect(
+        (
+          await offline.result.current.actions!.pay(
+            oneTablet(offline.result.current, 'lot_brufen'),
+            50
+          )
+        ).ok
+      ).toBe(true);
+    });
+    offline.unmount();
+  }
+
+  it('sends the sealed sales in order and keeps a refused head visible across a reload until a manager settles it', async () => {
+    await waitingSales();
+    const requests: Array<{ path: string; sequence: number; key: string | null }> = [];
+    const send = vi.spyOn(globalThis, 'fetch').mockImplementation(async (path, options) => {
+      const body = JSON.parse(String(options?.body));
+      const command = body.command ?? body;
+      const headers = new Headers(options?.headers);
+      expect(headers.get('x-terminal-session')).toBe('in-memory-token');
+      expect(headers.get('x-command-signature')).toMatch(/^[a-f0-9]{64}$/);
+      expect(command.seal).toBeTruthy();
+      requests.push({
+        path: String(path),
+        sequence: command.sequence,
+        key: headers.get('idempotency-key'),
+      });
+      if (String(path).endsWith('/reject'))
+        return Response.json({ commandId: 'db-command-1', status: 'REJECTED', replayed: false });
+      return command.sequence === 1
+        ? Response.json({ error: 'PERIOD_CLOSED' }, { status: 409 })
+        : Response.json({ saleId: 'sale-2', receiptNumber: 502, replayed: false });
+    });
+    try {
+      const back = renderHook(() => useCounterOffline(props(true)));
+      await waitFor(() => expect(back.result.current.queued[0]?.status).toBe('QUARANTINED'));
+      expect(back.result.current.queued[0]?.rejection).toMatch(/closed/i);
+      const first = back.result.current.queued[0]!;
+      back.unmount();
+      const again = renderHook(() => useCounterOffline(props(true)));
+      await waitFor(() => expect(again.result.current.actions).not.toBeNull());
+      expect(again.result.current.queued.map((c) => c.sequence)).toEqual([1, 2]);
+      expect(requests.map((r) => r.sequence)).toEqual([1]);
+      await act(async () => {
+        await again.result.current.actions!.resolveConflict!(first.commandId, 'Refunded the cash');
+      });
+      await waitFor(() => expect(again.result.current.actions).not.toBeNull());
+      expect(again.result.current.queued).toHaveLength(0);
+      expect(requests.map((r) => [r.path, r.sequence])).toEqual([
+        ['/api/pharmacy/counter/replay', 1],
+        ['/api/pharmacy/counter/reject', 1],
+        ['/api/pharmacy/counter/replay', 2],
+      ]);
+      expect(requests[0]?.key).toBe(first.commandId);
+      expect(requests[1]?.key).toBe(first.commandId);
+      again.unmount();
+    } finally {
+      send.mockRestore();
+    }
+  });
+});
