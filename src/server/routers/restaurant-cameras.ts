@@ -26,7 +26,8 @@ import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 const strict = <T extends z.ZodRawShape>(shape: T) => z.object(shape).strict();
 const branchId = z.string().min(1);
-function entitled(ctx: { entitlements: Parameters<typeof hasModule>[0] }) {
+function entitled(ctx: Pick<TRPCContext, 'entitlements' | 'support'>) {
+  if (ctx.support) throw new TRPCError({ code: 'FORBIDDEN' });
   if (!hasModule(ctx.entitlements, 'restaurant-integrations')) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Camera integrations are not enabled.' });
   }

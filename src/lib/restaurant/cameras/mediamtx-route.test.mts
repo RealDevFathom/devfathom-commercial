@@ -5,7 +5,11 @@ import assert from 'node:assert/strict';
 const { mock } = await import('bun:' + 'test');
 
 const organizationId = 'tenant-a';
-const actor = { session: { user: { id: 'viewer-a' } }, organization: { id: organizationId } };
+const actor = {
+  support: null as { id: string } | null,
+  session: { user: { id: 'viewer-a' } },
+  organization: { id: organizationId },
+};
 let signedIn = true;
 let entitled = true;
 let calls = 0;
@@ -77,6 +81,7 @@ const { GET } = await import('../../../app/api/restaurant/cameras/[cameraId]/str
 
 function reset() {
   signedIn = true;
+  actor.support = null;
   entitled = true;
   calls = 0;
   grant = makeGrant();
@@ -101,6 +106,15 @@ test('authorized route rewrites every playlist request through viewer grant', as
     await response.text(),
     /\/api\/restaurant\/cameras\/camera-a\/stream\?grant=grant-a&segment=seg0.ts/
   );
+});
+
+test('support cannot use an existing grant for a playlist or a segment', async () => {
+  reset();
+  actor.support = { id: 'synthetic-support' };
+  for (const query of ['?grant=grant-a', '?grant=grant-a&segment=seg0.ts']) {
+    assert.equal((await get(query)).status, 403);
+  }
+  assert.equal(calls, 0);
 });
 
 test('route rejects missing actor, entitlement, runtime and grant without upstream reads', async () => {

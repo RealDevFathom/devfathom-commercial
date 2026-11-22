@@ -337,6 +337,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyPurchasing.debitNotePositions': ['pharmacy:procurement'],
   'pharmacyPurchasing.decideReceiptDebitNote': ['pharmacy:procurement', 'reports:financial'],
   'pharmacyPurchasing.dispatchPurchaseReturn': ['pharmacy:procurement', 'reports:financial'],
+  'pharmacyPurchasing.legacySupplierDispatches': ['pharmacy:procurement', 'reports:financial'],
   'pharmacyPurchasing.goodsReceipts': ['pharmacy:procurement'],
   'pharmacyPurchasing.ignoreLostDemandAdvice': ['pharmacy:procurement'],
   'pharmacyPurchasing.issueDebitNote': ['pharmacy:procurement', 'reports:financial'],

@@ -41,13 +41,15 @@ import {
   verifyOperatorCredential,
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
+import { deviceBaseCapability, operatorHasCapability } from './operator-capability';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
 import {
   evaluateTerminalSession,
   isTerminalSessionTokenFormat,
-  resolveSessionByToken,
+  hashTerminalSessionToken,
+  lockDeniedOperator,
   touchSession,
   type TerminalInvalidReason,
   type TerminalSessionState,
@@ -122,7 +124,7 @@ export const TERMINAL_DEVICE_COOKIE = 'devfathom-terminal';
  *
  * A handler that RETURNS a response still commits, deliberately. `authenticateOperator`
  * advances the durable failed-attempt counter and the route then answers 401/423; that
- * brute-force evidence, and the device/session check-in, must survive a refusal. Only a
+ * brute-force evidence and the device check-in must survive a refusal. Only a
  * THROW rolls the request back.
  */
 export type TerminalErrorMapper = (err: unknown) => Response | null;
@@ -142,7 +144,10 @@ function unauthorized(message: string): NextResponse {
 }
 
 function forbidden(message: string): NextResponse {
-  return NextResponse.json({ error: message }, { status: 403 });
+  return NextResponse.json(
+    { error: message },
+    { status: 403, headers: { 'X-Terminal-Access': 'denied' } }
+  );
 }
 
 function tooManyRequests(retryAfter: number): NextResponse {
@@ -463,9 +468,14 @@ export function withTerminalAuth<T extends unknown[]>(
       return await withTenantDb(auth.organizationId, async (db) => {
         const now = new Date();
         // C5: authoritative, FRESH reads inside one consistent transaction.
-        const [device, session] = await Promise.all([
+        const [device, [session]] = await Promise.all([
           db.restaurantRegisteredDevice.findUnique({ where: { id: auth.deviceId } }),
-          resolveSessionByToken(db, sessionToken),
+          // Serialize requests and access revocations on the same binding.
+          db.$queryRaw<RestaurantTerminalSession[]>`
+            SELECT * FROM restaurant_terminal_sessions
+            WHERE "tokenHash" = ${hashTerminalSessionToken(sessionToken)} AND "deviceId" = ${auth.deviceId}
+            FOR UPDATE
+          `,
         ]);
         if (!device) return forbidden('This device has been revoked.');
         if (device.kind !== 'POS' && device.kind !== 'KDS')
@@ -490,14 +500,31 @@ export function withTerminalAuth<T extends unknown[]>(
         }
 
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
-        if (entitlementRejection) return entitlementRejection;
+        if (entitlementRejection) {
+          return entitlementRejection;
+        }
 
-        await Promise.all([
-          touchDeviceLastSeen(db, device.id, now),
-          touchSession(db, session.id, now),
-        ]);
+        if (session.activeStaffProfileId !== null) {
+          const capability = deviceBaseCapability(device.kind);
+          if (
+            !(await operatorHasCapability(
+              db,
+              session.activeStaffProfileId,
+              capability,
+              now,
+              device.branchId,
+              true
+            ))
+          ) {
+            await lockDeniedOperator(db, session.id);
+            return forbidden(
+              `To use this terminal, the operator must be active, assigned to this branch, and have the "${capability}" capability.`
+            );
+          }
+        }
 
-        return withOwnerReauthenticationScope(
+        await touchDeviceLastSeen(db, device.id, now);
+        const response = await withOwnerReauthenticationScope(
           {
             actingStaffProfileId: session.activeStaffProfileId,
             deviceId: device.id,
@@ -517,11 +544,24 @@ export function withTerminalAuth<T extends unknown[]>(
               ...args
             )
         );
+        if (response.ok) await touchSession(db, session.id, new Date());
+        return response;
       });
     } catch (err) {
       return respondToEscapedError('Terminal session-auth error:', err, options.mapError);
     }
   };
+}
+
+/** Device-only KDS reads are also used by an established display. When it
+ * presents a session, authenticate that exact binding before serving the read. */
+export function withKdsReadAuth(
+  handler: (ctx: TerminalDeviceContext, request: Request) => Promise<Response>
+) {
+  const deviceRead = withDeviceAuth(handler);
+  const sessionRead = withTerminalAuth(handler);
+  return (request: Request) =>
+    request.headers.has(SESSION_HEADER) ? sessionRead(request) : deviceRead(request);
 }
 
 // --- Operator credential authentication (C4) -------------------------------
@@ -591,6 +631,7 @@ export async function authenticateOperator(
     type: OperatorCredentialType;
     secret: string;
     now: Date;
+    forTerminalBinding?: boolean;
     /** DEV-879: set when the credential approves an action rather than signing in. An
      * approver who enrolled an approval authenticator must then enter its current code
      * instead of their PIN (see `verifyApprovalSecret`). */
@@ -697,5 +738,22 @@ export async function authenticateOperator(
     }
   }
 
+  if (params.forTerminalBinding) {
+    // A reset or deactivation may have committed during credential verification.
+    // Recheck the exact proof and profile under shared row locks through bind.
+    const verified = await db.$queryRaw<{ id: string }[]>`
+      SELECT c.id FROM restaurant_operator_credentials c
+      JOIN restaurant_staff_profiles p ON (p."organizationId", p.id) = (c."organizationId", c."staffProfileId")
+      WHERE c.id = ${credential.id} AND c."credentialHash" = ${credential.credentialHash}
+        AND c."revokedAt" IS NULL AND p.id = ${staffProfileId}
+        AND p.status = 'ACTIVE' AND p."primaryBranchId" = ${branchId}
+        AND (p."userId" IS NULL OR EXISTS (
+          SELECT 1 FROM users u WHERE (u."organizationId", u.id) = (p."organizationId", p."userId")
+            AND u.status = 'ACTIVE' FOR SHARE OF u
+        ))
+      FOR SHARE OF c, p
+    `;
+    if (!verified.length) return { ok: false, reason: 'INVALID' };
+  }
   return { ok: true, credentialId: credential.id, staffProfileId };
 }
