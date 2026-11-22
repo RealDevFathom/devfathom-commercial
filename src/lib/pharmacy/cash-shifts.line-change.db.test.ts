@@ -684,7 +684,10 @@ describeDatabase('DEV-988 explicit bill line pack check', () => {
       });
       return 'TESTPACK';
     });
-    expect(await check(`(01)${gtin}(10)${batch}(17)310101`)).toMatchObject({ matched: true });
+    expect(await check(`(01)${gtin}(10)${batch}(17)310101`)).toMatchObject({
+      matched: true,
+      batchChecked: true,
+    });
     await cash(s, s.cashier, device, sale.id, 1000);
     const checks = await tenant(s.owner, (db) =>
       db.pharmacySaleEvent.findMany({
@@ -743,6 +746,32 @@ describeDatabase('DEV-977 existing line discount', () => {
       expect(await db.pharmacySaleLine.findFirst({ where: { id: lines[1]!.id } })).toMatchObject({
         discountMinor: 0,
       });
+
+      await db.organization.update({
+        where: { id: s.owner.organizationId },
+        data: { pharmacyBillDiscountEnabled: true },
+      });
+      const { applyBillDiscount } = await import('./bill-discount-service');
+      const wholeBill = await applyBillDiscount(db, s.owner, {
+        saleId: sale.id,
+        request: { kind: 'AMOUNT', minor: 5 },
+        approval: {
+          approvedByUserId: s.cashier,
+          approvalPolicy: line.approvalPolicy!,
+          selfApproved: true,
+        },
+      });
+      expect(wholeBill).toMatchObject({
+        status: 'APPLIED',
+        excluded: [{ saleLineId: line.id, reason: 'OWN_DISCOUNT' }],
+        lines: [{ saleLineId: lines[1]!.id, discountMinor: 5 }],
+      });
+      expect(await db.pharmacySaleLine.findUniqueOrThrow({ where: { id: line.id } })).toMatchObject(
+        {
+          discountMinor: 20,
+          billDiscountMinor: 0,
+        }
+      );
     });
   }, 60000);
 });
@@ -1066,6 +1095,35 @@ describeDatabase('reviewed counter invariants', () => {
 });
 
 describeDatabase('reviewed pack, demand and discount storage rules', () => {
+  it('matches a registered presentation barcode without a pack level or batch', async () => {
+    const s = await shop('presentationpack');
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const line = lines[0]!;
+    const gtin = '01234567890128';
+    await tenant(s.owner, async (db) => {
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: line.packLevelId } });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          presentationId: pack.presentationId,
+          type: 'GTIN',
+          code: gtin,
+          normalizedCode: gtin,
+        },
+      });
+    });
+    await expect(
+      asMember(s, s.cashier, (c) =>
+        c.checkBillLinePack({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          saleLineId: line.id,
+          payload: '(01)' + gtin,
+        })
+      )
+    ).resolves.toEqual({ matched: true, batchChecked: false });
+  }, 60_000);
+
   it('requires a fresh pack check after removing and re-adding the same medicine, even without an encoded batch', async () => {
     const s = await shop('reviewpack');
     const device = 'recheck';
@@ -1109,6 +1167,7 @@ describeDatabase('reviewed pack, demand and discount storage rules', () => {
     await expect(cash(s, s.cashier, device, sale.id, 1000)).rejects.toThrow(/pack.check/i);
     expect(await check(next.id, '(01)' + gtin + '(21)TEST-SERIAL')).toMatchObject({
       matched: true,
+      batchChecked: false,
     });
     await cash(s, s.cashier, device, sale.id, 1000);
     expect(

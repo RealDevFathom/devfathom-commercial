@@ -4469,7 +4469,9 @@ export const pharmacySalesRouter = router({
         // DEV-817: the counter's gate, before any demand row is written.
         const scope = await requireCounterReceiptAccess(ctx, branch, true);
         const event = demand.saleId
-          ? await ctx.db.$transaction((tx) => captureDemand(txDb(tx), scope, demand))
+          ? await ctx.db.$transaction((tx) =>
+              captureDemand(txDb(tx), scope, { ...demand, shareBillDemand: true })
+            )
           : await captureDemand(ctx.db, scope, demand);
         return redactDemandContact(event);
       } catch (error) {
@@ -5206,18 +5208,19 @@ export const pharmacySalesRouter = router({
             },
             select: { packLevelId: true },
           }));
+        const packLevelId = barcode ? (barcode.packLevelId ?? line.packLevelId) : null;
         const serial = await db.pharmacySoldPackSerial.findFirst({
           where: { ...where, saleLineId: line.id, releasedAt: null },
         });
         const matched = Boolean(
           scan.status === 'VERIFIED' &&
           code &&
-          barcode?.packLevelId === line.packLevelId &&
+          packLevelId === line.packLevelId &&
           (!serial || (serial.serialNumber === code.serial && serial.gtin === code.gtin)) &&
           line.allocations.some(
             (a) =>
               a.lot.receivedAt &&
-              a.lot.packLevelId === barcode.packLevelId &&
+              a.lot.packLevelId === packLevelId &&
               (!serial?.inventoryLotId || a.lot.id === serial.inventoryLotId) &&
               a.lot.batch.state === 'ACTIVE' &&
               (!code.batch || a.lot.batch.batchNumber === code.batch) &&
@@ -5239,7 +5242,7 @@ export const pharmacySalesRouter = router({
             payload: { saleLineId: line.id, scanId: scan.id, matched },
           },
         });
-        return { matched };
+        return { matched, batchChecked: Boolean(code?.batch) };
       });
     }),
   /** SAFE-05: advisory pack authentication; only the existing recall path blocks. */

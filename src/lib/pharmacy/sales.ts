@@ -2534,7 +2534,11 @@ export async function saleReturnValueMinor(db: ScopedDb, scope: LedgerScope, ret
 export async function captureDemand(
   db: ScopedDb,
   scope: LedgerScope,
-  input: {
+  {
+    shareBillDemand,
+    ...input
+  }: {
+    shareBillDemand?: boolean;
     saleId?: string;
     requestedMedicineId?: string;
     requestedText?: string;
@@ -2576,7 +2580,7 @@ export async function captureDemand(
   }
   // Both counter entry points capture the same unmet request for a bill and medicine.
   // The bill row serializes the first write, including concurrent calls from different tills.
-  if (input.saleId && (input.requestedMedicineId || input.requestedText?.trim())) {
+  if (shareBillDemand && input.saleId) {
     const [bill] = await db.$queryRaw<
       { id: string }[]
     >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
@@ -2586,6 +2590,7 @@ export async function captureDemand(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         saleId: bill.id,
+        status: 'OPEN',
         requestedMedicineId: input.requestedMedicineId ?? null,
         ...(!input.requestedMedicineId && {
           requestedText: { equals: input.requestedText!.trim(), mode: 'insensitive' as const },
@@ -2594,8 +2599,7 @@ export async function captureDemand(
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
     if (existing) {
-      if (existing.quantity !== input.quantity || existing.saleUnit !== input.saleUnit)
-        throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+      if (existing.saleUnit !== input.saleUnit) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
       return existing;
     }
   }
@@ -2699,6 +2703,7 @@ export async function recordCounterDemand(
     db,
     scope,
     {
+      shareBillDemand: true,
       saleId: input.saleId,
       requestedText: input.requestedText,
       requestedMedicineId: input.requestedMedicineId,

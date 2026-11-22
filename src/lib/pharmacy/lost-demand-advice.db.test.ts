@@ -226,6 +226,72 @@ describeIfDatabase('DEV-991 customer asked for it', () => {
       expect(await dbx.pharmacyInventoryLot.count({ where })).toBe(0);
     });
   });
+
+  it('shares open shortfall captures and records a substitute decline separately on the same bill', async () => {
+    const { captureDemand } = await import('./sales');
+    const { declineSubstitute } = await import('./substitute-finder');
+    const scope = { organizationId: orgA, branchId: branchA2, actorId };
+    await inOrg(orgA, async (dbx) => {
+      const sale = await dbx.pharmacySale.create({
+        data: {
+          organizationId: orgA,
+          branchId: branchA2,
+          createdByUserId: actorId,
+          status: 'OPEN',
+        },
+      });
+      const medicine = await dbx.medicine.create({
+        data: {
+          organizationId: orgA,
+          productName: 'Synthetic shortfall',
+          productFamily: 'PHARMACEUTICAL',
+        },
+      });
+      const input = {
+        saleId: sale.id,
+        requestedMedicineId: medicine.id,
+        saleUnit: 'UNIT' as const,
+        quantity: 2,
+        inventoryRuleSnapshot: {},
+      };
+      const shortfall = await captureDemand(dbx, scope, {
+        ...input,
+        reason: 'STOCKOUT',
+        shareBillDemand: true,
+      });
+      const declined = await captureDemand(dbx, scope, {
+        ...input,
+        quantity: 1,
+        reason: 'SUBSTITUTE_DECLINED',
+      });
+      expect(declined.id).not.toBe(shortfall.id);
+      await expect(declineSubstitute(dbx, scope, declined.id)).resolves.toMatchObject({
+        reason: 'SUBSTITUTE_DECLINED',
+        status: 'CLOSED',
+      });
+
+      await expect(
+        captureDemand(dbx, scope, {
+          ...input,
+          quantity: 3,
+          reason: 'STOCKOUT',
+          shareBillDemand: true,
+        })
+      ).resolves.toMatchObject({ id: shortfall.id, status: 'OPEN', quantity: 2 });
+
+      await dbx.unfulfilledDemandEvent.update({
+        where: { id: shortfall.id },
+        data: { status: 'CLOSED', closedAt: new Date() },
+      });
+      const fresh = await captureDemand(dbx, scope, {
+        ...input,
+        reason: 'STOCKOUT',
+        shareBillDemand: true,
+      });
+      expect(fresh.id).not.toBe(shortfall.id);
+      expect(fresh.status).toBe('OPEN');
+    });
+  });
 });
 
 describeIfDatabase('DEV-991 notify and reserve choices', () => {

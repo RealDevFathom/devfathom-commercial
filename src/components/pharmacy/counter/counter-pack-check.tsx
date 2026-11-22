@@ -54,7 +54,7 @@ function PackForm({ branchId, saleId, lines, disabled, refresh }: Props) {
     (lines.find((l) => l.packCheckBlocked) ?? lines[0])?.saleLineId ?? ''
   );
   const [code, setCode] = useState('');
-  const [result, setResult] = useState<boolean | null>(null);
+  const [result, setResult] = useState<{ matched: boolean; batchChecked: boolean } | null>(null);
   const [error, setError] = useState('');
   const check = trpc.pharmacySales.checkBillLinePack.useMutation();
   const selected = lines.find((l) => l.saleLineId === lineId);
@@ -73,7 +73,7 @@ function PackForm({ branchId, saleId, lines, disabled, refresh }: Props) {
             saleLineId: lineId,
             payload: code.trim(),
           });
-          setResult(response.matched);
+          setResult(response);
           setCode('');
         } catch (e) {
           setError(counterErrorMessage(e));
@@ -112,15 +112,17 @@ function PackForm({ branchId, saleId, lines, disabled, refresh }: Props) {
           onChange={(e) => setCode(e.target.value)}
           placeholder="Scan the pack"
         />
-        {(result === false || selected?.packCheckBlocked) && (
+        {(result?.matched === false || (!result && selected?.packCheckBlocked)) && (
           <CounterNote tone="danger" role="alert">
             <b>This pack doesn’t match the bill line.</b> Set it aside and tell the pharmacist. Scan
             a matching pack or remove this line before taking payment.
           </CounterNote>
         )}
-        {result === true && (
-          <CounterNote tone="success" role="status">
-            The pack matches this line’s allocated batch. Check recorded.
+        {result?.matched && (
+          <CounterNote tone={result.batchChecked ? 'success' : 'warning'} role="status">
+            {result.batchChecked
+              ? 'The pack matches this line’s allocated batch. Check recorded.'
+              : 'Product matched. Batch not checked: confirm the batch on the pack.'}
           </CounterNote>
         )}
         {error && (

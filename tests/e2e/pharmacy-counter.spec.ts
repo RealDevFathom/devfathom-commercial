@@ -2449,6 +2449,39 @@ test.describe('Counter server features', () => {
     await page.reload();
     await expect(billLine(page, otc.name)).toBeVisible();
     await expect(page.getByRole('button', { name: /Take payment/i }).first()).toBeDisabled();
+
+    // Use a registered synthetic GTIN with no encoded batch and no barcode pack level.
+    const gtin = '01234567890128';
+    const { Client } = await import('pg');
+    const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+    await db.connect();
+    try {
+      await db.query('BEGIN');
+      await db.query("SELECT set_config('app.current_organization_id', $1, true)", [
+        PHARMACY_E2E.organizationId,
+      ]);
+      await db.query(
+        `INSERT INTO pharmacy_medicine_barcodes
+          (id, "organizationId", "presentationId", type, code, "normalizedCode")
+          VALUES ($1, $2, $3, 'GTIN', $4, $4) ON CONFLICT (id) DO NOTHING`,
+        ['barcode_counter_e2e_no_batch', PHARMACY_E2E.organizationId, otc.presentationId, gtin]
+      );
+      await db.query('COMMIT');
+    } finally {
+      await db.end();
+    }
+    await pressControl(page.getByRole('button', { name: 'More', exact: true }));
+    await pressControl(page.getByRole('button', { name: 'Pack check', exact: true }));
+    await sheet.getByLabel('Pack code').fill(`(01)${gtin}`);
+    await pressControl(sheet.getByRole('button', { name: 'Check pack', exact: true }));
+    await expect(sheet.getByRole('status')).toHaveText(
+      'Product matched. Batch not checked: confirm the batch on the pack.'
+    );
+    await expect(sheet.getByRole('alert')).toHaveCount(0);
+    await featureShots(page, 'pack-batch-not-checked', sheet.getByLabel('Pack code'));
+    await page.keyboard.press('Escape');
+    await expect(sheet).toBeHidden();
+    await expect(page.getByRole('button', { name: /Take payment/i }).first()).toBeEnabled();
   });
 
   test('DEV-991 records an unlisted medicine request without opening a bill', async ({ page }) => {
