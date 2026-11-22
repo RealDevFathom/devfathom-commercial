@@ -1,3 +1,4 @@
+import { rollForwardDueDate } from '@/lib/finance/recurring-expense';
 /**
  * FINANCE tools for the DevFathom assistant — invoices, transactions, recurring
  * expenses and financial summaries.
@@ -13,6 +14,12 @@
  * `needsApproval: true`. Optional params are `.nullish()` (NOT `.optional()`):
  * Groq/gpt-oss send `null` for omitted optionals and 400 on a bare `.optional()`.
  */
+import {
+  workspaceDateRange,
+  workspaceMonthRange,
+  workspaceToday,
+  workspaceTimezone,
+} from '@/lib/timezone';
 import { tool } from 'ai';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -49,23 +56,6 @@ const EXPENSE_CATEGORIES = [
   'MISCELLANEOUS',
 ] as const;
 
-// A recurring expense's stored nextDueDate doesn't advance on its own, so once a
-// due date passes it goes stale. Roll it forward by its interval until it lands
-// today or later, so we always surface the genuine *next* occurrence. Computed
-// on read — we never mutate the row. Mirrors src/server/routers/finance.ts.
-const INTERVAL_MONTHS: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
-
-function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
-  const stepMonths = INTERVAL_MONTHS[interval.toLowerCase()] ?? 1;
-  const next = new Date(due);
-  const anchorDay = next.getDate();
-  for (let i = 0; next < now && i < 600; i++) {
-    next.setDate(anchorDay);
-    next.setMonth(next.getMonth() + stepMonths);
-  }
-  return next;
-}
-
 /** Display label for a money amount, e.g. "$1,200" / "Rs 50,000". */
 const moneyLabel = (amount: number, currency: string) =>
   currency === 'PKR' ? `Rs ${amount.toLocaleString()}` : `$${amount.toLocaleString()}`;
@@ -74,12 +64,32 @@ const moneyLabel = (amount: number, currency: string) =>
  * Build the FINANCE tool set. Returns an EMPTY set for non-admins so the model
  * receives no finance tools at all; admins get the full read + write surface.
  */
+/** Interpret date-only tool inputs on the workspace clock. Timestamp inputs keep their instant. */
+function financeInputInstant(
+  value: string,
+  zone: string,
+  boundary: 'start' | 'inclusive-end' = 'start'
+) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return new Date(value);
+  const { from, to } = workspaceDateRange(value, value, zone);
+  return boundary === 'start' ? from : new Date(to.getTime() - 1);
+}
+
 export function buildFinanceTools(h: AssistantHelpers): ToolSet {
   const { db } = h;
   const tools: ToolSet = {};
   if (!h.isAdmin) return tools; // finance is admin-only — no tools for non-admins.
 
   const now = () => h.now();
+  const organizationZone = async () =>
+    workspaceTimezone(
+      (
+        await db.organization.findUnique({
+          where: { id: h.ctx.organizationId },
+          select: { timezone: true },
+        })
+      )?.timezone
+    );
   const FINANCE_RESTRICTED = 'Finance data is restricted to administrators.';
 
   // Resolve a free-text client name to one client (or candidates to ask about).
@@ -106,10 +116,11 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
     execute: async ({ startDate, endDate }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
       const today = now();
+      const zone = await organizationZone();
       const start = startDate
-        ? new Date(startDate)
-        : new Date(today.getFullYear(), today.getMonth(), 1);
-      const end = endDate ? new Date(endDate) : today;
+        ? financeInputInstant(startDate, zone)
+        : workspaceMonthRange(zone, today).from;
+      const end = endDate ? financeInputInstant(endDate, zone, 'inclusive-end') : today;
 
       // FIN-02: group by currency — never report a USD + PKR sum as one number.
       const [incomeG, expenseG, paidG, outstandingG] = await Promise.all([
@@ -182,22 +193,23 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
 
       // FIN-02: per-month figures are grouped by currency (USD + PKR are never
       // summed together). Each month carries a per-currency breakdown.
+      const zone = await organizationZone();
+      const january = workspaceToday(zone, today).slice(0, 4) + '-01-01';
       const monthRanges: Date[] = [];
       const groupPromises = [];
       for (let i = span - 1; i >= 0; i--) {
-        const date = new Date(today.getFullYear(), today.getMonth() - i, 1);
-        const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59);
+        const { from: date, to } = workspaceMonthRange(zone, today, -i);
         monthRanges.push(date);
         groupPromises.push(
           db.transaction.groupBy({
             by: ['currency'],
             _sum: { amount: true },
-            where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } },
+            where: { type: 'INCOME', date: { gte: date, lt: to } },
           }),
           db.transaction.groupBy({
             by: ['currency'],
             _sum: { amount: true },
-            where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } },
+            where: { type: 'EXPENSE', date: { gte: date, lt: to } },
           })
         );
       }
@@ -208,7 +220,11 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         const income = fromCurrencyGroups(groups[idx * 2], 'amount');
         const expense = fromCurrencyGroups(groups[idx * 2 + 1], 'amount');
         return {
-          period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+          period: date.toLocaleDateString('en-US', {
+            month: 'short',
+            year: 'numeric',
+            timeZone: zone,
+          }),
           incomeByCurrency: income,
           expenseByCurrency: expense,
           profitByCurrency: diffByCurrency(income, expense),
@@ -218,7 +234,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       const categoryGroups = await db.transaction.groupBy({
         by: ['category', 'currency'],
         _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: new Date(today.getFullYear(), 0, 1) } },
+        where: { type: 'EXPENSE', date: { gte: workspaceDateRange(january, january, zone).from } },
         orderBy: { _sum: { amount: 'desc' } },
       });
 
@@ -396,9 +412,10 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       if (type) where.type = type;
       if (category) where.category = category;
       if (startDate || endDate) {
+        const zone = await organizationZone();
         where.date = {
-          ...(startDate ? { gte: new Date(startDate) } : {}),
-          ...(endDate ? { lte: new Date(endDate) } : {}),
+          ...(startDate ? { gte: financeInputInstant(startDate, zone) } : {}),
+          ...(endDate ? { lte: financeInputInstant(endDate, zone, 'inclusive-end') } : {}),
         };
       }
       const transactions = await db.transaction.findMany({
@@ -431,12 +448,13 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
     execute: async () => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
       const expenses = await db.recurringExpense.findMany({ where: { active: true } });
-      const today = now();
-      today.setHours(0, 0, 0, 0);
+      const zone = await organizationZone();
+      const day = workspaceToday(zone, now());
+      const today = workspaceDateRange(day, day, zone).from;
       return expenses
         .map((exp) => ({
           ...exp,
-          nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today),
+          nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone),
         }))
         .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime())
         .map((exp) => ({
@@ -917,7 +935,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           currency: currency ?? 'USD',
           category,
           interval,
-          nextDueDate: new Date(nextDueDate),
+          nextDueDate: financeInputInstant(nextDueDate, await organizationZone()),
           vendorName: vendorName ?? null,
         },
       });

@@ -123,7 +123,7 @@ describe('private attachment delivery', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe(mime);
     expect(response.headers.get('content-disposition')).toBe('inline');
-    expect(response.headers.get('cache-control')).toBe('private, max-age=3600');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3]));
     expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', name);
     expect(db.restaurantSopEvidence.findFirst).toHaveBeenCalledWith(

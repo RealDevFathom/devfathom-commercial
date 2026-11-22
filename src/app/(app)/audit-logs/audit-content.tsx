@@ -41,7 +41,7 @@ import {
   auditOperationLabel,
   auditRoleLabel,
 } from '@/lib/audit-labels';
-import { formatWorkspaceDateTime } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceDateRange, workspaceToday } from '@/lib/timezone';
 import type { AppRouter } from '@/server/routers/_app';
 
 type AuditEntry = inferRouterOutputs<AppRouter>['audit']['list']['items'][number];
@@ -146,8 +146,12 @@ export function AuditContent({
       outcome: (filters.outcome || undefined) as never,
       actorId: filters.actorId || undefined,
       branchId: filters.branchId || undefined,
-      startDate: filters.startDate ? new Date(filters.startDate) : undefined,
-      endDate: filters.endDate ? new Date(`${filters.endDate}T23:59:59`) : undefined,
+      startDate: filters.startDate
+        ? workspaceDateRange(filters.startDate, filters.startDate, timeZone).from
+        : undefined,
+      endDate: filters.endDate
+        ? new Date(workspaceDateRange(filters.endDate, filters.endDate, timeZone).to.getTime() - 1)
+        : undefined,
       assistantOnly: filters.assistantOnly ? true : undefined,
       limit: 50,
     }),
@@ -161,6 +165,7 @@ export function AuditContent({
       filters.branchId,
       filters.startDate,
       filters.endDate,
+      timeZone,
       filters.assistantOnly,
     ]
   );
@@ -247,7 +252,7 @@ export function AuditContent({
                 );
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+                a.download = `audit-log-${workspaceToday(timeZone)}.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
               }}

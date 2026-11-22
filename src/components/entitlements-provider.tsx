@@ -20,3 +20,8 @@ export function useEntitlements(): EntitlementView {
   if (!entitlements) throw new Error('EntitlementsProvider is missing.');
   return entitlements;
 }
+
+/** The verified tenant's clock, including for screens mounted outside the workspace shell. */
+export function useWorkspaceTimeZone() {
+  return useContext(EntitlementsContext)?.timeZone ?? 'UTC';
+}

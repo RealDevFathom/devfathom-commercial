@@ -13,11 +13,11 @@
  * into this page. The page hands it the finished document over a
  * `BroadcastChannel` named after a random id in the URL fragment (same origin
  * only, held in memory, never in a URL query, storage or a server request), and
- * the print page prints itself, then closes itself when the dialog closes.
+ * the print page prints itself and handles dismissal.
  *
- * With `noopener`, `window.open` returns null whether or not the browser blocked
- * the window, so "blocked" means the print page never announced itself within
- * `PRINT_WINDOW_READY_TIMEOUT_MS`. The print page lives inside the counter
+ * With `noopener`, `window.open` returns null even for an open window. Chromium
+ * consumes transient activation on creation. Without a reliable activation
+ * signal, wait for the page to announce itself. The page lives inside the counter
  * service worker's scope, which keeps a copy for offline printing.
  * Returning never confirms that paper came out.
  */
@@ -27,7 +27,7 @@ export const PRINT_WINDOW_PATH = '/pharmacy/counter/print-window.html';
 export const PRINT_WINDOW_SCRIPT_PATH = '/pharmacy/counter/print-window.js';
 export const PRINT_WINDOW_CHANNEL_PREFIX = 'devfathom-print-window:';
 /** A print page that has not announced itself by then was blocked or never loaded. */
-export const PRINT_WINDOW_READY_TIMEOUT_MS = 5_000;
+export const PRINT_WINDOW_READY_TIMEOUT_MS = 12_000;
 /** A print page that loads after all is still told to close for this long. */
 const LATE_WINDOW_MS = 120_000;
 
@@ -49,10 +49,12 @@ type Entry = {
   open: boolean;
   ready: boolean;
   /** Cancelled or failed: a late print page is told to close. */
-  closing: boolean;
+  failure: PrintWindowError | null;
   sent: boolean;
   readiness: Promise<void>;
   settle: (error?: PrintWindowError) => void;
+  closed: Promise<void>;
+  resolveClosed: () => void;
   timer: ReturnType<typeof setTimeout> | null;
 };
 
@@ -80,6 +82,7 @@ function dispose(id: string): void {
   entries.delete(id);
   if (entry.timer) clearTimeout(entry.timer);
   entry.settle(new PrintWindowError('closed'));
+  entry.resolveClosed();
   try {
     entry.channel.close();
   } catch {
@@ -91,10 +94,11 @@ function dispose(id: string): void {
 /** Stops counting the window; a print page that loads later is told to close. */
 function abandon(id: string, reason: 'blocked' | 'closed'): void {
   const entry = entries.get(id);
-  if (!entry) return;
+  if (!entry || entry.failure) return;
   entry.open = false;
-  entry.closing = true;
-  entry.settle(new PrintWindowError(reason));
+  entry.failure = new PrintWindowError(reason);
+  entry.settle(entry.failure);
+  entry.resolveClosed();
   if (entry.ready) {
     post(entry, { type: 'close' });
     dispose(id);
@@ -112,7 +116,7 @@ function onMessage(id: string, data: unknown): void {
   if (type === 'ready') {
     if (entry.ready) return;
     entry.ready = true;
-    if (entry.closing) {
+    if (entry.failure) {
       post(entry, { type: 'close' });
       dispose(id);
       return;
@@ -120,6 +124,7 @@ function onMessage(id: string, data: unknown): void {
     if (entry.timer) clearTimeout(entry.timer);
     entry.timer = null;
     entry.settle();
+    emit();
   } else if (type === 'closed') {
     dispose(id);
   }
@@ -150,14 +155,20 @@ export function openPrintWindow(features: string): PrintWindow {
   });
   // Nobody may be waiting yet; a failure is still reported to whoever asks.
   readiness.catch(() => {});
+  let resolveClosed!: Entry['resolveClosed'];
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve;
+  });
   const entry: Entry = {
     channel,
     open: true,
     ready: false,
-    closing: false,
+    failure: null,
     sent: false,
     readiness,
     settle,
+    closed,
+    resolveClosed,
     timer: null,
   };
   // Listen before opening: the print page announces itself as soon as it loads.
@@ -171,7 +182,13 @@ export function openPrintWindow(features: string): PrintWindow {
   try {
     // noopener: its own browsing-context group, so its print dialog cannot
     // pause this page; and no reference back into this page.
-    window.open(`${PRINT_WINDOW_PATH}#${id}`, '_blank', `noopener,${features}`);
+    // WebKit can open a popup without consuming activation, so only use this
+    // signal on Chromium and only when the operator's activation was present.
+    const activated =
+      /\bChrom(?:e|ium)\//.test(navigator.userAgent) && navigator.userActivation?.isActive;
+    const popup = window.open(`${PRINT_WINDOW_PATH}#${id}`, '_blank', `noopener,${features}`);
+    if (popup === null && activated && navigator.userActivation?.isActive && !entry.ready)
+      abandon(id, 'blocked');
   } catch {
     abandon(id, 'blocked');
   }
@@ -181,13 +198,41 @@ export function openPrintWindow(features: string): PrintWindow {
 /** Resolves once the print page has loaded; rejects if it was blocked or closed. */
 export function printWindowReady(handle: PrintWindow): Promise<void> {
   const entry = entries.get(handle.id);
-  if (!entry || entry.closing) return Promise.reject(new PrintWindowError('closed'));
+  if (!entry || entry.failure) {
+    return Promise.reject(entry?.failure ?? new PrintWindowError('closed'));
+  }
   return entry.readiness;
+}
+
+/** Resolves when the window closes or can no longer be used. */
+export function printWindowClosed(handle: PrintWindow): Promise<void> {
+  return entries.get(handle.id)?.closed ?? Promise.resolve();
 }
 
 /** True until the operator closes the window, it is cancelled, or it never loaded. */
 export function isPrintWindowOpen(handle: PrintWindow): boolean {
   return entries.get(handle.id)?.open ?? false;
+}
+
+// The isolated static page has no application stylesheet. Pass the resolved
+// Studio tokens for its screen-only Close action with the print document.
+function printDocumentMessage(html: string): Record<string, unknown> {
+  const styles = getComputedStyle(document.documentElement);
+  const tokens = [
+    '--surface-raised',
+    '--surface-sunken',
+    '--text-strong',
+    '--border-strong',
+    '--radius-control',
+    '--ring',
+    '--font-sans',
+  ];
+  const chrome = Object.fromEntries(
+    tokens
+      .map((token) => [token, styles.getPropertyValue(token).trim()])
+      .filter(([, value]) => value)
+  );
+  return { type: 'print', html, ...(Object.keys(chrome).length ? { chrome } : {}) };
 }
 
 /**
@@ -205,11 +250,12 @@ export async function sendToPrintWindow(
   }
 ): Promise<void> {
   const entry = entries.get(handle.id);
-  if (!entry || entry.closing || entry.sent) throw new Error(messages.failedMessage);
+  if (!entry || entry.sent) throw new Error(messages.failedMessage);
   entry.sent = true;
   try {
-    await entry.readiness;
-    if (entries.get(handle.id) !== entry || entry.closing || !post(entry, { type: 'print', html }))
+    await printWindowReady(handle);
+    if (entry.failure) throw entry.failure;
+    if (entries.get(handle.id) !== entry || !post(entry, printDocumentMessage(html)))
       throw new PrintWindowError('closed');
   } catch (error) {
     closePrintWindow(handle);
@@ -228,12 +274,18 @@ export function closePrintWindow(handle: PrintWindow): void {
 
 /** Asks every open print window to come to the front. */
 export function focusPrintWindows(): void {
-  for (const entry of entries.values()) if (entry.open) post(entry, { type: 'focus' });
+  for (const entry of entries.values())
+    if (entry.open && entry.ready) post(entry, { type: 'focus' });
 }
 
 /** For `useSyncExternalStore`: how many print windows are open right now. */
 export function getOpenPrintWindowCount(): number {
   return openCount;
+}
+
+/** Only windows that announced themselves can show a finish-or-cancel notice. */
+export function getConfirmedPrintWindowCount(): number {
+  return Array.from(entries.values()).filter((entry) => entry.open && entry.ready).length;
 }
 
 export function subscribePrintWindows(listener: () => void): () => void {

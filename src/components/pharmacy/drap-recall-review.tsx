@@ -1,5 +1,7 @@
 'use client';
 
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -19,10 +21,10 @@ const MATCH_LABEL = {
   NO_MATCH: { label: 'No catalog match', tone: 'neutral' },
 } as const;
 
-const day = (value: Date | string | null) => {
+const day = (value: Date | string | null, timeZone: string) => {
   if (!value) return '—';
   const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? '—' : date.toISOString().slice(0, 10);
+  return Number.isNaN(date.getTime()) ? '—' : pharmacyCalendarDay(timeZone, date);
 };
 
 function medicineLabel(medicine: { productName: string; brandName: string | null }) {
@@ -32,6 +34,7 @@ function medicineLabel(medicine: { productName: string; brandName: string | null
 }
 
 function AlertEvidence({ item }: { item: QueueItem }) {
+  const timeZone = useWorkspaceTimeZone();
   const { alert } = item;
   return (
     <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
@@ -56,7 +59,7 @@ function AlertEvidence({ item }: { item: QueueItem }) {
       <div>
         <dt className="font-mono text-xs uppercase text-text-muted">Alert / published</dt>
         <dd>
-          {alert.alertNumber ?? item.sourceReference} · {day(alert.publishedAt)}
+          {alert.alertNumber ?? item.sourceReference} · {day(alert.publishedAt, timeZone)}
         </dd>
       </div>
       <div className="sm:col-span-2">
@@ -251,6 +254,7 @@ export function DrapRecallReviewView({
   onConfirm: (ingestId: string, note?: string) => Promise<unknown>;
   onDismiss: (ingestId: string, reason: string) => Promise<unknown>;
 }) {
+  const timeZone = useWorkspaceTimeZone();
   if (forbidden)
     return (
       <SectionCard title="Recall review permission required" titleLevel={2}>
@@ -334,7 +338,7 @@ export function DrapRecallReviewView({
                         label={item.reviewStatus === 'CONFIRMED' ? 'Recall confirmed' : 'Dismissed'}
                       />
                     </td>
-                    <td className="whitespace-nowrap p-3">{day(item.reviewedAt)}</td>
+                    <td className="whitespace-nowrap p-3">{day(item.reviewedAt, timeZone)}</td>
                     <td className="p-3">{item.reviewNote ?? '—'}</td>
                   </tr>
                 ))}
