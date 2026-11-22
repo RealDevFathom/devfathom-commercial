@@ -85,6 +85,7 @@ import {
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import {
   actorManagesBranchDrawers,
+  CART_WRITE_CAPABILITIES,
   counterCapabilityDecision,
   RECEIPT_READ_CAPABILITIES,
 } from '@/lib/pharmacy/counter-capability';
@@ -1222,6 +1223,18 @@ export async function requireCounterReceiptAccess(
   });
 }
 
+// Keep existing denials across the entire receipt family, including a receipt-only DENY.
+function requireCartWriteAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  return requireCounterReceiptAccess(
+    ctx,
+    branch,
+    false,
+    (rules) =>
+      counterCapabilityDecision(rules, CART_WRITE_CAPABILITIES) === 'ALLOW' &&
+      counterCapabilityDecision(rules) !== 'DENY'
+  );
+}
+
 /** Navigation uses the counter's grant and branch rules without recording an access. */
 export async function canAccessPharmacyCounter(ctx: TRPCContext): Promise<boolean> {
   const user = ctx.session?.user;
@@ -2029,7 +2042,7 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         // DEV-830 (F04): the counter's member, capability and branch-assignment gate.
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => linkCustomerToSale(txDb(tx), scope, input));
       } catch (error) {
         fail(error);
@@ -2050,7 +2063,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         const linked = await ctx.db.$transaction(async (tx) =>
           linkLoyaltyCardToSale(txDb(tx), scope, { saleId: input.saleId, code: input.cardToken })
         );
@@ -2880,7 +2893,7 @@ export const pharmacySalesRouter = router({
         metadata: { branchId: input.branchId, billDiscount: input.discount },
       });
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         // A switched-off feature never reaches a PIN check, so a wrong PIN is never a lockout
         // strike for it. The domain re-checks the switch inside the sale transaction.
         if (!(await readBillDiscountEnabled(ctx.db as unknown as ScopedDb, scope.organizationId)))
@@ -3078,9 +3091,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        // DEV-607: the same member, capability and branch-assignment gate as
-        // `counterCart`, so nobody opens a bill they cannot then read or pay.
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         // DEV-97: only someone who takes payment opens a drawer. A pharmacist without
         // `pharmacy:counter` builds the bill and hands it to counter staff, whose
         // tender keeps its own capability and drawer checks.
@@ -3229,8 +3240,7 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
-        // DEV-607: refused before any stock is allocated, with the gate `counterCart` uses.
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         // #520: PINs are verified before the sale transaction takes a connection.
         const { lineInput, approvals } = await approvedLineInput(
           ctx,
@@ -3798,7 +3808,7 @@ export const pharmacySalesRouter = router({
         metadata: { branchId: input.branchId, saleLineId: input.saleLineId },
       });
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await requirePharmacyTodayOpenForTrading(db, scope);
@@ -3842,7 +3852,7 @@ export const pharmacySalesRouter = router({
         metadata: { branchId: input.branchId, saleLineId: input.saleLineId },
       });
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           await requirePharmacyTodayOpenForTrading(db, scope);
@@ -3896,10 +3906,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scope = await requireCartWriteAccess(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           try {
             const db = txDb(tx);
-            const scope = await requireCounterReceiptAccess(ctx, input.branchId);
             const voidReason = input.action === 'void' ? input.voidReason : undefined;
             return await changeSaleStatus(
               db,
@@ -4612,7 +4622,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const scope = await requireCartWriteAccess(ctx, input.branchId);
       try {
         const acknowledgement = await verifyDuplicateSaltAcknowledgement(ctx.db, scope, input);
         annotateAudit(ctx, {
@@ -4948,7 +4958,7 @@ export const pharmacySalesRouter = router({
       // DEV-965: the scan record feeds the flag reports, so only a member who may sell or
       // dispense at this branch (the counter gate) writes one.
       await assignedBranchScope(ctx, input.branchId);
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const scope = await requireCartWriteAccess(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,
