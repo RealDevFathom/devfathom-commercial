@@ -28,6 +28,7 @@ import { anonymousToken, classifyAnonymousRequest } from '@/lib/auth/anonymous-a
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
 import { clientIp } from '@/lib/rate-limit';
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 
 /**
  * `/api/trpc` is the only tRPC transport in the app, and it required a session
@@ -418,7 +419,26 @@ async function handleAnonymous(req: Request): Promise<Response> {
   const routing = classifyAnonymousRequest(req);
   if (routing.kind === 'denied') return unauthorized();
 
-  const token = routing.kind === 'token' ? await anonymousToken(req) : null;
+  let boundedRequest = req;
+  if (req.method === 'POST' && req.body) {
+    // Allow the supplier document's 14 million base64 characters plus its JSON envelope.
+    const limit = routing.procedures.includes('pharmacySupplierLinks.uploadDocument')
+      ? 16 * 1024 * 1024
+      : 256 * 1024;
+    const body = await readBoundedBody(req, limit);
+    if (body === null) {
+      return requestFailed(
+        new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large.' })
+      );
+    }
+    boundedRequest = new Request(req.url, {
+      method: req.method,
+      headers: req.headers,
+      signal: req.signal,
+      body,
+    });
+  }
+  const token = routing.kind === 'token' ? await anonymousToken(boundedRequest) : null;
 
   // Throttle BEFORE any database work, so neither the platform-scope token
   // lookup nor the tenant transaction can be driven by an unauthenticated flood.
@@ -434,7 +454,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
     const organizationId = await organizationForAnonymousToken(token);
     const organization = organizationId ? await resolveOrganizationById(organizationId) : null;
     const target = servable(organization);
-    return target ? runAnonymously(req, target) : runFallback(req);
+    return target ? runAnonymously(boundedRequest, target) : runFallback(boundedRequest);
   }
 
   // Host-routed: `passwordReset.request` carries an email, not a token, so the
@@ -444,7 +464,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
   // never named. An unnamed tenant means nothing is sent, and the caller still
   // gets the ordinary generic confirmation.
   const organization = servable(await resolveExplicitOrganizationByHost(requestHost(req)));
-  return organization ? runAnonymously(req, organization) : runFallback(req);
+  return organization ? runAnonymously(boundedRequest, organization) : runFallback(boundedRequest);
 }
 
 async function handler(req: Request) {

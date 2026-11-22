@@ -1,5 +1,6 @@
 import { passwordResetRequestInput } from '@/lib/auth/anonymous-inputs';
 import { enqueuePasswordReset } from '@/lib/auth/password-reset-request';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { rateLimit } from '@/lib/rate-limit';
 import { requestHost } from '@/lib/tenancy/host';
 import { ipFromHeaders } from '@/server/audit';
@@ -12,7 +13,9 @@ export async function POST(request: Request) {
 
   let email: string;
   try {
-    email = passwordResetRequestInput.parse(await request.json()).email;
+    const body = await readBoundedJson(request, 4 * 1024);
+    if (body.tooLarge) return Response.json(NEUTRAL, { status: 413 });
+    email = passwordResetRequestInput.parse(body.value).email;
   } catch {
     return Response.json(NEUTRAL);
   }

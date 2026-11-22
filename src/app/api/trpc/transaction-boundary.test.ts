@@ -20,6 +20,7 @@
  * acceptance run: that ROLLBACK actually discards the rows, that RLS holds
  * across the boundary, and concurrent behaviour.
  */
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
@@ -164,6 +165,9 @@ vi.mock('@/server/routers/_app', async () => {
           throw new Error('anonymous event failed');
         }),
       }),
+      pharmacySupplierLinks: t.router({
+        uploadDocument: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
+      }),
       trelloImport: t.router({
         importBoard: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
       }),
@@ -222,6 +226,7 @@ vi.mock('@/lib/tenancy/host', async () => {
 });
 
 import { createTRPCUntypedClient, httpBatchLink, TRPCClientError } from '@trpc/client';
+import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import type { AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
 import { TenantHostError } from '@/lib/tenancy/host';
@@ -755,4 +760,40 @@ describe('Trello import HTTP preflight', () => {
     expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
     expect(harness.outcomes).toEqual([]);
   });
+});
+
+it.each([
+  ['passwordReset.request', 256 * 1024],
+  ['pharmacySupplierLinks.uploadDocument', 16 * 1024 * 1024],
+] as const)('stops reading at the anonymous tRPC cap for %s', async (procedure, limit) => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const input = oversizedRequest(limit, {
+    url: url(procedure, '?batch=1'),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 16_384);
+  expect(harness.scopeTenants).toEqual([]);
+});
+
+it('replays a bounded anonymous upload for both tenant lookup and the tRPC parser', async () => {
+  const payload = { token: 'supplier-link', contentBase64: 'A'.repeat(300 * 1024) };
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  mocks.resolveOrganizationById.mockResolvedValueOnce(ORGANIZATION);
+  vi.mocked(organizationForAnonymousToken).mockResolvedValueOnce(ORGANIZATION.id);
+
+  const response = await POST(
+    new Request(url('pharmacySupplierLinks.uploadDocument', '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ '0': { json: payload } }),
+    })
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([{ result: { data: { json: payload } } }]);
+  expect(organizationForAnonymousToken).toHaveBeenCalledWith(payload.token);
+  expect(harness.scopeTenants).toEqual([ORGANIZATION.id]);
 });

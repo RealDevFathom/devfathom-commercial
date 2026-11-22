@@ -5,7 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
-import { consumeBoundedBody } from '@/lib/http/read-bounded-body';
+import { consumeBoundedBody, readBoundedJson } from '@/lib/http/read-bounded-body';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { loyaltyBalance } from '@/lib/restaurant/loyalty';
 import { walletAliasFingerprint } from './alias';
@@ -81,7 +81,9 @@ export async function registerApplePass(
   if (!ID_PATTERN.test(input.deviceLibraryIdentifier)) return EMPTY_401();
   const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
   if (!authenticated) return EMPTY_401();
-  const body = (await request.json().catch(() => null)) as { pushToken?: unknown } | null;
+  const inputBody = await readBoundedJson(request, 2 * 1024).catch(() => null);
+  if (inputBody?.tooLarge) return new Response(null, { status: 413 });
+  const body = inputBody?.value as { pushToken?: unknown } | null | undefined;
   if (!body || typeof body.pushToken !== 'string' || !ID_PATTERN.test(body.pushToken))
     return new Response(null, { status: 400 });
   const created = await withTenantDb(authenticated.pass.organizationId, async (db) => {

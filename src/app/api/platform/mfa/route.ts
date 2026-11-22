@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import {
   requirePlatformMfaSession,
   platformRoleRequiresMfa,
@@ -61,7 +62,10 @@ export async function POST(request: Request) {
   try {
     assertPlatformMutationOrigin(request);
     const actor = await requirePlatformMfaSession(request);
-    const input = actionSchema.parse(await request.json());
+    const requestBody = await readBoundedJson(request, 1024);
+    if (requestBody.tooLarge)
+      return NextResponse.json({ error: 'Request body is too large.' }, { status: 413 });
+    const input = actionSchema.parse(requestBody.value);
     if (actor.enrollmentOnly && !['begin', 'confirm'].includes(input.action)) {
       throw new PlatformSecurityError('Complete MFA enrollment first.', 403);
     }
