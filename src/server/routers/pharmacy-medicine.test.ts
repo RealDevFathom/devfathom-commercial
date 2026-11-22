@@ -223,7 +223,7 @@ describe('staged import proposal read', () => {
     expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
   });
-  it('requires admission to the proposed reorder branch for both reading and approval', async () => {
+  it('requires admission to the proposed reorder branch for reading and deciding', async () => {
     grantCatalogueReview('user_a');
     db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
     db.pharmacyCatalogueEdit.findFirst.mockResolvedValue({
@@ -244,6 +244,10 @@ describe('staged import proposal read', () => {
     await expect(
       reviewer.decideCatalogueEdit({ editId: 'edit', decision: 'APPROVE' })
     ).rejects.toMatchObject(refusal);
+    await expect(
+      reviewer.decideCatalogueEdit({ editId: 'edit', decision: 'REJECT' })
+    ).rejects.toMatchObject(refusal);
+    expect(db.pharmacyCatalogueEdit.updateMany).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();
   });

@@ -523,8 +523,6 @@ async function applyCatalogueCommand(
     [catalogueReplay]: authority,
     [catalogueProposer]: proposerId,
   };
-  if (operation === STAGED_CREATION_OPERATION)
-    await requireStagedReviewBranch(replayContext, approvedReorderBranch(payload));
   const caller = pharmacyMedicineRouter.createCaller(replayContext) as unknown as Record<
     CatalogueCommand,
     (input: unknown) => Promise<unknown>
@@ -718,7 +716,14 @@ export const pharmacyMedicineRouter = router({
         input,
         (tx, operation, payload, proposerId) =>
           applyCatalogueCommand(ctx, tx, operation, payload, authority, proposerId),
-        { soloOwnerAuthority: !access.reviewer, ownerWithoutOtherReviewer: true }
+        {
+          soloOwnerAuthority: !access.reviewer,
+          ownerWithoutOtherReviewer: true,
+          authorizeProposal: async (tx, operation, changes) => {
+            if (operation === STAGED_CREATION_OPERATION)
+              await requireStagedReviewBranch({ ...ctx, db: tx }, approvedReorderBranch(changes));
+          },
+        }
       );
     }),
   priceNotices: capabilityProcedure('pharmacy:safety').query(async ({ ctx }) => ({

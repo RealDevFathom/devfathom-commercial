@@ -980,7 +980,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyMedicine.decideCatalogueEdit': {
-    gate: 'auditedProtectedProcedure + inline catalogueAccess: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer, fresh approval code); staged import approval also requires the same branch admission as proposedImport',
+    gate: 'auditedProtectedProcedure + inline catalogueAccess: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer, fresh approval code); staged import decisions also require the same branch admission as proposedImport',
     lines: [
       'review-catalogue/approve-reject-others-catalogue',
       'suggest-catalogue-edits/owner-approve-no-reviewer',
@@ -2794,6 +2794,30 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'check-procedures/approve-send-back-submitted',
       'dispense-prescriptions/check-procedure-tasks-others',
     ],
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stageBatch': {
+    gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
+    none: 'preparing import files requires both workspace administrator and catalogue edit access',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedBatches': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedBranches': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedDetail': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedRows': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagingUpload': {
+    gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
+    none: 'preparing import files requires both workspace administrator and catalogue edit access',
   },
   'pharmacySupplierCompliance.history': {
     gate: 'auditedProtectedProcedure + supplierPolicyAuthority: tenant owner or ADMIN, AND can(pharmacy:manage); no support session',
