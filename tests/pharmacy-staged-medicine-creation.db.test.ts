@@ -140,11 +140,16 @@ const soloTemplate = [
                   who === 'cashier' ? 'EMPLOYEE' : 'ADMIN',
                 ]
               );
-              if (who === 'reviewer')
+              if (who === 'reviewer') {
+                await c.query(
+                  `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
+                  [id('assignment_' + org), id(org), id('branch_' + org), id(who + '_' + org)]
+                );
                 await c.query(
                   `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
                   [id('review_' + org), id(org), id(who + '_' + org)]
                 );
+              }
             }
           }
           await c.query(

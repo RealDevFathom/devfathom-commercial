@@ -71,6 +71,10 @@ const STOPPED =
               [id(who), id('org')]
             );
           await c.query(
+            `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
+            [id('reviewer_assignment'), id('org'), id('branch'), id('reviewer')]
+          );
+          await c.query(
             `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
             [id('review'), id('org'), id('reviewer')]
           );

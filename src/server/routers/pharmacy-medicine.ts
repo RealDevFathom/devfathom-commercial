@@ -389,9 +389,9 @@ export const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALO
 // A catalogue command is submitted by a catalogue editor. When an approved edit
 // replays it, the approver's own authority authorizes the write, so a pharmacist
 // reviewer who is not a tenant administrator can apply what they approve.
-const catalogueCommandProcedure = contextualCapabilityProcedure(
-  (ctx) => replayAuthority(ctx) ?? CATALOGUE_EDIT_ACTIONS
-);
+const catalogueCommandAuthority = (ctx: TRPCContext) =>
+  replayAuthority(ctx) ?? CATALOGUE_EDIT_ACTIONS;
+const catalogueCommandProcedure = contextualCapabilityProcedure(catalogueCommandAuthority);
 
 /**
  * Who may see and decide the catalogue queue. A reviewer holds the exact
@@ -443,6 +443,19 @@ async function maySetStockThresholds(ctx: TRPCContext, branchId: string) {
   )
     return false;
   return (await admittedInventoryBranchIds(ctx)).has(branchId);
+}
+
+const STAGED_CREATION_ACCESS_REFUSAL =
+  'Only a catalogue editor or reviewer can check or create medicines from this file. Ask the pharmacy owner for catalogue edit or review access.';
+
+async function requireStagedReviewBranch(ctx: TRPCContext, reorderBranchId?: string | null) {
+  const branches = await admittedInventoryBranchIds(ctx);
+  if (!branches.size || (reorderBranchId && !branches.has(reorderBranchId)))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message:
+        'This import needs a catalogue reviewer assigned to an active branch covered by the request. Ask the pharmacy owner to check the branch assignment.',
+    });
 }
 
 /** The reorder branch an approved bulk creation request carries; null for none or an older one. */
@@ -510,6 +523,8 @@ async function applyCatalogueCommand(
     [catalogueReplay]: authority,
     [catalogueProposer]: proposerId,
   };
+  if (operation === STAGED_CREATION_OPERATION)
+    await requireStagedReviewBranch(replayContext, approvedReorderBranch(payload));
   const caller = pharmacyMedicineRouter.createCaller(replayContext) as unknown as Record<
     CatalogueCommand,
     (input: unknown) => Promise<unknown>
@@ -1350,7 +1365,10 @@ export const pharmacyMedicineRouter = router({
    * approval replays this command, which checks the batch again; `runStagedMedicineCreation`
    * then creates the medicines in chunks.
    */
-  createStagedMedicines: catalogueCommandProcedure
+  createStagedMedicines: contextualCapabilityProcedure(
+    catalogueCommandAuthority,
+    'An administrator with catalogue edit access can submit this import. Ask the pharmacy owner to assign an editor to submit it or a reviewer to approve it.'
+  )
     .input(
       z
         .object({
@@ -1462,7 +1480,10 @@ export const pharmacyMedicineRouter = router({
     ),
 
   /** The proposal exposes staged rows only while pending. Its signer can resume an approved file. */
-  proposedImport: capabilityProcedure(CATALOGUE_REVIEW_ACTION)
+  proposedImport: capabilityProcedure(
+    CATALOGUE_REVIEW_ACTION,
+    'Only a catalogue reviewer can inspect the proposed medicines. Ask the pharmacy owner to assign a reviewer.'
+  )
     .input(
       z
         .object({
@@ -1507,13 +1528,7 @@ export const pharmacyMedicineRouter = router({
         : 'This import is no longer awaiting review here. Ask the catalogue editor to check the request.';
       if (!request.success) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
       const { batchId, sourceSha256, reorderBranchId } = request.data.json;
-      const branches = await admittedInventoryBranchIds(ctx);
-      if (!branches.size || (reorderBranchId && !branches.has(reorderBranchId)))
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message:
-            'This import needs a catalogue reviewer assigned to an active branch covered by the request. Ask the pharmacy owner to check the branch assignment.',
-        });
+      await requireStagedReviewBranch(ctx, reorderBranchId);
       const batch = await ctx.db.pharmacyMigrationBatch.findFirst({
         where: {
           organizationId,
@@ -1575,7 +1590,7 @@ export const pharmacyMedicineRouter = router({
       if (!access.editor && !access.reviewer)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'You do not have permission for this action.',
+          message: STAGED_CREATION_ACCESS_REFUSAL,
         });
       const [request] = await ctx.db.pharmacyCatalogueEdit.findMany({
         where: {
@@ -1609,7 +1624,7 @@ export const pharmacyMedicineRouter = router({
       if (!access.editor && !access.reviewer)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'You do not have permission for this action.',
+          message: STAGED_CREATION_ACCESS_REFUSAL,
         });
       // A row the database refuses never throws here (it is recorded); anything else does.
       const step = ctx.db.$transaction(
@@ -1626,7 +1641,8 @@ export const pharmacyMedicineRouter = router({
           if (!approved?.reviewerId)
             throw new TRPCError({
               code: 'PRECONDITION_FAILED',
-              message: 'Creating these medicines needs an approved request first.',
+              message:
+                'Creating these medicines needs an approved request first. Ask a catalogue reviewer to approve this import.',
             });
           return {
             editId: approved.id,

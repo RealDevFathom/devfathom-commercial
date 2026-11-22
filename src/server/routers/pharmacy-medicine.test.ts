@@ -223,6 +223,56 @@ describe('staged import proposal read', () => {
     expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
   });
+  it('requires admission to the proposed reorder branch for both reading and approval', async () => {
+    grantCatalogueReview('user_a');
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue({
+      id: 'edit',
+      editorId: 'editor',
+      medicineId: null,
+      status: 'PENDING',
+      operation: 'createStagedMedicines',
+      changes: { json: { batchId: 'batch_a', sourceSha256: 'hash', reorderBranchId: 'branch_a' } },
+    });
+    const reviewer = caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a');
+    const refusal = {
+      code: 'FORBIDDEN',
+      message:
+        'This import needs a catalogue reviewer assigned to an active branch covered by the request. Ask the pharmacy owner to check the branch assignment.',
+    };
+    await expect(reviewer.proposedImport({ editId: 'edit' })).rejects.toMatchObject(refusal);
+    await expect(
+      reviewer.decideCatalogueEdit({ editId: 'edit', decision: 'APPROVE' })
+    ).rejects.toMatchObject(refusal);
+    expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('explains who can grant access to a proposed file and staged creation', async () => {
+    const cashier = caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a');
+    await expect(cashier.proposedImport({ editId: 'edit' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'Only a catalogue reviewer can inspect the proposed medicines. Ask the pharmacy owner to assign a reviewer.',
+    });
+    await expect(cashier.createStagedMedicines({ batchId: 'batch_a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'An administrator with catalogue edit access can submit this import. Ask the pharmacy owner to assign an editor to submit it or a reviewer to approve it.',
+    });
+    const refusal = {
+      code: 'FORBIDDEN',
+      message:
+        'Only a catalogue editor or reviewer can check or create medicines from this file. Ask the pharmacy owner for catalogue edit or review access.',
+    };
+    await expect(cashier.stagedMedicineCreation({ batchId: 'batch_a' })).rejects.toMatchObject(
+      refusal
+    );
+    await expect(cashier.runStagedMedicineCreation({ batchId: 'batch_a' })).rejects.toMatchObject(
+      refusal
+    );
+    expect(db.pharmacyCatalogueEdit.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
   it('refuses a missing proposal or mismatched file before reading rows', async () => {
     grantCatalogueReview('user_a');
     db.pharmacyCatalogueEdit.findFirst.mockResolvedValueOnce(null);

@@ -972,7 +972,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyMedicine.createStagedMedicines': {
-    gate: 'catalogueCommandProcedure -> admin:access AND pharmacy:catalogue-edit to request; reorder levels kept only if requester also holds pharmacy:inventory at that branch (maySetStockThresholds); approval replay under pharmacy:catalogue-review (or owner fallback)',
+    gate: 'contextualCapabilityProcedure(catalogueCommandAuthority) -> admin:access AND pharmacy:catalogue-edit to request; reorder levels kept only if requester also holds pharmacy:inventory at that branch (maySetStockThresholds); approval replay under pharmacy:catalogue-review (or owner fallback) requires an admitted active branch and admission to the requested reorder branch, if any',
     lines: [
       'suggest-catalogue-edits/request-create-imported-medicines',
       'manage-stock/set-reorder-levels-when',
@@ -980,7 +980,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyMedicine.decideCatalogueEdit': {
-    gate: 'auditedProtectedProcedure + inline catalogueAccess: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer, fresh approval code)',
+    gate: 'auditedProtectedProcedure + inline catalogueAccess: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer, fresh approval code); staged import approval also requires the same branch admission as proposedImport',
     lines: [
       'review-catalogue/approve-reject-others-catalogue',
       'suggest-catalogue-edits/owner-approve-no-reviewer',
