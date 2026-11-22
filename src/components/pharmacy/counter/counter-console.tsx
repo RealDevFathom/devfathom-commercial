@@ -197,6 +197,7 @@ import {
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
 import {
+  allocateWhileCounterPrintWindowOpen,
   assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
   counterFormatFromLayout,
@@ -226,6 +227,7 @@ type Notice = {
   /** DEV-910: stays on screen until the cashier dismisses it. */
   persistent?: boolean;
   inventoryBranchId?: string;
+  printReceiptSaleId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
 };
@@ -834,6 +836,8 @@ function ScopedPharmacyCounterConsole({
     receipt: CounterReceipt;
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
+  const printInFlight = useRef(false);
+  const [printPending, setPrintPending] = useState(false);
   // The patient on the bill when it was first seen paid or voided, and the
   // authorization fields the operator has edited since then (DEV-712).
   const closedBillPatient = useRef<{
@@ -1864,6 +1868,12 @@ function ScopedPharmacyCounterConsole({
     ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
     : null;
   const displayReceipt = presentedReceipt ?? currentReceipt;
+  const receiptPrintNotice =
+    receiptOpen &&
+    notice?.printReceiptSaleId &&
+    notice.printReceiptSaleId === displayReceipt?.saleId
+      ? notice
+      : null;
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -3811,73 +3821,97 @@ function ScopedPharmacyCounterConsole({
 
   const printReceipt = useCallback(
     async (existingReservation?: CounterBrowserPrintReservation): Promise<boolean> => {
-      const reservation = existingReservation ?? reserveCounterBrowserPrint();
+      if (printInFlight.current) {
+        existingReservation?.cancel();
+        return false;
+      }
       // Outside the drawer the shortcut belongs to the current bill; Last
       // receipt explicitly selects the retained, authorized receipt snapshot.
       const receipt = receiptOpen ? displayReceipt : currentReceipt;
       if (!receipt || receipt.receiptNumber === null) {
         setNotice({ tone: 'warning', message: 'Load the settled receipt before printing.' });
-        reservation.cancel();
+        existingReservation?.cancel();
         return false;
       }
-      if (!existingReservation) {
-        discardReceiptIntent();
-        setReceiptSettlement(null);
-      }
+      printInFlight.current = true;
+      setPrintPending(true);
       try {
-        // Reject known popup and rendering failures before claiming an ordinal.
-        // Recheck at dispatch too: windows can close while allocation is in flight.
-        await assertCounterBrowserPrintReady(reservation);
-        buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
-        buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
-      } catch (error) {
-        reservation.cancel();
+        const reservation = existingReservation ?? reserveCounterBrowserPrint();
+        setNotice((previous) =>
+          previous?.printReceiptSaleId === receipt.saleId ? null : previous
+        );
+        if (!existingReservation) {
+          discardReceiptIntent();
+          setReceiptSettlement(null);
+        }
+        try {
+          // Reject known popup and rendering failures before claiming an ordinal.
+          // Recheck at dispatch too: windows can close while allocation is in flight.
+          await assertCounterBrowserPrintReady(reservation);
+          buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
+          buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
+        } catch (error) {
+          reservation.cancel();
+          pendingPrintAudits.current.push({
+            branchId,
+            saleId: receipt.saleId,
+            locale: receiptLocale,
+            failed: true,
+          });
+          void flushPrintAudits();
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            printReceiptSaleId: receipt.saleId,
+          });
+          return false;
+        }
+        let allocation: { copyNumber: number; reprint: boolean };
+        try {
+          allocation = await allocateWhileCounterPrintWindowOpen(reservation, () =>
+            allocateBrowserPrint.mutateAsync({
+              branchId,
+              saleId: receipt.saleId,
+              locale: receiptLocale,
+            })
+          );
+          await printCounterBrowserReceipt(
+            receipt,
+            receiptLocale,
+            receiptFormat,
+            allocation.reprint,
+            reservation
+          );
+        } catch (error) {
+          reservation.cancel();
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            printReceiptSaleId: receipt.saleId,
+          });
+          return false;
+        }
+        // Recording faults do not undo a dialog that has already opened.
+        setLastReceipt({ branchId, receipt });
+        setReceiptReprint(allocation.reprint);
+        setNotice({
+          tone: 'success',
+          persistent: true,
+          message:
+            'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
+        });
         pendingPrintAudits.current.push({
           branchId,
           saleId: receipt.saleId,
           locale: receiptLocale,
-          failed: true,
+          copyNumber: allocation.copyNumber,
         });
         void flushPrintAudits();
-        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
-        return false;
+        return true;
+      } finally {
+        printInFlight.current = false;
+        setPrintPending(false);
       }
-      let allocation: { copyNumber: number; reprint: boolean };
-      try {
-        allocation = await allocateBrowserPrint.mutateAsync({
-          branchId,
-          saleId: receipt.saleId,
-          locale: receiptLocale,
-        });
-        await printCounterBrowserReceipt(
-          receipt,
-          receiptLocale,
-          receiptFormat,
-          allocation.reprint,
-          reservation
-        );
-      } catch (error) {
-        reservation.cancel();
-        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
-        return false;
-      }
-      // Recording faults do not undo a dialog that has already opened.
-      setLastReceipt({ branchId, receipt });
-      setReceiptReprint(allocation.reprint);
-      setNotice({
-        tone: 'success',
-        persistent: true,
-        message:
-          'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
-      });
-      pendingPrintAudits.current.push({
-        branchId,
-        saleId: receipt.saleId,
-        locale: receiptLocale,
-        copyNumber: allocation.copyNumber,
-      });
-      void flushPrintAudits();
-      return true;
     },
     [
       currentReceipt,
@@ -4264,7 +4298,7 @@ function ScopedPharmacyCounterConsole({
           setActiveSale(null);
           setHeldSaleId(null);
         }}
-        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56"
+        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56 xl:max-w-44"
       >
         {branches.map((branch) => (
           <option key={branch.id} value={branch.id}>
@@ -4525,7 +4559,7 @@ function ScopedPharmacyCounterConsole({
               ) : null}
             </div>
             <div className="space-y-2.5">
-              {notice ? (
+              {notice && !receiptPrintNotice ? (
                 <div
                   role={notice.tone === 'success' || notice.tone === 'info' ? 'status' : 'alert'}
                   aria-live="polite"
@@ -5429,9 +5463,13 @@ function ScopedPharmacyCounterConsole({
                 <Button
                   variant="outline"
                   className="h-11 w-full"
+                  disabled={printPending}
+                  aria-busy={printPending || undefined}
                   onClick={() => void printReceipt()}
                 >
-                  Print · {formatBinding(keymap.bindings.printReceipt)}
+                  {printPending
+                    ? 'Printing receipt…'
+                    : `Print · ${formatBinding(keymap.bindings.printReceipt)}`}
                 </Button>
               </div>
             ) : (
@@ -6247,6 +6285,8 @@ function ScopedPharmacyCounterConsole({
           format={receiptFormat}
           reprint={receiptReprint}
           printing={!displayReceipt && receiptQuery.isFetching}
+          printPending={printPending}
+          printError={receiptPrintNotice?.message}
           error={!displayReceipt && receiptQuery.error ? messageFrom(receiptQuery.error) : null}
           onLocaleChange={setReceiptLocale}
           onFormatChange={setReceiptFormat}

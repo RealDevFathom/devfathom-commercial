@@ -40,14 +40,27 @@ describe('DEV-973 print window notice', () => {
     expect(region).toBeEmptyDOMElement();
   });
 
-  it('clears when the browser blocked the window, once it fails to load', async () => {
+  it('waits for the popup to confirm that it opened before displaying the notice', () => {
+    const windows = installFakePrintWindows({ ready: false });
+    render(<PrintWindowNotice />);
+    act(() => {
+      openPrintWindow('popup');
+    });
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+    act(() => windows.last().ready());
+    expect(screen.getByRole('status')).toHaveTextContent('Finish or cancel printing');
+    act(() => windows.closeAll());
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  });
+
+  it('stays empty while a blocked window waits for the readiness timeout', async () => {
     vi.useFakeTimers();
     installFakePrintWindows({ blocked: true });
     render(<PrintWindowNotice />);
     act(() => {
       openPrintWindow('popup');
     });
-    expect(screen.getByRole('status')).toHaveTextContent('Finish or cancel printing');
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
     await act(() => vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS));
     expect(screen.getByRole('status')).toBeEmptyDOMElement();
     vi.useRealTimers();

@@ -40,7 +40,8 @@ export function MarketingSummary({
           <ReportDetails>
             <p className="text-text-muted">
               {report.period.from}–{report.period.to} ({workspaceZoneLabel(report.period.timezone)}
-              {screenCopy.marketing.evidenceCutoff} {formatShopTime(report.cutoff)}
+              {screenCopy.marketing.evidenceCutoff}{' '}
+              {formatShopTime(report.cutoff, report.period.timezone)}
               {screenCopy.marketing.branchAndDateFiltersApplySupplierIngredientAnd}
             </p>
           </ReportDetails>

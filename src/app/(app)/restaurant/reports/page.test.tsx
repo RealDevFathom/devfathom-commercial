@@ -63,6 +63,26 @@ async function renderPage(query: Record<string, string | undefined> = {}) {
 }
 
 describe('Restaurant financial report integration', () => {
+  it('ends the default report on the selected branch day at 00:30 in Karachi', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-11-02T00:30:00+05:00'));
+      reportMocks.branches.mockResolvedValue({
+        branches: [
+          { id: 'branch-1', name: 'Karachi', timezone: 'Asia/Karachi', businessDayCutoff: '00:00' },
+        ],
+        canAllBranches: false,
+      });
+      await renderPage({ from: undefined, to: undefined });
+      expect(reportMocks.payments).toHaveBeenCalledWith({
+        branchId: 'branch-1',
+        from: '2026-10-27',
+        to: '2026-11-02',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     reportMocks.context.mockResolvedValue({
