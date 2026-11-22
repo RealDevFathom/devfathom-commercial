@@ -36,11 +36,15 @@ const db: any = {
     create: vi.fn(),
   },
   organizationRolePermission: {
-    deleteMany: vi.fn(async () => {
-      permissions = [];
+    findMany: vi.fn(async () => permissions),
+    deleteMany: vi.fn(async ({ where }) => {
+      permissions = permissions.filter((row) => !where.capability.in.includes(row.capability));
     }),
     createMany: vi.fn(async ({ data }: { data: typeof permissions }) => {
-      permissions = data;
+      permissions = [
+        ...permissions,
+        ...data.map(({ capability, effect }) => ({ capability, effect })),
+      ];
     }),
   },
   $transaction: vi.fn(async (run: (tx: typeof db) => Promise<unknown>) => {
@@ -90,7 +94,10 @@ describe('organization role replacement', () => {
     db.organizationRole.findFirst.mockResolvedValue(role);
     db.organizationRolePermission.createMany.mockImplementation(
       async ({ data }: { data: typeof permissions }) => {
-        permissions = data;
+        permissions = [
+          ...permissions,
+          ...data.map(({ capability, effect }) => ({ capability, effect })),
+        ];
       }
     );
   });
@@ -117,6 +124,19 @@ describe('organization role replacement', () => {
 
     expect(db.$transaction).toHaveBeenCalledOnce();
     expect(permissions).toEqual([{ capability: 'existing:permission', effect: 'ALLOW' }]);
+  });
+
+  it('retains existing terminal grants when a role gains access or only its label changes', async () => {
+    permissions = [{ capability: 'pos:operate', effect: 'ALLOW' }];
+    const next = [
+      { capability: 'pos:operate', effect: 'ALLOW' as const },
+      { capability: 'payments:collect', effect: 'ALLOW' as const },
+    ];
+    await caller().upsertRole({ ...input, permissions: next });
+    await caller().upsertRole({ ...input, name: 'Renamed role', permissions: next });
+    expect(permissions).toEqual(next);
+    expect(db.organizationRolePermission.deleteMany).not.toHaveBeenCalled();
+    expect(db.organizationRolePermission.createMany).toHaveBeenCalledTimes(1);
   });
 
   it('locks the tenant and denies editing a role outside it', async () => {

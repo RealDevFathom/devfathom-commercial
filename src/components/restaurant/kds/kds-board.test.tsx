@@ -8,10 +8,10 @@ import { KdsBoard } from './kds-board';
 type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
 type ItemDisplayStatus = TicketDisplayStatus | 'HELD' | 'SERVED';
 
-function json(body: unknown, status = 200) {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }
 
@@ -219,6 +219,23 @@ describe('KdsBoard transport', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: 'KDS' }),
     });
+  });
+
+  it('shows the server reason when a session-bearing kitchen poll is refused', async () => {
+    vi.useFakeTimers();
+    const reason = 'This operator no longer has kitchen access at this branch.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith('/operators')) return json(operatorDirectory());
+        if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+        return json({ error: reason }, 403, { 'X-Terminal-Access': 'denied' });
+      })
+    );
+    render(<KdsBoard />);
+    await connect();
+    expect(screen.getByText(reason)).toBeVisible();
   });
 
   it('fully resyncs once after a cursor gap and replaces stale level state', async () => {
@@ -451,6 +468,27 @@ describe('KdsBoard transport', () => {
     );
     expect(new Headers(call?.[1]?.headers).get('X-POS-Composer-Proof')).toBeNull();
     expect(screen.getByText('KOT 2 reprint queued.')).toBeVisible();
+  });
+
+  it('keeps the station connected and shows the plain reason when only reprint is forbidden', async () => {
+    vi.useFakeTimers();
+    const reason = 'This operator lacks the "orders:take" capability.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith('/operators')) return json(operatorDirectory());
+        if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+        if (path.endsWith('/orders/reprint-kot')) return json({ error: reason }, 403);
+        return json(queue([ticket(2, 'Burger', 'NEW')]));
+      })
+    );
+    render(<KdsBoard />);
+    await connect();
+    fireEvent.click(screen.getByRole('button', { name: 'Reprint KOT 2 for order 42' }));
+    await flush();
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reprint KOT 2 for order 42' })).toBeVisible();
   });
 
   it('rejects a denied device before exposing operators or the secret', async () => {

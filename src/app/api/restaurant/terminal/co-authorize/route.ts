@@ -1,8 +1,16 @@
-import { recordOwnerPinReauthentication } from '@/lib/restaurant/owner-reauthentication';
+import {
+  isSoloOwner,
+  recordOwnerPinReauthentication,
+} from '@/lib/restaurant/owner-reauthentication';
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
+import { operatorHasCapability } from '@/lib/restaurant/operator-capability';
+import {
+  OPEN_ORDER_STATUSES,
+  requireOrderTakingCapability,
+} from '@/lib/restaurant/terminal-orders';
 import { rateLimit } from '@/lib/rate-limit';
 import {
   CoAuthorizationError,
@@ -11,14 +19,14 @@ import {
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 
-const bodySchema = z.object({
+const bodySchema = z.strictObject({
   approvingStaffProfileId: z.string().min(1),
   type: z.enum(['PIN', 'BADGE']),
   secret: z.string().min(1),
-  capability: z.string().min(1),
-  reason: z.string().min(1),
-  targetType: z.string().min(1).optional(),
-  targetId: z.string().min(1).optional(),
+  capability: z.literal('orders:void'),
+  reason: z.string().trim().min(1),
+  targetType: z.literal('Order'),
+  targetId: z.string().trim().min(1),
 });
 
 /**
@@ -49,8 +57,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
       { status: 400 }
     );
   }
-  const { approvingStaffProfileId, type, secret, capability, reason, targetType, targetId } =
-    parsed.data;
+  const { approvingStaffProfileId, type, secret, reason, targetId } = parsed.data;
 
   const burst = await rateLimit(
     `terminal:cred:${ctx.device.id}:${approvingStaffProfileId}`,
@@ -65,6 +72,40 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   }
 
   const now = new Date();
+  const actorRefusal = await requireOrderTakingCapability(ctx, actingStaffProfileId);
+  if (actorRefusal) return actorRefusal;
+  if (
+    actingStaffProfileId === approvingStaffProfileId &&
+    (type !== 'PIN' || !(await isSoloOwner(ctx.db, actingStaffProfileId, ctx.device.branchId)))
+  ) {
+    return NextResponse.json(
+      { error: 'A second approving operator is required.' },
+      { status: 400 }
+    );
+  }
+  if (
+    !(await operatorHasCapability(
+      ctx.db,
+      approvingStaffProfileId,
+      'coauth:approve',
+      now,
+      ctx.device.branchId
+    ))
+  ) {
+    return NextResponse.json({ error: 'Manager approval is unavailable.' }, { status: 403 });
+  }
+  // Resolve the same branch boundary as the void command before credential
+  // verification can emit approval evidence. Closed orders cannot be voided here.
+  const order = await ctx.db.restaurantOrder.findFirst({
+    where: {
+      id: targetId,
+      branchId: ctx.device.branchId,
+      status: { in: [...OPEN_ORDER_STATUSES] },
+    },
+    select: { id: true },
+  });
+  if (!order) return NextResponse.json({ error: 'Order unavailable.' }, { status: 404 });
+
   const auth = await authenticateOperator(ctx.db, {
     staffProfileId: approvingStaffProfileId,
     deviceId: ctx.device.id,
@@ -98,10 +139,10 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     record = buildCoAuthorizationRecord({
       actingStaffProfileId,
       approvingStaffProfileId,
-      capability,
+      capability: 'orders:void',
       reason,
-      targetType: targetType ?? null,
-      targetId: targetId ?? null,
+      targetType: 'Order',
+      targetId: order.id,
       deviceId: ctx.device.id,
       terminalSessionId: ctx.session.id,
     });

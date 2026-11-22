@@ -1,3 +1,4 @@
+import { oversizedRequest } from '../../../../../../tests/fixtures/bounded-request';
 import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   config: vi.fn(),
@@ -132,7 +133,7 @@ it('records a signed account_update fixture as an owner alert, and nothing when 
   const { verifyMetaSignature } = await vi.importActual<
     typeof import('@/lib/pharmacy/whatsapp/provider')
   >('@/lib/pharmacy/whatsapp/provider');
-  mocks.verify.mockImplementation((body: string, header: string | null) =>
+  mocks.verify.mockImplementation((body: Uint8Array, header: string | null) =>
     verifyMetaSignature(secret, body, header)
   );
   mocks.parse.mockReturnValue([]);
@@ -169,21 +170,23 @@ it('records a signed account_update fixture as an owner alert, and nothing when 
       },
     },
   };
-  const body = JSON.stringify({
-    object: 'whatsapp_business_account',
-    entry: [
-      {
-        id: 'waba-a',
-        time: 1790000000,
-        changes: [
-          {
-            field: 'account_update',
-            value: { event: 'DISABLED_UPDATE', ban_info: { waba_ban_state: 'DISABLE' } },
-          },
-        ],
-      },
-    ],
-  });
+  const body =
+    '\uFEFF' +
+    JSON.stringify({
+      object: 'whatsapp_business_account',
+      entry: [
+        {
+          id: 'waba-a',
+          time: 1790000000,
+          changes: [
+            {
+              field: 'account_update',
+              value: { event: 'DISABLED_UPDATE', ban_info: { waba_ban_state: 'DISABLE' } },
+            },
+          ],
+        },
+      ],
+    });
   const signed = (signature: string) =>
     new Request('http://pharmacy.localhost/api/pharmacy/whatsapp/webhook', {
       method: 'POST',
@@ -211,4 +214,13 @@ it('records a signed account_update fixture as an owner alert, and nothing when 
       message: expect.stringContaining('appeal'),
     }),
   ]);
+});
+
+it('stops reading a chunked body at the limit', async () => {
+  const limit = 4 * 1024 * 1024;
+  const { request, cancelled, bytesRead } = oversizedRequest(limit);
+  expect((await POST(request)).status).toBe(413);
+  expect(cancelled()).toBe(true);
+  expect(bytesRead()).toBeLessThanOrEqual(limit + 16_384);
+  expect(mocks.verify).not.toHaveBeenCalled();
 });

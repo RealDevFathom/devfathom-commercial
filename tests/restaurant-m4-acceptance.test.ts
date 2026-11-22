@@ -2,6 +2,9 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { encryptSecret } from '@/lib/secret-crypto';
+import { generateTotpSecret } from '@/lib/totp';
+import { fixtureTotp } from './fixtures/restaurant-totp';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -13,6 +16,7 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const PIN = '424242';
 const MANAGER_PIN = '989898';
+const managerAuthenticator = generateTotpSecret();
 
 const ids = {
   orgA: `org_wha49_a_${suffix}`,
@@ -386,6 +390,7 @@ beforeAll(async () => {
           create: [
             { capability: 'payments:collect', effect: 'ALLOW' },
             { capability: 'coauth:approve', effect: 'ALLOW' },
+            { capability: 'pos:operate', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
             { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],
@@ -410,6 +415,13 @@ beforeAll(async () => {
         department: 'LEADERSHIP',
         title: 'Manager',
         organizationRoleId: ids.settleRole,
+      },
+    });
+    await tx.approvalAuthenticator.create({
+      data: {
+        userId: ids.managerAUser,
+        encryptedSecret: encryptSecret(managerAuthenticator),
+        enabledAt: new Date(),
       },
     });
     for (const [id, displayName, pin, userId] of [
@@ -498,6 +510,7 @@ beforeAll(async () => {
         name: 'WHA-49 Order Taking',
         permissions: {
           create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
             { capability: 'orders:take', effect: 'ALLOW' },
             { capability: 'kitchen:operate', effect: 'ALLOW' },
           ],
@@ -719,7 +732,11 @@ describeIfDatabase('WHA-49 M4 restaurant acceptance (real DB/routes)', () => {
       itemId,
       reason: 'burnt',
       wastageDisposition: 'WASTE',
-      approving: { staffProfileId: ids.managerA, type: 'PIN', secret: MANAGER_PIN },
+      approving: {
+        staffProfileId: ids.managerA,
+        type: 'PIN',
+        secret: fixtureTotp(managerAuthenticator),
+      },
     });
     expect(approved.status).toBe(200);
 

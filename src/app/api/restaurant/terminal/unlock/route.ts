@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
+import { deviceBaseCapability } from '@/lib/restaurant/operator-capability';
 import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { describeShiftDenial } from '@/lib/restaurant/shifts';
@@ -54,6 +55,7 @@ export const POST = withTerminalAuth(async (ctx, request) => {
 
   const now = new Date();
   const auth = await authenticateOperator(ctx.db, {
+    forTerminalBinding: true,
     staffProfileId,
     deviceId: ctx.device.id,
     branchId: ctx.device.branchId,
@@ -84,21 +86,19 @@ export const POST = withTerminalAuth(async (ctx, request) => {
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
   }
 
-  // Authenticate before authorization so the capability result cannot be used
-  // to discover which operators may access a kitchen display without first
-  // proving possession of that operator's credential.
-  if (
-    ctx.device.kind === 'KDS' &&
-    !(await operatorHasCapability(
-      ctx.db,
-      staffProfileId,
-      'kitchen:operate',
-      now,
-      ctx.device.branchId
-    ))
-  ) {
+  // Check device access only after proving the incoming operator's credential.
+  const kitchenDisplay = ctx.device.kind === 'KDS';
+  const mayUnlock = await operatorHasCapability(
+    ctx.db,
+    staffProfileId,
+    kitchenDisplay ? 'kitchen:operate' : 'pos:operate',
+    now,
+    ctx.device.branchId
+  );
+  if (!mayUnlock) {
+    const capability = deviceBaseCapability(ctx.device.kind);
     return NextResponse.json(
-      { error: 'This operator lacks the "kitchen:operate" capability.' },
+      { error: `This operator lacks the "${capability}" capability.` },
       { status: 403 }
     );
   }

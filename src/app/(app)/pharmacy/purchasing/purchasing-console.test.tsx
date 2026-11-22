@@ -194,6 +194,7 @@ function callerStub(overrides: Record<string, unknown> = {}) {
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
     receiptDebitNotes: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
+    legacySupplierDispatches: vi.fn().mockResolvedValue(null),
     returnableLots: vi.fn().mockResolvedValue([]),
     supplierCredits: vi.fn().mockResolvedValue([]),
     receivedAgainstOrder: vi.fn().mockResolvedValue({}),

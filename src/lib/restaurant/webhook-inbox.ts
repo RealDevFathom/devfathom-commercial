@@ -8,7 +8,7 @@ import {
   type RestaurantWebhookVerificationStatus,
 } from '@/generated/prisma/client';
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
-import { enqueue } from '@/lib/restaurant/scheduler';
+import { enqueue, SchedulerError } from '@/lib/restaurant/scheduler';
 import { recordAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/terminal-payments';
@@ -21,11 +21,8 @@ import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/term
  * it inside the tenant's RLS context — the receiver never processes provider
  * events on the request path.
  *
- * Conservative M7 defaults (recorded in BUILD-ASSUMPTIONS):
- *   - Signature verification is STUBBED. No provider secret is configured in M7,
- *     so {@link verifyWebhookSignatureStub} records a status from the presence of a
- *     signature header — never a real HMAC/asymmetric check. It is the seam a
- *     provider adapter replaces; `FAILED` is reserved for that real verifier.
+ * The route authenticates the raw body. Admission checks tenant provider mode
+ * and job capacity inside the same transaction as the inbox and queue writes.
  *   - Dedup is idempotent at two layers: a check-then-create fast path plus the
  *     `(organization, source, externalEventId)` unique index as the authoritative
  *     guard (a concurrent duplicate loses the race and is returned as
@@ -72,9 +69,9 @@ export type RecordInboundWebhookInput = {
   externalEventId: string;
   eventType?: string | null;
   payload: Prisma.InputJsonValue;
-  /** The raw signature header value, if the caller presented one (STUB input). */
-  signature?: string | null;
-  verificationStatus?: RestaurantWebhookVerificationStatus;
+  verificationStatus: RestaurantWebhookVerificationStatus | 'UNVERIFIED';
+  /** Set only after the provider HMAC verifier authenticates the original body. */
+  signatureMethod?: 'HMAC_SHA256';
 };
 
 export type RecordInboundWebhookResult = {
@@ -98,17 +95,23 @@ const INBOX_SELECT = {
 } as const;
 
 /**
- * STUB (D21) signature verification. No provider secret is configured in M7, so
- * this performs NO cryptographic check: it records `VERIFIED` when the caller
- * presented a non-empty signature and `PENDING` otherwise (awaiting a real
- * verifier). This is the extension point a provider adapter replaces to return the
- * real `VERIFIED`/`FAILED` — the receiver claims no more than it does.
+ * Providers without a cryptographic verifier have no proof of origin.
+ * UNVERIFIED is an admission result only and never enters the inbox.
  */
-export function verifyWebhookSignatureStub(input: {
+export const verifyWebhookSignatureStub: (input: {
   source: string;
   signature: string | null;
-}): RestaurantWebhookVerificationStatus {
-  return input.signature != null && input.signature.trim().length > 0 ? 'VERIFIED' : 'PENDING';
+}) => 'UNVERIFIED' = () => 'UNVERIFIED';
+
+export const MAX_PENDING_WEBHOOK_JOBS = 1000;
+
+export class WebhookAdmissionError extends Error {
+  constructor(
+    readonly status: 401 | 404 | 429,
+    message: string
+  ) {
+    super(message);
+  }
 }
 
 /** Open one tenant-scoped transaction (same retype as scheduler.ts / dispatcher). */
@@ -122,8 +125,8 @@ function isUniqueViolation(error: unknown): boolean {
 
 /**
  * True only for a terminal event that a real verifier marked VERIFIED. The route
- * stores a `terminal.*` row only after its HMAC passes; every other row carries
- * either no check or the presence-only stub, so it is unauthenticated.
+ * has always required an HMAC for `terminal.*`. Older non-terminal rows can
+ * carry a VERIFIED status from the retired presence-only stub.
  */
 function isAuthenticatedTerminal(
   eventType: string | null | undefined,
@@ -173,11 +176,12 @@ export async function recordInboundWebhook(
   input: RecordInboundWebhookInput,
   now: Date = new Date()
 ): Promise<RecordInboundWebhookResult> {
-  const verificationStatus =
-    input.verificationStatus ??
-    verifyWebhookSignatureStub({ source: input.source, signature: input.signature ?? null });
-  // Only an explicit verifier result counts; the stub never authenticates.
-  const authenticated = isAuthenticatedTerminal(input.eventType, input.verificationStatus);
+  const { verificationStatus } = input;
+  if (verificationStatus !== 'VERIFIED') {
+    throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
+  }
+  // Preserve promotion of legacy rows when a verified terminal event arrives.
+  const authenticated = isAuthenticatedTerminal(input.eventType, verificationStatus);
   // An authenticated event deduplicates only against another authenticated row.
   const isDuplicate = (existing: ExistingInbox) =>
     !authenticated || isAuthenticatedTerminal(existing.eventType, existing.verificationStatus);
@@ -185,9 +189,27 @@ export async function recordInboundWebhook(
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await runInboxTransaction(db, async (tx) => {
+        // Serialize admission across all webhook sources for this tenant.
+        await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(
+          'restaurant:webhook:' || current_setting('app.current_organization_id'), 0
+        ))::text`;
+        // Hold one enabled configuration through commit if it is being disabled concurrently.
+        const providers = await tx.$queryRaw<{ id: string }[]>`
+          SELECT id FROM restaurant_terminal_provider_configs
+          WHERE "organizationId" = current_setting('app.current_organization_id')
+            AND source = ${input.source} AND mode = 'WEBHOOK'
+          LIMIT 1 FOR SHARE
+        `;
+        if (!providers.length) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
         const existing = await findExistingInbox(tx, input.source, input.externalEventId);
+        if (existing && isDuplicate(existing)) return duplicateOf(existing);
+        const pending = await tx.restaurantJob.count({
+          where: { type: WEBHOOK_PROCESS_JOB_TYPE, status: { in: ['QUEUED', 'RUNNING'] } },
+        });
+        if (pending >= MAX_PENDING_WEBHOOK_JOBS) {
+          throw new WebhookAdmissionError(429, 'Too many pending webhook jobs.');
+        }
         if (existing) {
-          if (isDuplicate(existing)) return duplicateOf(existing);
           // Authenticated promotion: drop the unauthenticated row that holds this
           // event id. Its pending job, if any, no-ops once the row is gone.
           await tx.restaurantWebhookInbox.deleteMany({ where: { id: existing.id } });
@@ -222,6 +244,7 @@ export async function recordInboundWebhook(
             eventType: input.eventType ?? null,
             payload: input.payload,
             verificationStatus,
+            providerHmacVerified: input.signatureMethod === 'HMAC_SHA256',
             status: 'PENDING',
           },
           select: INBOX_SELECT,
@@ -246,6 +269,9 @@ export async function recordInboundWebhook(
       // externalEventId) first. Re-read and report it as a duplicate receipt,
       // unless an unauthenticated row won against an authenticated event: then
       // retry once so the promotion above replaces it.
+      if (error instanceof SchedulerError && error.reason === 'WEBHOOK_CAPACITY') {
+        throw new WebhookAdmissionError(429, error.message);
+      }
       if (isUniqueViolation(error)) {
         const existing = await runInboxTransaction(db, (tx) =>
           findExistingInbox(tx, input.source, input.externalEventId)

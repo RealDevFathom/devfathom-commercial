@@ -1,9 +1,9 @@
 import { NextResponse } from 'next/server';
 
-import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
+import { withKdsReadAuth } from '@/lib/restaurant/terminal-auth';
 
 /** Active staff eligible to act on the authenticated KDS device's branch. */
-export const GET = withDeviceAuth(async (ctx) => {
+export const GET = withKdsReadAuth(async (ctx) => {
   const staff = await ctx.db.restaurantStaffProfile.findMany({
     where: { primaryBranchId: ctx.device.branchId, status: 'ACTIVE' },
     select: {

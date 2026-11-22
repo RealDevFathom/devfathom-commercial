@@ -30,6 +30,8 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    // Bound the proxy clone while allowing the 7.5 MB customer portal request.
+    proxyClientMaxBodySize: '8mb',
     // Coupled to Dockerfile's per-process NODE_OPTIONS heap ceiling. Raising this
     // multiplies concurrently available heaps and must be evaluated against the
     // image builder's total memory before changing the worker count.

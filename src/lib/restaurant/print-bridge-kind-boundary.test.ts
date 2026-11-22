@@ -64,6 +64,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         return row;
       },
     },
+    $queryRaw: async (_query: TemplateStringsArray, tokenHash: string, deviceId: string) =>
+      h.store.sessions.filter((row) => row.tokenHash === tokenHash && row.deviceId === deviceId),
     restaurantTerminalSession: {
       findUnique: async ({ where }: { where: Record<string, unknown> }) =>
         findBy(h.store.sessions, where),

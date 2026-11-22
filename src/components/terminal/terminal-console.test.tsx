@@ -88,6 +88,10 @@ function createTransport() {
         serverTime: '2026-08-18T00:01:00Z',
       });
     }
+    if (path.endsWith('/open-orders'))
+      return json({
+        orders: [{ id: 'fixture-order', orderNumber: 23, businessDate: '2026-11-21' }],
+      });
     if (path.endsWith('/co-authorize')) {
       return json({
         coAuthorization: {
@@ -95,8 +99,8 @@ function createTransport() {
           capability: body.capability,
           actingStaffProfileId: transport.actor,
           approvingStaffProfileId: body.approvingStaffProfileId,
-          targetType: null,
-          targetId: null,
+          targetType: body.targetType,
+          targetId: body.targetId,
           createdAt: '2026-08-18T00:02:00Z',
         },
       });
@@ -280,15 +284,24 @@ describe('terminal console transitions', () => {
       }
     );
     fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '5678' } });
-    fireEvent.change(screen.getByLabelText('Capability / action'), {
-      target: { value: 'orders:void' },
-    });
+    const orderControl = () => screen.getByRole('combobox', { name: 'Order to void' });
+    await waitFor(() => expect(orderControl()).toBeEnabled());
+    fireEvent.change(selectFieldControl(orderControl()), { target: { value: 'fixture-order' } });
     fireEvent.change(screen.getByLabelText('Reason'), {
       target: { value: 'Guest rejected item' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Verify and record approval' }));
 
     await screen.findByRole('heading', { name: 'Last manager approval' });
+    expect(
+      JSON.parse(
+        transport.fetch.mock.calls.find(([path]) => String(path).endsWith('/co-authorize'))![1].body
+      )
+    ).toMatchObject({
+      capability: 'orders:void',
+      targetType: 'Order',
+      targetId: 'fixture-order',
+    });
     expect(screen.getAllByText('Amina Khan').length).toBeGreaterThan(0);
     expect(screen.getByText('Mina Ali')).toBeVisible();
     for (const internalId of ['staff-a', 'manager-a', 'approval-1', 'device-1', 'session-1']) {

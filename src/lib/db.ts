@@ -3,7 +3,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 
 /** Validate at the pool boundary; never substitute ambient/admin configuration. */
-function runtimeDatabaseUrl(): string {
+export function runtimeDatabaseUrl(): string {
   const value = process.env.DATABASE_URL;
   if (!value?.trim()) throw new Error('runtime_database_url_missing');
 

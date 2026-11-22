@@ -3,6 +3,7 @@ import 'server-only';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
@@ -30,7 +31,7 @@ import {
 import { persistPrescriptionFile } from './prescription-files';
 import { createWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
 
-const MAX_BODY_CHARS = 7_500_000;
+const MAX_BODY_BYTES = 7_500_000;
 const TEN_MINUTES = 10 * 60_000;
 
 type Json = Record<string, unknown>;
@@ -38,6 +39,7 @@ const json = (body: Json, status = 200, headers: HeadersInit = {}) =>
   Response.json(body, { status, headers: { 'Cache-Control': 'private, no-store', ...headers } });
 
 export const portalResponse = {
+  tooLarge: () => json({ ok: false, message: 'Request body too large.' }, 413),
   notFound: () => json({ ok: false, message: 'Not found.' }, 404),
   invalid: (message = 'This request could not be completed.') => json({ ok: false, message }, 400),
   signedOut: () => json({ ok: false, message: 'Please sign in again.' }, 401),
@@ -85,13 +87,13 @@ const PORTAL_ERROR_MESSAGES: Record<PharmacyPortalError['reason'], string> = {
   KIND_NOT_ALLOWED: 'This request could not be completed.',
 };
 
-export async function readPortalRequestBody(request: Request): Promise<unknown> {
-  const text = await request.text().catch(() => '');
-  if (!text || text.length > MAX_BODY_CHARS) return null;
+export async function readPortalRequestBody(request: Request): Promise<{ body: unknown } | null> {
   try {
-    return JSON.parse(text);
+    const raw = await readBoundedBody(request, MAX_BODY_BYTES);
+    if (raw === null) return null;
+    return { body: JSON.parse(new TextDecoder().decode(raw)) };
   } catch {
-    return null;
+    return { body: null };
   }
 }
 
