@@ -21,6 +21,14 @@ const bookkeepingGate =
   'bookkeepingProcedure: admin:access + Pharmacy Finance module + finance:read (a live grant or the system Owner, subject to deny) + active branch';
 
 export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedureGate>> = {
+  'organizationAdmin.roleAccess': {
+    gate: 'adminProcedure in a pharmacy, reads role grants in the current workspace',
+    none: 'workspace administration only',
+  },
+  'organizationAdmin.setRoleSubRole': {
+    gate: 'adminProcedure in a pharmacy, active owner editing another role, no support session, fresh owner PIN for weighty changes, with every holder checked under the organization lock',
+    none: 'owner administration only',
+  },
   'pharmacyAccess.navigation': {
     gate: "protectedProcedure; reads the caller's own decisions for the menu",
     none: 'menu only: any signed-in member, about themselves',

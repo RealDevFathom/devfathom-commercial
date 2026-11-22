@@ -41,6 +41,20 @@ describe('platform host routing', () => {
     expect(secondPolicy).not.toBe(firstPolicy);
   });
 
+  it('preserves the workspace evidence sandbox through the proxy', async () => {
+    for (const route of [
+      '/api/platform/workspace-requests/lead?document=1',
+      '/api/platform/workspace-%72equests/lead',
+    ]) {
+      const response = await proxy(adminRequest(route));
+      const policy = response.headers.get('content-security-policy');
+      expect(policy).toMatch(/script-src 'self' 'nonce-[^']+'/);
+      expect(policy).toMatch(/; sandbox$/);
+    }
+    const unrelated = await proxy(adminRequest('/api/platform/session'));
+    expect(unrelated.headers.get('content-security-policy')).not.toContain('sandbox');
+  });
+
   it('never redirects framework assets away from their asset URL', async () => {
     const response = await proxy(adminRequest('/_next/static/chunks/app.js'));
 

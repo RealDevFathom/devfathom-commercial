@@ -1,4 +1,5 @@
 import { selectFieldControl } from '@/lib/testing/select-field';
+import { EntitlementsProvider } from '@/components/entitlements-provider';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -162,4 +163,18 @@ describe('DEV-672 controlled register branch list', () => {
     expect(popup.querySelector('table')?.textContent).toContain('Register Tablet 5mg');
     expect(screen.queryByText(/Allow the print window/)).not.toBeInTheDocument();
   });
+});
+
+it.each([
+  ['Asia/Karachi', '2 Nov 2026'],
+  ['UTC', '1 Nov 2026'],
+])('shows the register entry on the %s clock', (timeZone, date) => {
+  h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Main' }] };
+  h.entries = [{ ...entry, createdAt: new Date('2026-11-02T00:30:00+05:00') }];
+  const { container } = render(
+    <EntitlementsProvider value={{ timeZone } as never}>
+      <ControlledRegisterConsole />
+    </EntitlementsProvider>
+  );
+  expect(container).toHaveTextContent(date);
 });

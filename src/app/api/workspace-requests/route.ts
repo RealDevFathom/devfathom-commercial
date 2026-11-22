@@ -3,9 +3,13 @@ import { publicRequestOrigin } from '@/lib/http-origin';
 import { rateLimit } from '@/lib/rate-limit';
 import { ipFromHeaders } from '@/server/audit';
 import { workspaceRequestSchema } from '@/app/login/register/request-schema';
+import {
+  LICENCE_DOCUMENT_REFUSAL,
+  MAX_LICENCE_FILE_BYTES,
+  verifyLicenceDocument,
+} from '@/lib/workspace-requests/licence-document';
 
-const MAX_FILE = 1024 * 1024;
-const MAX_BODY = MAX_FILE + 64 * 1024;
+const MAX_BODY = MAX_LICENCE_FILE_BYTES + 64 * 1024;
 
 /** Public intake only: creates a NEW platform lead, never a user, tenant or session. */
 export async function POST(request: Request) {
@@ -68,10 +72,10 @@ export async function POST(request: Request) {
         { error: 'Check the highlighted fields.', fields: parsed.error.flatten().fieldErrors },
         { status: 400 }
       );
-    let document: { name: string; type: string; base64: string } | undefined;
+    let document: { name: string; type: string; base64: string; checked: true } | undefined;
     if (parsed.data.vertical === 'pharmacy') {
       const file = form.get('licenceCopy');
-      if (!(file instanceof File) || !file.size || file.size > MAX_FILE)
+      if (!(file instanceof File) || !file.size || file.size > MAX_LICENCE_FILE_BYTES)
         return Response.json(
           {
             error: 'Upload a PDF, JPG or PNG licence copy, up to 1 MB.',
@@ -80,26 +84,19 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       const buffer = Buffer.from(await file.arrayBuffer());
-      const type =
-        buffer.subarray(0, 5).toString() === '%PDF-'
-          ? 'application/pdf'
-          : buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
-            ? 'image/png'
-            : buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255
-              ? 'image/jpeg'
-              : null;
-      if (!type || type !== file.type)
+      const verified = await verifyLicenceDocument(buffer, file.type);
+      if (!verified)
         return Response.json(
           {
-            error: 'The document must be a valid PDF, JPG or PNG.',
-            fields: { licenceCopy: ['Unsupported document content.'] },
+            error: LICENCE_DOCUMENT_REFUSAL,
+            fields: { licenceCopy: [LICENCE_DOCUMENT_REFUSAL] },
           },
           { status: 400 }
         );
       // Private evidence stays inside the existing platform lead; no public upload URL.
       document = {
-        name: file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 120),
-        type,
+        ...verified,
+        checked: true,
         base64: buffer.toString('base64'),
       };
     }

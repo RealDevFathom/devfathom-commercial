@@ -1,4 +1,5 @@
 import { selectFieldControl } from '@/lib/testing/select-field';
+import { EntitlementsProvider } from '@/components/entitlements-provider';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -477,4 +478,19 @@ it('tells the owner to record a new profile when confirmed successor rules exist
   expect(notice).toHaveTextContent('The owner must record a new profile version');
   expect(mocks.mutate).not.toHaveBeenCalled();
   expect(screen.getByText('Pending legal review')).toBeInTheDocument();
+});
+
+it('prefills the regulatory effective date at 00:30 in Karachi', () => {
+  vi.useFakeTimers({ toFake: ['Date'] });
+  try {
+    vi.setSystemTime(new Date('2026-11-02T00:30:00+05:00'));
+    render(
+      <EntitlementsProvider value={{ timeZone: 'Asia/Karachi' } as never}>
+        <PharmacyRegulatoryProfileForm initial={initial} />
+      </EntitlementsProvider>
+    );
+    expect(document.querySelector('#effectiveFrom')).toHaveValue('2026-11-02');
+  } finally {
+    vi.useRealTimers();
+  }
 });

@@ -42,6 +42,7 @@ it.each(['development', 'test', 'production'])(
     render(
       <MarketingSummary financial report={report as never} money={(value) => `${value} minor`} />
     );
+    expect(screen.getByText(/evidence cutoff/i)).toHaveTextContent('9 Oct 2026, 12:00 AM UTC');
     expect(screen.getByText('-50 minor')).toBeInTheDocument();
     if (environment === 'production') {
       expect(screen.queryByText(/Sandbox only:/)).not.toBeInTheDocument();

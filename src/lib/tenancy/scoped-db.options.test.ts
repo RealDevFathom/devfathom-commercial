@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/db', () => ({ db: { $transaction: mocks.transaction } }));
 vi.mock('@/lib/side-effects/drain', () => ({ drainOrganization: mocks.drainOrganization }));
-import { trackTransactionWork } from '@/lib/side-effects/scope';
+import { afterTenantCommit, trackTransactionWork } from '@/lib/side-effects/scope';
 import { createTenantDb, withTenantDb, withPlatformDb } from './scoped-db';
 beforeEach(() => {
   vi.resetAllMocks();
@@ -85,6 +85,23 @@ describe('tenant transaction isolation options', () => {
       withTenantDb("bad'org", async () => true, { isolationLevel: 'ReadCommitted' })
     ).rejects.toThrow('Invalid organization');
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+
+  it('only enqueues committed requests after releasing the owning transaction', async () => {
+    const enqueue = vi.fn(async () => {});
+    await expect(
+      withTenantDb('org', async () => {
+        await afterTenantCommit(enqueue);
+        throw new Error('rollback');
+      })
+    ).rejects.toThrow('rollback');
+    expect(enqueue).not.toHaveBeenCalled();
+
+    await withTenantDb('org', async () => {
+      await afterTenantCommit(enqueue);
+      expect(enqueue).not.toHaveBeenCalled();
+    });
+    expect(enqueue).toHaveBeenCalledOnce();
   });
 
   it('waits for transaction-local work without scheduling an outbox drain', async () => {

@@ -331,3 +331,19 @@ describe('processDueSubscriptionRefillReminders (DEV-73)', () => {
     expect(provider.calls).toEqual([]);
   });
 });
+
+it('keeps the capture identity and shows the local run-out day at 00:30', () => {
+  const plan = planRefillReminder(
+    {
+      patientId: 'p',
+      medicineId: 'm',
+      dispensedAt: new Date('2026-11-01T00:30:00+05:00'),
+      quantityDispensed: 1,
+      directions: 'one tablet once daily',
+    },
+    NOW,
+    3,
+    'Asia/Karachi'
+  );
+  expect(plan).toMatchObject({ dueDate: '2026-11-02', dedupeKey: 'refill:p:m:2026-11-01' });
+});

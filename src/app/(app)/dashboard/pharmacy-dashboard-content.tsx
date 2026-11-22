@@ -1,7 +1,7 @@
 'use client';
 
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
-
+import { pharmacyBusinessDay, sharedPharmacyDayEnd } from '@/lib/pharmacy/business-day';
 import { useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -34,7 +34,6 @@ import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
-const today = () => new Date().toISOString().slice(0, 10);
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
 type CommandQuery = {
   data?: {
@@ -319,7 +318,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
 }
 
 function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
-  const { enabledModules } = useEntitlements();
+  const { enabledModules, timeZone } = useEntitlements();
   const utils = trpc.useUtils();
   const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
@@ -330,7 +329,14 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const fallback = useMemo(() => pharmacyDashboardDefault(role), [role]);
   const [draft, setDraft] = useState<PharmacyDashboardPreference>(fallback);
   const draftRef = useRef(draft);
-  const input = { ...(branchId ? { branchId } : {}), from: today(), to: today() };
+  const selected = (branches.data?.branches ?? []).filter(
+    (branch) => !branchId || branch.id === branchId
+  );
+  const { dayEnd } = sharedPharmacyDayEnd(
+    selected.map((branch) => branch.businessDayEndsAtHistory)
+  );
+  const today = pharmacyBusinessDay({ timeZone, dayEnd });
+  const input = { ...(branchId ? { branchId } : {}), from: today, to: today };
   const command = trpc.pharmacyReports.commandCentre.useQuery(input, {
     enabled: Boolean(branches.data?.branches.length),
     retry: false,

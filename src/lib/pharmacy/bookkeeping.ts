@@ -1,3 +1,4 @@
+import { pharmacyCalendarDayRange } from './business-day';
 import type {
   Currency,
   PharmacyAllocationSourceKind,
@@ -281,16 +282,45 @@ export async function reverseBookkeepingTransaction(
 export async function closeAccountingPeriod(
   db: ScopedDb,
   scope: BookkeepingScope,
-  input: { startsAt: Date; endsAt: Date }
+  input: { startsAt: Date | string; endsAt: Date | string },
+  timeZone?: string | null
 ) {
-  if (input.startsAt >= input.endsAt) throw new PharmacyBookkeepingError('INVALID_STATE');
+  const start = (value: string | Date) =>
+    typeof value === 'string' ? pharmacyCalendarDayRange(value, value, timeZone).from : value;
+  let startsAt = start(input.startsAt);
+  let endsAt = start(input.endsAt);
   await lockPharmacyLedgerScope(db, scope);
+  if (typeof input.startsAt === 'string') {
+    const previous = await db.pharmacyAccountingPeriod.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'CLOSED',
+        endsAt: new Date(input.startsAt),
+      },
+      select: { endsAt: true },
+    });
+    if (previous) startsAt = previous.endsAt;
+  }
+  if (typeof input.endsAt === 'string') {
+    const following = await db.pharmacyAccountingPeriod.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'CLOSED',
+        startsAt: new Date(input.endsAt),
+      },
+      select: { startsAt: true },
+    });
+    if (following) endsAt = following.startsAt;
+  }
+  if (startsAt >= endsAt) throw new PharmacyBookkeepingError('INVALID_STATE');
   return db.pharmacyAccountingPeriod.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      startsAt: input.startsAt,
-      endsAt: input.endsAt,
+      startsAt,
+      endsAt,
       status: 'CLOSED',
       closedAt: new Date(),
       closedByUserId: scope.actorId,
@@ -385,7 +415,8 @@ export async function reconcileBankLine(
 
 /** Match already-posted POS receipts; matching creates no new journal entry. */
 export async function reconcileSettlementBankLine(
-  db: ScopedDb, scope: BookkeepingScope,
+  db: ScopedDb,
+  scope: BookkeepingScope,
   input: { statementLineId: string; settlementBatchId: string; amountMinor: number }
 ) {
   positiveMinor(input.amountMinor);
@@ -397,31 +428,54 @@ export async function reconcileSettlementBankLine(
       AND "branchId"=${scope.branchId} FOR UPDATE`);
   const [line, batch] = await Promise.all([
     db.pharmacyBankStatementLine.findFirst({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.statementLineId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: input.statementLineId,
+      },
       include: { matches: { where: { reversedAt: null } } },
     }),
     db.pharmacySettlementBatch.findFirst({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId, id: input.settlementBatchId },
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: input.settlementBatchId,
+      },
       include: { bankMatches: { where: { reversedAt: null } } },
     }),
   ]);
   if (!line || !batch) throw new PharmacyBookkeepingError('NOT_FOUND');
   const lineMatched = line.matches.reduce((sum, match) => sum + match.amountMinor, 0);
   const batchMatched = batch.bankMatches.reduce((sum, match) => sum + match.amountMinor, 0);
-  if (line.amountMinor <= 0 || lineMatched + input.amountMinor > line.amountMinor ||
-      batchMatched + input.amountMinor > batch.expectedMinor)
+  if (
+    line.amountMinor <= 0 ||
+    lineMatched + input.amountMinor > line.amountMinor ||
+    batchMatched + input.amountMinor > batch.expectedMinor
+  )
     throw new PharmacyBookkeepingError('RECONCILIATION_MISMATCH');
-  const match = await db.pharmacyBankReconciliation.create({ data: {
-    organizationId: scope.organizationId, statementLineId: line.id,
-    settlementBatchId: batch.id, amountMinor: input.amountMinor, matchedByUserId: scope.actorId,
-  } });
+  const match = await db.pharmacyBankReconciliation.create({
+    data: {
+      organizationId: scope.organizationId,
+      statementLineId: line.id,
+      settlementBatchId: batch.id,
+      amountMinor: input.amountMinor,
+      matchedByUserId: scope.actorId,
+    },
+  });
   if (lineMatched + input.amountMinor === line.amountMinor)
-    await db.pharmacyBankStatementLine.update({ where: { id: line.id }, data: { status: 'MATCHED' } });
+    await db.pharmacyBankStatementLine.update({
+      where: { id: line.id },
+      data: { status: 'MATCHED' },
+    });
   const settledMinor = batchMatched + input.amountMinor;
-  await db.pharmacySettlementBatch.update({ where: { id: batch.id }, data: {
-    settledMinor, settledAt: settledMinor === batch.expectedMinor ? new Date() : null,
-    bankReference: line.statementRef,
-  } });
+  await db.pharmacySettlementBatch.update({
+    where: { id: batch.id },
+    data: {
+      settledMinor,
+      settledAt: settledMinor === batch.expectedMinor ? new Date() : null,
+      bankReference: line.statementRef,
+    },
+  });
   return match;
 }
 

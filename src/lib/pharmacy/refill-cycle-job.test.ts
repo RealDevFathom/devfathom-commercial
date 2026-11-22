@@ -225,3 +225,12 @@ describe('DEV-73 scheduled job: opening due refill cycles', () => {
     expect(reminder.parameters).toEqual([dueAt.toISOString().slice(0, 10)]);
   });
 });
+
+it('names a subscription due at 00:30 on the Karachi calendar', () => {
+  expect(
+    refillSubscriptionReminder(
+      { id: 'cycle', dueAt: new Date('2026-11-02T00:30:00+05:00') },
+      'Asia/Karachi'
+    )
+  ).toMatchObject({ dueDate: '2026-11-02', dedupeKey: 'refill-subscription:cycle' });
+});
