@@ -170,6 +170,7 @@ function fixture(
       findMany: vi.fn(async () => [] as { id: string; branchId: string; name: string }[]),
     },
     pharmacySale: {
+      findFirst: vi.fn(),
       findMany: vi.fn(async () => [
         {
           id: 'sale-a',
@@ -181,6 +182,7 @@ function fixture(
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     auditLog: { create: vi.fn(async () => ({ id: 'audit-a' })) },
+    pharmacyPackAuthenticationScan: { create: vi.fn() },
     $queryRaw: vi.fn(async () => [{ copyCount: ++printCopyCount }]),
     $executeRaw: vi.fn<(query: Prisma.Sql) => Promise<number>>(async () => 1),
     $transaction: vi.fn(),
@@ -1745,10 +1747,18 @@ describe('DEV-1008 cart write authorization', () => {
       (api) => api.linkCustomer({ ...bill, patientId: 'patient-a', displayName: 'Test Customer' }),
     ],
     ['scanLoyaltyCard', (api) => api.scanLoyaltyCard({ ...bill, cardToken: 'test-card' })],
+    [
+      'acknowledgeDuplicateSalt',
+      (api) => api.acknowledgeDuplicateSalt({ ...bill, ingredientKey: 'ingredient-a' }),
+    ],
+    [
+      'authenticatePack',
+      (api) => api.authenticatePack({ branchId: bill.branchId, payload: 'test-pack' }),
+    ],
   ];
 
   it.each(writes)(
-    '%s refuses an assigned receipt clerk before the sale transaction',
+    '%s refuses an assigned receipt clerk at the cart-write permission boundary',
     async (_name, write) => {
       for (const capability of ['pharmacy:receipt', 'pharmacy.receipt']) {
         const f = fixture([{ capability, effect: 'ALLOW' }]);
@@ -1757,7 +1767,14 @@ describe('DEV-1008 cart write authorization', () => {
           code: 'FORBIDDEN',
           message: 'You do not have permission for this action.',
         });
+        expect(f.db.user.findUnique).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: f.user.id } })
+        );
         expect(f.db.$transaction).not.toHaveBeenCalled();
+        expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+        expect(f.db.auditLog.create).not.toHaveBeenCalled();
+        expect(f.context.audit.detail.action).toBeUndefined();
+        expect(f.db.pharmacyPackAuthenticationScan.create).not.toHaveBeenCalled();
       }
     }
   );

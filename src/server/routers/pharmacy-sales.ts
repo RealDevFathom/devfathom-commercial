@@ -4622,7 +4622,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const scope = await requireCartWriteAccess(ctx, input.branchId);
       try {
         const acknowledgement = await verifyDuplicateSaltAcknowledgement(ctx.db, scope, input);
         annotateAudit(ctx, {
@@ -4958,7 +4958,7 @@ export const pharmacySalesRouter = router({
       // DEV-965: the scan record feeds the flag reports, so only a member who may sell or
       // dispense at this branch (the counter gate) writes one.
       await assignedBranchScope(ctx, input.branchId);
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const scope = await requireCartWriteAccess(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,

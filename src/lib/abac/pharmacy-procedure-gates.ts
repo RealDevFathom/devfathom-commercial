@@ -2063,7 +2063,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySales.acknowledgeDuplicateSalt': {
-    gate: 'requireCounterReceiptAccess default -> counter family (pharmacy:counter, or exact pharmacy:dispense; legacy pharmacy:receipt) at assigned branch or ADMIN',
+    gate: 'requireCartWriteAccess -> pharmacy:counter or exact pharmacy:dispense (counter family not DENIED) at assigned branch or ADMIN',
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
@@ -2099,7 +2099,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['take-payment/follow-up-outofstock-requests'],
   },
   'pharmacySales.authenticatePack': {
-    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
+    gate: 'assignedBranchScope then requireCartWriteAccess -> pharmacy:counter or exact pharmacy:dispense (counter family not DENIED)',
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
