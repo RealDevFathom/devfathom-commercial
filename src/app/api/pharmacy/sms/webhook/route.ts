@@ -1,3 +1,4 @@
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { NextResponse } from 'next/server';
 
 import { handleInboundSmsMessage } from '@/lib/pharmacy/sms/inbound';
@@ -19,6 +20,7 @@ import {
  */
 
 const PRIVATE_HEADERS = { 'cache-control': 'no-store' };
+const MAX_BODY_BYTES = 256 * 1024;
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
 
@@ -37,7 +39,8 @@ export async function POST(request: Request) {
 
   const config = readSmsConfig();
   const provider = createSmsProvider(config);
-  const rawBody = await request.text();
+  const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
+  if (rawBody === null) return json({ error: 'Body too large.' }, 413);
   if (!provider.verifyWebhook(rawBody, request.headers.get('x-sms-signature'))) {
     return json({ error: 'Invalid signature.' }, 401);
   }
@@ -57,7 +60,7 @@ export async function POST(request: Request) {
 
   let payload: unknown;
   try {
-    payload = JSON.parse(rawBody) as unknown;
+    payload = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
   } catch {
     return json({ error: 'Invalid JSON body.' }, 400);
   }

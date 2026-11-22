@@ -1,9 +1,12 @@
+// @vitest-environment node
+import { multipartUpload } from '../../../../../../tests/fixtures/multipart-upload';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 
 const mocks = vi.hoisted(() => ({
+  acquireSlot: vi.fn(),
   attachEvidence: vi.fn(),
   createTRPCContext: vi.fn(),
   deleteUpload: vi.fn(),
@@ -13,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
 }));
 
+vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.acquireSlot }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/restaurant/sop-execution', async () => ({
   ...(await vi.importActual<typeof import('@/lib/restaurant/sop-execution')>(
@@ -60,11 +64,16 @@ function request(overrides?: {
     );
   }
   const origin = overrides?.origin === undefined ? 'https://devfathom.test' : overrides.origin;
-  return {
-    formData: overrides?.formData ?? (async () => form),
-    headers: new Headers(origin ? { origin } : undefined),
-    url: 'https://devfathom.test/api/pharmacy/sop/evidence',
-  } as Request;
+  // Only synthetic invalid File metadata and parser failures need a test double.
+  if (overrides?.formData)
+    vi.spyOn(Response.prototype, 'formData').mockImplementationOnce(overrides.formData);
+  else if (overrides && 'file' in overrides)
+    vi.spyOn(Response.prototype, 'formData').mockResolvedValueOnce(form);
+  return new Request('https://devfathom.test/api/pharmacy/sop/evidence', {
+    method: 'POST',
+    headers: origin ? { origin } : undefined,
+    body: form,
+  });
 }
 
 const TARGET = {
@@ -116,6 +125,7 @@ function existingReceiptedRow() {
 }
 
 beforeEach(() => {
+  mocks.acquireSlot.mockResolvedValue(async () => {});
   vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
@@ -553,4 +563,48 @@ describe('POST pharmacy SOP evidence capture receipts', () => {
     expect(retry.status).toBe(201);
     expect(db.pharmacySopEvidenceCapture.createMany).toHaveBeenCalledTimes(2);
   });
+});
+
+it.each([24, 25])('accepts a %i MB multipart file with its full byte count', async (size) => {
+  const response = await POST(multipartUpload('/api/pharmacy/sop/evidence', size));
+  expect(response.status).toBe(201);
+  expect(mocks.putUpload).toHaveBeenCalledOnce();
+  expect(mocks.putUpload.mock.calls[0]![2].byteLength).toBe(size * 1024 * 1024);
+  expect(response.headers.get('Content-Security-Policy')).toContain("'nonce-");
+});
+
+it('refuses a 26 MB multipart file with a plain size message before storage', async () => {
+  const response = await POST(multipartUpload('/api/pharmacy/sop/evidence', 26));
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain('Choose a file of 25 MB or smaller.');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+});
+
+it('returns 401 without reading the request stream when the session is missing', async () => {
+  mocks.resolveTenantActor.mockResolvedValueOnce(null);
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+    controller.close()
+  );
+  const body = new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 });
+  const req = new Request('https://devfathom.test/api/pharmacy/sop/evidence', {
+    method: 'POST',
+    headers: { origin: 'https://devfathom.test' },
+    body,
+    duplex: 'half',
+  } as RequestInit);
+  const response = await POST(req);
+  expect(response.status).toBe(401);
+  expect(pull).not.toHaveBeenCalled();
+  expect(req.bodyUsed).toBe(false);
+  expect(mocks.acquireSlot).not.toHaveBeenCalled();
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+});
+
+it('refuses a large upload for the signed-in user when both slots are occupied', async () => {
+  mocks.acquireSlot.mockResolvedValueOnce(null);
+  const response = await POST(multipartUpload('/api/pharmacy/sop/evidence', 9));
+  expect(response.status).toBe(429);
+  expect((await response.json()).error).toContain('Wait for one to finish');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user_1');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
 });
