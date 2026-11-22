@@ -3,10 +3,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { DeliveryBoard } from './delivery-board';
 
-function json(body: unknown, status = 200) {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }
 
@@ -128,7 +128,7 @@ describe('DeliveryBoard', () => {
     const onAuthorizationFailure = vi.fn();
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => json({ error: 'Forbidden.' }, 403))
+      vi.fn(async () => json({ error: 'Forbidden.' }, 403, { 'X-Terminal-Access': 'denied' }))
     );
     render(
       <DeliveryBoard
@@ -139,6 +139,7 @@ describe('DeliveryBoard', () => {
     );
     await flush();
     expect(onAuthorizationFailure).toHaveBeenCalledOnce();
+    expect(onAuthorizationFailure).toHaveBeenCalledWith('Forbidden.');
     expect(screen.queryByText(/queued offline/i)).not.toBeInTheDocument();
   });
 });

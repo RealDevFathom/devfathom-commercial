@@ -445,6 +445,7 @@ const CALLS = {
   receivingExceptionQueue: (c: Caller) => c.receivingExceptionQueue({ branchId: 'branch_a' }),
   lotsFromReceipt: (c: Caller) =>
     c.lotsFromReceipt({ branchId: 'branch_a', goodsReceiptId: 'gr_a' }),
+  legacySupplierDispatches: (c: Caller) => c.legacySupplierDispatches({ branchId: 'branch_a' }),
   purchaseReturns: (c: Caller) => c.purchaseReturns({ branchId: 'branch_a' }),
   returnableLots: (c: Caller) => c.returnableLots({ branchId: 'branch_a' }),
   resolveScan: (c: Caller) => c.resolveScan({ term: 'paracetamol' }),
@@ -554,6 +555,7 @@ const EXPECTED_CAPABILITIES: Record<ProcedureName, string[]> = {
   goodsReceipts: PROCUREMENT,
   receivingExceptionQueue: PROCUREMENT,
   lotsFromReceipt: PROCUREMENT,
+  legacySupplierDispatches: PROCUREMENT_AND_FINANCE,
   purchaseReturns: FINANCIAL,
   returnableLots: PROCUREMENT,
   resolveScan: PROCUREMENT,
@@ -593,6 +595,7 @@ const BRANCH_SCOPED: ProcedureName[] = [
   'goodsReceipts',
   'receivingExceptionQueue',
   'lotsFromReceipt',
+  'legacySupplierDispatches',
   'purchaseReturns',
   'returnableLots',
   'authenticatePack',

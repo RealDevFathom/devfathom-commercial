@@ -6,16 +6,18 @@ import {
   createAuthorizationState,
   createSsoBrowserBinding,
   PrismaSamlCache,
-  requireIdentityConnection,
   SSO_BROWSER_BINDING_COOKIE,
   ssoBrowserBindingCookieOptions,
 } from '@/lib/sso';
+import { admitSsoStart } from '@/lib/sso-start-limit';
+import { reserveSsoStateCapacity, SsoStateCapacityError } from '@/lib/sso-state';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 export async function GET(request: Request, route: { params: Promise<{ connectionId: string }> }) {
   try {
     const { connectionId } = await route.params;
-    const connection = await requireIdentityConnection(request, connectionId, 'SAML');
+    const connection = await admitSsoStart(request, connectionId, 'SAML');
+    if (connection instanceof Response) return connection;
     const publicUrl = publicRequestUrl(request);
     if (!connection.ssoUrl || !connection.certificate) {
       return Response.json(
@@ -26,9 +28,11 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     // F10: bind the RelayState and the AuthnRequest ID to this browser.
     const binding = createSsoBrowserBinding();
     const redirect = await withTenantDb(connection.organizationId, async (db) => {
+      const sourceKey = await reserveSsoStateCapacity(db, connection.id, request, 2);
       const relayState = await createAuthorizationState(db, {
         organizationId: connection.organizationId,
         identityConnectionId: connection.id,
+        sourceKey,
         kind: 'SAML_RELAY',
         payload: { returnTo: '/dashboard', browserBindingHash: binding.hash },
       });
@@ -46,6 +50,7 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
         acceptedClockSkewMs: 120_000,
         cacheProvider: new PrismaSamlCache(db, connection.organizationId, connection.id, {
           hash: binding.hash,
+          sourceKey,
         }),
       });
       return saml.getAuthorizeUrlAsync(relayState, publicUrl.host, {});
@@ -58,6 +63,8 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     );
     return response;
   } catch (error) {
+    if (error instanceof SsoStateCapacityError)
+      return Response.json({ error: 'Too many pending sign-ins.' }, { status: 429 });
     console.error('[sso:saml:start]', error);
     return Response.json({ error: 'SAML sign-in could not be started.' }, { status: 400 });
   }

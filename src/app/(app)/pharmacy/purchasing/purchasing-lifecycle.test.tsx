@@ -177,6 +177,7 @@ function callerStub(overrides: Record<string, unknown> = {}) {
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
     receiptDebitNotes: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
+    legacySupplierDispatches: vi.fn().mockResolvedValue(null),
     returnableLots: vi.fn().mockResolvedValue([]),
     supplierCredits: vi.fn().mockResolvedValue([]),
     receivedAgainstOrder: vi.fn().mockResolvedValue({}),
@@ -651,6 +652,7 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   list.mockResolvedValue([{ ...row, status: 'SUBMITTED' }]);
   view.rerender(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
   expect(screen.getByRole('button', { name: 'Dispatch to supplier' })).toBeEnabled();
+  expect(screen.queryByLabelText('Witness PIN or approval code')).toBeNull();
   const outcome = screen.getByRole('link', { name: 'View saved record' }).parentElement!;
   expect(within(outcome).getByRole('status')).toHaveTextContent(
     /^Return submitted\. The quantity is reserved and can no longer be sold\. Check the updated record before starting another change\.$/
@@ -665,6 +667,224 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([1, 5]);
   expect(write).toHaveBeenCalledOnce();
 });
+
+it('keeps historical stock read-only until the owner opens its witnessed action', async () => {
+  const dispatch = vi.fn();
+  const historical = {
+    lineId: 'line-old',
+    purchaseReturnId: 'old-return',
+    batch: 'BATCH-29',
+    quantity: 30,
+    supplier: 'Sindh Supplies',
+    dispatchedAt: new Date('2026-09-03T11:47:00Z'),
+    sender: 'Ayesha Khan',
+  };
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      legacySupplierDispatches: vi.fn().mockResolvedValue({ rows: [historical], next: null }),
+      dispatchPurchaseReturn: dispatch,
+    })
+  );
+  render(await ReturnsPage({ searchParams: params({}) }));
+  expect(
+    screen.getByRole('heading', {
+      name: 'Controlled stock sent back to a supplier before the register recorded returns',
+    })
+  ).toBeVisible();
+  expect(screen.getByText('Batch BATCH-29 · 30 units · Sindh Supplies')).toBeVisible();
+  expect(screen.getByText(/Sent by Ayesha Khan on/)).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Review late entry' })).toHaveAttribute(
+    'href',
+    expect.stringContaining('legacyLine=line-old')
+  );
+  expect(screen.queryByRole('button', { name: 'Record late entry' })).toBeNull();
+  expect(dispatch).not.toHaveBeenCalled();
+});
+
+const controlledReturn = {
+  id: 'controlled-return',
+  reference: 'RET-controlled',
+  status: 'SUBMITTED',
+  kind: 'PURCHASE_RETURN',
+  supplier: licensedSupplier,
+  createdAt: new Date('2026-09-01'),
+  debitNotes: [],
+  lines: [
+    {
+      id: 'line',
+      lot: {
+        batch: {
+          medicine: { productName: 'Controlled medicine', controlled: true },
+          batchNumber: 'B1',
+          expiresAt: new Date('2027-06-01'),
+        },
+      },
+      location: { name: 'Shelf' },
+      quantityUnits: 80,
+      expectedCreditMinor: 80000,
+      reason: 'Return',
+      windowState: 'OPEN',
+      daysToWindowEnd: 20,
+    },
+  ],
+};
+
+it.each([
+  [true, 'Witness approval code'],
+  [false, 'Witness PIN'],
+] as const)(
+  'requires an independent witness in the configured mode (%s)',
+  async (required, label) => {
+    const ctx = contextStub();
+    const witness = {
+      id: 'staff-w',
+      displayName: 'Witness pharmacist',
+      user: { ...actor.session.user, id: 'user-w', status: 'ACTIVE' },
+    };
+    ctx.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [
+          { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+          { capability: 'reports:financial', effect: 'ALLOW' },
+          { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+        ],
+      },
+      permissionOverrides: [],
+    });
+    mocks.createTRPCContext.mockResolvedValue({
+      ...ctx,
+      db: {
+        ...ctx.db,
+        organization: {
+          findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: required }),
+        },
+        restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([witness]) },
+      },
+    });
+    const row = controlledReturn;
+    const dispatch = vi.fn().mockResolvedValue({});
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        purchaseReturns: vi.fn().mockResolvedValue([row]),
+        dispatchPurchaseReturn: dispatch,
+      })
+    );
+    render(await ReturnsPage({ searchParams: params({ return: row.id }) }));
+    const select = screen.getByLabelText(/Dispatch witness/);
+    const secret = screen.getByLabelText(label, { exact: true });
+    expect(secret).toHaveAttribute('type', 'password');
+    expect(secret).toBeRequired();
+    fireEvent.change(select, { target: { value: 'staff-w' } });
+    fireEvent.change(secret, { target: { value: '123456' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Dispatch to supplier' }));
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purchaseReturnId: row.id,
+        controlledWitness: { staffProfileId: 'staff-w', pin: '123456' },
+      })
+    );
+  }
+);
+
+it.each(['late', 'solo'] as const)(
+  'asks only for the confirming pharmacist’s own approval and reason for %s',
+  async (mode) => {
+    const late = mode === 'late';
+    const ctx = contextStub();
+    ctx.db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [
+          { capability: 'pharmacy.procurement', effect: 'ALLOW' },
+          { capability: 'reports:financial', effect: 'ALLOW' },
+          ...(late ? [] : [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]),
+        ],
+      },
+      permissionOverrides: [],
+    });
+    const self = {
+      id: 'staff-self',
+      displayName: 'Owner pharmacist',
+      user: { ...actor.session.user, status: 'ACTIVE' },
+    };
+    mocks.createTRPCContext.mockResolvedValue({
+      ...ctx,
+      db: {
+        ...ctx.db,
+        user: { ...ctx.db.user, findMany: vi.fn().mockResolvedValue([]) },
+        organization: {
+          findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: late }),
+        },
+        restaurantStaffProfile: {
+          findMany: vi
+            .fn()
+            .mockImplementation(async ({ where }) =>
+              typeof where.userId === 'string' ? [self] : []
+            ),
+        },
+      },
+    });
+    const dispatch = vi.fn().mockResolvedValue({});
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        dispatchPurchaseReturn: dispatch,
+        purchaseReturns: vi.fn().mockResolvedValue(late ? [] : [controlledReturn]),
+        legacySupplierDispatches: vi.fn().mockResolvedValue(
+          late
+            ? {
+                rows: [
+                  {
+                    lineId: 'old-line',
+                    purchaseReturnId: 'old-doc',
+                    batch: 'Old',
+                    quantity: 30,
+                    supplier: 'Supplier',
+                    dispatchedAt: new Date('2026-09-03'),
+                    sender: 'Original sender',
+                  },
+                ],
+                next: null,
+              }
+            : null
+        ),
+      })
+    );
+    render(
+      await ReturnsPage({
+        searchParams: params(late ? { legacyLine: 'old-line' } : { return: controlledReturn.id }),
+      })
+    );
+    expect(screen.queryByRole('combobox', { name: 'Dispatch witness' })).toBeNull();
+    expect(
+      screen.getByText(late ? 'Recorded late, no witness' : 'No second person available', {
+        exact: true,
+      })
+    ).toBeVisible();
+    const secret = screen.getByLabelText(late ? 'Your approval code' : 'Your PIN', { exact: true });
+    expect(secret).toHaveAttribute('type', 'password');
+    expect(secret).toBeRequired();
+    const why = screen.getByLabelText(
+      late ? 'Reason for recording late' : 'Reason for sending without a second person'
+    );
+    expect(why).toBeRequired();
+    fireEvent.change(why, { target: { value: 'Document checked at the pharmacy' } });
+    fireEvent.change(secret, { target: { value: '123456' } });
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole('button', { name: late ? 'Record late entry' : 'Dispatch to supplier' })
+      );
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        purchaseReturnId: late ? 'old-doc' : controlledReturn.id,
+        ...(late ? { recordLateLineId: 'old-line' } : {}),
+        controlledWitness: { staffProfileId: 'staff-self', pin: '123456' },
+        approvalReason: 'Document checked at the pharmacy',
+      })
+    );
+  }
+);
 
 it('review: same allocation cannot repeat through the credit and debit-note forms after uncertain outcome', async () => {
   const note = {

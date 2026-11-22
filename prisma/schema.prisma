@@ -14086,6 +14086,7 @@ model PharmacySubstitutionRecord {
 }
 
 enum PharmacyControlledRegisterKind {
+  RETURN_TO_SUPPLIER
   SALE
   PURCHASE
   CORRECTION
@@ -14120,7 +14121,8 @@ model PharmacyControlledRegisterEntry {
   balanceDelta           Int                               @default(0)
   runningBalance         Int
   recordedByUserId       String
-  witnessedByUserId      String
+  /// Null only for an owner-confirmed historical supplier dispatch.
+  witnessedByUserId      String?
   signatureRef           String?
   rxSerialWritten        Boolean                           @default(false)
   emergency              Boolean                           @default(false)
@@ -14131,6 +14133,15 @@ model PharmacyControlledRegisterEntry {
   restorationMovementId  String?
   refEntryId             String?
   createdAt              DateTime                          @default(now())
+  /// Reason for an owner-confirmed late entry or a sole pharmacist dispatch.
+  supplierReturnReason    String?
+  /// Original movement time for an entry recorded after the dispatch.
+  lateDispatchAt           DateTime?
+  sourcePurchaseEntryId    String?
+  supplierReturnLineId     String?
+  sourcePurchase           PharmacyControlledRegisterEntry? @relation("SupplierReturnPurchase", fields: [organizationId, sourcePurchaseEntryId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_register_return_purchase_fk")
+  supplierReturns          PharmacyControlledRegisterEntry[] @relation("SupplierReturnPurchase")
+  supplierReturnLine       PharmacyPurchaseReturnLine? @relation(fields: [organizationId, supplierReturnLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_register_return_line_fk")
   prescription           Prescription?                     @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescription_fkey")
   line                   PrescriptionLine?                 @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_line_fkey")
   patient                PharmacyPatient?                  @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
@@ -14142,6 +14153,7 @@ model PharmacyControlledRegisterEntry {
   repeats                PharmacyControlledRegisterEntry[] @relation("RegisterRepeat")
   incidents              PharmacyRegisterIncident[]
 
+  @@unique([organizationId, supplierReturnLineId], map: "pharmacy_register_return_line_once")
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, serial])
   @@unique([organizationId, stockMovementId])
@@ -14493,6 +14505,8 @@ model PharmacyPurchaseReturn {
   submittedByUserId  String?
   submittedAt        DateTime?
   dispatchedByUserId String?
+  /// True only for documents dispatched under the witnessed register policy.
+  dispatchedWithRegisterPolicy Boolean @default(false)
   dispatchedAt       DateTime?
   settledAt          DateTime?
   cancelledAt        DateTime?
@@ -14531,8 +14545,11 @@ model PharmacyPurchaseReturnLine {
   /// The INV-09 reservation this line takes at submission. Null while the line
   /// is still on a DRAFT return, which is precisely why a draft holds no stock.
   supplierClaimId     String?
+  /// Outgoing movement identified when the controlled-return register policy first took effect.
+  legacyOutgoingMovementId String?
   createdAt           DateTime @default(now())
 
+  registerEntry PharmacyControlledRegisterEntry?
   purchaseReturn PharmacyPurchaseReturn @relation(fields: [organizationId, branchId, purchaseReturnId], references: [organizationId, branchId, id], onDelete: Restrict)
   lot            PharmacyInventoryLot   @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict)
   location       PharmacyStockLocation  @relation(fields: [organizationId, stockLocationId], references: [organizationId, id], onDelete: Restrict)

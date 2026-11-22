@@ -1,3 +1,4 @@
+import { discoverOidc } from '@/lib/oidc-discovery';
 import * as client from 'openid-client';
 import { NextResponse } from 'next/server';
 import { publicRequestOrigin, publicRequestUrl } from '@/lib/http-origin';
@@ -31,8 +32,8 @@ export async function GET(request: Request, route: { params: Promise<{ connectio
     const nonce = String(state.nonce ?? '');
     const redirectUri = String(state.redirectUri ?? '');
     if (!verifier || !nonce || !redirectUri) throw new Error('OIDC state is incomplete.');
-    const config = await client.discovery(
-      new URL(connection.issuer),
+    const config = await discoverOidc(
+      connection,
       connection.clientId,
       oidcClientSecret(connection)
     );

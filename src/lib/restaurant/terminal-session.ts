@@ -181,6 +181,14 @@ export async function lockSession(
   });
 }
 
+/** An operator access refusal clears the binding without refreshing idle time. */
+export async function lockDeniedOperator(db: ScopedDb, sessionId: string) {
+  await db.restaurantTerminalSession.update({
+    where: { id: sessionId },
+    data: { activeStaffProfileId: null },
+  });
+}
+
 /** End a terminal session — stamps `endedAt`; every later call fails C5. */
 export async function endSession(
   db: ScopedDb,

@@ -776,6 +776,54 @@ describeIfDatabase('WHA-136 terminal money mutations roll back before HTTP mappi
       expect(await customerExists(marker)).toBe(false);
     });
 
+    it('preserves the operator binding and idle timestamp after a refused catering operation', async () => {
+      await deps.withPlatformDb(async (tx) => {
+        const core = await ensurePlatformModule(tx, 'restaurant-core', {
+          name: 'Restaurant core',
+          category: 'Operations',
+        });
+        await tx.organizationModule.create({ data: { organizationId: orgId, moduleId: core.id } });
+      });
+      const established = await call(deps.routes.establish, { session: '' });
+      const session = established.json.sessionToken as string;
+      const sessionId = (established.json.session as { id: string }).id;
+      expect(
+        (
+          await call(deps.routes.unlock, {
+            session,
+            body: { staffProfileId: ctx.operator, type: 'PIN', secret: PIN },
+          })
+        ).status
+      ).toBe(200);
+      const binding = () =>
+        deps.withTenantDb(orgId, (tx) =>
+          tx.restaurantTerminalSession.findUniqueOrThrow({ where: { id: sessionId } })
+        );
+      const before = await binding();
+      const route = await import('@/app/api/restaurant/catering/money/route');
+      const res = await call(route, {
+        session,
+        key: uniqueKey('catering-denial'),
+        body: {
+          cateringOrderId: 'synthetic-order',
+          quoteRevisionId: 'synthetic-quote',
+          kind: 'DEPOSIT',
+          amount: '1.00',
+          currency: 'USD',
+          source: 'OPERATOR_ATTESTED',
+          externalEvidenceSource: 'Synthetic fixture',
+          externalEvidenceReference: uniqueKey('fixture'),
+        },
+      });
+      expect(res.status).toBe(403);
+      expect(res.json.error).toBe('CAPABILITY_DENIED');
+      expect(await binding()).toMatchObject({
+        activeStaffProfileId: ctx.operator,
+        endedAt: null,
+        lastActivityAt: before.lastActivityAt,
+      });
+    });
+
     it('commits a handler that returns normally', async () => {
       const marker = `synthetic_ok_${suffix}`;
       const handler = deps.terminalAuth.withTerminalAuth(async (routeCtx) => {

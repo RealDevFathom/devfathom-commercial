@@ -144,6 +144,9 @@ beforeAll(async () => {
           primaryBranchId: branchId,
         },
       });
+      await tx.restaurantStaffCapabilityGrant.create({
+        data: { branchId, staffProfileId: staff.id, capability: 'pos:operate' },
+      });
       await tx.restaurantOperatorCredential.create({
         data: {
           staffProfileId: staff.id,

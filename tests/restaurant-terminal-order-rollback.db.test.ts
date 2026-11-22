@@ -273,7 +273,12 @@ beforeAll(async () => {
         id: ids.operatorRole,
         key: `operator_${suffix}`,
         name: 'Operator',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
+            { capability: 'orders:take', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.organizationRole.create({
@@ -289,7 +294,12 @@ beforeAll(async () => {
         id: ids.unauthorizedRole,
         key: `unauthorized_${suffix}`,
         name: 'Unauthorized',
-        permissions: { create: [{ capability: 'menu:read', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
+            { capability: 'menu:read', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     for (const [id, roleId, label] of [

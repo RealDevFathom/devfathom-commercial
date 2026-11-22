@@ -1629,6 +1629,13 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'financial-reports/order-receive-stock-issue',
     ],
   },
+  'pharmacyPurchasing.legacySupplierDispatches': {
+    gate: 'meta PROCUREMENT_AND_FINANCE -> pharmacy:procurement AND reports:financial (assigned branch), live owner for historical dispatch data',
+    lines: [
+      'receive-stock/use-financial-reports-return',
+      'financial-reports/order-receive-stock-issue',
+    ],
+  },
   'pharmacyPurchasing.goodsReceipts': {
     gate: 'meta PROCUREMENT -> pharmacy:procurement (assigned branch)',
     lines: ['receive-stock/open-purchasing-screens-read'],

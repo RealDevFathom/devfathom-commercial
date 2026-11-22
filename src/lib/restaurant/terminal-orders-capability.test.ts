@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
     organizationId: 'org-1',
     session: { id: 'session-1', activeStaffProfileId: 'staff-cashier' },
     device: { id: 'device-1', branchId: 'branch-1', kind: 'POS' },
-    db: { restaurantOrder: { findFirst: vi.fn() } },
+    db: { restaurantOrder: { findFirst: vi.fn() }, restaurantTerminalSession: { update: vi.fn() } },
   },
 }));
 
@@ -63,6 +63,7 @@ function request(
 beforeEach(() => {
   vi.stubEnv('AUTH_SECRET', 'terminal-order-test-secret');
   mocks.capabilities.clear();
+  mocks.ctx.db.restaurantTerminalSession.update.mockClear();
   mocks.ctx.device.kind = 'POS';
 });
 
@@ -89,6 +90,7 @@ describe('terminal order capability boundary', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'This operator lacks the "orders:take" capability.',
     });
+    expect(mocks.ctx.db.restaurantTerminalSession.update).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
     expect(mocks.ctx.db.restaurantOrder.findFirst).not.toHaveBeenCalled();
   });
@@ -104,6 +106,7 @@ describe('terminal order capability boundary', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'This operator lacks the "customers:read" capability.',
     });
+    expect(mocks.ctx.db.restaurantTerminalSession.update).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
 

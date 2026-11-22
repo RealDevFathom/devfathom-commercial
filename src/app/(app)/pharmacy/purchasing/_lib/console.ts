@@ -1,3 +1,6 @@
+import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
+import { PharmacyReceivingError, receiptReversalRefusals } from '@/lib/pharmacy/receiving';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
 import { ZodError } from 'zod';
 
@@ -125,14 +128,8 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'amountMinor',
   },
   BLOCKED_STOCK: { message: 'That stock is quarantined or recalled and cannot be moved.' },
-  REVERSAL_STOCK_MOVED: {
-    message:
-      'Some of the stock this receipt brought in has since been sold, transferred, quarantined or written off, so the receipt cannot be reversed. Return the remaining stock to the supplier or write it off instead.',
-  },
-  REVERSAL_PACKS_OPENED: {
-    message:
-      'Sealed packs from this receipt have since been opened into loose units, so the receipt cannot be reversed exactly. Return the remaining stock to the supplier or write it off instead.',
-  },
+  REVERSAL_STOCK_MOVED: { message: receiptReversalRefusals.REVERSAL_STOCK_MOVED },
+  REVERSAL_PACKS_OPENED: { message: receiptReversalRefusals.REVERSAL_PACKS_OPENED },
   COLD_CHAIN_STORAGE_REQUIRED: {
     message:
       'This medicine requires cold-chain storage. Choose a validated cold-chain zone before posting the receipt.',
@@ -214,9 +211,17 @@ export function purchasingOutcome() {
       };
     },
     failure(error: unknown, fallback: string): ActionFailure & { outcome: 'rejected' | 'unknown' } {
-      const raw = error instanceof Error ? error.message : '';
+      const raw =
+        error instanceof Error && error.cause instanceof PharmacyReceivingError
+          ? error.cause.reason
+          : error instanceof Error
+            ? error.message
+            : '';
       const known =
         (!writeStarted && error instanceof PurchasingValidationError) ||
+        (error instanceof Error &&
+          (error.cause instanceof ControlledRestorationDenied ||
+            error.cause instanceof PharmacySupplierReturnError)) ||
         zodFailure(error) !== null ||
         KNOWN_REJECTIONS.has(raw) ||
         uniqueViolation(error, raw);
