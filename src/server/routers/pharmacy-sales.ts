@@ -1,4 +1,4 @@
-import { pharmacyAccountMutation } from '@/server/pharmacy-finance-gate';
+import { pharmacyRefundPostingMutation } from '@/server/pharmacy-finance-gate';
 import { anyCardTerminalTender } from '@/lib/pharmacy/card-terminal/open-attempts';
 import {
   authenticatePrepaidPin,
@@ -783,7 +783,7 @@ async function refundTenderInTransaction(
     if (terminalPosting) {
       // This counter command also books a provider liability. Invoke the accounts write
       // procedure in this transaction, after the existing refund and branch controls.
-      const accounts = router({ bookTerminalRefund: pharmacyAccountMutation.mutation(book) });
+      const accounts = router({ bookTerminalRefund: pharmacyRefundPostingMutation.mutation(book) });
       return accounts.createCaller({ ...ctx, db }).bookTerminalRefund();
     }
     return book();

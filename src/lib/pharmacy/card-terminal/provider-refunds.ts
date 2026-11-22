@@ -9,6 +9,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { actorIsPharmacyOwner } from '../procurement-access';
 import type { LedgerScope } from '../stock-ledger';
 import { assertNoCardholderData } from './cardholder-data';
+import { isOwnerWithoutOtherReviewer } from '../catalogue-approvals';
 import { otherCardTerminalReviewers } from './review-approvers';
 import type { CardTerminalAttempt } from './store';
 
@@ -217,9 +218,15 @@ export function providerRefundAccounts(db: ScopedDb, scope: Scope) {
       | 'kind'
       | 'actorId'
       | 'terminalConfirmed'
-    > & { createdAt: Date; attemptKey: string; originalActorId: string; chargeActorId: string })[]
+    > & {
+      createdAt: Date;
+      reference: string;
+      attemptKey: string;
+      originalActorId: string;
+      chargeActorId: string;
+    })[]
   >`
-    SELECT e.id,e."attemptId",e."refundId",e."amountMinor",e."remainingMinor",e.kind,e."actorId",e."terminalConfirmed",
+    SELECT root."slipRef" AS reference,e.id,e."attemptId",e."refundId",e."amountMinor",e."remainingMinor",e.kind,e."actorId",e."terminalConfirmed",
       CASE WHEN root."refundId" IS NULL THEN COALESCE(a."resolvedAt", root."createdAt") ELSE root."createdAt" END AS "createdAt", root."actorId" AS "originalActorId",a."attemptKey",a."actorId" AS "chargeActorId"
     FROM pharmacy_terminal_refund_events e
     JOIN pharmacy_card_terminal_attempts a ON a.id=e."attemptId" AND a."organizationId"=e."organizationId" AND a."branchId"=e."branchId"
@@ -249,6 +256,22 @@ export async function reversedTenderRefundIds(
     select: { refundId: true },
   });
   return new Set(events.map((e) => e.refundId));
+}
+
+export function maySignOwnRefundCorrection(db: ScopedDb, scope: Scope) {
+  return isOwnerWithoutOtherReviewer(
+    db,
+    { ...scope, actorOrganizationId: scope.organizationId },
+    { countOtherOwners: true }
+  );
+}
+
+export async function refundCalendarDay(db: ScopedDb, organizationId: string) {
+  const { timezone } = await db.organization.findUniqueOrThrow({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
+  return pharmacyCalendarDay(timezone);
 }
 
 export async function changeProviderRefund(
@@ -303,7 +326,8 @@ export async function changeProviderRefund(
         authority.ownerAuthority &&
         peers.length === 0 &&
         approval.declareSelfApproval === true &&
-        !approval.secondApproverId;
+        !approval.secondApproverId &&
+        (await maySignOwnRefundCorrection(db, scope));
       if (!selfApproved && !peers.some((peer) => peer.id === approval.secondApproverId))
         throw new TRPCError({
           code: 'FORBIDDEN',
@@ -316,9 +340,13 @@ export async function changeProviderRefund(
   const amountMinor = settling
     ? (input.settlementAmountMinor ?? previous.remainingMinor)
     : (input.verifiedAmountMinor ?? previous.amountMinor);
-  const settledOn = settling
-    ? new Date((input.settledOn ?? pharmacyCalendarDay('UTC')) + 'T00:00:00Z')
-    : null;
+  const today = settling ? await refundCalendarDay(db, scope.organizationId) : '';
+  if (settling && input.settledOn && input.settledOn > today)
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Settlement date cannot be in the future.',
+    });
+  const settledOn = settling ? new Date((input.settledOn ?? today) + 'T00:00:00Z') : null;
   if (
     settledOn &&
     (!Number.isFinite(settledOn.getTime()) ||

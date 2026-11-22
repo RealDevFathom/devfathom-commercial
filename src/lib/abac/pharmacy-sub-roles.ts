@@ -121,7 +121,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'settle-card-reviews',
-        text: 'With Manage their branches, settle card-machine payments under review with their authenticator code (or PIN, if the owner turned the authenticator off)',
+        text: 'With Manage their branches, settle card-machine payments under review with their authenticator code (or PIN, if the owner turned the authenticator off). Recording a refund also requires Read finance accounts, Manage finance accounts and accounts administration access.',
         sites: {},
       },
     ],
@@ -586,7 +586,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'settle-cardmachine-payments-under',
-        text: 'With Take payment, settle card-machine payments under review with their authenticator code (or PIN, if the owner turned the authenticator off)',
+        text: 'With Take payment, settle card-machine payments under review with their authenticator code (or PIN, if the owner turned the authenticator off). Recording a refund also requires Read finance accounts, Manage finance accounts and accounts administration access.',
         sites: { 'src/lib/pharmacy/card-terminal/review-approvers.ts': 2 },
       },
       {

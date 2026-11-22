@@ -1,5 +1,6 @@
 import {
   PHARMACY_FINANCE_MANAGE,
+  PHARMACY_FINANCE_READ,
   type PharmacyFinanceAction,
 } from '@/lib/abac/pharmacy-finance-actions';
 import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
@@ -23,4 +24,9 @@ export const pharmacyFinanceGate = (action: PharmacyFinanceAction) =>
 
 export const pharmacyAccountMutation = adminProcedure.use(
   pharmacyFinanceGate(PHARMACY_FINANCE_MANAGE)
+);
+
+/** Terminal postings require both finance grants in addition to accounts administration. */
+export const pharmacyRefundPostingMutation = pharmacyAccountMutation.use(
+  pharmacyFinanceGate(PHARMACY_FINANCE_READ)
 );

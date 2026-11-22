@@ -51,6 +51,7 @@ export type CardTerminalCounterView = {
  */
 export type CardTerminalReviewAccess = {
   mayResolve: boolean;
+  mayPostRefund: boolean;
   selfResolve: boolean;
   askName: string | null;
 };

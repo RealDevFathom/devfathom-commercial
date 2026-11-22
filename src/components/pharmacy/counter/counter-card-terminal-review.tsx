@@ -2,6 +2,7 @@
 
 import { useId, useRef, useState } from 'react';
 
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -25,6 +26,7 @@ type Props = {
   view: CardTerminalCounterView;
   /** The person took this charge, and nobody else can resolve it at this branch (solo rule). */
   selfResolve?: boolean;
+  mayPostRefund: boolean;
   onResolved: (next: CardTerminalCounterView) => Promise<void> | void;
 };
 
@@ -35,12 +37,16 @@ export function CounterCardTerminalReview({
   branchId,
   view,
   selfResolve = false,
+  mayPostRefund,
   onResolved,
 }: Props) {
   const id = useId();
+  const secret = useApprovalSecretKind() === 'CODE' ? 'authenticator code' : 'PIN';
   const resolve = trpc.pharmacyCardTerminal.resolveReview.useMutation();
   // The terminal reported a charge: it cannot be recorded as not charged.
-  const [outcome, setOutcome] = useState<Outcome | null>(view.chargeReported ? 'REVERSED' : null);
+  const [outcome, setOutcome] = useState<Outcome | null>(
+    view.chargeReported && mayPostRefund ? 'REVERSED' : null
+  );
   const [slipRef, setSlipRef] = useState('');
   const [reason, setReason] = useState('');
   const [pin, setPin] = useState('');
@@ -50,10 +56,11 @@ export function CounterCardTerminalReview({
   const trimmedReason = reason.trim();
   const ready =
     outcome !== null &&
+    (outcome === 'REVERSED' ? mayPostRefund : !view.chargeReported) &&
     SLIP_REF.test(slipRef.trim()) &&
     trimmedReason.length >= 3 &&
     trimmedReason.length <= 200 &&
-    PIN.test(pin) &&
+    (secret === 'PIN' ? PIN.test(pin) : /^\d{6}$/.test(pin)) &&
     !resolve.isPending;
 
   async function submit() {
@@ -114,13 +121,19 @@ export function CounterCardTerminalReview({
           Manager review
         </h4>
         <p className="text-sm text-text-muted">
-          Only a manager or owner can record this, with their own PIN. Check the terminal slip
+          Only a manager or owner can record this, with their own {secret}. Check the terminal slip
           first.
         </p>
+        {!mayPostRefund && (
+          <p className="text-sm text-text-body">
+            A manager or owner with finance read, finance management and accounts administration
+            access can record a card refund.
+          </p>
+        )}
         {selfResolve ? (
           <p className="text-sm text-text-body">
             You took this payment, and no other manager or owner can resolve it at this branch, so
-            you may resolve it yourself with your PIN. It is recorded as self-approved.
+            you may resolve it yourself with your {secret}. It is recorded as self-approved.
           </p>
         ) : null}
         {view.reviewReason ? (
@@ -131,29 +144,31 @@ export function CounterCardTerminalReview({
         <legend className="mb-2 text-sm font-medium text-text-strong">
           What does the terminal slip show?
         </legend>
-        {options.map((option) => (
-          <label
-            key={option.value}
-            className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle p-3 has-[:checked]:border-ring has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
-          >
-            <input
-              type="radio"
-              name={`${id}-outcome`}
-              className="mt-1"
-              value={option.value}
-              checked={outcome === option.value}
-              disabled={option.disabled || resolve.isPending}
-              aria-describedby={`${id}-${option.value}-hint`}
-              onChange={() => setOutcome(option.value)}
-            />
-            <span className="text-sm">
-              <span className="block text-text-strong">{option.label}</span>
-              <span id={`${id}-${option.value}-hint`} className="block text-text-muted">
-                {option.hint}
+        {options
+          .filter((option) => option.value !== 'REVERSED' || mayPostRefund)
+          .map((option) => (
+            <label
+              key={option.value}
+              className="flex cursor-pointer items-start gap-3 rounded-md border border-border-subtle p-3 has-[:checked]:border-ring has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-60"
+            >
+              <input
+                type="radio"
+                name={`${id}-outcome`}
+                className="mt-1"
+                value={option.value}
+                checked={outcome === option.value}
+                disabled={option.disabled || resolve.isPending}
+                aria-describedby={`${id}-${option.value}-hint`}
+                onChange={() => setOutcome(option.value)}
+              />
+              <span className="text-sm">
+                <span className="block text-text-strong">{option.label}</span>
+                <span id={`${id}-${option.value}-hint`} className="block text-text-muted">
+                  {option.hint}
+                </span>
               </span>
-            </span>
-          </label>
-        ))}
+            </label>
+          ))}
       </fieldset>
       <div className="space-y-2">
         <Label htmlFor={`${id}-slip`}>Reference on the terminal slip</Label>
@@ -162,7 +177,7 @@ export function CounterCardTerminalReview({
           className="h-11"
           autoComplete="off"
           maxLength={64}
-          disabled={resolve.isPending}
+          disabled={resolve.isPending || (view.chargeReported && !mayPostRefund)}
           aria-describedby={`${id}-slip-hint`}
           value={slipRef}
           onChange={(event) => setSlipRef(event.target.value)}
@@ -176,13 +191,13 @@ export function CounterCardTerminalReview({
         <Textarea
           id={`${id}-reason`}
           maxLength={200}
-          disabled={resolve.isPending}
+          disabled={resolve.isPending || (view.chargeReported && !mayPostRefund)}
           value={reason}
           onChange={(event) => setReason(event.target.value)}
         />
       </div>
       <div className="space-y-2">
-        <Label htmlFor={`${id}-pin`}>Your manager or owner PIN</Label>
+        <Label htmlFor={`${id}-pin`}>Your manager or owner {secret}</Label>
         <Input
           id={`${id}-pin`}
           type="password"
@@ -190,7 +205,7 @@ export function CounterCardTerminalReview({
           autoComplete="off"
           maxLength={8}
           className="h-11"
-          disabled={resolve.isPending}
+          disabled={resolve.isPending || (view.chargeReported && !mayPostRefund)}
           value={pin}
           onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
         />

@@ -305,7 +305,8 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
       previousId: string,
       kind: 'OWED' | 'DECLINED' | 'SETTLED',
       commandKey: string,
-      amount?: number
+      amount?: number,
+      settlementDate = '2026-11-19'
     ) =>
       run((db) =>
         changeProviderRefund(
@@ -316,7 +317,7 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
             kind,
             commandKey,
             settlementAmountMinor: amount,
-            settledOn: kind === 'SETTLED' ? '2026-11-19' : undefined,
+            settledOn: kind === 'SETTLED' ? settlementDate : undefined,
             reason: 'Provider statement checked',
             slipRef: 'REF-' + suffix,
           },
@@ -338,6 +339,26 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     await expect(act(renewed.id, 'SETTLED', 'too-high', 302)).rejects.toMatchObject({
       code: 'CONFLICT',
     });
+    await expect(
+      act(renewed.id, 'SETTLED', 'future-settlement', 101, '9999-01-01')
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    // Bypass the service amount check to exercise the database invariant itself.
+    await expect(
+      run((db) =>
+        db.pharmacyTerminalRefundEvent.create({
+          data: {
+            ...renewed,
+            id: 'over-settlement-' + suffix,
+            previousId: renewed.id,
+            kind: 'SETTLED',
+            amountMinor: renewed.remainingMinor + 1,
+            remainingMinor: 0,
+            settledOn: new Date('2026-11-19'),
+            commandKey: 'over-settlement-' + suffix,
+          },
+        })
+      )
+    ).rejects.toThrow(/settlement exceeds or disagrees with the remaining obligation/);
     const part = await act(renewed.id, 'SETTLED', 'partial', 101);
     expect(part).toMatchObject({
       amountMinor: 101,
@@ -563,6 +584,17 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     await expect(
       change(root, 'OWED', { pinVerified: true, declareSelfApproval: true }, '')
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    const secondOwner = await run((db) =>
+      db.user.findUniqueOrThrow({ where: { id: reviewerId }, select: { organizationRoleId: true } })
+    );
+    const soleOwner = await run((db) =>
+      db.user.findUniqueOrThrow({ where: { id: ownerId }, select: { organizationRoleId: true } })
+    );
+    await run((db) => db.user.update({ where: { id: reviewerId }, data: soleOwner }));
+    await expect(
+      change(root, 'OWED', { pinVerified: true, declareSelfApproval: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await run((db) => db.user.update({ where: { id: reviewerId }, data: secondOwner }));
     const self = await change(root, 'OWED', { pinVerified: true, declareSelfApproval: true });
     expect(self).toMatchObject({
       previousId: root,

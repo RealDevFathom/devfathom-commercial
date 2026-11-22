@@ -340,6 +340,14 @@ beforeAll(async () => {
         reason: 'Book the terminal review in accounts',
       },
     });
+    await db.userPermissionOverride.create({
+      data: {
+        userId: actorId,
+        capability: 'finance:read',
+        effect: 'ALLOW',
+        reason: 'Read terminal refund accounts',
+      },
+    });
     // The owner's own approval PIN: this workspace has no second manager (solo owner).
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     const profile = await db.restaurantStaffProfile.create({
@@ -1091,6 +1099,65 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
     expect(await attemptsFor(saleId)).toEqual([
       expect.objectContaining({ status: 'MANUAL_REVIEW' }),
     ]);
+    // Unknown outcomes on a separate day-close branch have no confirmed card charge.
+    const nonPostingBranch = 'ct_non_posting_' + run;
+    await setupBranch(nonPostingBranch);
+    await tenant((db) =>
+      db.pharmacyBranchAssignment.createMany({
+        data: [actorId, managerId].map((userId) => ({ userId, branchId: nonPostingBranch })),
+      })
+    );
+    async function declineUncharged(slipRef: string) {
+      const saleId = await openSale(nonPostingBranch);
+      const testScope = scopeOf(nonPostingBranch);
+      const { store } = depsFor(gatedTerminal());
+      const { attempt } = await store.create(testScope, {
+        ...chargeInput(saleId),
+        provider: 'FAKE_TERMINAL',
+      });
+      const sent = await store.transition(testScope, attempt, {
+        status: 'SENT',
+        sentAt: new Date(),
+      });
+      await store.transition(testScope, sent!, {
+        status: 'MANUAL_REVIEW',
+        reviewReason: 'No terminal response',
+      });
+      const read = await withTenantDb(
+        organizationId,
+        (db) =>
+          counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).attempt({
+            branchId: nonPostingBranch,
+            saleId,
+          }),
+        { userId: managerId }
+      );
+      await expect(
+        withTenantDb(
+          organizationId,
+          (db) =>
+            counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
+              branchId: nonPostingBranch,
+              attemptKey: attempt.attemptKey,
+              outcome: 'DECLINED',
+              slipRef,
+              resolutionReason: 'Statement confirms no charge',
+              managerPin: secondManagerPin,
+            }),
+          { userId: managerId }
+        )
+      ).resolves.toMatchObject({ phase: 'DECLINED', open: false });
+      expect(
+        await tenant((db) =>
+          db.pharmacyTerminalRefundEvent.findFirstOrThrow({ where: { attemptId: attempt.id } })
+        )
+      ).toMatchObject({ kind: 'DECLINED', journalId: null, remainingMinor: 0 });
+      return read?.reviewAccess;
+    }
+    expect(await declineUncharged('NO-CHARGE-A')).toMatchObject({
+      mayResolve: true,
+      mayPostRefund: false,
+    });
     await tenant((db) =>
       db.userPermissionOverride.create({
         data: {
@@ -1101,6 +1168,37 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         },
       })
     );
+    // Manage alone is insufficient for a posting decision.
+    const resolveAsManager = (values: typeof resolution) =>
+      withTenantDb(
+        organizationId,
+        (db) =>
+          counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
+            ...values,
+            managerPin: secondManagerPin,
+          }),
+        { userId: managerId }
+      );
+    await expect(resolveAsManager(resolution)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await tenant((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: managerId,
+          capability: 'finance:read',
+          effect: 'ALLOW',
+          reason: 'Read refund accounts',
+        },
+      })
+    );
+    expect(await declineUncharged('NO-CHARGE-B')).toMatchObject({
+      mayResolve: true,
+      mayPostRefund: true,
+    });
+    await expect(
+      tenant((db) =>
+        settlement.cutPharmacyDailyClose(db, scopeOf(nonPostingBranch), { businessDate })
+      )
+    ).resolves.toMatchObject({ branchId: nonPostingBranch, sequence: 1 });
     // The other manager resolves it with their own PIN.
     await expect(
       withTenantDb(

@@ -109,6 +109,7 @@ const managerMembership = async () => ({
     permissions: [
       { capability: 'admin:access', effect: 'ALLOW' },
       { capability: 'finance:manage', effect: 'ALLOW' },
+      { capability: 'finance:read', effect: 'ALLOW' },
     ],
   },
   permissionOverrides: [],
@@ -378,6 +379,14 @@ describe('DEV-743 card-terminal router', () => {
 
   it('shares one timeout with the recovery sweep', () => {
     expect(COUNTER_TERMINAL_TIMEOUT_MS).toBe(CARD_TERMINAL_TIMEOUT_MS);
+  });
+
+  it('returns NOT_FOUND for a missing review in branch history', async () => {
+    refundAuth.actorMayRefund.mockResolvedValue(true);
+    requestDb.pharmacyCardTerminalAttempt.findFirst.mockImplementationOnce(async () => null!);
+    await expect(
+      caller(true).reviewHistory({ branchId: scope.branchId, attemptKey: 'missing-review' })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
   describe('resolveReview', () => {

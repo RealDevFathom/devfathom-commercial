@@ -10,11 +10,14 @@ import { SectionCard } from '@/components/ui/section-card';
 import { SelectField } from '@/components/ui/select-field';
 import { StatusPill } from '@/components/ui/status-pill';
 import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { parseMajorToMinor } from '@/lib/pharmacy/khata-payment-slip';
 import type { BranchOption } from '../branch-picker';
 
 type Row = {
   id: string;
   attemptKey: string;
+  reference: string | null;
   kind: string;
   amountMinor: number | null;
   remainingMinor: number | null;
@@ -33,9 +36,7 @@ const actions: Record<Action, string> = {
   BOOK_HISTORICAL: 'Book historical refund',
 };
 const money = (value: number | null) =>
-  value === null
-    ? 'Verify statement amount'
-    : new Intl.NumberFormat('en-PK').format(value) + ' paisa';
+  value === null ? 'Verify statement amount' : 'PKR ' + formatMinor(value);
 const date = (value: Date) => new Date(value).toISOString().slice(0, 10);
 function status(row: Row) {
   if (row.historical) return 'Historical review';
@@ -132,7 +133,7 @@ function BranchRefunds({ branchId }: { branchId: string }) {
             {rows.map((r) => (
               <li key={r.id} className="flex flex-wrap items-center justify-between gap-3 py-3">
                 <div className="min-w-0">
-                  <p className="break-all font-medium">{r.attemptKey}</p>
+                  <p className="break-all font-medium">{r.reference || 'Terminal review'}</p>
                   <p className="text-sm text-text-muted">
                     {money(r.remainingMinor)} outstanding ·{' '}
                     {Math.max(0, Math.floor((asOf - new Date(r.createdAt).getTime()) / 86400000))}{' '}
@@ -147,7 +148,7 @@ function BranchRefunds({ branchId }: { branchId: string }) {
                     setMessage('');
                     setAction(null);
                   }}
-                  aria-label={'View ' + r.attemptKey}
+                  aria-label={'View ' + (r.reference || 'terminal review')}
                 >
                   View details
                 </Button>
@@ -161,7 +162,8 @@ function BranchRefunds({ branchId }: { branchId: string }) {
         <>
           <SectionCard title="Refund actions" titleLevel={2}>
             <p className="mb-3 break-all">
-              {row.attemptKey} · {status(row)} · {money(row.remainingMinor)} outstanding
+              {row.reference || 'Terminal review'} · {status(row)} · {money(row.remainingMinor)}{' '}
+              outstanding
             </p>
             {!data.canWrite ? (
               <p>
@@ -191,6 +193,7 @@ function BranchRefunds({ branchId }: { branchId: string }) {
                 {...{ row, action, branchId }}
                 peers={data.peers}
                 owner={data.owner}
+                today={data.today}
                 needsPeer={!!needsPeer && (action === 'OWED' || action === 'DECLINED')}
                 onSaved={async () => {
                   setAction(null);
@@ -221,6 +224,7 @@ function RefundForm({
   branchId,
   peers,
   owner,
+  today,
   needsPeer,
   onSaved,
 }: {
@@ -229,6 +233,7 @@ function RefundForm({
   branchId: string;
   peers: { id: string; name: string | null }[];
   owner: boolean;
+  today: string;
   needsPeer: boolean;
   onSaved: () => Promise<void>;
 }) {
@@ -249,7 +254,7 @@ function RefundForm({
     if (mutation.isPending) return;
     const form = new FormData(e.currentTarget);
     const val = (name: string) => String(form.get(name) ?? '').trim();
-    const amount = val('amount') ? Number(val('amount')) : undefined;
+    const amount = val('amount') ? parseMajorToMinor(val('amount')) : undefined;
     if (
       amount !== undefined &&
       (!Number.isSafeInteger(amount) ||
@@ -257,7 +262,9 @@ function RefundForm({
         amount > 2147483647 ||
         (action === 'SETTLED' && amount > (row.remainingMinor ?? 0)))
     ) {
-      setError('Enter a positive whole amount within the outstanding balance.');
+      setError(
+        'Enter a positive amount within the outstanding balance, with up to two decimal places.'
+      );
       return;
     }
     setError('');
@@ -300,16 +307,20 @@ function RefundForm({
       <h3 className="font-semibold">{actions[action]}</h3>
       {(action === 'SETTLED' || row.amountMinor === null || action === 'OWED') && (
         <Label className="grid gap-1">
-          Amount (PKR paisa)
+          Amount (PKR)
           <Input
             required
             name="amount"
             type="number"
-            step="1"
-            min="1"
-            max={action === 'SETTLED' ? (row.remainingMinor ?? undefined) : 2147483647}
+            step="0.01"
+            min="0.01"
+            max={formatMinor(action === 'SETTLED' ? (row.remainingMinor ?? 0) : 2147483647)}
             defaultValue={
-              action === 'SETTLED' ? (row.remainingMinor ?? '') : (row.amountMinor ?? '')
+              action === 'SETTLED'
+                ? formatMinor(row.remainingMinor ?? 0)
+                : row.amountMinor === null
+                  ? ''
+                  : formatMinor(row.amountMinor)
             }
           />
         </Label>
@@ -317,7 +328,7 @@ function RefundForm({
       {action === 'SETTLED' && (
         <Label className="grid gap-1">
           Settlement date
-          <Input required name="date" type="date" />
+          <Input required name="date" type="date" max={today} />
         </Label>
       )}
       <Label className="grid gap-1">
@@ -352,7 +363,7 @@ function RefundForm({
             <option value="">Choose a reviewer</option>
             {peers.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.name ?? p.id}
+                {p.name || 'Unnamed reviewer'}
               </option>
             ))}
           </SelectField>
@@ -404,6 +415,9 @@ function History({ branchId, attemptKey }: { branchId: string; attemptKey: strin
       ) : (
         <>
           <p>Original terminal status: {history.data.attempt.status}</p>
+          {history.data.attempt.reviewerName && (
+            <p>Reviewed by {history.data.attempt.reviewerName}</p>
+          )}
           {history.data.attempt.resolutionReason && <p>{history.data.attempt.resolutionReason}</p>}
           <ol className="divide-y divide-border">
             {history.data.events.map((e) => {
@@ -427,14 +441,14 @@ function History({ branchId, attemptKey }: { branchId: string; attemptKey: strin
                     · {money(e.amountMinor)}
                   </p>
                   <p>
-                    {date(e.createdAt)} · {e.actorId} · {e.reason}
+                    {date(e.createdAt)} · {e.actorName} · {e.reason}
                   </p>
                   <p>
                     Provider reference {e.slipRef}
                     {e.settledOn ? ' · Settled ' + date(e.settledOn) : ''}
                   </p>
                   {e.selfApproved && <p>Self-approved by sole owner.</p>}
-                  {e.secondApproverId && <p>Approved by {e.secondApproverId}</p>}
+                  {e.secondApproverName && <p>Approved by {e.secondApproverName}</p>}
                   <div className="flex flex-wrap gap-4">
                     {e.previousId && (
                       <a className="underline" href={'#entry-' + e.previousId}>

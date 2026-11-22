@@ -23,6 +23,7 @@ vi.mock('@/components/pharmacy/own-approval-copy', () => ({ useApprovalSecretKin
 const row = {
   id: 'refund-1',
   attemptKey: 'synthetic-terminal',
+  reference: 'Slip 42',
   kind: 'OWED',
   amountMinor: 755,
   remainingMinor: 755,
@@ -33,6 +34,7 @@ const row = {
   terminalConfirmed: false,
 };
 const data = {
+  today: '2026-11-22',
   records: [row],
   historical: [],
   peers: [],
@@ -63,20 +65,51 @@ describe('provider refund accounts workspace', () => {
   it('shows the balance and access required when actions are unavailable', () => {
     api.list.mockReturnValue({ data: { ...data, canWrite: false } });
     show();
-    fireEvent.click(screen.getByRole('button', { name: 'View synthetic-terminal' }));
-    expect(screen.getByText(/755 paisa outstanding ·/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'View Slip 42' }));
+    expect(screen.getByText(/PKR 7\.55 outstanding ·/)).toBeVisible();
+    expect(screen.queryByText('synthetic-terminal')).toBeNull();
     expect(screen.getByText(/Finance management access is required/)).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Record provider settlement' })).toBeNull();
   });
+  it('shows reviewer and approver names and formats the linked amount in rupees', () => {
+    api.history.mockReturnValue({
+      data: {
+        attempt: { status: 'REVERSED', reviewerName: 'Original Reviewer' },
+        events: [
+          {
+            id: 'sample-event',
+            kind: 'OWED',
+            amountMinor: 755,
+            actorId: 'actor-internal',
+            actorName: 'Review Manager',
+            secondApproverId: 'approver-internal',
+            secondApproverName: 'Finance Owner',
+            createdAt: row.createdAt,
+            reason: 'Statement checked',
+            slipRef: 'Slip 42',
+          },
+        ],
+      },
+    });
+    show();
+    fireEvent.click(screen.getByRole('button', { name: 'View Slip 42' }));
+    expect(screen.getByText('Reviewed by Original Reviewer')).toBeVisible();
+    expect(screen.getByText(/Review Manager · Statement checked/)).toBeVisible();
+    expect(screen.getByText('Approved by Finance Owner')).toBeVisible();
+    expect(screen.getByText('Refund owed · PKR 7.55')).toBeVisible();
+    expect(screen.queryByText(/actor-internal|approver-internal/)).toBeNull();
+  });
   it('submits the provider amount, date and reference and refreshes linked history', async () => {
     show();
-    fireEvent.click(screen.getByRole('button', { name: 'View synthetic-terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View Slip 42' }));
     fireEvent.click(screen.getByRole('button', { name: 'Record provider settlement' }));
     const fill = (name: string, value: string) =>
       fireEvent.change(screen.getByLabelText(name), { target: { value } });
-    fill('Amount (PKR paisa)', '756');
-    expect(screen.getByLabelText('Amount (PKR paisa)')).toBeInvalid();
-    fill('Amount (PKR paisa)', '125');
+    fill('Amount (PKR)', '7.56');
+    expect(screen.getByLabelText('Amount (PKR)')).toBeInvalid();
+    fill('Amount (PKR)', '1.25');
+    fill('Settlement date', '2026-11-23');
+    expect(screen.getByLabelText('Settlement date')).toBeInvalid();
     fill('Settlement date', '2026-11-20');
     fill('Provider reference', 'SYNTH-125');
     fill('Reason', 'Provider statement checked');
@@ -98,7 +131,7 @@ describe('provider refund accounts workspace', () => {
   it('requires a declared sole-owner sign-off with the active credential mode', () => {
     api.mode.mockReturnValue('PIN');
     show();
-    fireEvent.click(screen.getByRole('button', { name: 'View synthetic-terminal' }));
+    fireEvent.click(screen.getByRole('button', { name: 'View Slip 42' }));
     fireEvent.click(screen.getByRole('button', { name: 'Correct a review decision' }));
     expect(screen.getByLabelText('Your PIN')).toBeRequired();
     expect(screen.getByRole('checkbox')).toBeRequired();
