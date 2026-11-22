@@ -517,13 +517,14 @@ describe('prescription capture and private delivery', () => {
       entitlements.enabledModules.includes(moduleKey)
     );
     mocks.can.mockImplementation(async (_subject, requestedAction) => requestedAction === action);
+    const savedAddress = '42 Synthetic Test Street';
     mocks.patients.mockResolvedValue([]);
     mocks.patient.mockResolvedValue({
       id: 'patient-a',
       displayName: 'Patient A',
       cnic: null,
       phone: null,
-      address: null,
+      address: savedAddress,
       dateOfBirth: null,
       consents: [],
       prescriptions: [],
@@ -533,9 +534,11 @@ describe('prescription capture and private delivery', () => {
     await expect(counterCaller.counterPatients({ query: 'patient' })).resolves.toEqual({
       patients: [],
     });
-    await expect(
-      counterCaller.counterPatientPanel({ patientId: 'patient-a' })
-    ).resolves.toMatchObject({ patientId: 'patient-a', prescriptions: [] });
+    const panel = await counterCaller.counterPatientPanel({ patientId: 'patient-a' });
+    expect(panel).toMatchObject({ patientId: 'patient-a', prescriptions: [] });
+    expect(panel).not.toHaveProperty('address');
+    expect(JSON.stringify(panel)).not.toContain(savedAddress);
+    expect(mocks.patient.mock.calls[0]![0].select).not.toHaveProperty('address');
 
     expect(mocks.patients).toHaveBeenCalledOnce();
     expect(mocks.patient).toHaveBeenCalledOnce();
