@@ -1,3 +1,4 @@
+import { WHOLE_RECEIPT_REVERSAL_ONLY } from '@/lib/pharmacy/receiving';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { ProgressiveLines } from '../_components/progressive-lines';
 import { APPROVAL_BLOCKED } from '@/lib/pharmacy/purchase-approval';
@@ -525,6 +526,18 @@ export default async function PharmacyReceivingPage({
     try {
       const actionCaller = await purchasingCaller();
       if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      // A quantity or line selection would otherwise be discarded and turn a
+      // partial request into a full reversal. This action accepts whole receipts only.
+      const fields = [
+        'branchId',
+        'goodsReceiptId',
+        'reversalReason',
+        'witnessStaffProfileId',
+        'witnessPin',
+      ];
+      if (Array.from(form.keys()).some((key) => !fields.includes(key))) {
+        throw new PurchasingValidationError(WHOLE_RECEIPT_REVERSAL_ONLY);
+      }
       await outcome.write(actionCaller.reverseGoodsReceipt)({
         branchId: branch,
         goodsReceiptId,

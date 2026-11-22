@@ -99,6 +99,8 @@ import {
   PharmacyReceivingError,
   receiptLandedCosts,
   receiptLineQuantities,
+  receiptReversalRefusals,
+  WHOLE_RECEIPT_REVERSAL_ONLY,
 } from '@/lib/pharmacy/receiving';
 import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
 import {
@@ -116,6 +118,7 @@ import {
   issueDebitNote,
   recordSupplierCredit,
   submitPurchaseReturn,
+  legacySupplierDispatches,
 } from '@/lib/pharmacy/supplier-returns-operations';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import {
@@ -176,7 +179,7 @@ const MAX_RECEIPT_ALLOCATIONS = MAX_RECEIPT_LINES * 4;
 
 function domainError(error: unknown): never {
   if (error instanceof ControlledRestorationDenied) {
-    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message, cause: error });
   }
   if (error instanceof CentralPurchasingError) {
     throw new TRPCError({
@@ -216,7 +219,11 @@ function domainError(error: unknown): never {
               error.reason === 'SELF_APPROVAL'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
-      message: error.reason,
+      message:
+        error.reason === 'REVERSAL_STOCK_MOVED' || error.reason === 'REVERSAL_PACKS_OPENED'
+          ? receiptReversalRefusals[error.reason]
+          : error.reason,
+      cause: error,
     });
   }
   if (error instanceof PharmacyInventoryError) {
@@ -239,13 +246,15 @@ function domainError(error: unknown): never {
           ? 'NOT_FOUND'
           : error.reason === 'CROSS_TENANT_REFERENCE' ||
               error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'LATE_OWNER_REQUIRED' ||
               error.reason === 'SELF_APPROVAL'
             ? 'FORBIDDEN'
             : // ALREADY_CLAIMED, RETURN_WINDOW_CLOSED, OVER_ALLOCATION and the
               // transition refusals are all "you asked for something the current
               // state does not allow", not authorization failures.
               'BAD_REQUEST',
-      message: error.reason,
+      message: error.message,
+      cause: error,
     });
   }
   if (serialUniqueViolation(error)) {
@@ -2283,8 +2292,8 @@ const purchasingRouter = router({
   reverseGoodsReceipt: purchasing
     .meta(PROCUREMENT)
     .input(
-      z
-        .object({
+      z.strictObject(
+        {
           branchId,
           goodsReceiptId: z.string().min(1).max(200),
           reason: z.string().trim().min(1).max(1000),
@@ -2295,8 +2304,12 @@ const purchasingRouter = router({
             })
             .strict()
             .optional(),
-        })
-        .strict()
+        },
+        {
+          error: (issue) =>
+            issue.code === 'unrecognized_keys' ? WHOLE_RECEIPT_REVERSAL_ONLY : undefined,
+        }
+      )
     )
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
@@ -2490,6 +2503,15 @@ const purchasingRouter = router({
         .object({
           branchId,
           purchaseReturnId: z.string().min(1).max(200),
+          approvalReason: z.string().trim().max(500).optional(),
+          recordLateLineId: z.string().min(1).max(200).optional(),
+          controlledWitness: z
+            .object({
+              staffProfileId: z.string().min(1).max(200),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
           idempotencyKey: z.string().trim().min(1).max(200),
         })
         .strict()
@@ -2502,9 +2524,22 @@ const purchasingRouter = router({
             purchaseReturnId: input.purchaseReturnId,
             at: new Date(),
             idempotencyKeyPrefix: input.idempotencyKey,
+            controlledWitness: input.controlledWitness,
+            recordLateLineId: input.recordLateLineId,
+            approvalReason: input.approvalReason,
           })
         );
       } catch (error) {
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError ||
+          error instanceof Prisma.PrismaClientUnknownRequestError
+        ) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'The supplier return could not be confirmed. Review the original dispatch and register before trying again.',
+          });
+        }
         domainError(error);
       }
     }),
@@ -2737,6 +2772,13 @@ const purchasingRouter = router({
     .input(z.object({ branchId, goodsReceiptId: z.string().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) =>
       lotsFromReceipt(ctx.db, await receivingScope(ctx, input.branchId), input.goodsReceiptId)
+    ),
+
+  legacySupplierDispatches: purchasing
+    .meta(PROCUREMENT_AND_FINANCE)
+    .input(z.object({ branchId, after: z.string().min(1).max(200).optional() }).strict())
+    .query(async ({ ctx, input }) =>
+      legacySupplierDispatches(ctx.db, await receivingScope(ctx, input.branchId), input.after)
     ),
 
   /** PUR-06 — returns and claims with their window state and credit position. */

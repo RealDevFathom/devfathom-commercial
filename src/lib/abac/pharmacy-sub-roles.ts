@@ -303,6 +303,14 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         sites: { 'src/lib/pharmacy/controlled-restoration-authorization.ts': 1 },
       },
       {
+        id: 'dispatch-controlled-supplier-return',
+        text: "With purchasing access, send controlled stock back to its supplier with a different pharmacist's authenticator code (or PIN, if the owner turned the authenticator off)",
+        sites: {
+          'src/app/(app)/pharmacy/purchasing/returns/page.tsx': 1,
+          'src/lib/pharmacy/supplier-returns-operations.ts': 1,
+        },
+      },
+      {
         id: 'see-which-pharmacists-can',
         text: 'See which pharmacists can witness controlled-medicine entries',
         sites: { 'src/server/routers/pharmacy-safety.ts': 1 },

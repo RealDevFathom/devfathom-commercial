@@ -376,6 +376,7 @@ describe('supplier claims and returns take stock locks in the global order', () 
       quantityUnits: 1,
       reason: 'Damaged',
       returnWindowEndsAt: new Date('2100-01-01'),
+      lot: { unitsPerPack: 1, batch: { medicine: { controlled: false } } },
       supplierClaimId: null,
     });
     return {

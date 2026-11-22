@@ -6,12 +6,45 @@ import {
   appendControlledPurchaseEntries,
   appendControlledPurchaseReversals,
   appendControlledSaleEntries,
+  appendControlledSupplierReturn,
   DEFAULT_EMERGENCY_SUPPLY_POLICY,
   derivedCorrectionDelta,
   emergencyNoRxDecision,
   registerBalanceAfter,
   resolveEmergencySupplyPolicy,
 } from './controlled-register';
+
+describe('controlled supplier return refusals', () => {
+  const message =
+    'The register could not confirm this supplier return. Check the original dispatch and register before trying again.';
+  it.each([
+    ['PostgreSQL', { code: '23514' }],
+    ['Prisma adapter', { meta: { driverAdapterError: { cause: { originalCode: '23514' } } } }],
+    [
+      'Prisma database error',
+      new Error('Database error. Code: `23514`. Message: `check constraint failed`'),
+    ],
+  ])('translates a %s check violation into a plain refusal', async (_source, failure) => {
+    const { db, create } = correctionDb({ sellable: 8 });
+    db.$queryRaw = vi.fn().mockResolvedValue([{ id: 'purchase', medicineId: 'medicine' }]);
+    create.mockRejectedValueOnce(failure);
+    await expect(
+      appendControlledSupplierReturn(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'sender' },
+        {
+          supplierId: 'supplier',
+          supplierName: 'Supplier',
+          lineId: 'line',
+          inventoryLotId: 'lot',
+          movementId: 'movement',
+          quantity: 1,
+          witness: { witnessedByUserId: 'witness', signatureRef: 'pin:fixture' },
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'REGISTER_REFUSED', message });
+  });
+});
 
 describe('registerBalanceAfter', () => {
   it('adds a signed delta and refuses a negative balance', () => {
@@ -195,7 +228,7 @@ function correctionDb(options: {
       }),
       aggregate: vi.fn(async () => {
         calls.push('serial');
-        return { _max: { serial: 4 } };
+        return { _sum: { quantityCanonicalUnits: null }, _max: { serial: 4 } };
       }),
       create,
       update: vi.fn(),
@@ -347,7 +380,9 @@ describe('appendControlledPurchaseReversals', () => {
       pharmacyControlledRegisterEntry: {
         findMany: vi.fn().mockResolvedValue([purchase]),
         findFirst: vi.fn().mockResolvedValue({ runningBalance: 2 }),
-        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        aggregate: vi
+          .fn()
+          .mockResolvedValue({ _sum: { quantityCanonicalUnits: null }, _max: { serial: 1 } }),
         create,
       },
       pharmacyStockBalance: {
@@ -400,7 +435,7 @@ describe('appendControlledSaleEntries', () => {
       pharmacyControlledRegisterEntry: {
         aggregate: vi.fn(async () => {
           calls.push('serial');
-          return { _max: { serial: 3 } };
+          return { _sum: { quantityCanonicalUnits: null }, _max: { serial: 3 } };
         }),
         findFirst: vi.fn(async () => null),
         create,
@@ -461,7 +496,9 @@ describe('appendControlledSaleEntries', () => {
     const db = {
       $queryRaw: vi.fn(),
       pharmacyControlledRegisterEntry: {
-        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        aggregate: vi
+          .fn()
+          .mockResolvedValue({ _sum: { quantityCanonicalUnits: null }, _max: { serial: 1 } }),
         findFirst: vi.fn(async ({ where }: { where: { medicineId?: string } }) => {
           expect(where.medicineId).toBe('med');
           return { runningBalance: 10 };
@@ -515,7 +552,9 @@ describe('appendControlledPurchaseEntries', () => {
     const db = {
       $queryRaw: vi.fn(),
       pharmacyControlledRegisterEntry: {
-        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 0 } }),
+        aggregate: vi
+          .fn()
+          .mockResolvedValue({ _sum: { quantityCanonicalUnits: null }, _max: { serial: 0 } }),
         findFirst: vi.fn(async () => ({ runningBalance: 3 })),
         create,
       },

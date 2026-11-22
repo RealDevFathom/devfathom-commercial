@@ -65,6 +65,7 @@ describe('controlled register replay', () => {
       },
       pharmacyControlledRegisterEntry: {
         aggregate: async () => ({
+          _sum: { quantityCanonicalUnits: null },
           _max: { serial: rows.reduce((max, row) => Math.max(max, Number(row.serial)), 0) || null },
         }),
         findMany: async ({ where }: { where: Record<string, unknown> }) =>
