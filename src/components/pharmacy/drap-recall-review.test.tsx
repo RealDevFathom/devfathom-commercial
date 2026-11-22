@@ -1,3 +1,4 @@
+import { EntitlementsProvider } from '@/components/entitlements-provider';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -160,4 +161,28 @@ describe('DRAP recall review screen', () => {
       'Recall confirmed'
     );
   });
+});
+
+it('shows a decision made at 00:30 on its Karachi calendar date', () => {
+  render(
+    <EntitlementsProvider value={{ timeZone: 'Asia/Karachi' } as never}>
+      <DrapRecallReviewView
+        {...handlers()}
+        data={{
+          pending: [],
+          decided: [
+            {
+              ...matched,
+              reviewStatus: 'CONFIRMED',
+              reviewedAt: new Date('2026-11-02T00:30:00+05:00'),
+              recallNoticeId: 'recall-1',
+            },
+          ],
+        }}
+      />
+    </EntitlementsProvider>
+  );
+  expect(screen.getByRole('region', { name: 'Recent DRAP recall decisions' })).toHaveTextContent(
+    '2026-11-02'
+  );
 });

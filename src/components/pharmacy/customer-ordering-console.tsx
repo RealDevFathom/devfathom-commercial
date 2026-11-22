@@ -1,7 +1,7 @@
 'use client';
 
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
-
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -57,6 +57,7 @@ function OrderCard({
   runners: Array<{ id: string; name: string }>;
   currency: string;
 }) {
+  const timeZone = useWorkspaceTimeZone();
   const total = order.lines.reduce((sum, line) => sum + line.lineTotalMinor, 0);
   const next =
     order.status === 'PROPOSED'
@@ -110,12 +111,12 @@ function OrderCard({
       <ol aria-label="Order tracking" className="mt-3 space-y-1 text-sm text-text-muted">
         {order.events.map((event) => (
           <li key={event.id}>
-            {event.kind.replaceAll('_', ' ')} · {formatOrderDateTime(event.occurredAt)}
+            {event.kind.replaceAll('_', ' ')} · {formatOrderDateTime(event.occurredAt, timeZone)}
           </li>
         ))}
         {order.deliveryEvidence.map((event) => (
           <li key={event.id}>
-            {event.action.replaceAll('_', ' ')} · {formatOrderDateTime(event.occurredAt)}
+            {event.action.replaceAll('_', ' ')} · {formatOrderDateTime(event.occurredAt, timeZone)}
           </li>
         ))}
       </ol>
@@ -127,7 +128,7 @@ function OrderCard({
       ) : null}
       {['PROPOSED', 'ACCEPTED', 'PACKING'].includes(order.status) ? (
         <p className="mt-3 text-xs text-text-muted">
-          Reservation expires {formatOrderDateTime(order.reservationExpiresAt)}
+          Reservation expires {formatOrderDateTime(order.reservationExpiresAt, timeZone)}
         </p>
       ) : null}
       {staff && next ? (

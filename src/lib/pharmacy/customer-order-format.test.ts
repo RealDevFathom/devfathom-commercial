@@ -16,3 +16,9 @@ describe('customer order formatting', () => {
     expect(formatOrderDateTime('2026-11-02T00:30:00Z')).not.toMatch(/[  ]/);
   });
 });
+
+it('displays each workspace date when it is 00:30 in Karachi', () => {
+  const at = new Date('2026-11-02T00:30:00+05:00');
+  expect(formatOrderDateTime(at, 'Asia/Karachi')).toBe('2 Nov 2026, 12:30 am');
+  expect(formatOrderDateTime(at, 'UTC')).toBe('1 Nov 2026, 7:30 pm');
+});

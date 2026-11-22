@@ -46,3 +46,12 @@ describe('packing slip expiry (QA-3)', () => {
     expect(text).not.toContain('9998');
   });
 });
+
+it('prints dispatch at 00:30 on the Karachi calendar', () => {
+  expect(
+    buildPackingSlipText(
+      { ...slip([]), dispatchedAt: '2026-11-02T00:30:00+05:00', timeZone: 'Asia/Karachi' },
+      80
+    )
+  ).toContain('Dispatched:   2026-11-02');
+});

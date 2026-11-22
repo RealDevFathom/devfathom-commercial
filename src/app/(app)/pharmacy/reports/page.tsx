@@ -29,7 +29,7 @@ import {
   pharmacyBusinessDayRange,
   sharedPharmacyDayEnd,
 } from '@/lib/pharmacy/business-day';
-import { workspaceZoneLabel } from '@/lib/timezone';
+import { workspaceTimezone, workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -181,7 +181,7 @@ export default async function PharmacyReportsPage({
     return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
   };
   // The owner's business day: the workspace zone, not UTC (00:00–04:59 PKT is still "today").
-  const timeZone = ctx.organization?.timezone;
+  const timeZone = workspaceTimezone(ctx.organization?.timezone);
   const branch =
     value(query.branch) ??
     (query.branch === undefined && branchResult.branches.length === 1
@@ -802,7 +802,7 @@ export default async function PharmacyReportsPage({
         <>
           <p className="text-sm text-text-muted">
             {screenCopy.reports.updated}
-            {formatShopTime(result.freshness.asOf, timeZone ?? 'Asia/Karachi')}
+            {formatShopTime(result.freshness.asOf, workspaceTimezone(timeZone))}
           </p>
           <details className="text-sm text-text-muted">
             <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
@@ -1039,10 +1039,10 @@ export default async function PharmacyReportsPage({
                           <ReportDetails>
                             <p className="text-xs leading-5 text-text-muted">
                               {screenCopy.reports.window}
-                              {formatShopTime(signal.dataWindowStart, timeZone ?? 'Asia/Karachi')}–
-                              {formatShopTime(signal.dataWindowEnd, timeZone ?? 'Asia/Karachi')}
+                              {formatShopTime(signal.dataWindowStart, workspaceTimezone(timeZone))}–
+                              {formatShopTime(signal.dataWindowEnd, workspaceTimezone(timeZone))}
                               {screenCopy.reports.sourceObserved}{' '}
-                              {formatShopTime(signal.sourceObservedAt, timeZone ?? 'Asia/Karachi')}
+                              {formatShopTime(signal.sourceObservedAt, workspaceTimezone(timeZone))}
                               {screenCopy.reports.policy} {signal.policyVersion}
                             </p>
                           </ReportDetails>

@@ -1059,3 +1059,19 @@ describe('DEV-76 schedule switch and the DEV-730 owner send', () => {
     expect(sql).toContain('unlinked."id" IS NOT NULL');
   });
 });
+
+it('shows a debt due at 00:30 on its Karachi calendar date', () => {
+  expect(
+    planKhataReminder(
+      {
+        familyAccountId: 'f',
+        balanceMinor: 50_000,
+        oldestOverdueAt: new Date('2026-09-01T00:30:00+05:00'),
+      },
+      NOW,
+      1,
+      7,
+      'Asia/Karachi'
+    ).dueDate
+  ).toBe('2026-09-01');
+});

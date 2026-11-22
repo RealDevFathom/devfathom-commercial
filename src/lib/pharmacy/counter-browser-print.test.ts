@@ -5,6 +5,7 @@ import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { FakeBroadcastChannel, installFakePrintWindows } from '@/lib/testing/print-window';
 
 import {
+  allocateWhileCounterPrintWindowOpen,
   assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
   buildCounterBrowserZReport,
@@ -523,6 +524,19 @@ describe('isolated Pharmacy browser receipt', () => {
     await vi.advanceTimersByTimeAsync(PRINT_WINDOW_READY_TIMEOUT_MS);
     await outcome;
     expect(print).not.toHaveBeenCalled();
+  });
+
+  it('releases copy allocation when the popup closes before allocation finishes', async () => {
+    const windows = installFakePrintWindows();
+    const reservation = reserveCounterBrowserPrint();
+    const copy = Promise.withResolvers<number>();
+    await assertCounterBrowserPrintReady(reservation);
+    const outcome = expect(
+      allocateWhileCounterPrintWindowOpen(reservation, () => copy.promise)
+    ).rejects.toThrow('Retry Print receipt');
+    windows.last().closeByOperator();
+    await outcome;
+    copy.resolve(1);
   });
 
   it('rejects a blocked reservation before a server copy can be requested', async () => {
