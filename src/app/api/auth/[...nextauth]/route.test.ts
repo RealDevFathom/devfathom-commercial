@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { oversizedRequest } from '../../../../../tests/fixtures/bounded-request';
 import { Auth, type AuthConfig } from '@auth/core';
 import { encode } from '@auth/core/jwt';
 import { NextRequest } from 'next/server';
@@ -30,7 +31,7 @@ vi.mock('@/lib/auth', () => {
   return { handlers: { GET: handler, POST: handler } };
 });
 
-const { GET } = await import('./route');
+const { GET, POST } = await import('./route');
 
 async function sessionCookie(issuedSecondsAgo: number) {
   // encode() stamps iat from the clock, so mint the cookie in the past.
@@ -114,4 +115,36 @@ describe('GET /api/auth/session cookie re-issue', () => {
     expect(cleared).toHaveLength(1);
     expect(cleared[0]).toMatch(new RegExp(`^${COOKIE.replace(/[.-]/g, '\\$&')}=;`));
   });
+});
+
+it('stops reading an oversized Auth.js form before delegating', async () => {
+  const limit = 32 * 1024;
+  const input = oversizedRequest(limit, {
+    url: 'https://acme.devfathom.com/api/auth/signout',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+  });
+
+  expect((await POST(new NextRequest(input.request))).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 16_384);
+});
+
+it('passes the bounded form and cookies to Auth.js', async () => {
+  const url = 'https://acme.devfathom.com/api/auth';
+  const csrf = await GET(new NextRequest(`${url}/csrf`));
+  const csrfCookie = csrf.headers
+    .getSetCookie()
+    .find((header) => header.includes('authjs.csrf-token'));
+  const cookie = await sessionCookie(5);
+  const { csrfToken } = await csrf.json();
+  const response = await POST(
+    new NextRequest(`${url}/signout`, {
+      method: 'POST',
+      headers: { cookie: `${csrfCookie?.split(';')[0]}; ${COOKIE}=${cookie}` },
+      body: new URLSearchParams({ csrfToken }),
+    })
+  );
+
+  expect(response.status).toBe(302);
+  expect(sessionSetCookies(response).join('')).toMatch(/Max-Age=0/);
 });

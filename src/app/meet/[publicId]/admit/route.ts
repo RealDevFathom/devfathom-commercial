@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { clientIp } from '@/lib/rate-limit';
 import { admitToMeeting, GENERIC_ADMISSION_ERROR } from '@/lib/meetings/admission';
 import { requestHost } from '@/lib/tenancy/host';
@@ -18,7 +19,9 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ publicId: string }> }
 ) {
-  const parsed = inputSchema.safeParse(await request.json().catch(() => null));
+  const body = await readBoundedJson(request, 2 * 1024).catch(() => null);
+  if (body?.tooLarge) return unavailable(413);
+  const parsed = inputSchema.safeParse(body?.value);
   if (!parsed.success) return unavailable();
   const ip = clientIp(request);
   const rate = await admitAnonymousRequest({

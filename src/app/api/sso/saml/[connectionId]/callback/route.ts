@@ -1,6 +1,7 @@
 import { SAML, ValidateInResponseTo } from '@node-saml/node-saml';
 import { NextResponse } from 'next/server';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import {
   callbackUrl,
   consumeAuthorizationState,
@@ -24,7 +25,11 @@ export async function POST(request: Request, route: { params: Promise<{ connecti
     if (!connection.ssoUrl || !connection.certificate) {
       throw new Error('SAML connection is incomplete.');
     }
-    const form = await request.formData();
+    // The form carries the base64 response plus URL encoding and relay state.
+    const body = await readBoundedBody(request, 512 * 1024);
+    if (body === null)
+      return Response.json({ error: 'Request body is too large.' }, { status: 413 });
+    const form = await new Response(body, { headers: request.headers }).formData();
     const samlResponse = form.get('SAMLResponse');
     const relayState = form.get('RelayState');
     if (typeof samlResponse !== 'string' || typeof relayState !== 'string') {

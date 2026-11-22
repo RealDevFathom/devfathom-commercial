@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { verifyEnrollment } from '@/lib/restaurant/wallet/enrollment';
 import {
   admitWalletEnrollment,
@@ -18,7 +19,9 @@ const inputSchema = z
 
 export async function POST(request: Request) {
   const context = await enrollmentContext(request);
-  const parsed = inputSchema.safeParse(await request.json().catch(() => null));
+  const body = await readBoundedJson(request, 4 * 1024).catch(() => null);
+  if (body?.tooLarge) return Response.json(INVALID, { status: 413 });
+  const parsed = inputSchema.safeParse(body?.value);
   if (!context || !parsed.success) return Response.json(INVALID, { status: 400 });
   const broadGate = await admitWalletEnrollment({ ip: context.ip, token: parsed.data.token });
   const attemptGate = await admitWalletOtpAttempt(parsed.data.attemptId);

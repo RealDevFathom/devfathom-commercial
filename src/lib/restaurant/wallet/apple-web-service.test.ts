@@ -1,6 +1,7 @@
 import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { POST as registerRoute } from '@/app/api/wallet/apple/v1/devices/[deviceLibraryIdentifier]/registrations/[passTypeIdentifier]/[serialNumber]/route';
 
 const state = vi.hoisted(() => ({
   pass: null as null | Record<string, unknown>,
@@ -119,6 +120,28 @@ describe('Apple web-service authentication', () => {
     state.existingRegistration = true;
     expect((await registerApplePass(request(token), params)).status).toBe(200);
     expect(tenantDb.walletPassRegistration.upsert).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops reading at the registration cap after pass authentication', async () => {
+    const token = 'wpa_00000000000000000000000000';
+    state.pass = {
+      id: 'pass-1',
+      organizationId: 'org-1',
+      appleAuthTokenHash: createHash('sha256').update(token).digest('hex'),
+      status: 'ACTIVE',
+    };
+    const limit = 2 * 1024;
+    const input = oversizedRequest(limit, {
+      headers: { authorization: `ApplePass ${token}`, 'content-type': 'application/json' },
+      chunkSize: 1024,
+    });
+
+    expect((await registerRoute(input.request, { params: Promise.resolve(params) })).status).toBe(
+      413
+    );
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 1024);
+    expect(tenantDb.walletPassRegistration.upsert).not.toHaveBeenCalled();
   });
 
   it('lists only revisions newer than passesUpdatedSince and returns 204 when none remain', async () => {

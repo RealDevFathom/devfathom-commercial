@@ -1,3 +1,4 @@
+import { oversizedRequest } from '../../../../../../tests/fixtures/bounded-request';
 import { beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({ exchange: vi.fn() }));
 vi.mock('@/lib/restaurant/print-bridge-enrollment', () => ({
@@ -42,4 +43,16 @@ it('never leaks exchange errors or retries an uncertain outcome', async () => {
   expect(res.headers.get('cache-control')).toBe('no-store');
   expect(await res.text()).not.toMatch(/private|rdk_secret/);
   expect(h.exchange).toHaveBeenCalledOnce();
+});
+
+it('stops reading at the enrolment cap without exchanging a code', async () => {
+  const limit = 2 * 1024;
+  const input = oversizedRequest(limit, { chunkSize: 1024 });
+
+  const response = await POST(input.request);
+  expect(response.status).toBe(413);
+  expect(response.headers.get('cache-control')).toBe('no-store');
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 1024);
+  expect(h.exchange).not.toHaveBeenCalled();
 });
