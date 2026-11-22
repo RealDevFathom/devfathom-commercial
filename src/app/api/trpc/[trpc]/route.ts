@@ -415,30 +415,39 @@ function servable(organization: TenantOrganization | null): TenantOrganization |
   return isTenantLifecycleAccessible(organization.status) ? organization : null;
 }
 
+async function boundAnonymousPost(req: Request, procedures: string[]): Promise<Request | Response> {
+  if (req.method !== 'POST' || !req.body) return req;
+
+  // Allow the supplier document's 14 million base64 characters plus its JSON envelope.
+  const limit = procedures.includes('pharmacySupplierLinks.uploadDocument')
+    ? 16 * 1024 * 1024
+    : 256 * 1024;
+  const body = await readBoundedBody(req, limit);
+  if (body === null) {
+    return requestFailed(
+      new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large.' })
+    );
+  }
+  return new Request(req.url, {
+    method: req.method,
+    headers: req.headers,
+    signal: req.signal,
+    body,
+  });
+}
+
 async function handleAnonymous(req: Request): Promise<Response> {
   const routing = classifyAnonymousRequest(req);
   if (routing.kind === 'denied') return unauthorized();
 
-  let boundedRequest = req;
-  if (req.method === 'POST' && req.body) {
-    // Allow the supplier document's 14 million base64 characters plus its JSON envelope.
-    const limit = routing.procedures.includes('pharmacySupplierLinks.uploadDocument')
-      ? 16 * 1024 * 1024
-      : 256 * 1024;
-    const body = await readBoundedBody(req, limit);
-    if (body === null) {
-      return requestFailed(
-        new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large.' })
-      );
-    }
-    boundedRequest = new Request(req.url, {
-      method: req.method,
-      headers: req.headers,
-      signal: req.signal,
-      body,
-    });
-  }
-  const token = routing.kind === 'token' ? await anonymousToken(boundedRequest) : null;
+  // Keep the existing limiter ahead of the body read whenever its key is already known.
+  const tokenNeedsBody =
+    routing.kind === 'token' &&
+    req.method === 'POST' &&
+    !new URL(req.url).searchParams.get('input');
+  const tokenRequest = tokenNeedsBody ? await boundAnonymousPost(req, routing.procedures) : req;
+  if (tokenRequest instanceof Response) return tokenRequest;
+  const token = routing.kind === 'token' ? await anonymousToken(tokenRequest) : null;
 
   // Throttle BEFORE any database work, so neither the platform-scope token
   // lookup nor the tenant transaction can be driven by an unauthenticated flood.
@@ -449,6 +458,11 @@ async function handleAnonymous(req: Request): Promise<Response> {
       { status: 429, headers: { 'retry-after': String(admitted.retryAfter) } }
     );
   }
+
+  const boundedRequest = tokenNeedsBody
+    ? tokenRequest
+    : await boundAnonymousPost(req, routing.procedures);
+  if (boundedRequest instanceof Response) return boundedRequest;
 
   if (routing.kind === 'token') {
     const organizationId = await organizationForAnonymousToken(token);

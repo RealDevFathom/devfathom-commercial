@@ -213,7 +213,7 @@ vi.mock('@/lib/auth/anonymous-tenant', () => ({
   organizationForAnonymousToken: vi.fn(async () => null),
 }));
 vi.mock('@/lib/auth/anonymous-rate-limit', () => ({
-  admitAnonymousRequest: () => ({ ok: true }),
+  admitAnonymousRequest: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('@/lib/tenancy/host', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tenancy/host')>('@/lib/tenancy/host');
@@ -226,6 +226,7 @@ vi.mock('@/lib/tenancy/host', async () => {
 });
 
 import { createTRPCUntypedClient, httpBatchLink, TRPCClientError } from '@trpc/client';
+import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import type { AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
@@ -796,4 +797,19 @@ it('replays a bounded anonymous upload for both tenant lookup and the tRPC parse
   expect(await response.json()).toEqual([{ result: { data: { json: payload } } }]);
   expect(organizationForAnonymousToken).toHaveBeenCalledWith(payload.token);
   expect(harness.scopeTenants).toEqual([ORGANIZATION.id]);
+});
+
+it('checks the host-routed anonymous throttle before reading the body', async () => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  vi.mocked(admitAnonymousRequest).mockResolvedValueOnce({ ok: false, retryAfter: 60 });
+  const input = oversizedRequest(256 * 1024, {
+    url: url('passwordReset.request', '?batch=1'),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  const response = await POST(input.request);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('retry-after')).toBe('60');
+  expect(input.bytesRead()).toBe(0);
+  expect(mocks.resolveExplicitOrganizationByHost).not.toHaveBeenCalled();
 });
