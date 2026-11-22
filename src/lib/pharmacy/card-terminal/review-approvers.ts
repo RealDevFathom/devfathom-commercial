@@ -28,8 +28,8 @@ import type { LedgerScope } from '../stock-ledger';
  * gate passes `gate: 'branch'`: then the operator gate is only the branch rule the counter gate
  * ends with (`counterBranchAssignmentDenial`: an active assignment to this branch, or an
  * organization ADMIN), without the `pharmacy:counter` grant. The default is the card-terminal
- * rule above. Refund corrections use the counter gate and also require accounts administration
- * and finance management access.
+ * rule above. Refund-correction witnesses need an active assignment to this branch, even as an
+ * ADMIN, and both accounts administration and finance management access.
  */
 export type ReviewerGate = 'counter' | 'branch' | 'refund-correction';
 
@@ -39,6 +39,7 @@ export async function otherCardTerminalReviewers(
   now = new Date(),
   options: { gate?: ReviewerGate } = {}
 ): Promise<{ id: string; name: string | null }[]> {
+  const refundCorrection = options.gate === 'refund-correction';
   const credentials = await db.restaurantOperatorCredential.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -51,6 +52,18 @@ export async function otherCardTerminalReviewers(
           organizationId: scope.organizationId,
           status: 'ACTIVE',
           id: { not: scope.actorId },
+          ...(refundCorrection
+            ? {
+                pharmacyBranchAssignments: {
+                  some: {
+                    organizationId: scope.organizationId,
+                    branchId: scope.branchId,
+                    active: true,
+                    branch: { organizationId: scope.organizationId, active: true },
+                  },
+                },
+              }
+            : {}),
         },
       },
     },
@@ -72,22 +85,23 @@ export async function otherCardTerminalReviewers(
     const other = credential.staffProfile.user;
     if (!other || other.id === scope.actorId || checked.has(other.id)) continue;
     checked.add(other.id);
-    const denial =
-      options.gate === 'branch'
-        ? await counterBranchAssignmentDenial(db, other, scope.organizationId, scope.branchId)
-        : await counterOperatorDenial(db, other, scope.organizationId, scope.branchId, {
-            source: 'TRPC',
-          });
-    if (denial) continue;
     const subject = subjectFromSession(other);
     const access = { db, now, source: 'TRPC' as const };
-    if (!(await can(subject, 'pharmacy:manage', undefined, access))) continue;
-    if (
-      options.gate === 'refund-correction' &&
-      (!(await can(subject, 'admin:access', undefined, access)) ||
-        !(await canAccessPharmacyFinance(other, access, PHARMACY_FINANCE_MANAGE)))
-    )
-      continue;
+    if (refundCorrection) {
+      if (
+        !(await can(subject, 'admin:access', undefined, access)) ||
+        !(await canAccessPharmacyFinance(other, access, PHARMACY_FINANCE_MANAGE))
+      )
+        continue;
+    } else {
+      const denial =
+        options.gate === 'branch'
+          ? await counterBranchAssignmentDenial(db, other, scope.organizationId, scope.branchId)
+          : await counterOperatorDenial(db, other, scope.organizationId, scope.branchId, {
+              source: 'TRPC',
+            });
+      if (denial || !(await can(subject, 'pharmacy:manage', undefined, access))) continue;
+    }
     reviewers.push({ id: other.id, name: other.name });
   }
   return reviewers;

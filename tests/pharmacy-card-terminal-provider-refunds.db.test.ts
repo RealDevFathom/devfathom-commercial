@@ -521,6 +521,8 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
   it('requires a verified declared sole owner or independent approval for a self-correction and audits both', async () => {
     const ownerId = 'peer' + suffix;
     const reviewerId = scope.actorId;
+    const financeId = 'third' + suffix;
+    const witnessPin = '3762';
     const attemptId = 'self-review-' + suffix;
     await run(async (db) => {
       const ownerRole = await db.organizationRole.upsert({
@@ -596,6 +598,7 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
           role: 'ADMIN',
         },
       });
+      await db.pharmacyBranchAssignment.create({ data: { userId: accountantId, branchId } });
       for (const capability of [
         'admin:access',
         'finance:manage',
@@ -640,6 +643,7 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
     });
     await run(async (db) => {
       await db.user.update({ where: { id: reviewerId }, data: { role: 'ADMIN' } });
+      await db.pharmacyBranchAssignment.create({ data: { userId: reviewerId, branchId } });
       await db.userPermissionOverride.create({
         data: {
           userId: reviewerId,
@@ -672,7 +676,7 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
         data: {
           staffProfileId: profile.id,
           type: 'PIN',
-          credentialHash: await hashOperatorCredential('PIN', '3762'),
+          credentialHash: await hashOperatorCredential('PIN', witnessPin),
         },
       });
     });
@@ -698,26 +702,97 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
         },
       })
     );
+    await run((db) =>
+      db.pharmacyBranchAssignment.updateMany({
+        where: { userId: reviewerId, branchId },
+        data: { active: false },
+      })
+    );
     await expect(
-      change(withoutFinance.id, 'OWED', { pinVerified: true, declareSelfApproval: true })
+      change(withoutFinance.id, 'OWED', { pinVerified: true, secondApproverId: reviewerId })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    await expect(
-      change(withoutFinance.id, 'OWED', { pinVerified: true, secondApproverId: ownerId })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    const peer = await change(withoutFinance.id, 'OWED', {
+    const withoutBranchApprover = await change(withoutFinance.id, 'OWED', {
       pinVerified: true,
-      secondApproverId: reviewerId,
+      declareSelfApproval: true,
+    });
+    expect(withoutBranchApprover).toMatchObject({
+      previousId: withoutFinance.id,
+      selfApproved: true,
+      secondApproverId: null,
+    });
+
+    await run(async (db) => {
+      await db.pharmacyBranchAssignment.create({ data: { userId: financeId, branchId } });
+      for (const capability of ['admin:access', 'finance:manage'])
+        await db.userPermissionOverride.create({
+          data: {
+            userId: financeId,
+            capability,
+            effect: 'ALLOW',
+            reason: 'Synthetic branch finance approver',
+          },
+        });
+      const profile = await db.restaurantStaffProfile.create({
+        data: { userId: financeId, displayName: 'Finance reviewer' },
+      });
+      const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+      await db.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: profile.id,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', witnessPin),
+        },
+      });
+      await db.organization.update({
+        where: { id: organizationId },
+        data: { requireApprovalAuthenticator: false },
+      });
+    });
+    const { can, subjectFromSession } = await import('@/lib/abac');
+    await run(async (db) => {
+      const person = await db.user.findUniqueOrThrow({
+        where: { id: financeId },
+        select: { id: true, role: true, department: true, status: true },
+      });
+      const access = { db, source: 'TRPC' as const };
+      expect(await can(subjectFromSession(person), 'pharmacy:counter', undefined, access)).toBe(
+        false
+      );
+      expect(await can(subjectFromSession(person), 'pharmacy:manage', undefined, access)).toBe(
+        false
+      );
+    });
+    const { verifyRefundPin } = await import('@/lib/pharmacy/refund-authorization');
+    await expect(
+      run((db) =>
+        verifyRefundPin(db, {
+          organizationId,
+          actorId: financeId,
+          pin: witnessPin,
+          requestedById: ownerId,
+        })
+      )
+    ).resolves.toEqual({ verified: true });
+    await expect(
+      change(withoutBranchApprover.id, 'DECLINED', { pinVerified: true, declareSelfApproval: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      change(withoutBranchApprover.id, 'DECLINED', { pinVerified: true, secondApproverId: ownerId })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const peer = await change(withoutBranchApprover.id, 'DECLINED', {
+      pinVerified: true,
+      secondApproverId: financeId,
     });
     expect(peer).toMatchObject({
       selfApproved: false,
-      secondApproverId: reviewerId,
-      previousId: withoutFinance.id,
+      secondApproverId: financeId,
+      previousId: withoutBranchApprover.id,
     });
     expect(
       await run((db) => db.auditLog.findFirstOrThrow({ where: { targetId: peer.id } }))
     ).toMatchObject({
       actorId: ownerId,
-      metadata: expect.objectContaining({ selfApproved: false, secondApproverId: reviewerId }),
+      metadata: expect.objectContaining({ selfApproved: false, secondApproverId: financeId }),
     });
   });
 
