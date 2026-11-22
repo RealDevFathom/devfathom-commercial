@@ -96,7 +96,7 @@ import {
   resolveEmergencySupplyPolicy,
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
-import { annotateAudit } from '@/server/audit';
+import { annotateAudit, recordAudit } from '@/server/audit';
 import { annotateAuditBranch } from '@/server/audit-branch';
 import {
   authenticateVoucherCashierPin,
@@ -299,6 +299,7 @@ import {
 } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
+const controlledAddress = z.string().trim().min(3).max(300);
 const branchId = z.string().trim().min(1).max(128);
 /** DEV-929: the owner's maximum discount in the audit description ("no maximum" or "10%"). */
 const maximumWords = (bps: number) =>
@@ -3178,7 +3179,10 @@ export const pharmacySalesRouter = router({
             .object({
               prescriptionLineId: z.string().min(1).optional(),
               patientId: z.string().min(1),
-              patientAddress: z.string().trim().min(3).max(300),
+              patientAddress: z.union([
+                controlledAddress,
+                z.object({ useAddressOnFile: z.literal(true) }).strict(),
+              ]),
               staffProfileId: z.string().min(1),
               pin: z.string().regex(/^\d{4,8}$/),
               rxSerialWritten: z.boolean(),
@@ -3484,6 +3488,40 @@ export const pharmacySalesRouter = router({
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
           }
+          // Resolve the address only for this witnessed supply. The routine patient panel
+          // never needs to read it, and the controlled response never returns it.
+          const resolveAddress = async () => {
+            if (typeof authorization.patientAddress === 'string')
+              return authorization.patientAddress;
+            const patient = await db.pharmacyPatient.findFirst({
+              where: { id: authorization.patientId, organizationId: scope.organizationId },
+              select: { address: true },
+            });
+            await recordAudit(
+              {
+                organizationId: scope.organizationId,
+                actorId: scope.actorId,
+                source: 'TRPC',
+                category: 'PHARMACY_PATIENT',
+                operation: 'READ',
+                action: 'pharmacy.patient.controlledAddress.read',
+                targetType: 'PharmacyPatient',
+                targetId: authorization.patientId,
+                metadata: {
+                  branchId: scope.branchId,
+                  saleId: input.saleId,
+                  witnessedByUserId: pharmacist.id,
+                },
+              },
+              db
+            );
+            const address = controlledAddress.safeParse(patient?.address);
+            return address.success ? address.data : null;
+          };
+          const addressRequired = {
+            blocked:
+              'Enter the patient address for this supply. The address on file is missing or incomplete.',
+          };
           // DEV-874: a retry replays only after the independent pharmacist PIN passes again,
           // so a missing or wrong PIN never returns the saved controlled line.
           const replay = await replaySaleLine(db, scope, lineInput);
@@ -3506,16 +3544,21 @@ export const pharmacySalesRouter = router({
                 refEntryId: true,
               },
             });
+            if (
+              recorded.length === 0 ||
+              recorded.some((entry) => entry.patientId !== authorization.patientId)
+            )
+              throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+            const patientAddress = await resolveAddress();
             const emergency = authorization.emergency;
             const prescriptionLineId = emergency
               ? null
               : (authorization.prescriptionLineId ?? null);
             if (
-              recorded.length === 0 ||
+              !patientAddress ||
               recorded.some(
                 (entry) =>
-                  entry.patientId !== authorization.patientId ||
-                  entry.patientAddress !== authorization.patientAddress ||
+                  entry.patientAddress !== patientAddress ||
                   entry.emergency !== emergency ||
                   entry.prescriptionLineId !== prescriptionLineId ||
                   entry.rxSerialWritten !== authorization.rxSerialWritten ||
@@ -3534,6 +3577,7 @@ export const pharmacySalesRouter = router({
           if (authorization.emergency) {
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
+              select: { cnic: true },
             });
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
@@ -3607,6 +3651,8 @@ export const pharmacySalesRouter = router({
             if (!consent?.granted || consent.revokedAt) {
               return { blocked: 'Patient dispensing consent is required.' };
             }
+            const patientAddress = await resolveAddress();
+            if (!patientAddress) return addressRequired;
             // DEV-825: the sale row is a document lock, so it precedes the register
             // lock (stock-lock-order.ts); a concurrent void takes them in that order.
             await lockSaleForControlledLine(db, scope, input.saleId);
@@ -3617,7 +3663,7 @@ export const pharmacySalesRouter = router({
               branchId: scope.branchId,
               movementIds: result.allocation.movementIds,
               patientId: authorization.patientId,
-              patientAddress: authorization.patientAddress,
+              patientAddress,
               medicineId: medicine.id,
               manufacturer: medicine.manufacturer,
               prescriberId: null,
@@ -3659,7 +3705,7 @@ export const pharmacySalesRouter = router({
               presentationId: input.presentationId,
             },
             include: {
-              prescription: { include: { patient: true, prescriber: true } },
+              prescription: { include: { patient: { select: { cnic: true } }, prescriber: true } },
               fills: true,
             },
           });
@@ -3698,6 +3744,8 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
+          const patientAddress = await resolveAddress();
+          if (!patientAddress) return addressRequired;
           const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
           await db.prescriptionFill.create({
             data: {
@@ -3733,7 +3781,7 @@ export const pharmacySalesRouter = router({
             branchId: scope.branchId,
             movementIds: result.allocation.movementIds,
             patientId: authorization.patientId,
-            patientAddress: authorization.patientAddress,
+            patientAddress,
             medicineId: medicine.id,
             manufacturer: medicine.manufacturer,
             prescriberId: rx.prescription.prescriberId,

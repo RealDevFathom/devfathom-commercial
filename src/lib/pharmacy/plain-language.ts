@@ -75,8 +75,7 @@ export const PHARMACY_COPY = {
       'No stock or supplier-return data was changed. Expiry risk has not been assessed.',
     emptyCheck: 'No items were returned by this check; other items may still need attention.',
     failedCheck: 'This check could not load. Refresh or open the report to try again.',
-    expiryFailure:
-      'Expiry advice could not load; refresh to try again.',
+    expiryFailure: 'Expiry advice could not load; refresh to try again.',
   },
   account: {
     exportCsv: 'Download CSV',
@@ -131,7 +130,8 @@ export function formatShopTime(
 ): string {
   if (!value || !Number.isFinite(new Date(value).getTime())) return PHARMACY_COPY.unavailable;
   const formatted = formatWorkspaceDateTime(value, timeZone);
-  if (pharmacyCalendarDay(timeZone, new Date(value)) !== pharmacyCalendarDay(timeZone, now)) return formatted;
+  if (pharmacyCalendarDay(timeZone, new Date(value)) !== pharmacyCalendarDay(timeZone, now))
+    return formatted;
   return `Today ${formatted.split(', ')[1]}`;
 }
 
@@ -653,3 +653,10 @@ export const SHOP_SCREEN_COPY = {
     details: 'Details',
   },
 } as const;
+
+export const REGISTER_KIND_WORDS: Readonly<Record<string, string>> = {
+  RETURN_TO_SUPPLIER: 'Returned to supplier',
+  SALE: 'Sale',
+  PURCHASE: 'Purchase',
+  CORRECTION: 'Correction',
+};

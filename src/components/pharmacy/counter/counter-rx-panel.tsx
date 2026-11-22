@@ -514,7 +514,7 @@ export type CounterRxPanelProps = {
     pharmacists: ReadonlyArray<{ id: string; name: string }>;
     loading: boolean;
     error: boolean;
-    patientAddress: string;
+    patientAddress: string | null;
     rxSerialWritten: boolean;
     emergency: boolean;
     prescriberName: string;
@@ -984,7 +984,9 @@ export function CounterControlledAuthorization({
         steps={[
           {
             label: 'Patient',
-            done: Boolean(patient) && controlled.patientAddress.trim() !== '',
+            done:
+              Boolean(patient) &&
+              (controlled.patientAddress === null || controlled.patientAddress.trim().length >= 3),
           },
           {
             label: 'Prescription',
@@ -1007,9 +1009,15 @@ export function CounterControlledAuthorization({
           id="controlled-address"
           className="h-11"
           disabled={disabled || !patient}
-          value={controlled.patientAddress}
+          placeholder={controlled.patientAddress === null ? 'Use the address on file' : undefined}
+          aria-describedby="controlled-address-help"
+          value={controlled.patientAddress ?? ''}
           onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
         />
+        <p id="controlled-address-help" className="text-xs text-text-muted">
+          The pharmacist’s approval uses the selected patient’s address on file. Enter an address to
+          use for this supply instead.
+        </p>
       </section>
       <section
         aria-labelledby="controlled-step-prescription"
