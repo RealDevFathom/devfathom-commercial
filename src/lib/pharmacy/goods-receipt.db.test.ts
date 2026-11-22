@@ -1443,6 +1443,35 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
           idempotencyKeyPrefix: tag('pre-upgrade-client'),
         });
       });
+      // Historical paperwork without a stock movement cannot be recorded late.
+      await inOrg(scope.organizationId, (db) =>
+        db.pharmacyPurchaseReturn.create({
+          data: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            supplierId: f.supplierId,
+            kind: 'PURCHASE_RETURN',
+            reference: tag('unmatched-archive'),
+            status: 'DISPATCHED',
+            createdByUserId: actor.id,
+            submittedByUserId: actor.id,
+            dispatchedByUserId: actor.id,
+            submittedAt: at,
+            dispatchedAt: at,
+            lines: {
+              create: {
+                lineNumber: 1,
+                inventoryLotId: lotId,
+                stockLocationId: f.storeId,
+                quantityUnits: 1,
+                reason: 'Historical paperwork',
+                returnWindowEndsAt: EXPIRY,
+                expectedCreditMinor: 1000,
+              },
+            },
+          },
+        })
+      );
       const before = await snapshot();
       expect(before.balances).toMatchObject({ AVAILABLE: 50, RETURN_TO_SUPPLIER: 30 });
       expect(before.entries.map((e) => [e.entryKind, e.runningBalance])).toEqual([

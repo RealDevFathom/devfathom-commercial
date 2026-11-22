@@ -6,12 +6,45 @@ import {
   appendControlledPurchaseEntries,
   appendControlledPurchaseReversals,
   appendControlledSaleEntries,
+  appendControlledSupplierReturn,
   DEFAULT_EMERGENCY_SUPPLY_POLICY,
   derivedCorrectionDelta,
   emergencyNoRxDecision,
   registerBalanceAfter,
   resolveEmergencySupplyPolicy,
 } from './controlled-register';
+
+describe('controlled supplier return refusals', () => {
+  const message =
+    'The register could not confirm this supplier return. Check the original dispatch and register before trying again.';
+  it.each([
+    ['PostgreSQL', { code: '23514' }],
+    ['Prisma adapter', { meta: { driverAdapterError: { cause: { originalCode: '23514' } } } }],
+    [
+      'Prisma database error',
+      new Error('Database error. Code: `23514`. Message: `check constraint failed`'),
+    ],
+  ])('translates a %s check violation into a plain refusal', async (_source, failure) => {
+    const { db, create } = correctionDb({ sellable: 8 });
+    db.$queryRaw = vi.fn().mockResolvedValue([{ id: 'purchase', medicineId: 'medicine' }]);
+    create.mockRejectedValueOnce(failure);
+    await expect(
+      appendControlledSupplierReturn(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'sender' },
+        {
+          supplierId: 'supplier',
+          supplierName: 'Supplier',
+          lineId: 'line',
+          inventoryLotId: 'lot',
+          movementId: 'movement',
+          quantity: 1,
+          witness: { witnessedByUserId: 'witness', signatureRef: 'pin:fixture' },
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'REGISTER_REFUSED', message });
+  });
+});
 
 describe('registerBalanceAfter', () => {
   it('adds a signed delta and refuses a negative balance', () => {

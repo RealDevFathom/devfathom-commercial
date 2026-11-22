@@ -249,7 +249,7 @@ export function ControlledRegisterConsole() {
                                 : entry.entryKind === 'CORRECTION'
                                   ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
                                   : entry.entryKind === 'RETURN_TO_SUPPLIER'
-                                    ? supplierReturnLabel(entry)
+                                    ? supplierReturnLabel(entry, timeZone)
                                     : entry.emergency
                                       ? 'Emergency sale'
                                       : 'Sale'}
@@ -519,11 +519,12 @@ function supplierReturnLabel(
     | 'recordedByName'
     | 'supplierReturnReason'
     | 'signatureRef'
-  >
+  >,
+  timeZone: string
 ) {
   const label = `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
   if (entry.lateDispatchAt)
-    return `${label} · Recorded late, no witness · Sent by ${entry.sentByName ?? 'Name unavailable'} on ${formatKarachiDateTime(entry.lateDispatchAt)} · Recorded by ${entry.recordedByName ?? 'Name unavailable'} on ${formatKarachiDateTime(entry.createdAt)} · Reason: ${entry.supplierReturnReason ?? '—'}`;
+    return `${label} · Recorded late, no witness · Sent by ${entry.sentByName ?? 'Name unavailable'} on ${formatWorkspaceDateTime(entry.lateDispatchAt, timeZone)} · Recorded by ${entry.recordedByName ?? 'Name unavailable'} on ${formatWorkspaceDateTime(entry.createdAt, timeZone)} · Reason: ${entry.supplierReturnReason ?? '—'}`;
   if (entry.signatureRef?.startsWith('solo-'))
     return `${label} · No second person available · Reason: ${entry.supplierReturnReason ?? '—'}`;
   return label;
@@ -542,7 +543,7 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
               {entry.serial} · {formatWorkspaceDateTime(entry.createdAt, timeZone)}
             </p>
             {entry.entryKind === 'RETURN_TO_SUPPLIER' && (
-              <p className="mt-1 text-text-muted">{supplierReturnLabel(entry)}</p>
+              <p className="mt-1 text-text-muted">{supplierReturnLabel(entry, timeZone)}</p>
             )}
             <p className="mt-1 text-text-body">
               {drug} · {batchNumberLabel(entry.batchNumber)} · qty {entry.quantityCanonicalUnits}

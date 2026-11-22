@@ -168,28 +168,38 @@ describe('DEV-672 controlled register branch list', () => {
     expect(card).toHaveTextContent('balance 0');
   });
 
-  it('shows the original dispatch date and the separate recording date on a late register entry', () => {
-    h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
-    h.entries = [
-      {
-        ...entry,
-        entryKind: 'RETURN_TO_SUPPLIER',
-        sourcePurchase: { serial: 1 },
-        lateDispatchAt: new Date('2026-09-03T11:47:00Z'),
-        sentByName: 'Sending pharmacist',
-        recordedByName: 'Recording owner',
-        supplierReturnReason: 'Checked old dispatch',
-      },
-    ];
-    render(<ControlledRegisterConsole />);
-    expect(screen.getByRole('table')).not.toHaveTextContent('PIN witnessed');
-    expect(screen.getByRole('article')).toHaveTextContent(
-      'Recorded late, no witness · Sent by Sending pharmacist on 2026-09-03 16:47 PKT · Recorded by Recording owner on 2026-11-01 11:00 PKT · Reason: Checked old dispatch'
-    );
-    expect(screen.getByRole('table')).toHaveTextContent(
-      'Recorded late, no witness · Sent by Sending pharmacist on 2026-09-03 16:47 PKT · Recorded by Recording owner on 2026-11-01 11:00 PKT · Reason: Checked old dispatch'
-    );
-  });
+  it.each([
+    ['Asia/Karachi', '3 Sep 2026, 4:47 PM PKT', '1 Nov 2026, 11:00 AM PKT'],
+    ['UTC', '3 Sep 2026, 11:47 AM UTC', '1 Nov 2026, 6:00 AM UTC'],
+  ])(
+    'shows both late-entry dates in the %s workspace time zone',
+    (timeZone, dispatchDate, entryDate) => {
+      h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
+      h.entries = [
+        {
+          ...entry,
+          entryKind: 'RETURN_TO_SUPPLIER',
+          sourcePurchase: { serial: 1 },
+          lateDispatchAt: new Date('2026-09-03T11:47:00Z'),
+          sentByName: 'Sending pharmacist',
+          recordedByName: 'Recording owner',
+          supplierReturnReason: 'Checked old dispatch',
+        },
+      ];
+      render(
+        <EntitlementsProvider value={{ timeZone } as never}>
+          <ControlledRegisterConsole />
+        </EntitlementsProvider>
+      );
+      expect(screen.getByRole('table')).not.toHaveTextContent('PIN witnessed');
+      expect(screen.getByRole('article')).toHaveTextContent(
+        `Recorded late, no witness · Sent by Sending pharmacist on ${dispatchDate} · Recorded by Recording owner on ${entryDate} · Reason: Checked old dispatch`
+      );
+      expect(screen.getByRole('table')).toHaveTextContent(
+        `Recorded late, no witness · Sent by Sending pharmacist on ${dispatchDate} · Recorded by Recording owner on ${entryDate} · Reason: Checked old dispatch`
+      );
+    }
+  );
 
   it('prints the register table with the branch name', async () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };

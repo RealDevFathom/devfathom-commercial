@@ -394,6 +394,23 @@ export async function appendControlledPurchaseReversals(
   }
 }
 
+// Depending on the adapter path, PostgreSQL's check_violation is structured
+// or embedded in Prisma's database-error diagnostic.
+function isRegisterCheckViolation(error: unknown): boolean {
+  const driver = error as {
+    code?: string;
+    cause?: { originalCode?: string };
+    meta?: { code?: string; driverAdapterError?: { cause?: { originalCode?: string } } };
+  } | null;
+  return (
+    driver?.code === '23514' ||
+    driver?.cause?.originalCode === '23514' ||
+    driver?.meta?.code === '23514' ||
+    driver?.meta?.driverAdapterError?.cause?.originalCode === '23514' ||
+    (error instanceof Error && /Database error\. Code: `23514`/.test(error.message))
+  );
+}
+
 /** The return document and its stock movement are written in the caller's transaction. */
 export async function appendControlledSupplierReturn(
   db: ScopedDb,
@@ -467,8 +484,9 @@ export async function appendControlledSupplierReturn(
     });
   } catch (error) {
     if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      ['P2003', 'P2004', 'P2010'].includes(error.code)
+      isRegisterCheckViolation(error) ||
+      (error instanceof Prisma.PrismaClientKnownRequestError &&
+        ['P2003', 'P2004', 'P2010'].includes(error.code))
     )
       throw new PharmacySupplierReturnError('REGISTER_REFUSED');
     if (error instanceof Error && error.message === 'CONFLICT')

@@ -331,6 +331,7 @@ export async function legacySupplierDispatches(db: ScopedDb, scope: LedgerScope,
     JOIN pharmacy_suppliers s ON s."organizationId" = d."organizationId" AND s.id = d."supplierId"
     LEFT JOIN users u ON u."organizationId" = d."organizationId" AND u.id = d."dispatchedByUserId"
     WHERE d."organizationId" = ${scope.organizationId} AND d."branchId" = ${scope.branchId}
+      AND l."legacyOutgoingMovementId" IS NOT NULL
       AND NOT d."dispatchedWithRegisterPolicy" AND d.status IN ('DISPATCHED','SETTLED') AND (
         m.controlled OR EXISTS (SELECT FROM pharmacy_controlled_register_entries purchase
           JOIN pharmacy_stock_movements receipt ON receipt."organizationId" = purchase."organizationId" AND receipt.id = purchase."stockMovementId"
