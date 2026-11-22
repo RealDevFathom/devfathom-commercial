@@ -19,6 +19,7 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
     throw error;
   }
   if (!actor?.session.user?.id) return response('Unauthorized', 401);
+  if (actor.support) return response('Forbidden', 403);
   if (actor.organization.isDemo) return response('Not available in demo.', 403);
   const organizationId = actor.organization.id;
   const entitlements = await withTenantDb(organizationId, (db) =>

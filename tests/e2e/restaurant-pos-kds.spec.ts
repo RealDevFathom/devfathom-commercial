@@ -94,24 +94,6 @@ test.describe('restaurant POS and KDS core flow', () => {
     });
     expect(switchedBack.status()).toBe(200);
 
-    const approval = await request.post('/api/restaurant/terminal/co-authorize', {
-      headers: pos.headers,
-      data: {
-        approvingStaffProfileId: fixture.manager.staffProfileId,
-        type: 'PIN',
-        secret: fixture.manager.pin,
-        capability: 'orders:void-post-prep',
-        reason: 'E2E manager co-authorization evidence',
-        targetType: 'ORDER',
-        targetId: 'pending-e2e-order',
-      },
-    });
-    expect(approval.status()).toBe(201);
-    expect((await approval.json()).coAuthorization).toMatchObject({
-      actingStaffProfileId: fixture.operator.staffProfileId,
-      approvingStaffProfileId: fixture.manager.staffProfileId,
-    });
-
     await unlockPos(page);
     await expect(page.getByRole('option', { name: 'Delivery' })).toBeEnabled();
     await expect(page.getByLabel('Channel')).toHaveValue('DINE_IN');
@@ -132,6 +114,24 @@ test.describe('restaurant POS and KDS core flow', () => {
     await expect(
       page.getByText(`Order ${opened.orderNumber} opened.`, { exact: true })
     ).toBeVisible();
+
+    const approval = await request.post('/api/restaurant/terminal/co-authorize', {
+      headers: pos.headers,
+      data: {
+        approvingStaffProfileId: fixture.manager.staffProfileId,
+        type: 'PIN',
+        secret: fixture.manager.pin,
+        capability: 'orders:void',
+        reason: 'E2E manager co-authorization evidence',
+        targetType: 'Order',
+        targetId: opened.orderId,
+      },
+    });
+    expect(approval.status()).toBe(201);
+    expect((await approval.json()).coAuthorization).toMatchObject({
+      actingStaffProfileId: fixture.operator.staffProfileId,
+      approvingStaffProfileId: fixture.manager.staffProfileId,
+    });
 
     const deliveryPos = await establishDeliveryPosFixture(request);
     const crossBranchDetail = await request.get(
