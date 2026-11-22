@@ -325,6 +325,7 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(screen.getByText('Create medicines from an imported file')).toBeVisible();
     expect(screen.getByText('abuzar-products.csv')).toBeVisible();
     expect(screen.getByText('18999')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Review proposed medicines' })).toBeVisible();
     expect(screen.getByText('Uploaded')).toBeVisible();
     expect(screen.queryByText('a'.repeat(64))).not.toBeInTheDocument();
     expect(screen.queryByText(/SHA/)).not.toBeInTheDocument();

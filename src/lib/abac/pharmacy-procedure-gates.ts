@@ -972,7 +972,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyMedicine.createStagedMedicines': {
-    gate: 'catalogueCommandProcedure -> admin:access AND pharmacy:catalogue-edit to request; reorder levels kept only if requester also holds pharmacy:inventory at that branch (maySetStockThresholds); approval replay under pharmacy:catalogue-review (or owner fallback)',
+    gate: 'contextualCapabilityProcedure(catalogueCommandAuthority) -> admin:access AND pharmacy:catalogue-edit to request; reorder levels kept only if requester also holds pharmacy:inventory at that branch (maySetStockThresholds); approval replay under pharmacy:catalogue-review (or owner fallback) requires an admitted active branch and admission to the requested reorder branch, if any',
     lines: [
       'suggest-catalogue-edits/request-create-imported-medicines',
       'manage-stock/set-reorder-levels-when',
@@ -980,7 +980,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyMedicine.decideCatalogueEdit': {
-    gate: 'auditedProtectedProcedure + inline catalogueAccess: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer, fresh approval code)',
+    gate: 'auditedProtectedProcedure + inline catalogueAccess: pharmacy:catalogue-review, OR owner fallback (admin:access AND pharmacy:catalogue-edit, live owner, no other active reviewer, fresh approval code); staged import decisions also require the same branch admission as proposedImport',
     lines: [
       'review-catalogue/approve-reject-others-catalogue',
       'suggest-catalogue-edits/owner-approve-no-reviewer',
@@ -1025,6 +1025,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacyMedicine.priceOverrides': {
     gate: 'adminProcedure -> admin:access',
     none: 'workspace administrators only (admin:access)',
+  },
+  'pharmacyMedicine.proposedImport': {
+    gate: "capabilityProcedure('pharmacy:catalogue-review'); pending import in the caller's workspace, an admitted active branch, and the proposed file checksum; only its approver can reopen the approved file for creation",
+    lines: ['review-catalogue/approve-reject-others-catalogue'],
   },
   'pharmacyMedicine.proposeCatalogueEdit': {
     gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
@@ -2790,6 +2794,30 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'check-procedures/approve-send-back-submitted',
       'dispense-prescriptions/check-procedure-tasks-others',
     ],
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stageBatch': {
+    gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
+    none: 'preparing import files requires both workspace administrator and catalogue edit access',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedBatches': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedBranches': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedDetail': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagedRows': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the full staged import workbench is workspace administrator-only',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.stagingUpload': {
+    gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
+    none: 'preparing import files requires both workspace administrator and catalogue edit access',
   },
   'pharmacySupplierCompliance.history': {
     gate: 'auditedProtectedProcedure + supplierPolicyAuthority: tenant owner or ADMIN, AND can(pharmacy:manage); no support session',
