@@ -3963,6 +3963,7 @@ enum PlatformJobType {
   CAMERA_EVIDENCE_RETENTION_V1  @map("camera.evidence.retention.v1")
   PHARMACY_RECORD_RETENTION_V1  @map("pharmacy.record.retention.v1")
   PHARMACY_OWNER_DATA_EXPORT_V1 @map("pharmacy.owner.data_export.v1")
+  PASSWORD_RESET_REQUEST_V1     @map("password.reset.request.v1")
 }
 
 enum PlatformJobStatus {

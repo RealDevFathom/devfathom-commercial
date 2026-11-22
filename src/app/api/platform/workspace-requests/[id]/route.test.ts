@@ -5,7 +5,9 @@ vi.mock('@/lib/platform/auth', () => ({ getPlatformSession: m.actor, canPlatform
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: (run: (db: unknown) => unknown) => run({ platformLead: { findUnique: m.find } }),
 }));
+import { syntheticLicencePdf } from '@/lib/workspace-requests/licence-test-fixtures';
 import { GET } from './route';
+const pdf = syntheticLicencePdf();
 const params = { params: Promise.resolve({ id: 'lead' }) };
 beforeEach(() => {
   vi.clearAllMocks();
@@ -17,8 +19,8 @@ beforeEach(() => {
       details: { companyName: 'Pharmacy' },
       document: {
         type: 'application/pdf',
-        name: 'licence.pdf',
-        base64: Buffer.from('%PDF-evidence').toString('base64'),
+        name: 'legacy-sender-filename.jpg',
+        base64: pdf.toString('base64'),
       },
     }),
   });
@@ -54,9 +56,13 @@ it('delivers private evidence as an attachment and omits bytes from details JSON
     new Request('https://admin.example.test/api/platform/workspace-requests/lead?document=1'),
     params
   );
-  expect(await doc.text()).toBe('%PDF-evidence');
+  expect(Buffer.from(await doc.arrayBuffer())).toEqual(pdf);
   expect(doc.headers.get('content-disposition')).toContain('attachment');
   expect(doc.headers.get('cache-control')).toContain('no-store');
+  expect(doc.headers.get('content-disposition')).toBe('attachment; filename="licence.pdf"');
+  expect(doc.headers.get('content-type')).toBe('application/pdf');
+  expect(doc.headers.get('x-content-type-options')).toBe('nosniff');
+  expect(doc.headers.get('content-security-policy')).toBe('sandbox');
 });
 it('does not reinterpret ordinary lead notes as workspace intake', async () => {
   m.find.mockResolvedValue({ source: 'Direct', notes: '{}' });
@@ -68,4 +74,36 @@ it('does not reinterpret ordinary lead notes as workspace intake', async () => {
       )
     ).status
   ).toBe(404);
+});
+
+it('preserves malformed legacy evidence only as a sandboxed generic attachment', async () => {
+  const bytes = Buffer.from('%PDF-1.7\nEvidence');
+  const notes = {
+    details: { companyName: 'Pharmacy' },
+    document: { type: 'application/pdf', name: 'legacy.pdf', base64: bytes.toString('base64') },
+  };
+  m.find.mockResolvedValue({
+    source: 'workspace-request:pharmacy',
+    notes: JSON.stringify(notes),
+  });
+  const base = 'https://admin.example.test/api/platform/workspace-requests/lead';
+  const request = new Request(base + '?document=1');
+  m.allowed.mockReturnValueOnce(false);
+  expect((await GET(request, params)).status).toBe(403);
+  const response = await GET(request, params);
+  expect(response.status).toBe(200);
+  expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+  expect(response.headers.get('content-disposition')).toBe(
+    'attachment; filename="licence-unverified.bin"'
+  );
+  expect(response.headers.get('content-type')).toBe('application/octet-stream');
+  expect(response.headers.get('content-security-policy')).toBe('sandbox');
+  expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+  expect((await GET(new Request(base), params)).status).toBe(200);
+
+  m.find.mockResolvedValue({
+    source: 'workspace-request:pharmacy',
+    notes: JSON.stringify({ ...notes, document: { ...notes.document, checked: true } }),
+  });
+  expect((await GET(request, params)).status).toBe(404);
 });

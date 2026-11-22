@@ -413,3 +413,9 @@ describe('closedDateRange', () => {
     expect(closedDateRange(30, now)).toEqual({ from: '2026-07-31', to: '2026-08-29' });
   });
 });
+
+it('ends the closed-date report yesterday at 00:30 Karachi time', () => {
+  expect(
+    closedDateRange(7, new Date('2026-11-02T00:30:00+05:00'), 'Asia/Karachi', '00:00')
+  ).toEqual({ from: '2026-10-26', to: '2026-11-01' });
+});

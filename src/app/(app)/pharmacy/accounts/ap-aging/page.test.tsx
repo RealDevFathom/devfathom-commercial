@@ -103,6 +103,15 @@ describe('parseAgingQuery', () => {
 });
 
 describe('ApAgingPage', () => {
+  it('allows today as of 00:30 in Karachi', async () => {
+    vi.setSystemTime(new Date('2026-11-16T00:30:00+05:00'));
+    mocks.resolveTenantActor.mockResolvedValue({
+      ...actor,
+      organization: { ...actor.organization, timezone: 'Asia/Karachi' },
+    });
+    await html({ branch: 'branch_1', asOf: '2026-11-16' });
+    expect(mocks.aging).toHaveBeenCalledWith({ branchId: 'branch_1', asOf: '2026-11-16' });
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.useFakeTimers({ toFake: ['Date'] });

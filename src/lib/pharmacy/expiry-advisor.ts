@@ -1,3 +1,4 @@
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { isNoExpiryDate } from './product-class';
 
 const DAY_MS = 86_400_000;
@@ -34,7 +35,11 @@ export type ExpiryAdvice = ExpiryLotFact & {
 const validCount = (value: number) => Number.isSafeInteger(value) && value >= 0;
 
 /** Pure, deterministic AI-02 calculation. It advises; it never mutates stock. */
-export function adviseExpiryLots(facts: readonly ExpiryLotFact[], at: Date): ExpiryAdvice[] {
+export function adviseExpiryLots(
+  facts: readonly ExpiryLotFact[],
+  at: Date,
+  timeZone?: string | null
+): ExpiryAdvice[] {
   return facts
     .filter((fact) => fact.expiresAt.getTime() > at.getTime())
     .map((fact) => {
@@ -73,7 +78,7 @@ export function adviseExpiryLots(facts: readonly ExpiryLotFact[], at: Date): Exp
       const windowText = noExpiry
         ? 'none, the item has no expiry'
         : fact.returnWindowDays
-          ? `${fact.returnWindowDays} days before expiry (opens ${returnWindowStartsAt!.toISOString().slice(0, 10)})`
+          ? `${fact.returnWindowDays} days before expiry (opens ${pharmacyCalendarDay(timeZone, returnWindowStartsAt!)})`
           : 'not recorded; none was guessed';
       return {
         ...fact,
@@ -85,7 +90,7 @@ export function adviseExpiryLots(facts: readonly ExpiryLotFact[], at: Date): Exp
         projectedUnsoldUnits,
         proposalAllowed:
           classification === 'RETURNABLE' && !fact.coldChain && Boolean(fact.supplierId),
-        explanation: `Observed ${fact.soldUnits} units over ${fact.historyDays} days (${rate.toFixed(2)}/day). Projected clear: ${projectedClearAt ? projectedClearAt.toISOString().slice(0, 10) : 'no clear date at zero demand'}; expiry: ${noExpiry ? 'none' : fact.expiresAt.toISOString().slice(0, 10)}; supplier return window: ${windowText}; value at risk: PKR ${(valueAtRiskMinor / 100).toFixed(2)}.${fact.coldChain ? ' Cold-chain lot: no return is proposed because this route has no validated chain-preserving handoff.' : ''}`,
+        explanation: `Observed ${fact.soldUnits} units over ${fact.historyDays} days (${rate.toFixed(2)}/day). Projected clear: ${projectedClearAt ? pharmacyCalendarDay(timeZone, projectedClearAt) : 'no clear date at zero demand'}; expiry: ${noExpiry ? 'none' : fact.expiresAt.toISOString().slice(0, 10)}; supplier return window: ${windowText}; value at risk: PKR ${(valueAtRiskMinor / 100).toFixed(2)}.${fact.coldChain ? ' Cold-chain lot: no return is proposed because this route has no validated chain-preserving handoff.' : ''}`,
       } satisfies ExpiryAdvice;
     })
     .sort((left, right) =>

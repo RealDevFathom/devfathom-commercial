@@ -164,6 +164,9 @@ vi.mock('@/server/routers/_app', async () => {
           throw new Error('anonymous event failed');
         }),
       }),
+      trelloImport: t.router({
+        importBoard: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
+      }),
       read: t.procedure.query(() => ({ read: true })),
       // A deliberate refusal: the caller is told exactly this, and nothing failed.
       refuse: t.procedure.mutation(() => {
@@ -222,6 +225,7 @@ import { createTRPCUntypedClient, httpBatchLink, TRPCClientError } from '@trpc/c
 import type { AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
 import { TenantHostError } from '@/lib/tenancy/host';
+import { MAX_TRELLO_REQUEST_BYTES, TRELLO_LIMIT_MESSAGE } from '@/types/trello-import-limits';
 import { GET, POST } from './[trpc]/route';
 
 const ORGANIZATION = { id: 'org_acme', slug: 'acme', status: 'ACTIVE' };
@@ -655,5 +659,100 @@ describe('tenant scope across aborts', () => {
     expect(harness.scopeTenants).toEqual(['org_acme']);
     expect(harness.outcomes).toEqual(['ROLLBACK']);
     expect(harness.writes).toEqual([]);
+  });
+});
+
+describe('Trello import HTTP preflight', () => {
+  const path = 'trelloImport.importBoard';
+  const board = { name: 'Trello board', lists: [], cards: [] };
+  const input = { trelloJson: board, newProjectName: 'Imported', memberMapping: {} };
+
+  function post(body: string, procedure = path) {
+    return POST(
+      new Request(url(procedure, '?batch=1'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      })
+    );
+  }
+
+  it('hands an exact-byte-limit request to the real tRPC adapter and transaction', async () => {
+    const json = JSON.stringify({ '0': { json: input } });
+    const response = await post(json.padEnd(MAX_TRELLO_REQUEST_BYTES));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([{ result: { data: { json: input } } }]);
+    expect(harness.outcomes).toEqual(['COMMIT']);
+  });
+
+  it('serves an import when Next binds methods through a request proxy', async () => {
+    const request = new Request(url(path, '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ '0': { json: input } }),
+    });
+    const proxied = new Proxy(request, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const response = await POST(proxied);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([{ result: { data: { json: input } } }]);
+    expect(harness.outcomes).toEqual(['COMMIT']);
+  });
+
+  it('rejects actual bytes beyond the limit even without Content-Length before auth or a database transaction', async () => {
+    const json = JSON.stringify({ '0': { json: input } });
+    const response = await post(json.padEnd(MAX_TRELLO_REQUEST_BYTES + 1));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({
+      error: { json: { message: TRELLO_LIMIT_MESSAGE } },
+    });
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(harness.outcomes).toEqual([]);
+  });
+
+  it.each(['', '/', '//'])(
+    'rejects a nested limit across a batch with suffix %j before any database work',
+    async (suffix) => {
+      const over = {
+        ...input,
+        trelloJson: { ...board, cards: [{ attachments: Array(101).fill(null) }] },
+      };
+      const response = await post(
+        JSON.stringify({ '0': { json: null }, '1': { json: over } }),
+        `write,${path}${suffix}`
+      );
+      expect(response.status).toBe(413);
+      expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+      expect(harness.outcomes).toEqual([]);
+      expect(harness.writes).toEqual([]);
+    }
+  );
+
+  it('names the imported list limit before tenant authentication or database access', async () => {
+    const trelloJson = {
+      ...board,
+      lists: Array.from({ length: 501 }, (_, id) => ({ id: String(id) })),
+    };
+    const response = await post(JSON.stringify({ '0': { json: { ...input, trelloJson } } }));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({
+      error: { json: { message: expect.stringContaining('500 lists') } },
+    });
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(harness.outcomes).toEqual([]);
+  });
+
+  it('rejects a repeated import path in a single transaction', async () => {
+    const response = await post(
+      JSON.stringify({ '0': { json: input }, '1': { json: input } }),
+      `${path},${path}`
+    );
+    expect(response.status).toBe(400);
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(harness.outcomes).toEqual([]);
   });
 });

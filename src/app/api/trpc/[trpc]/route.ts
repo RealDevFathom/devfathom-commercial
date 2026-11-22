@@ -10,6 +10,7 @@ import type { Session } from 'next-auth';
 import { appRouter } from '@/server/routers/_app';
 import { anonymousFallbackRouter } from '@/server/routers/anonymous-fallback';
 import { createTRPCContext } from '@/server/trpc';
+import { preflightTrelloImport } from '@/server/trello-import-transport';
 import {
   isTenantLifecycleAccessible,
   requestHost,
@@ -132,7 +133,10 @@ function procedurePaths(req: Request): string[] {
   const { pathname } = new URL(req.url);
   const start = pathname.indexOf(prefix);
   if (start < 0) return [];
-  return decodeURIComponent(pathname.slice(start + prefix.length)).split(',');
+  // The fetch adapter trims once from the URL pathname and again from its
+  // endpoint-relative path, then decodes procedure names.
+  const path = pathname.slice(start + prefix.length).replace(/\/{1,2}$/, '');
+  return decodeURIComponent(path).split(',');
 }
 
 function isPlatformAiSettingsRequest(req: Request): boolean {
@@ -446,6 +450,12 @@ async function handleAnonymous(req: Request): Promise<Response> {
 async function handler(req: Request) {
   try {
     if (isPlatformAiSettingsRequest(req)) return servePlatformAiSettings(req);
+    try {
+      await preflightTrelloImport(req, procedurePaths(req));
+    } catch (error) {
+      if (error instanceof TRPCError) return requestFailed(error);
+      throw error;
+    }
     const actor = await resolveTenantActor({ request: req });
     if (!actor) return handleAnonymous(req);
 

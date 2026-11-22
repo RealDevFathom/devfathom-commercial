@@ -4,7 +4,9 @@ import { router, protectedProcedure } from '../trpc';
 import { assertProjectAccess } from '../authz';
 import { TRPCError } from '@trpc/server';
 import { trelloBoardSchema, trelloColorMap } from '@/types/trello';
+import { trelloRawLimit, trelloRecordLimit } from '@/types/trello-import-limits';
 import { uploadNameFromRef } from '@/lib/uploads/registry';
+import { acquireTrelloImportLocks } from '@/server/trello-import-locks';
 
 // TRELLO-01: a non-parseable date string in a Trello export (`new Date(...)` →
 // Invalid Date) previously crashed the whole transactional import. Parse safely
@@ -57,13 +59,13 @@ function coverToText(cover: unknown): string | null {
 
 // Resolve one card custom-field item to a value string. Dropdown items reference
 // an option id on the board-level field definition; tolerate a missing field def.
-function customFieldText(item: unknown, field: unknown): string | null {
+function customFieldText(
+  item: unknown,
+  options: ReadonlyMap<string, unknown> | undefined
+): string | null {
   const it = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
   if (typeof it.idValue === 'string' && it.idValue) {
-    const f = (field && typeof field === 'object' ? field : {}) as Record<string, unknown>;
-    const options = Array.isArray(f.options) ? (f.options as Array<Record<string, unknown>>) : [];
-    const opt = options.find((o) => o && o.id === it.idValue);
-    return valueText(opt?.value);
+    return valueText(options?.get(it.idValue));
   }
   return valueText(it.value);
 }
@@ -86,14 +88,32 @@ export const trelloImportRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      const limit =
+        trelloRawLimit(input) ?? trelloRecordLimit(input.trelloJson, input.includeArchived);
+      if (limit) throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: limit });
+      const parsed = trelloBoardSchema.safeParse(input.trelloJson);
+      if (!parsed.success) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            "This doesn't look like a valid Trello export. Please export your board from Trello > Menu > Print and Export > Export as JSON.",
+        });
+      }
+      const trello = parsed.data;
+      // Repeating a card id would apply the same comments and checklists multiple times.
+      if (new Set(trello.cards.map((card) => card.id)).size !== trello.cards.length) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'This Trello export repeats a card ID.',
+        });
+      }
+
       // DEV-837: an imported attachment is a link, never one of this workspace's
       // uploads. A `/api/files` reference would bypass the upload registry, so
       // the whole import is refused before anything (even a new project) is
       // written.
-      const attachmentCheck = trelloBoardSchema.safeParse(input.trelloJson);
       if (
-        attachmentCheck.success &&
-        attachmentCheck.data.cards.some((card) =>
+        trello.cards.some((card) =>
           card.attachments.some((attachment) => uploadNameFromRef(attachment.url) !== null)
         )
       ) {
@@ -103,103 +123,92 @@ export const trelloImportRouter = router({
             'This export links attachments to files uploaded in this workspace. Remove those attachments and try again.',
         });
       }
-      // IMP-TRELLO-01: resolve the target project. A new project makes the caller
-      // its LEAD; importing into an EXISTING one is now lead/admin-only (bulk-
-      // mutating a shared board shouldn't be open to every member).
-      let projectId: string;
-      if (input.newProjectName) {
-        const project = await ctx.db.project.create({
-          data: {
-            name: input.newProjectName,
-            type: 'INTERNAL',
-            status: 'ACTIVE',
-            members: { create: { userId: ctx.session.user.id, role: 'LEAD' } },
-          },
-          select: { id: true },
-        });
-        projectId = project.id;
-      } else {
-        projectId = input.projectId!;
-        await assertProjectAccess(ctx, projectId);
-        if (ctx.session.user.role !== 'ADMIN') {
-          const membership = await ctx.db.projectMember.findUnique({
-            where: { projectId_userId: { projectId, userId: ctx.session.user.id } },
-            select: { role: true },
+      // The locks and all import writes live in the same tenant transaction.
+      const result = await ctx.db.$transaction(async (tx) => {
+        await acquireTrelloImportLocks(tx, ctx.session.user.id, ctx.entitlements.organizationId);
+        // IMP-TRELLO-01: resolve the target project. A new project makes the caller
+        // its LEAD; importing into an EXISTING one is now lead/admin-only (bulk-
+        // mutating a shared board shouldn't be open to every member).
+        let projectId: string;
+        if (input.newProjectName) {
+          const project = await tx.project.create({
+            data: {
+              name: input.newProjectName,
+              type: 'INTERNAL',
+              status: 'ACTIVE',
+              members: { create: { userId: ctx.session.user.id, role: 'LEAD' } },
+            },
+            select: { id: true },
           });
-          if (membership?.role !== 'LEAD') {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: 'Only the project lead or an admin can import into an existing project.',
+          projectId = project.id;
+        } else {
+          projectId = input.projectId!;
+          await assertProjectAccess({ ...ctx, db: tx as typeof ctx.db }, projectId);
+          if (ctx.session.user.role !== 'ADMIN') {
+            const membership = await tx.projectMember.findUnique({
+              where: { projectId_userId: { projectId, userId: ctx.session.user.id } },
+              select: { role: true },
             });
+            if (membership?.role !== 'LEAD') {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'Only the project lead or an admin can import into an existing project.',
+              });
+            }
           }
         }
-      }
 
-      // Whitelist of real project members. Imported attribution (task assignees,
-      // comment authorship) is constrained to this set so a caller-supplied
-      // memberMapping cannot forge authorship or assign tasks to arbitrary users.
-      const projectMemberIds = new Set(
-        (
-          await ctx.db.projectMember.findMany({
-            where: { projectId },
-            select: { userId: true },
-          })
-        ).map((m) => m.userId)
-      );
-
-      // Validate the Trello JSON
-      const parsed = trelloBoardSchema.safeParse(input.trelloJson);
-      if (!parsed.success) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message:
-            "This doesn't look like a valid Trello export. Please export your board from Trello > Menu > Print and Export > Export as JSON.",
-        });
-      }
-
-      const trello = parsed.data;
-
-      // IMP-TRELLO-05: dedup even when the export has no `trello.id`. Without an
-      // id we derive a stable synthetic key from the export's shape (name + list
-      // names + card count), so re-importing the SAME export is still caught as a
-      // duplicate rather than silently creating a second copy.
-      const boardKey =
-        trello.id ||
-        `local:${createHash('sha256')
-          .update(
-            JSON.stringify({
-              name: trello.name,
-              lists: trello.lists.map((l) => l.name),
-              cards: trello.cards.length,
+        // Whitelist of real project members. Imported attribution (task assignees,
+        // comment authorship) is constrained to this set so a caller-supplied
+        // memberMapping cannot forge authorship or assign tasks to arbitrary users.
+        const projectMemberIds = new Set(
+          (
+            await tx.projectMember.findMany({
+              where: { projectId },
+              select: { userId: true },
             })
-          )
-          .digest('hex')
-          .slice(0, 40)}`;
+          ).map((m) => m.userId)
+        );
 
-      const existing = await ctx.db.board.findUnique({ where: { trelloBoardId: boardKey } });
-      if (existing) {
-        throw new TRPCError({
-          code: 'CONFLICT',
-          message: `This board has already been imported as "${existing.name}". Delete the existing board first to re-import.`,
-        });
-      }
+        // IMP-TRELLO-05: dedup even when the export has no `trello.id`. Without an
+        // id we derive a stable synthetic key from the export's shape (name + list
+        // names + card count), so re-importing the SAME export is still caught as a
+        // duplicate rather than silently creating a second copy.
+        const boardKey =
+          trello.id ||
+          `local:${createHash('sha256')
+            .update(
+              JSON.stringify({
+                name: trello.name,
+                lists: trello.lists.map((l) => l.name),
+                cards: trello.cards.length,
+              })
+            )
+            .digest('hex')
+            .slice(0, 40)}`;
 
-      // Filter lists
-      const lists = input.includeArchived
-        ? trello.lists.sort((a, b) => a.pos - b.pos)
-        : trello.lists.filter((l) => !l.closed).sort((a, b) => a.pos - b.pos);
+        const existing = await tx.board.findUnique({ where: { trelloBoardId: boardKey } });
+        if (existing) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: `This board has already been imported as "${existing.name}". Delete the existing board first to re-import.`,
+          });
+        }
 
-      // Filter cards
-      const cards = input.includeArchived
-        ? trello.cards.sort((a, b) => a.pos - b.pos)
-        : trello.cards.filter((c) => !c.closed).sort((a, b) => a.pos - b.pos);
+        // Filter lists
+        const lists = input.includeArchived
+          ? trello.lists.sort((a, b) => a.pos - b.pos)
+          : trello.lists.filter((l) => !l.closed).sort((a, b) => a.pos - b.pos);
 
-      // Build ID maps
-      const listIdMap = new Map<string, string>(); // trello list id -> hub column id
-      const labelIdMap = new Map<string, string>(); // trello label id -> hub label id
+        // Filter cards
+        const cards = input.includeArchived
+          ? trello.cards.sort((a, b) => a.pos - b.pos)
+          : trello.cards.filter((c) => !c.closed).sort((a, b) => a.pos - b.pos);
 
-      // Run entire import in a transaction
-      const result = await ctx.db.$transaction(async (tx) => {
+        // Build ID maps
+        const listIdMap = new Map<string, string>(); // trello list id -> hub column id
+        const labelIdMap = new Map<string, string>(); // trello label id -> hub label id
+
         // 1. Create the board
         const board = await tx.board.create({
           data: {
@@ -256,7 +265,15 @@ export const trelloImportRouter = router({
         // IMP-TRELLO-02: index board-level custom-field definitions by id so a
         // card's customFieldItems can be resolved to "Name: value" lines.
         const customFieldMap = new Map<string, (typeof trello.customFields)[number]>();
-        for (const f of trello.customFields) customFieldMap.set(f.id, f);
+        const customFieldOptions = new Map<string, Map<string, unknown>>();
+        for (const field of trello.customFields) {
+          customFieldMap.set(field.id, field);
+          const options = new Map<string, unknown>();
+          for (const option of field.options) {
+            if (!options.has(option.id)) options.set(option.id, option.value);
+          }
+          customFieldOptions.set(field.id, options);
+        }
 
         // IMP-TRELLO-02: completed cards (dueComplete) should land in a DONE-like
         // column rather than their original list. Reuse an existing done-like list
@@ -346,7 +363,7 @@ export const trelloImportRouter = router({
           const customFieldLines: string[] = [];
           for (const item of card.customFieldItems) {
             const field = customFieldMap.get(item.idCustomField ?? '');
-            const text = customFieldText(item, field);
+            const text = customFieldText(item, customFieldOptions.get(item.idCustomField ?? ''));
             if (!text) continue;
             const fieldName = field?.name?.trim() || 'Field';
             customFieldLines.push(`${fieldName}: ${text}`);
@@ -429,26 +446,26 @@ export const trelloImportRouter = router({
 
           // Create comments
           const cardComments = commentMap.get(card.id) || [];
-          for (const comment of cardComments) {
-            // Only attribute a comment to a real member of the target project;
-            // otherwise fall back to the importer. Prevents audit-trail forgery.
-            const mappedUserId = comment.memberCreator
-              ? input.memberMapping[comment.memberCreator.id]
-              : undefined;
-            const userId =
-              mappedUserId && projectMemberIds.has(mappedUserId)
-                ? mappedUserId
-                : ctx.session.user.id;
-
-            await tx.taskComment.create({
-              data: {
+          for (let start = 0; start < cardComments.length; start += 1_000) {
+            const data = cardComments.slice(start, start + 1_000).map((comment) => {
+              // Only attribute a comment to a real member of the target project;
+              // otherwise fall back to the importer. Prevents audit-trail forgery.
+              const mappedUserId = comment.memberCreator
+                ? input.memberMapping[comment.memberCreator.id]
+                : undefined;
+              const userId =
+                mappedUserId && projectMemberIds.has(mappedUserId)
+                  ? mappedUserId
+                  : ctx.session.user.id;
+              return {
                 content: comment.data.text || '',
                 taskId: task.id,
                 userId,
                 // TRELLO-01: fall back to "now" if the comment timestamp is unparseable.
                 createdAt: safeDate(comment.date) ?? new Date(),
-              },
+              };
             });
+            await tx.taskComment.createMany({ data });
           }
 
           tasksCreated++;
