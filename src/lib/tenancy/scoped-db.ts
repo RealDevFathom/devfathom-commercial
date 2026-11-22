@@ -134,6 +134,7 @@ export async function withTenantDb<T>(
       // transaction for a pool connection or locks held on its actor row.
       for (const work of scope.afterTransaction) work();
     }
+    for (const work of scope.afterCommit) await work();
     if (scope.enqueued) {
       const { drainOrganization } = await import('@/lib/side-effects/drain');
       await drainOrganization(organizationId).catch((error) => {

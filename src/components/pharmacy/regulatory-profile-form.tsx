@@ -27,6 +27,8 @@ import { SelectField as StudioSelect } from '@/components/ui/select-field';
  * version and closes the previous one, which is why the history is listed
  * beside the form rather than hidden behind it.
  */
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -59,9 +61,8 @@ const labelClass = 'block font-mono text-xs font-semibold uppercase tracking-wid
 const controlClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none';
 
-const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium' });
+const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' });
 const day = (value: Date | string) => dayFormat.format(new Date(value));
-const isoDay = (value: Date | string) => new Date(value).toISOString().slice(0, 10);
 
 /** A labelled field that shows its own error, or its own hint when there is none. */
 function Field({
@@ -188,6 +189,7 @@ function BranchProvinceControl({
 }
 
 export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory }) {
+  const timeZone = useWorkspaceTimeZone();
   const [data, setData] = useState<Regulatory>(initial);
   const [branchId, setBranchId] = useState<string>(initial.selectedBranchId ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -504,7 +506,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 aria-describedby={errors.effectiveFrom ? 'effectiveFrom-error' : undefined}
                 aria-invalid={errors.effectiveFrom ? true : undefined}
                 className="mt-1 min-h-11"
-                defaultValue={isoDay(new Date())}
+                defaultValue={pharmacyCalendarDay(timeZone)}
                 id="effectiveFrom"
                 name="effectiveFrom"
                 required

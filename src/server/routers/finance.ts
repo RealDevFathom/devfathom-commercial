@@ -1,3 +1,10 @@
+import { recurringExpenseSchedule, rollForwardDueDate } from '@/lib/finance/recurring-expense';
+import {
+  workspaceDateRange,
+  workspaceMonthRange,
+  workspaceToday,
+  workspaceTimezone,
+} from '@/lib/timezone';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { format } from 'date-fns';
@@ -114,24 +121,6 @@ const round2 = roundMoney;
 // so a sub-cent float artifact never tips an exact payoff into "overpayment" — and
 // never leaves a fully-paid invoice a hair short of PAID.
 const PAYMENT_EPSILON = 0.005;
-
-// A recurring expense's stored nextDueDate doesn't advance on its own, so once a
-// due date passes it goes stale (e.g. seeded "May 1" still showing in June). Roll
-// it forward by its interval until it lands today or later so the UI always shows
-// the genuine *next* occurrence. Computed on read — we don't mutate the row here.
-const INTERVAL_MONTHS: Record<string, number> = { monthly: 1, quarterly: 3, yearly: 12 };
-
-function rollForwardDueDate(due: Date, interval: string, now: Date): Date {
-  const stepMonths = INTERVAL_MONTHS[interval.toLowerCase()] ?? 1;
-  const next = new Date(due);
-  const anchorDay = next.getDate();
-  // Cap iterations so an unrecognized interval can never spin forever.
-  for (let i = 0; next < now && i < 600; i++) {
-    next.setDate(anchorDay);
-    next.setMonth(next.getMonth() + stepMonths);
-  }
-  return next;
-}
 
 export const financeRouter = router({
   getTransactions: adminProcedure
@@ -827,15 +816,16 @@ export const financeRouter = router({
       where: { active: true },
     });
 
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const zone = ctx.organization?.timezone;
+    const day = workspaceToday(zone);
+    const today = workspaceDateRange(day, day, zone).from;
 
     // Surface the next upcoming due date (rolled past any lapsed cycles), then sort
     // by it so the soonest-due subscription leads the list.
     return expenses
       .map((exp) => ({
         ...exp,
-        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today),
+        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone),
       }))
       .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime());
   }),
@@ -889,14 +879,16 @@ export const financeRouter = router({
     const details: Array<{ id: string; name: string; cycles: number }> = [];
 
     for (const exp of expenses) {
-      const stepMonths = INTERVAL_MONTHS[exp.interval.toLowerCase()] ?? 1;
-      const anchorDay = new Date(exp.nextDueDate).getDate();
-      const due = new Date(exp.nextDueDate);
+      const advance = recurringExpenseSchedule(
+        exp.nextDueDate,
+        exp.interval,
+        ctx.organization?.timezone
+      );
+      let due = exp.nextDueDate;
       const toPost: Date[] = [];
       for (let i = 0; due <= now && i < 36; i++) {
         toPost.push(new Date(due));
-        due.setDate(anchorDay);
-        due.setMonth(due.getMonth() + stepMonths);
+        due = advance(due);
       }
       if (toPost.length === 0) continue;
 
@@ -956,8 +948,10 @@ export const financeRouter = router({
 
   getFinancialSummary: adminProcedure.query(async ({ ctx }) => {
     const now = new Date();
-    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    const startOfYear = new Date(now.getFullYear(), 0, 1);
+    const zone = workspaceTimezone(ctx.organization?.timezone);
+    const startOfMonth = workspaceMonthRange(zone, now).from;
+    const january = workspaceToday(zone, now).slice(0, 4) + '-01-01';
+    const startOfYear = workspaceDateRange(january, january, zone).from;
 
     // FIN-02: group every aggregate BY currency. Summing USD + PKR into one
     // scalar misstates totals (a hardcoded "$" on Rs hundreds of thousands), so
@@ -1069,23 +1063,23 @@ export const financeRouter = router({
       // currency per month (and the category breakdown by category+currency), so
       // the trend chart and pie never blend USD and PKR. The client picks one
       // currency to view at a time.
+      const zone = workspaceTimezone(ctx.organization?.timezone);
+      const january = workspaceToday(zone, now).slice(0, 4) + '-01-01';
       const monthRanges: Date[] = [];
       const groupPromises = [];
       for (let i = input.months - 1; i >= 0; i--) {
-        const date = new Date(now.getFullYear(), now.getMonth() - i, 1);
-        // FIN-09: include the final millisecond so a 23:59:59.5xx row isn't dropped.
-        const endOfMonth = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+        const { from: date, to } = workspaceMonthRange(zone, now, -i);
         monthRanges.push(date);
         groupPromises.push(
           ctx.db.transaction.groupBy({
             by: ['currency'],
             _sum: { amount: true },
-            where: { type: 'INCOME', date: { gte: date, lte: endOfMonth } },
+            where: { type: 'INCOME', date: { gte: date, lt: to } },
           }),
           ctx.db.transaction.groupBy({
             by: ['currency'],
             _sum: { amount: true },
-            where: { type: 'EXPENSE', date: { gte: date, lte: endOfMonth } },
+            where: { type: 'EXPENSE', date: { gte: date, lt: to } },
           })
         );
       }
@@ -1096,7 +1090,7 @@ export const financeRouter = router({
       const categoryGroups = await ctx.db.transaction.groupBy({
         by: ['category', 'currency'],
         _sum: { amount: true },
-        where: { type: 'EXPENSE', date: { gte: new Date(now.getFullYear(), 0, 1) } },
+        where: { type: 'EXPENSE', date: { gte: workspaceDateRange(january, january, zone).from } },
         orderBy: { _sum: { amount: 'desc' } },
       });
 
@@ -1137,7 +1131,11 @@ export const financeRouter = router({
           const incomeAmt = amountFor(monthGroups[idx * 2], currency);
           const expenseAmt = amountFor(monthGroups[idx * 2 + 1], currency);
           return {
-            period: date.toLocaleDateString('en-US', { month: 'short', year: 'numeric' }),
+            period: date.toLocaleDateString('en-US', {
+              month: 'short',
+              year: 'numeric',
+              timeZone: zone,
+            }),
             income: incomeAmt,
             expense: expenseAmt,
             // FIN-08: round to cents / 2-dp so raw JSON doesn't leak float artifacts

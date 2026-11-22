@@ -1,3 +1,4 @@
+import { workspaceToday } from '@/lib/timezone';
 import 'server-only';
 
 import { tool } from 'ai';
@@ -147,10 +148,10 @@ async function resolveBranch(h: AssistantHelpers, branch: string) {
       ...(ids ? { id: { in: ids } } : {}),
       OR: [{ id: branch }, { name: { equals: branch, mode: 'insensitive' } }],
     },
-    select: { id: true },
+    select: { id: true, timezone: true },
     take: 2,
   });
-  return branches.length === 1 ? branches[0].id : null;
+  return branches.length === 1 ? branches[0] : null;
 }
 
 /** Standalone read-only builder; registry integration belongs to Desktop. */
@@ -187,8 +188,9 @@ export function buildRestaurantReportTools(h: AssistantHelpers): ToolSet {
           // Catering is licensed by Restaurant Core at this base, not a separate vertical.
           if (input.report === 'upcoming_catering' && !(await h.can('catering:read')))
             return refusal();
-          const branchId = await resolveBranch(h, input.branch);
-          if (!branchId) return refusal();
+          const branch = await resolveBranch(h, input.branch);
+          if (!branch) return refusal();
+          const branchId = branch.id;
           const range = { branchIds: [branchId], from: input.from, to: input.to };
           const query = new URLSearchParams({ branch: branchId, from: input.from, to: input.to });
           const citation = {
@@ -414,11 +416,11 @@ export function buildRestaurantReportTools(h: AssistantHelpers): ToolSet {
                 'Retain period, branch scope, definitions and freshness. Partial closed dates do not represent the whole period.',
             };
           }
-          if (input.from < h.now().toISOString().slice(0, 10))
+          if (input.from < workspaceToday(branch.timezone, h.now()))
             return {
               kind: 'invalid_input',
               message:
-                'Upcoming Catering dates must start on or after today (UTC event-date calendar).',
+                'Upcoming Catering dates must start on or after today on the branch calendar.',
             };
           const report = cateringSchema.safeParse(await readCateringReport(h.db, range, 50));
           if (

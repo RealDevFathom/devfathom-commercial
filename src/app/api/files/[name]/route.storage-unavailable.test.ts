@@ -83,7 +83,7 @@ test('configured read keeps private response and missing files remain hidden', a
   const response = await read();
   expect(response.status).toBe(200);
   expect(await response.text()).toBe('proof');
-  expect(response.headers.get('cache-control')).toBe('private, max-age=3600');
+  expect(response.headers.get('cache-control')).toBe('private, no-store');
   m.get.mockRejectedValueOnce(new Error('fake missing blob'));
   expect((await read()).status).toBe(404);
 });

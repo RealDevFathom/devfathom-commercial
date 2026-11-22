@@ -4,6 +4,7 @@ import {
   openPrintWindow,
   printContentOverflows,
   printInWindow,
+  printWindowClosed,
   printWindowReady,
   sendToPrintWindow,
   type PrintWindow,
@@ -107,6 +108,20 @@ export async function assertCounterBrowserPrintReady(
         : 'The print window is no longer available. Retry Print receipt.'
     );
   }
+}
+
+/** Let the cashier retry if they close the window while a copy is being allocated. */
+export async function allocateWhileCounterPrintWindowOpen<T>(
+  reservation: CounterBrowserPrintReservation,
+  allocate: () => Promise<T>
+): Promise<T> {
+  const { handle } = reservedWindow(reservation);
+  return Promise.race([
+    allocate(),
+    printWindowClosed(handle).then(() => {
+      throw new Error(RECEIPT_WINDOW_MESSAGES.failedMessage);
+    }),
+  ]);
 }
 
 function escapeHtml(value: string | number): string {

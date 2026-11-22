@@ -26,7 +26,8 @@ import {
 } from '@/lib/abac/pharmacy-sub-role-weight';
 import { verifyOwnerExportPin } from '@/lib/pharmacy/owner-data-export-pin';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
-import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { approvalSecretKindFor } from '@/lib/approval-authenticator';
 import {
   AccessChangeError,
   accessChangeTrpcError,
@@ -79,19 +80,29 @@ export async function verifyAccessPin(input: {
     },
     input.now
   );
+  if (result === 'OK') return true;
   if (result === 'NO_PIN')
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
       message: 'Set your own PIN under Your PIN first.',
     });
+  const code =
+    (await withTenantDb(input.organizationId, (db) =>
+      approvalSecretKindFor(db, input.organizationId)
+    )) === 'CODE';
   if (result === 'LOCKED')
     throw new TRPCError({
       code: 'TOO_MANY_REQUESTS',
-      message: 'Your PIN is locked after too many wrong tries. Try again later.',
+      message: code
+        ? 'Your approvals are locked after too many wrong tries. Try again later.'
+        : 'Your PIN is locked after too many wrong tries. Try again later.',
     });
-  if (result !== 'OK')
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not right.' });
-  return true;
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: code
+      ? 'That approval code is not right or was already used. Enter the current code from your authenticator app.'
+      : 'That PIN is not right.',
+  });
 }
 
 /** Turns a guard refusal into the tRPC error the screen shows; other errors pass through. */
