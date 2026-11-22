@@ -52,7 +52,13 @@ const laterTemplateGrants: Record<string, readonly string[]> = {
     'pharmacy:procurement-approve',
     'pharmacy:inventory',
   ],
-  finance: [...(PHARMACY_SOP_TEMPLATE_GRANTS.finance ?? []), 'reports:operational'],
+  finance: [
+    ...(PHARMACY_SOP_TEMPLATE_GRANTS.finance ?? []),
+    'reports:operational',
+    // DEV-969 backfills these in 20261118127200, after the four migrations replayed here.
+    'finance:read',
+    'finance:manage',
+  ],
 };
 const expiry = new Date('2035-01-02T00:00:00.000Z');
 const expired = new Date('2020-01-02T00:00:00.000Z');

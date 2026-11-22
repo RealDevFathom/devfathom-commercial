@@ -1,11 +1,7 @@
-/**
- * Deterministic formatters for the customer ordering console. They avoid `Intl`
- * so server-rendered and browser-rendered text always match (React hydration #418),
- * regardless of the ICU data each runtime ships.
- */
+import { workspaceMinuteInput } from '@/lib/timezone';
 
+/** Keep the month names, spacing and punctuation identical during server and browser rendering. */
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const KARACHI_OFFSET_MS = 5 * 60 * 60 * 1000;
 
 function groupThousands(digits: string): string {
   return digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
@@ -19,11 +15,14 @@ export function formatOrderMoney(minor: number, currency: string): string {
   return `${negative ? '-' : ''}${currency} ${groupThousands(String(whole))}.${cents}`;
 }
 
-/** "2 Nov 2026, 11:08 pm" in Asia/Karachi (UTC+5, no DST). */
-export function formatOrderDateTime(value: Date | string | number): string {
+/** Old callers use the original Karachi clock. The workspace console supplies its own zone. */
+export function formatOrderDateTime(
+  value: Date | string | number,
+  timeZone = 'Asia/Karachi'
+): string {
   const instant = new Date(value);
   if (Number.isNaN(instant.getTime())) return '';
-  const local = new Date(instant.getTime() + KARACHI_OFFSET_MS);
+  const local = new Date(workspaceMinuteInput(instant, timeZone) + ':00Z');
   const hours24 = local.getUTCHours();
   const hours12 = hours24 % 12 === 0 ? 12 : hours24 % 12;
   const minutes = String(local.getUTCMinutes()).padStart(2, '0');

@@ -375,7 +375,7 @@ export async function readPharmacyDailyWorkPack(
     await read('expiry', 'inventory-review', copy.workPack.checkNote4, async (source) => {
       const rows = await readExpiryAdvice(
         db,
-        { organizationId: input.organizationId, branchIds: [branchId] },
+        { organizationId: input.organizationId, timeZone: input.timeZone, branchIds: [branchId] },
         asOf
       );
       source.returnedRows = rows.length;

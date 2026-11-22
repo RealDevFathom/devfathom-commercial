@@ -85,10 +85,7 @@ function cateringFixture(overrides = {}) {
 function execute(input: unknown = baseInput) {
   const tool = buildRestaurantReportTools(h).askRestaurantReports;
   return (
-    tool.execute! as (
-      value: unknown,
-      options: ToolExecutionOptions<unknown>
-    ) => Promise<unknown>
+    tool.execute! as (value: unknown, options: ToolExecutionOptions<unknown>) => Promise<unknown>
   )(input, { toolCallId: 'synthetic', messages: [], context: {} });
 }
 
@@ -679,3 +676,11 @@ it.each(['settled_sales', 'financial_breakdown'])(
     );
   }
 );
+
+it('refuses yesterday as upcoming at 00:30 on the catering branch calendar', async () => {
+  branches.mockResolvedValue([{ id: 'b1', timezone: 'Asia/Karachi' }]);
+  h.now = () => new Date('2026-09-08T00:30:00+05:00');
+  expect(await execute({ ...baseInput, report: 'upcoming_catering' })).toMatchObject({
+    kind: 'invalid_input',
+  });
+});

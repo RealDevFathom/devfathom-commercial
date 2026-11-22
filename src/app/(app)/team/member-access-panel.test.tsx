@@ -33,6 +33,7 @@ import {
   MEMBER_ACCESS_OWNER_ONLY_NOTE,
   MEMBER_ACCESS_READ_ONLY_NOTE,
   MemberAccessPanel,
+  SubRoleGroups,
 } from './member-access-panel';
 import { PHARMACY_WEIGHTY_SUB_ROLES } from '@/lib/abac/pharmacy-sub-role-weight';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
@@ -82,6 +83,34 @@ describe('what this person can do', () => {
     expect(screen.getByRole('region', { name: 'Pharmacist' })).toBeVisible();
     expect(screen.getByText(MEMBER_ACCESS_READ_ONLY_NOTE)).toBeVisible();
     expect(screen.getByText('Cashier', { selector: 'p' })).toBeVisible();
+  });
+
+  it('shows an inherited role tick as checked and locked and explains wildcard refusals beside their tick', () => {
+    const reason = 'Included with Dispense prescriptions. Untick that first.';
+    const note =
+      'People on this role cannot receive this ability individually while it is unticked.';
+    render(
+      <SubRoleGroups
+        groups={pharmacySubRoleGroups(new Set(['pharmacy:prescriptions', 'pharmacy:dispense']))}
+        lockedNoteFor={(item) => (item.key === 'record-prescriptions' ? reason : null)}
+        roleNotes={{ 'manage-stock': note }}
+        editor={{ pending: false, setSubRole: state.setSubRole }}
+        onChanged={vi.fn()}
+      />
+    );
+    const inherited = screen.getByRole('checkbox', { name: /Record prescriptions/ });
+    expect(inherited).toHaveAttribute('aria-checked', 'true');
+    expect(inherited).toHaveAttribute('aria-disabled', 'true');
+    expect(inherited).toHaveAccessibleDescription(expect.stringContaining(reason));
+    expect(screen.getByRole('checkbox', { name: /Manage stock/ })).toHaveAccessibleDescription(
+      expect.stringContaining(note)
+    );
+    expect(screen.getByText(reason).previousElementSibling).toHaveTextContent(
+      'Record prescriptions'
+    );
+    expect(screen.getByText(note).previousElementSibling).toHaveTextContent('Manage stock');
+    fireEvent.click(inherited);
+    expect(state.setSubRole).not.toHaveBeenCalled();
   });
 
   it('shows a partly held sub-role as a mixed tick', () => {
@@ -232,6 +261,14 @@ describe('DEV-959B: ticking for one person', () => {
       fireEvent.click(screen.getByRole('checkbox', { name: /See accounts/ }));
       const confirm = screen.getByRole('form', { name: 'Give See accounts?' });
       expect(within(confirm).getByLabelText('Your approval code')).toBeRequired();
+      expect(within(confirm).getByLabelText('Your approval code')).toHaveAttribute(
+        'autocomplete',
+        'one-time-code'
+      );
+      expect(within(confirm).getByLabelText('Your approval code')).toHaveAttribute(
+        'maxlength',
+        '6'
+      );
     } finally {
       state.approvalMode.mockReturnValue({ data: { required: false } });
     }

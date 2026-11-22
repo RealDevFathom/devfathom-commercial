@@ -44,8 +44,11 @@ export function refillCycleOpensBy(
  * the due date: no medicine, salt, strength or category ever leaves the
  * pharmacy in a WhatsApp or SMS message (Meta commerce policy, DRAP s.24).
  */
-export function refillSubscriptionReminder(cycle: { id: string; dueAt: Date }) {
-  const dueDate = cycle.dueAt.toISOString().slice(0, 10);
+export function refillSubscriptionReminder(
+  cycle: { id: string; dueAt: Date },
+  timeZone?: string | null
+) {
+  const dueDate = pharmacyCalendarDay(timeZone, cycle.dueAt);
   return {
     dueDate,
     dedupeKey: `refill-subscription:${cycle.id}`,

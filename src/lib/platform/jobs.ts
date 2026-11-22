@@ -11,6 +11,7 @@ import {
   type PlatformJobType,
   type PrismaClient,
 } from '@/generated/prisma/client';
+import { claimJob, runClaimedJob, type JobResult } from './job-runner';
 import { endSupportSessions } from '@/lib/platform/capabilities';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
@@ -36,13 +37,11 @@ import {
 } from '@/lib/pharmacy/retention-purge';
 
 type JobPayload = Record<string, unknown>;
-type JobResult = Record<string, unknown>;
 
 const STALE_JOB_MS = 15 * 60_000;
 
 /** A failure that no retry can cure: the job is marked FAILED at once. */
 class PermanentJobError extends Error {}
-const RETRY_BASE_MS = 30_000;
 const CONTROL_PLANE_TABLES = new Set([
   'organizations',
   'organization_lifecycle_events',
@@ -65,10 +64,6 @@ function objectPayload(value: Prisma.JsonValue | null): JobPayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JobPayload) : {};
 }
 
-function json(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-}
-
 function requiredOrganization(job: PlatformJob): string {
   if (!job.organizationId) throw new Error(`${job.type} requires an organization.`);
   return job.organizationId;
@@ -80,32 +75,6 @@ function requiredString(payload: JobPayload, key: string): string {
     throw new Error(`Job payload requires "${key}".`);
   }
   return value.trim();
-}
-
-async function claimJob(): Promise<PlatformJob | null> {
-  return withPlatformDb(async (db) => {
-    const candidates = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT "id"
-      FROM "platform_jobs"
-      WHERE "status" = 'QUEUED'
-        AND "scheduledAt" <= NOW()
-      ORDER BY "scheduledAt" ASC, "createdAt" ASC
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1
-    `);
-    const id = candidates[0]?.id;
-    if (!id) return null;
-    return db.platformJob.update({
-      where: { id },
-      data: {
-        status: 'RUNNING',
-        attempts: { increment: 1 },
-        startedAt: new Date(),
-        finishedAt: null,
-        error: null,
-      },
-    });
-  });
 }
 
 async function recoverStaleJobs(): Promise<number> {
@@ -834,11 +803,16 @@ async function setDeploymentAvailability(
 }
 
 async function executeJob(job: PlatformJob): Promise<JobResult> {
+  if (job.type === 'PASSWORD_RESET_REQUEST_V1') {
+    const { runPasswordResetJob } = await import('@/lib/auth/password-reset-request');
+    return runPasswordResetJob(job);
+  }
+  const jobType = job.type;
   return withPlatformDb(
     async (db) => {
       const payload = objectPayload(job.payload);
       const handlers: Record<
-        PlatformJobType,
+        Exclude<PlatformJobType, 'PASSWORD_RESET_REQUEST_V1'>,
         (database: PrismaClient, item: PlatformJob, data: JobPayload) => Promise<JobResult>
       > = {
         PROVISION_SHARED: sharedProvision,
@@ -863,7 +837,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
           }),
         PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
-      return handlers[job.type](db, job, payload);
+      return handlers[jobType](db, job, payload);
     },
     {
       timeout:
@@ -881,60 +855,6 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         : {}),
     }
   );
-}
-
-async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
-  await withPlatformDb(async (db) => {
-    const current = await db.platformJob.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
-    if (!current || current.status === 'CANCELLED') return;
-    await db.platformJob.update({
-      where: { id: job.id },
-      data: {
-        status: 'SUCCEEDED',
-        result: json(result),
-        error: null,
-        finishedAt: new Date(),
-      },
-    });
-  });
-}
-
-async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
-  const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  // An export over its size cap or build time limit stays over it: retrying only repeats the work.
-  const retry =
-    !(error instanceof PermanentJobError) &&
-    !(error instanceof OwnerDataExportTooLargeError) &&
-    !(error instanceof OwnerDataExportTimeLimitError) &&
-    job.attempts < job.maxAttempts;
-  await withPlatformDb(async (db) => {
-    const current = await db.platformJob.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
-    if (!current || current.status === 'CANCELLED') return;
-    await db.platformJob.update({
-      where: { id: job.id },
-      data: retry
-        ? {
-            status: 'QUEUED',
-            scheduledAt: new Date(
-              Date.now() + Math.min(RETRY_BASE_MS * 2 ** Math.max(0, job.attempts - 1), 30 * 60_000)
-            ),
-            startedAt: null,
-            error: message.slice(0, 2_000),
-          }
-        : {
-            status: 'FAILED',
-            error: message.slice(0, 2_000),
-            finishedAt: new Date(),
-          },
-    });
-  });
-  return retry ? 'retried' : 'failed';
 }
 
 const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
@@ -1022,13 +942,15 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
     const job = await claimJob();
     if (!job) break;
     result.claimed += 1;
-    try {
-      await completeJob(job, await executeJob(job));
-      result.succeeded += 1;
-    } catch (error) {
-      const status = await failJob(job, error);
-      result[status] += 1;
-    }
+    const status = await runClaimedJob(
+      job,
+      executeJob,
+      (error) =>
+        error instanceof PermanentJobError ||
+        error instanceof OwnerDataExportTooLargeError ||
+        error instanceof OwnerDataExportTimeLimitError
+    );
+    result[status] += 1;
   }
   return result;
 }

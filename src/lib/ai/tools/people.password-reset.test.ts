@@ -139,6 +139,10 @@ describe('assistant resetMemberPassword', () => {
     const installed = mocks.userUpdate.mock.calls[0]![0].data.password as string;
     expect(await compare('Old-Compromised-1', installed)).toBe(false);
 
+    // The password update retires outstanding tokens. Its replacement must be minted afterwards.
+    expect(mocks.userUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.resetTokenCreate.mock.invocationCallOrder[0]!
+    );
     const token = emailedToken();
     expect(mocks.resetTokenCreate).toHaveBeenCalledWith({
       data: {

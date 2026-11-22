@@ -553,8 +553,12 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
 
           // DEV-958A: the default day is the selected branches' business day when they share
           // their day-end hours, and the organisation's calendar day when they do not.
+          const organization = await h.db.organization.findUnique({
+            where: { id: h.ctx.organizationId },
+            select: { timezone: true },
+          });
           const clock = {
-            timeZone: 'Asia/Karachi',
+            timeZone: organization?.timezone,
             dayEnd: sharedPharmacyDayEnd(selected.map((row) => row.businessDayEndsAtHistory))
               .dayEnd,
           };
@@ -562,7 +566,7 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
             branchIds: selected.map(({ id }) => id),
             from: from ?? pharmacyBusinessDay(clock),
             to: to ?? from ?? pharmacyBusinessDay(clock),
-            // The same PKT day as the defaults above bounds event timestamps. DEV-958A: each
+            // The same workspace clock bounds event timestamps. DEV-958A: each
             // branch on its own business days; across branches, their sum.
             timeZone: clock.timeZone,
             ...pharmacyBranchDayEndsField(
