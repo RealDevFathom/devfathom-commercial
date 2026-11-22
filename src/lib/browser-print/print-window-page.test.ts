@@ -34,6 +34,7 @@ afterEach(() => {
 });
 
 function load(hash?: string) {
+  vi.useFakeTimers();
   // A fresh channel per page, so pages from earlier tests never answer.
   const ID = crypto.randomUUID();
   hash ??= `#${ID}`;
@@ -109,6 +110,7 @@ describe('DEV-973 print page', () => {
   });
 
   it('closes itself once the print dialog closes, printed or cancelled', () => {
+    vi.spyOn(navigator, 'vendor', 'get').mockReturnValue('Google Inc.');
     const page = load();
     // A dialog closing before any document arrived is not this window's.
     page.win.dispatchEvent(new page.win.Event('afterprint'));
@@ -122,6 +124,53 @@ describe('DEV-973 print page', () => {
     page.heard.length = 0;
     page.win.dispatchEvent(new page.win.Event('pagehide'));
     expect(page.heard).toEqual([{ type: 'closed' }]);
+    page.opener.close();
+  });
+
+  it('keeps Safari open on early afterprint and closes after the window regains focus', () => {
+    vi.useFakeTimers();
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue(
+      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.1 Safari/605.1.15'
+    );
+    const page = load();
+    const event = (type: string) => page.win.dispatchEvent(new page.win.Event(type));
+    page.opener.postMessage({ type: 'print', html: receipt });
+    page.print.mockImplementation(() => event('afterprint'));
+    vi.runAllTimers();
+    event('focus');
+    expect(page.close).not.toHaveBeenCalled();
+    event('blur');
+    event('focus');
+    expect(page.close).toHaveBeenCalledOnce();
+    expect(page.heard.at(-1)).toEqual({ type: 'closed' });
+    page.opener.close();
+  });
+
+  it('keeps Safari open when the latest focus event preceded afterprint', () => {
+    vi.spyOn(navigator, 'vendor', 'get').mockReturnValue('Apple Computer, Inc.');
+    const page = load();
+    const event = (type: string) => page.win.dispatchEvent(new page.win.Event(type));
+    page.opener.postMessage({ type: 'print', html: receipt });
+    vi.runAllTimers();
+    event('blur');
+    event('focus');
+    event('afterprint');
+    expect(page.close).not.toHaveBeenCalled();
+    page.win.document.getElementById('devfathom-print-close')?.click();
+    expect(page.close).toHaveBeenCalledOnce();
+    page.opener.close();
+  });
+
+  it('offers a keyboard-accessible Close button that is hidden from paper', () => {
+    const page = load();
+    page.opener.postMessage({ type: 'print', html: receipt });
+    const button = page.win.document.querySelector('button');
+    expect(button?.textContent).toBe('Close');
+    expect(button?.type).toBe('button');
+    expect(page.win.document.head.textContent).toMatch(/@media print[^{]*\{[^}]*display:\s*none/);
+    button?.click();
+    expect(page.close).toHaveBeenCalledOnce();
+    expect(page.heard.at(-1)).toEqual({ type: 'closed' });
     page.opener.close();
   });
 
@@ -163,6 +212,36 @@ describe('DEV-973 print page', () => {
       for (const element of doc.querySelectorAll('*'))
         expect(element.getAttributeNames().filter((name) => /^on/i.test(name))).toEqual([]);
       expect(doc.querySelector('pre')?.getAttribute('title')).toBe('kept');
+    });
+
+    it.each([
+      ['linked stylesheet', '<link rel="stylesheet" href="/print.css">', 'link'],
+      ['iframe', '<iframe src="/frame"></iframe>', 'iframe'],
+      ['frameset', '<frameset><frame src="/frame"></frameset>', 'frameset, frame'],
+      ['object', '<object data="/object"></object>', 'object'],
+      ['embed', '<embed src="/embed">', 'embed'],
+      ['form action', '<form action="/submit"></form>', 'form[action]'],
+      ['submit override', '<button formaction="/submit">Submit</button>', '[formaction]'],
+      ['SVG animation', '<svg><animate/><set/></svg>', 'animate, set'],
+    ])('strips %s from the print document', (_name, markup, selector) => {
+      const doc = shown(`<!doctype html><html><head></head>${markup}</html>`);
+      expect(doc.querySelector(selector)).toBeNull();
+    });
+
+    it.each([
+      '@import url("/linked.css");',
+      '@IMPORT "/linked.css";',
+      String.raw`@impor\74  "/linked.css";`,
+    ])('drops stylesheets that contain %s and keeps the print layout stylesheet', (rule) => {
+      const doc = shown(
+        `<!doctype html><html><head><style>${rule}</style><style>@page{size:A4} pre{white-space:pre-wrap}</style></head><body><pre dir="rtl">پرنٹ</pre><svg><rect width="5"/></svg></body></html>`
+      );
+      expect(Array.from(doc.querySelectorAll('style'), (style) => style.textContent)).toContain(
+        '@page{size:A4} pre{white-space:pre-wrap}'
+      );
+      expect(doc.head.textContent).not.toContain('/linked.css');
+      expect(doc.querySelector('pre[dir="rtl"]')?.textContent).toBe('پرنٹ');
+      expect(doc.querySelector('svg rect')?.getAttribute('width')).toBe('5');
     });
 
     it('drops javascript: URLs, however they are spelled', () => {

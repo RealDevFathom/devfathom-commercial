@@ -6,8 +6,7 @@ import { DailyWorkPack, type DailyWorkPackProps } from './daily-work-pack';
 
 afterEach(cleanup);
 
-const failure =
-  'Expiry advice could not load; refresh to try again.';
+const failure = 'Expiry advice could not load; refresh to try again.';
 
 function pack(
   status: 'available' | 'unavailable',
@@ -209,6 +208,7 @@ it('shows one review action per card even when readers offer more', async () => 
 async function showStock(value: PharmacyDailyWorkPack) {
   render(
     await DailyWorkPack({
+      timeZone: 'Asia/Karachi',
       read: vi.fn<DailyWorkPackProps['read']>().mockResolvedValue(value),
       filters: { branchId: 'branch_1', from: '2026-11-01', to: '2026-11-07' },
       branches: [{ id: 'branch_1', name: 'Main pharmacy' }],
@@ -268,4 +268,11 @@ it('shows work pack times in the shop time zone', async () => {
     `Prepared at ${formatShopTime(value.readAt, 'Pacific/Auckland')}`
   );
   expect(formatShopTime(value.readAt, 'Pacific/Auckland')).not.toBe(formatShopTime(value.readAt));
+});
+
+it('shows a 00:30 Karachi preparation on the workspace default UTC clock when no zone is configured', async () => {
+  const value = pack('available', 0);
+  value.readAt = '2026-11-02T00:30:00+05:00';
+  await show(value);
+  expect(screen.getByText(/Prepared at/)).toHaveTextContent('1 Nov 2026, 7:30 PM UTC');
 });

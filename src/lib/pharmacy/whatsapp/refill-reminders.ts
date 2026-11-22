@@ -1,3 +1,4 @@
+import { pharmacyCalendarDay } from '../business-day';
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -52,24 +53,32 @@ export type RefillReminderPlanInput = {
  * `leadDays` before it and closes at run-out. The dedupe key is stable per
  * patient x medicine x due date, so repeated job runs claim it only once.
  */
-export function planRefillReminder(input: RefillReminderPlanInput, now: Date, leadDays: number) {
+export function planRefillReminder(
+  input: RefillReminderPlanInput,
+  now: Date,
+  leadDays: number,
+  timeZone?: string | null
+) {
   const schedule = deriveRefillSchedule({
     dispensedAt: input.dispensedAt,
     quantityDispensed: input.quantityDispensed,
     directions: input.directions,
   });
-  const dueDate = schedule.expectedExhaustionAt.toISOString().slice(0, 10);
+  const dueDate = pharmacyCalendarDay(timeZone, schedule.expectedExhaustionAt);
+  // Already-claimed identities are keyed by the UTC date of the run-out instant.
+  const identityDay = schedule.expectedExhaustionAt.toISOString().slice(0, 10);
   const sendAt = new Date(schedule.expectedExhaustionAt.getTime() - leadDays * DAY_MS);
   return {
     dueDate,
     sendAt,
     expectedExhaustionAt: schedule.expectedExhaustionAt,
     due: sendAt <= now && now < schedule.expectedExhaustionAt,
-    dedupeKey: `refill:${input.patientId}:${input.medicineId}:${dueDate}`,
+    dedupeKey: `refill:${input.patientId}:${input.medicineId}:${identityDay}`,
   };
 }
 
 type DueCapture = {
+  timezone: string;
   id: string;
   organizationId: string;
   branchId: string;
@@ -142,10 +151,11 @@ export async function processDueWhatsAppRefillReminders(
   const windowEnd = new Date(now.getTime() + config.reminderLeadDays * DAY_MS);
   const captures = await withPlatformDb((db) =>
     db.$queryRaw<DueCapture[]>(Prisma.sql`
-      SELECT capture."id", capture."organizationId", capture."branchId", capture."patientId",
+      SELECT org.timezone, capture."id", capture."organizationId", capture."branchId", capture."patientId",
              line."medicineId", capture."medicineName", capture."directionsEnglish",
              capture."quantityDispensed", fill."dispensedAt"
       FROM "pharmacy_refill_reminder_captures" capture
+      JOIN organizations org ON org.id = capture."organizationId"
       JOIN "pharmacy_prescription_fills" fill
         ON fill."organizationId" = capture."organizationId" AND fill."id" = capture."prescriptionFillId"
       JOIN "pharmacy_prescription_lines" line
@@ -176,7 +186,8 @@ export async function processDueWhatsAppRefillReminders(
           directions: capture.directionsEnglish,
         },
         now,
-        config.reminderLeadDays
+        config.reminderLeadDays,
+        capture.timezone
       );
     } catch (error) {
       if (!(error instanceof RefillSupportError)) throw error;
@@ -393,6 +404,7 @@ async function deliverRefillReminder(
 }
 
 type DueSubscriptionCycle = {
+  timezone: string;
   id: string;
   organizationId: string;
   branchId: string;
@@ -442,9 +454,10 @@ export async function processDueSubscriptionRefillReminders(
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const cycles = await withPlatformDb((db) =>
     db.$queryRaw<DueSubscriptionCycle[]>(Prisma.sql`
-      SELECT cycle."id", cycle."organizationId", cycle."branchId", customer."patientId",
+      SELECT org.timezone, cycle."id", cycle."organizationId", cycle."branchId", customer."patientId",
              cycle."dueAt", subscription."reminderLeadDays"
       FROM "pharmacy_refill_subscription_cycles" cycle
+      JOIN organizations org ON org.id = cycle."organizationId"
       JOIN "pharmacy_refill_subscriptions" subscription
         ON subscription."organizationId" = cycle."organizationId"
        AND subscription."id" = cycle."subscriptionId"
@@ -473,7 +486,7 @@ export async function processDueSubscriptionRefillReminders(
       result.notDue += 1;
       continue;
     }
-    const reminder = refillSubscriptionReminder(cycle);
+    const reminder = refillSubscriptionReminder(cycle, cycle.timezone);
     await deliverRefillReminder(
       {
         organizationId: cycle.organizationId,

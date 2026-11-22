@@ -260,6 +260,8 @@ vi.mock('@/lib/pharmacy/counter-browser-print', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/counter-browser-print')>()),
   printCounterBrowserReceipt: mocks.printReceipt,
   assertCounterBrowserPrintReady: browserPrint.ready,
+  allocateWhileCounterPrintWindowOpen: (_reservation: unknown, allocate: () => Promise<unknown>) =>
+    allocate(),
   reserveCounterBrowserPrint: () => ({ cancel: browserPrint.cancel }),
 }));
 
@@ -5566,6 +5568,31 @@ describe('PharmacyCounterConsole browser print audit', () => {
       );
     }
   );
+
+  it('ignores a rapid second print press until the first handoff finishes', async () => {
+    const opening = Promise.withResolvers<void>();
+    browserPrint.ready.mockReturnValueOnce(opening.promise);
+    const print = renderSettledReceipt();
+    const props = () => mocks.receiptProps.mock.calls.at(-1)![0] as { printPending: boolean };
+    let first!: Promise<boolean>;
+    await act(async () => {
+      first = print();
+      expect(await print()).toBe(false);
+    });
+    expect(props().printPending).toBe(true);
+    expect(screen.getByRole('button', { name: 'Printing receipt…' })).toHaveAttribute(
+      'aria-busy',
+      'true'
+    );
+    expect(mocks.mutations.counterReceiptBrowserPrint).not.toHaveBeenCalled();
+    await act(async () => {
+      opening.resolve();
+      expect(await first).toBe(true);
+    });
+    expect(mocks.mutations.counterReceiptBrowserPrint).toHaveBeenCalledTimes(1);
+    expect(mocks.printReceipt).toHaveBeenCalledTimes(1);
+    expect(props().printPending).toBe(false);
+  });
 
   it('keeps the unconfirmed-printing notice until dismissed (DEV-910)', async () => {
     mocks.mutations.counterReceiptBrowserPrint!.mockResolvedValue({

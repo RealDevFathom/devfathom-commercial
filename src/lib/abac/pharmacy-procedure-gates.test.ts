@@ -39,8 +39,14 @@ const STANDALONE_ROUTERS = [
   ],
 ] as const;
 
-function isPharmacyProcedure(path: string): boolean {
-  return path.startsWith('pharmacy') || path.startsWith('organizationAdmin.pharmacySettings.');
+// Tenant administration also exposes these two pharmacy-only role procedures.
+function isPharmacyProcedure(path: string) {
+  return (
+    path.startsWith('pharmacy') ||
+    path.startsWith('organizationAdmin.pharmacySettings.') ||
+    path === 'organizationAdmin.roleAccess' ||
+    path === 'organizationAdmin.setRoleSubRole'
+  );
 }
 
 async function pharmacyProcedures(): Promise<string[]> {

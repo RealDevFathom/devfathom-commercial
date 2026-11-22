@@ -72,6 +72,7 @@ export const MODULE_CATALOG: readonly ModuleDefinition[] = [
 const MODULES_BY_KEY = new Map(MODULE_CATALOG.map((module) => [module.key, module]));
 
 export type EntitlementView = {
+  timeZone?: string | null;
   organizationId: string;
   /**
    * §2.3 — the organization's operating vertical, surfaced additively so

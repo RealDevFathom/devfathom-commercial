@@ -1,7 +1,7 @@
 'use client';
 
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
-
+import { workspaceDateOffset } from '@/lib/timezone';
 import { useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
@@ -70,12 +70,6 @@ function formNumber(data: FormData, name: string, fallback: number) {
   if (!raw) return fallback;
   const parsed = Number(raw);
   return Number.isFinite(parsed) ? parsed : fallback;
-}
-
-/** ISO date `n` days before today, in the browser's locale-independent UTC day. */
-function isoDaysAgo(days: number) {
-  const now = new Date();
-  return new Date(now.getTime() - days * 86_400_000).toISOString().slice(0, 10);
 }
 
 function minutesToClock(minutes: number | null) {
@@ -197,11 +191,11 @@ export default function RestaurantSopOversightPage() {
   const [statusMessage, setStatusMessage] = useState('');
   const [mutationError, setMutationError] = useState('');
   const [selectedPolicyId, setSelectedPolicyId] = useState('');
-  const [from, setFrom] = useState(() => isoDaysAgo(30));
-  const [to, setTo] = useState(() => isoDaysAgo(0));
+  const [from, setFrom] = useState(() => workspaceDateOffset(entitlements.timeZone, -30));
+  const [to, setTo] = useState(() => workspaceDateOffset(entitlements.timeZone, 0));
   const [scoreWindow, setScoreWindow] = useState(() => ({
-    from: isoDaysAgo(30),
-    to: isoDaysAgo(0),
+    from: workspaceDateOffset(entitlements.timeZone, -30),
+    to: workspaceDateOffset(entitlements.timeZone, 0),
   }));
   const [auditOccurrenceId, setAuditOccurrenceId] = useState('');
 

@@ -153,3 +153,20 @@ describe('audit drill-down destination', () => {
     }
   );
 });
+
+it('includes an event at 00:30 Karachi throughout the selected day', async () => {
+  resolveActor.mockResolvedValue({
+    session: { user: { role: 'ADMIN' } },
+    organization: { timezone: 'Asia/Karachi' },
+  });
+  render(await AuditLogPage({ searchParams: Promise.resolve({}) }));
+  fireEvent.change(screen.getByLabelText('From date'), { target: { value: '2026-11-02' } });
+  fireEvent.change(screen.getByLabelText('To date'), { target: { value: '2026-11-02' } });
+  expect(listQuery).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      startDate: new Date('2026-11-01T19:00:00.000Z'),
+      endDate: new Date('2026-11-02T18:59:59.999Z'),
+    }),
+    expect.anything()
+  );
+});

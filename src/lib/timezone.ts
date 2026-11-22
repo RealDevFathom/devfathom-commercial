@@ -223,3 +223,11 @@ export function workspaceDateOffset(
   const today = Date.parse(`${workspaceToday(timeZone, now)}T00:00:00.000Z`);
   return new Date(today + days * 86_400_000).toISOString().slice(0, 10);
 }
+
+/** Resolve a calendar month relative to the workspace's current month, including DST changes. */
+export function workspaceMonthRange(timeZone: string | null | undefined, at: Date, offset = 0) {
+  const [year, month] = workspaceToday(timeZone, at).split('-').map(Number);
+  const first = new Date(Date.UTC(year!, month! - 1 + offset, 1)).toISOString().slice(0, 10);
+  const last = new Date(Date.UTC(year!, month! + offset, 0)).toISOString().slice(0, 10);
+  return workspaceDateRange(first, last, timeZone);
+}
