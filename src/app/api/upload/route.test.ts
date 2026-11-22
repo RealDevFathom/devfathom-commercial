@@ -2,12 +2,14 @@
 import { multipartUpload } from '../../../../tests/fixtures/multipart-upload';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
+  acquireSlot: vi.fn(),
   actor: vi.fn(),
   put: vi.fn(),
   remove: vi.fn(),
   tenant: vi.fn(),
   register: vi.fn(),
 }));
+vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.acquireSlot }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.tenant }));
 vi.mock('@/lib/storage', async (original) => ({
@@ -25,6 +27,7 @@ function request(name = 'proof.png', type = 'image/png') {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.acquireSlot.mockResolvedValue(async () => {});
   mocks.actor.mockResolvedValue({
     organization: { id: 'org-a' },
     session: { user: { id: 'user-a' } },

@@ -1,4 +1,4 @@
-import { readUploadForm, uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
+import { uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
@@ -8,7 +8,7 @@ import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage'
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { registerUpload } from '@/lib/uploads/registry';
 
-export const POST = uploadPost(async (request: Request) => {
+export const POST = uploadPost(async (request, readUploadForm) => {
   try {
     const actor = await resolveTenantActor({ request });
     if (!actor?.session.user?.id) {
@@ -16,7 +16,8 @@ export const POST = uploadPost(async (request: Request) => {
     }
     const uploadedById = actor.session.user.id;
 
-    const formData = await readUploadForm(request);
+    const formData = await readUploadForm(uploadedById);
+    if (formData instanceof Response) return formData;
     if (!formData) return NextResponse.json({ error: UPLOAD_SIZE_MESSAGE }, { status: 413 });
     const file = formData.get('file') as File | null;
 

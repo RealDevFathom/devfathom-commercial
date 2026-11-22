@@ -1,4 +1,6 @@
-import { readUploadForm, uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
+import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import { requireSopActor } from '@/lib/restaurant/sop-actor';
 
 import crypto from 'node:crypto';
@@ -79,7 +81,7 @@ function destination(request: Request, form: FormData, notice: string, kind: 'su
   return url;
 }
 
-export const POST = uploadPost(async (request: Request) => {
+export const POST = uploadPost(async (request, readUploadForm) => {
   const origin = request.headers.get('origin');
   const fetchSite = request.headers.get('sec-fetch-site');
   let sameOrigin = false;
@@ -95,10 +97,31 @@ export const POST = uploadPost(async (request: Request) => {
     return new Response('Forbidden', { status: 403 });
   }
 
-  let form: FormData | null;
+  let actor: Awaited<ReturnType<typeof resolveTenantActor>>;
   try {
-    form = await readUploadForm(request);
-    if (!form) return new Response(UPLOAD_SIZE_MESSAGE, { status: 413 });
+    actor = await resolveTenantActor({ request });
+  } catch (error) {
+    warnEvidenceCaptureFailure('context', error);
+    return (
+      responseForPasswordChange(error) ??
+      NextResponse.redirect(
+        destination(
+          request,
+          new FormData(),
+          'Proof capture failed. Check the file and try again.',
+          'error'
+        ),
+        303
+      )
+    );
+  }
+  if (!actor?.session.user?.id) return new Response('Sign in to capture proof.', { status: 401 });
+  let form: FormData;
+  try {
+    const result = await readUploadForm(actor.session.user.id, 'text');
+    if (result instanceof Response) return result;
+    if (!result) return new Response(UPLOAD_SIZE_MESSAGE, { status: 413 });
+    form = result;
   } catch {
     return new Response('Invalid multipart form.', { status: 400 });
   }
@@ -126,7 +149,12 @@ export const POST = uploadPost(async (request: Request) => {
     }
 
     stage = 'context';
-    const ctx = await createTRPCContext({ req: request });
+    const ctx = await createTRPCContext({
+      req: request,
+      session: actor.session,
+      organization: actor.organization,
+      support: actor.support,
+    });
     organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId ?? null;
     if (!organizationId || !ctx.session?.user) throw new Error('Workspace not found.');
     stage = 'authorization';

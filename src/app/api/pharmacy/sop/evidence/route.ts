@@ -1,4 +1,4 @@
-import { readUploadForm, uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
+import { uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import crypto from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
@@ -158,21 +158,25 @@ function isSameOrigin(request: Request): boolean {
   }
 }
 
-export const POST = uploadPost(async (request: Request) => {
+export const POST = uploadPost(async (request, readUploadForm) => {
   if (!isSameOrigin(request)) return new Response('Forbidden', { status: 403 });
 
-  let form: FormData | null;
-  try {
-    form = await readUploadForm(request);
-    if (!form) return json(413, { error: UPLOAD_SIZE_MESSAGE });
-  } catch {
-    return json(400, { error: 'The upload was incomplete or not a multipart form.' });
-  }
-
-  let stage: Stage = 'file_validation';
+  let stage: Stage = 'authorization';
   let storedFilename: string | null = null;
   let organizationId: string | null = null;
   try {
+    const actor = await resolveTenantActor({ request });
+    if (!actor?.session.user?.id) return json(401, { error: 'Sign in to capture proof.' });
+    stage = 'file_validation';
+    let form: FormData;
+    try {
+      const result = await readUploadForm(actor.session.user.id);
+      if (result instanceof Response) return result;
+      if (!result) return json(413, { error: UPLOAD_SIZE_MESSAGE });
+      form = result;
+    } catch {
+      return json(400, { error: 'The upload was incomplete or not a multipart form.' });
+    }
     const pharmacyBranchId = field(form, 'pharmacyBranchId');
     const occurrenceId = field(form, 'occurrenceId');
     const occurrenceStepId = field(form, 'occurrenceStepId') || null;
@@ -186,8 +190,6 @@ export const POST = uploadPost(async (request: Request) => {
     const { baseType, bytes, extension } = await readEvidenceFile(form.get('file'));
 
     stage = 'authorization';
-    const actor = await resolveTenantActor({ request });
-    if (!actor?.session.user?.id) return json(401, { error: 'Sign in to capture proof.' });
     const ctx = await createTRPCContext({
       req: request,
       session: actor.session,

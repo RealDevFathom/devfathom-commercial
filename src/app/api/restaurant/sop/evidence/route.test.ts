@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 
 const mocks = vi.hoisted(() => ({
+  acquireSlot: vi.fn(),
+  resolveTenantActor: vi.fn(),
   attachEvidence: vi.fn(),
   can: vi.fn(),
   createTRPCContext: vi.fn(),
@@ -12,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   putUpload: vi.fn(),
 }));
 
+vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.acquireSlot }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/lib/abac', () => ({
   can: mocks.can,
   subjectFromSession: () => ({ id: 'user-1' }),
@@ -80,8 +84,13 @@ function request(overrides?: {
 }
 
 beforeEach(() => {
+  mocks.acquireSlot.mockResolvedValue(async () => {});
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.resolveTenantActor.mockResolvedValue({
+    session: { user: { id: 'user-1' } },
+    organization: { id: 'org-1' },
+  });
   mocks.createTRPCContext.mockResolvedValue({
     db: {
       restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff-1' }]) },
@@ -487,5 +496,25 @@ it('refuses a 26 MB multipart file with a plain size message before storage', as
   const response = await POST(multipartUpload('/api/restaurant/sop/evidence', 26));
   expect(response.status).toBe(413);
   expect(await response.text()).toContain('Choose a file of 25 MB or smaller.');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+});
+
+it('returns 401 without reading the request stream when the session is missing', async () => {
+  mocks.resolveTenantActor.mockResolvedValueOnce(null);
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+    controller.close()
+  );
+  const body = new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 });
+  const req = new Request('https://devfathom.test/api/restaurant/sop/evidence', {
+    method: 'POST',
+    headers: { origin: 'https://devfathom.test' },
+    body,
+    duplex: 'half',
+  } as RequestInit);
+  const response = await POST(req);
+  expect(response.status).toBe(401);
+  expect(pull).not.toHaveBeenCalled();
+  expect(req.bodyUsed).toBe(false);
+  expect(mocks.acquireSlot).not.toHaveBeenCalled();
   expect(mocks.putUpload).not.toHaveBeenCalled();
 });
