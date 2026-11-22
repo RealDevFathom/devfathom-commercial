@@ -9,7 +9,9 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { actorIsPharmacyOwner } from '../procurement-access';
 import type { LedgerScope } from '../stock-ledger';
 import { assertNoCardholderData } from './cardholder-data';
-import { isOwnerWithoutOtherReviewer } from '../catalogue-approvals';
+import { can, subjectFromSession } from '@/lib/abac';
+import { PHARMACY_FINANCE_MANAGE } from '@/lib/abac/pharmacy-finance-actions';
+import { canAccessPharmacyFinance } from '../finance-access';
 import { otherCardTerminalReviewers } from './review-approvers';
 import type { CardTerminalAttempt } from './store';
 
@@ -258,12 +260,25 @@ export async function reversedTenderRefundIds(
   return new Set(events.map((e) => e.refundId));
 }
 
-export function maySignOwnRefundCorrection(db: ScopedDb, scope: Scope) {
-  return isOwnerWithoutOtherReviewer(
-    db,
-    { ...scope, actorOrganizationId: scope.organizationId },
-    { countOtherOwners: true }
-  );
+export async function maySignOwnRefundCorrection(db: ScopedDb, scope: Scope) {
+  if (!(await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))) return false;
+  const others = await db.user.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { not: scope.actorId },
+      status: 'ACTIVE',
+    },
+    select: { id: true, role: true, department: true, status: true },
+  });
+  const options = { db, source: 'TRPC' as const };
+  for (const member of others) {
+    if (
+      (await can(subjectFromSession(member), 'admin:access', undefined, options)) &&
+      (await canAccessPharmacyFinance(member, options, PHARMACY_FINANCE_MANAGE))
+    )
+      return false;
+  }
+  return true;
 }
 
 export async function refundCalendarDay(db: ScopedDb, organizationId: string) {
@@ -324,7 +339,6 @@ export async function changeProviderRefund(
       const peers = await otherCardTerminalReviewers(db, scope);
       selfApproved =
         authority.ownerAuthority &&
-        peers.length === 0 &&
         approval.declareSelfApproval === true &&
         !approval.secondApproverId &&
         (await maySignOwnRefundCorrection(db, scope));

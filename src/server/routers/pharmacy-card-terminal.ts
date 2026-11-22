@@ -386,7 +386,6 @@ export const pharmacyCardTerminalRouter = router({
             needsPeer &&
             !input.secondApproval &&
             input.declareSelfApproval &&
-            others.length === 0 &&
             (await maySignOwnRefundCorrection(db, scope))
           )
         )

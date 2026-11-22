@@ -241,7 +241,7 @@ function RefundForm({
   const [error, setError] = useState('');
   const [key, setKey] = useState(() => crypto.randomUUID());
   const mutation = trpc.pharmacyCardTerminal.recordRefundAction.useMutation();
-  const solo = needsPeer && owner && !peers.length;
+  const solo = needsPeer && owner;
   if (needsPeer && !peers.length && !solo)
     return (
       <p role="alert">

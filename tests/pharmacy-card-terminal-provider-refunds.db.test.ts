@@ -585,16 +585,31 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
       change(root, 'OWED', { pinVerified: true, declareSelfApproval: true }, '')
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     const secondOwner = await run((db) =>
-      db.user.findUniqueOrThrow({ where: { id: reviewerId }, select: { organizationRoleId: true } })
+      db.user.findUniqueOrThrow({
+        where: { id: reviewerId },
+        select: { organizationRoleId: true, role: true },
+      })
     );
     const soleOwner = await run((db) =>
       db.user.findUniqueOrThrow({ where: { id: ownerId }, select: { organizationRoleId: true } })
     );
-    await run((db) => db.user.update({ where: { id: reviewerId }, data: soleOwner }));
+    await run((db) =>
+      db.user.update({ where: { id: reviewerId }, data: { ...soleOwner, role: 'ADMIN' } })
+    );
     await expect(
       change(root, 'OWED', { pinVerified: true, declareSelfApproval: true })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await run((db) => db.user.update({ where: { id: reviewerId }, data: secondOwner }));
+    await run((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: 'third' + suffix,
+          capability: 'pharmacy:catalogue-review',
+          effect: 'ALLOW',
+          reason: 'Synthetic pharmacist with catalogue review only',
+        },
+      })
+    );
     const self = await change(root, 'OWED', { pinVerified: true, declareSelfApproval: true });
     expect(self).toMatchObject({
       previousId: root,
@@ -630,6 +645,15 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
           reason: 'Independent branch review',
         },
       });
+      for (const capability of ['admin:access', 'finance:manage'])
+        await db.userPermissionOverride.create({
+          data: {
+            userId: reviewerId,
+            capability,
+            effect: 'ALLOW',
+            reason: 'Synthetic finance approver',
+          },
+        });
       const profile = await db.restaurantStaffProfile.create({
         data: { userId: reviewerId, displayName: 'Independent reviewer' },
       });
