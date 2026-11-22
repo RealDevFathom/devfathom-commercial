@@ -4361,7 +4361,7 @@ function ScopedPharmacyCounterConsole({
         ref={actionsButtonRef}
         type="button"
         variant="ghost"
-        className="order-last h-11 shrink-0 gap-2 px-3"
+        className="order-last h-11 shrink-0 gap-2 px-3 xl:px-2"
         aria-expanded={actionsOpen}
         aria-controls="counter-actions"
         onClick={() => setActionsOpen(!actionsOpen)}
