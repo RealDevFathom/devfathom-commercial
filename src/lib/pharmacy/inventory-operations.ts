@@ -1066,6 +1066,13 @@ export async function approveTransfer(
 ) {
   if (await warehouseDispatchSource(db, scope, transferId)) {
     await lockWarehouseQuality(db, scope.organizationId, false);
+    // A replenishment may replace this draft and carry its live reservations
+    // forward. Serialize approval with that change before counting reservations.
+    await db.$queryRaw(Prisma.sql`
+      SELECT id FROM pharmacy_interbranch_transfers
+      WHERE "organizationId"=${scope.organizationId} AND "fromBranchId"=${scope.branchId} AND id=${transferId}
+      FOR UPDATE
+    `);
     if (
       !(await db.pharmacyWarehouseReservation.count({
         where: {

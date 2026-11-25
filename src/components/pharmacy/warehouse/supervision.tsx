@@ -262,7 +262,7 @@ export function Arrivals({ branchId }: { branchId: string }) {
                         max={remaining}
                         value={0}
                       />
-                      {line.coldChain && (
+                      {line.requiresTemperatureEvidence && (
                         <>
                           <Field
                             label="Transit minimum °C"

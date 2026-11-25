@@ -2,6 +2,7 @@ import { Prisma, type PharmacyTransferStatus } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { shelfLabelCode } from './shelf-label-code';
 import type { LedgerScope } from './stock-ledger';
+import { requiresWarehouseTemperatureEvidence } from './warehouse-quality';
 
 const HOUR = 3_600_000;
 const WINDOW_DAYS = 30;
@@ -50,6 +51,7 @@ type TransferLineRow = {
   quantityUnits: number;
   receivedUnits: number;
   coldChain: boolean;
+  minimumStorageTemperatureC: number | null;
   controlled: boolean;
   adoptable: boolean;
 };
@@ -67,6 +69,7 @@ function transferLine(row: TransferLineRow) {
     quantityUnits: row.quantityUnits,
     receivedUnits: row.receivedUnits,
     coldChain: row.coldChain,
+    requiresTemperatureEvidence: requiresWarehouseTemperatureEvidence(row),
     controlled: row.controlled,
   };
 }
@@ -135,7 +138,7 @@ function readTransferLines(db: ScopedDb, scope: LedgerScope) {
     )
     SELECT t.id AS "transferId", t."fromBranchId", t."fromBranchName", t."toBranchId", t."toBranchName",
       t.status, t."dispatchedAt", t.adoptable, line.id AS "lineId", lot.id AS "lotId", lot."shelfLabelNumber",
-      m.id AS "medicineId", COALESCE(m."brandName", m."productName") AS "medicineName", m."coldChain", m.controlled,
+      m.id AS "medicineId", COALESCE(m."brandName", m."productName") AS "medicineName", m."coldChain", m."minimumStorageTemperatureC", m.controlled,
       b."batchNumber", loc.code AS "destinationBinCode", line."destinationStockLocationId", line."quantityUnits", line."receivedUnits"
     FROM scoped t
     JOIN pharmacy_interbranch_transfer_lines line ON line."organizationId" = t."organizationId" AND line."transferId" = t.id

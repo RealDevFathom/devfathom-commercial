@@ -20,6 +20,7 @@ import {
   noteMissingWarehouseDispatchEvidence,
   openWarehouseIncident,
   registerWarehouseCancellationHold,
+  requiresWarehouseTemperatureEvidence,
   warehouseDispatchQualityReason,
   warehouseStockQualityReason,
 } from './warehouse-quality';
@@ -207,6 +208,9 @@ async function presentOrders(db: ScopedDb, scope: LedgerScope, orders: OrderWith
         ...r,
         productName: lot?.batch.medicine.productName ?? '',
         coldChain: lot?.batch.medicine.coldChain ?? false,
+        requiresTemperatureEvidence: lot
+          ? requiresWarehouseTemperatureEvidence(lot.batch.medicine)
+          : false,
         medicineId: lot?.batch.medicineId ?? '',
         batchNumber: lot?.batch.batchNumber ?? null,
         expiresAt: lot?.batch.expiresAt ?? null,
@@ -490,6 +494,75 @@ async function holdUnits(
   );
 }
 
+/** Keep the superseded draft and all of its lines as evidence, including lines
+ * referenced by central-purchasing allocations. Live reservations keep their IDs
+ * and physical pack arrangements; only their destination manifest changes. */
+async function carryReservationsToReplacement(
+  db: ScopedDb,
+  scope: LedgerScope,
+  orderId: string,
+  priorTransferId: string,
+  replacementTransferId: string
+) {
+  const live = await db.pharmacyWarehouseReservation.findMany({
+    where: {
+      ...branchScope(scope),
+      orderId,
+      transferId: priorTransferId,
+      state: { in: ['RESERVED', 'PICKED', 'PACKED'] },
+    },
+    orderBy: { id: 'asc' },
+  });
+  const oldLines = await db.pharmacyInterbranchTransferLine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      transferId: priorTransferId,
+      id: { in: live.map((r) => r.transferLineId) },
+    },
+  });
+  const byId = new Map(oldLines.map((line) => [line.id, line]));
+  const carried = [];
+  for (const reservation of live) {
+    const prior = byId.get(reservation.transferLineId);
+    if (!prior || prior.receivedUnits !== 0 || prior.quantityUnits !== reservation.quantityUnits)
+      invalid('The reservation and its draft shipment line do not reconcile.');
+    const replacement = await db.pharmacyInterbranchTransferLine.create({
+      data: {
+        organizationId: scope.organizationId,
+        transferId: replacementTransferId,
+        sourceBranchId: scope.branchId,
+        sourceLotId: prior.sourceLotId,
+        sourceStockLocationId: prior.sourceStockLocationId,
+        destinationStockLocationId: prior.destinationStockLocationId,
+        quantityUnits: prior.quantityUnits,
+      },
+    });
+    await db.pharmacyWarehouseReservation.update({
+      where: { id: reservation.id },
+      data: { transferId: replacementTransferId, transferLineId: replacement.id },
+    });
+    carried.push({
+      reservationId: reservation.id,
+      priorLineId: prior.id,
+      replacementLineId: replacement.id,
+    });
+  }
+  await db.pharmacyInterbranchTransfer.update({
+    where: { id: priorTransferId },
+    data: { status: 'SUPERSEDED', approvedById: null },
+  });
+  await db.pharmacyWarehouseCommand.create({
+    data: {
+      ...branchScope(scope),
+      orderId,
+      actorId: scope.actorId,
+      key: 'wh-system:replace:' + priorTransferId,
+      kind: 'REPLACE_TRANSFER',
+      payload: { priorTransferId, replacementTransferId, carried },
+    },
+  });
+}
+
 async function fillDemand(db: ScopedDb, scope: LedgerScope, orderId: string, key: string) {
   const config = await configuration(db, scope);
   const order = await db.pharmacyWarehouseOrder.findFirstOrThrow({
@@ -536,15 +609,17 @@ async function fillDemand(db: ScopedDb, scope: LedgerScope, orderId: string, key
     for (const c of candidates) {
       if (!needed) break;
       const { lot } = c;
-      const existing = order.reservations.find(
+      let existing = order.reservations.find(
         (r) =>
           r.transferId === transferId &&
           r.inventoryLotId === lot.id &&
           r.sourceStockLocationId === c.stockLocationId
       );
-      if (existing && existing.state !== 'RESERVED') continue;
+      if (existing && !['RESERVED', 'CANCELLED'].includes(existing.state)) continue;
       const quantityUnits = Math.min(needed, c.availableUnits);
-      if (!transferId) {
+      // One manifest may have only one line per source lot/bin. Reusing a cancelled
+      // line would merge its old reservation movements with the new allocation.
+      if (!transferId || existing?.state === 'CANCELLED') {
         const transfer = await db.pharmacyInterbranchTransfer.create({
           data: {
             organizationId: scope.organizationId,
@@ -553,6 +628,13 @@ async function fillDemand(db: ScopedDb, scope: LedgerScope, orderId: string, key
             allocatedById: scope.actorId,
           },
         });
+        if (transferId) {
+          await carryReservationsToReplacement(db, scope, order.id, transferId, transfer.id);
+          order.reservations = await db.pharmacyWarehouseReservation.findMany({
+            where: { ...branchScope(scope), orderId: order.id },
+          });
+          existing = undefined;
+        }
         transferId = transfer.id;
         await db.pharmacyWarehouseOrder.update({ where: { id: order.id }, data: { transferId } });
       }

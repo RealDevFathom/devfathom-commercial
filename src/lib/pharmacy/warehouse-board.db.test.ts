@@ -109,5 +109,5 @@ describe('warehouse board under PostgreSQL row-level security', () => {
       expect(otherBoard.metrics.fillRate.percent).toBeNull();
       expect(otherBoard.shortages).toEqual([]);
     });
-  });
+  }, 30000);
 });

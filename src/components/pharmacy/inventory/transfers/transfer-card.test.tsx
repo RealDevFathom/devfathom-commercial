@@ -103,4 +103,12 @@ describe('DEV-80 transfer requests and solo approval', () => {
     expect(screen.queryByLabelText('Your PIN')).not.toBeInTheDocument();
     expect(screen.getByText(/Waiting for a colleague to approve/)).toBeInTheDocument();
   });
+  it.each(['OUTBOUND', 'INBOUND'])(
+    'shows a replaced %s manifest as history without stock actions',
+    (direction) => {
+      renderCard({ status: 'SUPERSEDED', direction });
+      expect(screen.getByText('Replaced')).toBeInTheDocument();
+      expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    }
+  );
 });

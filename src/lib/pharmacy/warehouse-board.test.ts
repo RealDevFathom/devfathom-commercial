@@ -30,6 +30,7 @@ const shipment = {
   quantityUnits: 10,
   receivedUnits: 8,
   coldChain: false,
+  minimumStorageTemperatureC: null,
   controlled: false,
 };
 const demand = {
@@ -81,6 +82,22 @@ describe('warehouse supervision', () => {
     expect(board.overdue.map((t) => t.id)).toEqual(['transfer']);
     expect(board.adoptable.map((t) => t.id)).toEqual(['out']);
     expect(board.metrics.openExceptions).toBe(1);
+  });
+
+  it('requires transport evidence for refrigerated lines and for ambient lines with approved storage limits', async () => {
+    const { db } = service([
+      { ...shipment, lineId: 'ambient' },
+      { ...shipment, lineId: 'labelled', minimumStorageTemperatureC: 15 },
+      { ...shipment, lineId: 'refrigerated', coldChain: true },
+    ]);
+    const board = await warehouseBoard(db, scope, now);
+    expect(
+      board.incoming[0].lines.map((line) => [line.id, line.requiresTemperatureEvidence])
+    ).toEqual([
+      ['ambient', false],
+      ['labelled', true],
+      ['refrigerated', true],
+    ]);
   });
 
   it('uses received units for fill rate while keeping older outstanding shortages actionable', async () => {

@@ -145,7 +145,7 @@ export function Outbound({ branchId }: { branchId: string }) {
                 )}
                 {transferId && ready && order.transferStatus === 'APPROVED' && (
                   <>
-                    {live.some((row) => row.coldChain) && (
+                    {live.some((row) => row.requiresTemperatureEvidence) && (
                       <ActionForm
                         label="Record dispatch temperature evidence"
                         success="Dispatch evidence recorded."

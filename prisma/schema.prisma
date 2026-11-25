@@ -1108,6 +1108,8 @@ enum PharmacyTransferStatus {
   PARTIALLY_RECEIVED
   RECEIVED
   EXCEPTION
+  /// A replacement warehouse manifest now owns the live reservations of this draft.
+  SUPERSEDED
 }
 
 enum PharmacyRecallStatus {
@@ -3090,6 +3092,7 @@ model PharmacyInterbranchTransferLine {
   receivedUnits              Int                         @default(0)
   transfer                   PharmacyInterbranchTransfer @relation(fields: [organizationId, transferId], references: [organizationId, id], onDelete: Restrict)
   sourceLot                  PharmacyInventoryLot        @relation("PharmacyTransferSourceLot", fields: [organizationId, sourceBranchId, sourceLotId], references: [organizationId, branchId, id], onDelete: Restrict)
+  warehouseReservation       PharmacyWarehouseReservation?
 
   @@unique([organizationId, transferId, sourceLotId, sourceStockLocationId])
   @@map("pharmacy_interbranch_transfer_lines")
@@ -17862,6 +17865,7 @@ model PharmacyWarehouseReservation {
   quantityUnits          Int
   state                  String                 @default("RESERVED")
   order                  PharmacyWarehouseOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id])
+  transferLine           PharmacyInterbranchTransferLine @relation(fields: [transferLineId], references: [id], onDelete: NoAction, onUpdate: NoAction, map: "pharmacy_warehouse_reservations_transferLineId_fkey")
 
   @@index([organizationId, branchId, transferId])
   @@index([organizationId, inventoryLotId, state])

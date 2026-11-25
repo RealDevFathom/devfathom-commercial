@@ -37,6 +37,7 @@ export function transferStatusLabel(transfer: Pick<TransferBoardRow, 'status' | 
   return (
     {
       DRAFT: 'Draft',
+      SUPERSEDED: 'Replaced',
       ALLOCATED: 'Awaiting approval',
       APPROVED: 'Ready to dispatch',
       DISPATCHED: 'In transit',

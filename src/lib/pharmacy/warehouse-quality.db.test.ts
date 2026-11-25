@@ -145,6 +145,79 @@ describe('warehouse temperature, custody and recall on PostgreSQL', () => {
     });
   }
 
+  it('exposes the approved ambient transport requirement on outbound reservations and destination arrivals', async () => {
+    const { listWarehouseOutbound } = await import('./warehouse-outbound');
+    const { warehouseBoard } = await import('./warehouse-board');
+    const f = await fixture();
+    await run(async (db) => {
+      await db.medicine.update({
+        where: { id: f.medicine.id },
+        data: {
+          coldChain: false,
+          minimumStorageTemperatureC: 15,
+          maximumStorageTemperatureC: 25,
+        },
+      });
+      const transfer = await db.pharmacyInterbranchTransfer.create({
+        data: {
+          organizationId,
+          fromBranchId: site,
+          toBranchId: branch,
+          allocatedById: actorId,
+          status: 'DISPATCHED',
+          dispatchedById: actorId,
+          dispatchedAt: new Date(),
+          lines: {
+            create: {
+              sourceBranchId: site,
+              sourceLotId: f.lot.id,
+              sourceStockLocationId: f.source.id,
+              destinationStockLocationId: f.destination.id,
+              quantityUnits: 10,
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      const order = await db.pharmacyWarehouseOrder.create({
+        data: {
+          organizationId,
+          branchId: site,
+          toBranchId: branch,
+          transferId: transfer.id,
+          createdById: actorId,
+          demands: {
+            create: {
+              medicineId: f.medicine.id,
+              destinationStockLocationId: f.destination.id,
+              requestedUnits: 10,
+            },
+          },
+        },
+        include: { demands: true },
+      });
+      await db.pharmacyWarehouseReservation.create({
+        data: {
+          organizationId,
+          branchId: site,
+          orderId: order.id,
+          demandId: order.demands[0]!.id,
+          transferId: transfer.id,
+          transferLineId: transfer.lines[0]!.id,
+          inventoryLotId: f.lot.id,
+          sourceStockLocationId: f.source.id,
+          quantityUnits: 10,
+          state: 'DISPATCHED',
+        },
+      });
+      const outbound = await listWarehouseOutbound(db, from);
+      const arrivals = await warehouseBoard(db, to);
+      const expected = { coldChain: false, requiresTemperatureEvidence: true };
+      expect(outbound.find((o) => o.id === order.id)?.reservations[0]).toMatchObject(expected);
+      expect(arrivals.incoming.find((t) => t.id === transfer.id)?.lines[0]).toMatchObject(expected);
+    });
+  });
+
   it('keeps a storage exposure held after normal readings return, until reviewer release', async () => {
     const f = await fixture();
     await run((db) =>

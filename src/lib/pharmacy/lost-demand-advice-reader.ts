@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { outstandingTransferLine } from './transfer-manifest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { blockReasonFor } from './inventory';
 import { loadStockCandidatesForRead } from './stock-ledger';
@@ -138,6 +139,7 @@ async function pendingTransfers(
 ) {
   const lines = await db.pharmacyInterbranchTransferLine.findMany({
     where: {
+      ...outstandingTransferLine,
       organizationId: scope.organizationId,
       sourceLot: { batch: { medicineId } },
       transfer: {
@@ -147,6 +149,7 @@ async function pendingTransfers(
     },
     take: MAX_PENDING_TRANSFER_LINES + 1,
     select: {
+      warehouseReservation: { select: { id: true } },
       quantityUnits: true,
       receivedUnits: true,
       transfer: { select: { fromBranchId: true, toBranchId: true, status: true } },
@@ -161,7 +164,12 @@ async function pendingTransfers(
   for (const line of lines) {
     if (line.transfer.toBranchId === scope.branchId)
       inboundUnits += Math.max(0, line.quantityUnits - line.receivedUnits);
-    if (line.transfer.fromBranchId !== scope.branchId && undispatched.has(line.transfer.status))
+    // Warehouse reservations already moved these units out of AVAILABLE on the stock ledger.
+    if (
+      !line.warehouseReservation &&
+      line.transfer.fromBranchId !== scope.branchId &&
+      undispatched.has(line.transfer.status)
+    )
       committedByDonor.set(
         line.transfer.fromBranchId,
         (committedByDonor.get(line.transfer.fromBranchId) ?? 0) + line.quantityUnits

@@ -20,7 +20,12 @@ function inTenant<T>(operation: (db: ScopedDb) => Promise<T>) {
   return tenancy.withTenantDb(organizationId, operation);
 }
 
-async function stockFixture(label: string, productCode: string, eligibleUnits: number) {
+async function stockFixture(
+  label: string,
+  productCode: string,
+  eligibleUnits: number,
+  stockReceivingBranch = false
+) {
   const { receiveLot } = await import('./stock-ledger');
   return inTenant(async (db) => {
     const bins = await Promise.all(
@@ -71,7 +76,7 @@ async function stockFixture(label: string, productCode: string, eligibleUnits: n
         normalizedCode: productCode,
       },
     });
-    async function stock(days: number) {
+    async function stock(days: number, bin = source) {
       const expiresAt = new Date(Date.now() + days * 86_400_000);
       const batch = await db.pharmacyManufacturingBatch.create({
         data: {
@@ -82,23 +87,28 @@ async function stockFixture(label: string, productCode: string, eligibleUnits: n
           expiryPrecision: 'DAY',
         },
       });
-      const { lot } = await receiveLot(db, scope, {
-        manufacturingBatchId: batch.id,
-        packLevelId: pack.id,
-        stockLocationId: source.id,
-        unitsPerPack: 10,
-        supplierName: 'Pilot supplier',
-        supplierInvoiceRef: 'INV-' + label + days,
-        unitCostMinor: 150,
-        printedMrpMinor: 200,
-        receivedExpiresAt: expiresAt,
-        receivedExpiryPrecision: 'DAY',
-        quantityUnits: days === 15 ? 10 : eligibleUnits,
-        idempotencyKey: 'stock-' + label + days,
-        receivedAt: new Date(),
-      });
+      const { lot } = await receiveLot(
+        db,
+        { ...scope, branchId: bin.branchId },
+        {
+          manufacturingBatchId: batch.id,
+          packLevelId: pack.id,
+          stockLocationId: bin.id,
+          unitsPerPack: 10,
+          supplierName: 'Pilot supplier',
+          supplierInvoiceRef: 'INV-' + label + days,
+          unitCostMinor: 150,
+          printedMrpMinor: 200,
+          receivedExpiresAt: expiresAt,
+          receivedExpiryPrecision: 'DAY',
+          quantityUnits: days === 15 ? 10 : eligibleUnits,
+          idempotencyKey: 'stock-' + label + days,
+          receivedAt: new Date(),
+        }
+      );
       return lot.id;
     }
+    if (stockReceivingBranch) await stock(45, bins[1]!);
     const shortDatedLotId = await stock(15);
     const eligibleLotId = await stock(365);
     return {
@@ -222,9 +232,299 @@ describe('warehouse branch replenishment pilot under PostgreSQL RLS', () => {
     expect(balance).toMatchObject({ onHandUnits: 30, sealedPacks: 2, looseUnits: 10 });
   });
 
+  it.each(['dispatch', 'cancel'] as const)(
+    'replenishes the released lot in its original bin before %s without reusing its cancelled line',
+    async (outcome) => {
+      const key = 'release-refill-' + outcome;
+      const affected = await stockFixture(
+        key + '-held',
+        outcome === 'dispatch' ? '25000050' : '25000052',
+        7
+      );
+      const sibling = await stockFixture(
+        key + '-sibling',
+        outcome === 'dispatch' ? '25000051' : '25000053',
+        13
+      );
+      const {
+        createWarehouseOutbound,
+        replenishWarehouseOutbound,
+        pickWarehouseLine,
+        packWarehouseLine,
+        cancelWarehouseOutbound,
+        adoptWarehouseTransfer,
+      } = await import('./warehouse-outbound');
+      const { approveTransfer, dispatchTransfer, receiveTransferLine, setManufacturingBatchState } =
+        await import('./inventory-operations');
+      const { listWarehouseQuality, reviewWarehouseQuality } = await import('./warehouse-quality');
+      const order = await inTenant((db) =>
+        createWarehouseOutbound(db, scope, {
+          toBranchId: affected.destinations[0]!.branchId,
+          idempotencyKey: key + ':create',
+          lines: [affected, sibling].map((f) => ({
+            medicineId: f.medicineId,
+            destinationStockLocationId: f.destinations[0]!.id,
+            requestedUnits: f === affected ? 7 : 13,
+          })),
+        })
+      );
+      type Reservation = (typeof order.reservations)[number];
+      async function pack(r: Reservation, f: typeof affected) {
+        const scans = {
+          reservationId: r.id,
+          quantityUnits: r.quantityUnits,
+          productScan: f.medicineId,
+          lotScan: r.lotCode!,
+          stagingBinScan: f.staging.code,
+        };
+        await inTenant((db) =>
+          pickWarehouseLine(db, scope, {
+            ...scans,
+            sourceBinScan: f.source.code,
+            idempotencyKey: key + ':pick:' + r.id,
+          })
+        );
+        await inTenant((db) =>
+          packWarehouseLine(db, scope, { ...scans, idempotencyKey: key + ':pack:' + r.id })
+        );
+      }
+      const original = order.reservations.find((r) => r.inventoryLotId === affected.eligibleLotId)!;
+      const packedSibling = order.reservations.find(
+        (r) => r.inventoryLotId === sibling.eligibleLotId
+      )!;
+      const priorTransferId = order.transferId!;
+      await pack(original, affected);
+      await pack(packedSibling, sibling);
+      const approver = { ...scope, actorId: 'reviewer' };
+      await inTenant((db) => approveTransfer(db, approver, priorTransferId));
+      const batch = await inTenant((db) =>
+        db.pharmacyInventoryLot.findUniqueOrThrow({
+          where: { id: affected.eligibleLotId },
+          select: { manufacturingBatchId: true },
+        })
+      );
+      for (const state of ['QUARANTINED', 'ACTIVE'] as const) {
+        await inTenant((db) =>
+          setManufacturingBatchState(
+            db,
+            organizationId,
+            {
+              manufacturingBatchId: batch.manufacturingBatchId,
+              state,
+              reason: 'Quality assessment',
+            },
+            scope.actorId
+          )
+        );
+      }
+      const incident = (await inTenant((db) => listWarehouseQuality(db, scope))).find(
+        (row) => row.inventoryLotId === affected.eligibleLotId
+      )!;
+      await inTenant((db) =>
+        reviewWarehouseQuality(db, scope, {
+          incidentId: incident.id,
+          decision: 'RELEASE',
+          reason: 'Product cleared',
+          evidenceRef: 'Release record',
+          destinationBinCode: affected.source.code,
+        })
+      );
+      const siblingMoves = () =>
+        inTenant((db) =>
+          db.pharmacyStockMovement.count({
+            where: { organizationId, inventoryLotId: sibling.eligibleLotId },
+          })
+        );
+      const beforeMoves = await siblingMoves();
+      const refill = (operationKey: string) =>
+        inTenant((db) =>
+          replenishWarehouseOutbound(db, scope, {
+            orderId: order.id,
+            idempotencyKey: key + operationKey,
+          })
+        );
+      const [replacement, replay] = await Promise.all([refill(':refill'), refill(':refill')]);
+      const replacementId = replacement.transferId!;
+      expect(replacementId).not.toBe(priorTransferId);
+      expect(replay.transferId).toBe(replacementId);
+      expect((await refill(':refresh')).transferId).toBe(replacementId);
+      expect(replacement.demands.map((d) => d.shortfallUnits)).toEqual([0, 0]);
+      expect(replacement.reservations).toHaveLength(3);
+      const repicked = replacement.reservations.find(
+        (r) => r.inventoryLotId === affected.eligibleLotId && r.state === 'RESERVED'
+      )!;
+      expect(repicked).toMatchObject({
+        quantityUnits: 7,
+        sourceStockLocationId: affected.source.id,
+        transferId: replacementId,
+      });
+      expect(repicked.id).not.toBe(original.id);
+      expect(repicked.transferLineId).not.toBe(original.transferLineId);
+      const carried = replacement.reservations.find((r) => r.id === packedSibling.id)!;
+      expect(carried).toMatchObject({
+        transferId: replacementId,
+        state: 'PACKED',
+        quantityUnits: 13,
+        stagingStockLocationId: sibling.staging.id,
+      });
+      expect(carried.transferLineId).not.toBe(packedSibling.transferLineId);
+      expect(replacement.reservations.find((r) => r.id === original.id)).toMatchObject({
+        state: 'CANCELLED',
+        transferId: priorTransferId,
+        transferLineId: original.transferLineId,
+      });
+      expect(await siblingMoves()).toBe(beforeMoves);
+      expect(
+        (
+          await inTenant((db) =>
+            db.pharmacyInterbranchTransfer.findUniqueOrThrow({ where: { id: priorTransferId } })
+          )
+        ).status
+      ).toBe('SUPERSEDED');
+      const originalLines = await inTenant((db) =>
+        db.pharmacyInterbranchTransferLine.findMany({
+          where: { organizationId, transferId: priorTransferId },
+          select: { id: true, receivedUnits: true },
+        })
+      );
+      expect(originalLines).toEqual(
+        expect.arrayContaining(
+          [original, packedSibling].map((r) => ({ id: r.transferLineId, receivedUnits: 0 }))
+        )
+      );
+      const audit = await inTenant((db) =>
+        db.pharmacyWarehouseCommand.findFirstOrThrow({
+          where: { organizationId, orderId: order.id, kind: 'REPLACE_TRANSFER' },
+        })
+      );
+      expect(audit.payload).toEqual({
+        priorTransferId,
+        replacementTransferId: replacementId,
+        carried: [
+          {
+            reservationId: packedSibling.id,
+            priorLineId: packedSibling.transferLineId,
+            replacementLineId: carried.transferLineId,
+          },
+        ],
+      });
+      await expect(
+        inTenant((db) => approveTransfer(db, approver, priorTransferId))
+      ).rejects.toThrow();
+      await expect(
+        inTenant((db) =>
+          adoptWarehouseTransfer(db, scope, {
+            transferId: priorTransferId,
+            idempotencyKey: key + ':readopt',
+          })
+        )
+      ).rejects.toThrow();
+      await expect(
+        inTenant((db) => dispatchTransfer(db, scope, priorTransferId, key + ':old-dispatch'))
+      ).rejects.toThrow();
+      if (outcome === 'cancel') {
+        const cancel = () =>
+          inTenant((db) =>
+            cancelWarehouseOutbound(db, scope, {
+              orderId: order.id,
+              idempotencyKey: key + ':cancel',
+              reason: 'Branch no longer needs stock',
+            })
+          );
+        await cancel();
+        await cancel();
+        const balances = await inTenant((db) =>
+          db.pharmacyStockBalance.findMany({
+            where: {
+              organizationId,
+              inventoryLotId: { in: [affected.eligibleLotId, sibling.eligibleLotId] },
+              onHandUnits: { gt: 0 },
+            },
+            select: {
+              inventoryLotId: true,
+              stockLocationId: true,
+              disposition: true,
+              onHandUnits: true,
+            },
+          })
+        );
+        expect(balances).toHaveLength(2);
+        expect(balances).toEqual(
+          expect.arrayContaining([
+            {
+              inventoryLotId: affected.eligibleLotId,
+              stockLocationId: affected.source.id,
+              disposition: 'AVAILABLE',
+              onHandUnits: 7,
+            },
+            {
+              inventoryLotId: sibling.eligibleLotId,
+              stockLocationId: sibling.staging.id,
+              disposition: 'QUARANTINE',
+              onHandUnits: 13,
+            },
+          ])
+        );
+        return;
+      }
+      await pack(repicked, affected);
+      await expect(
+        inTenant((db) => dispatchTransfer(db, scope, replacementId, key + ':unapproved'))
+      ).rejects.toThrow();
+      await inTenant((db) => approveTransfer(db, approver, replacementId));
+      for (let n = 0; n < 2; n++)
+        await inTenant((db) => dispatchTransfer(db, scope, replacementId, key + ':ship'));
+      for (const [r, f] of [
+        [repicked, affected],
+        [carried, sibling],
+      ] as const) {
+        const destination = f.destinations[0]!;
+        const receipt = {
+          transferId: replacementId,
+          lineId: r.transferLineId,
+          receivedUnits: r.quantityUnits,
+          lotScan: r.lotCode!,
+          productScan: f.medicineId,
+          binScan: destination.code,
+          idempotencyKeyPrefix: key + ':receipt:' + r.id,
+        };
+        for (let n = 0; n < 2; n++)
+          await inTenant((db) =>
+            receiveTransferLine(db, { ...scope, branchId: destination.branchId }, receipt)
+          );
+        const remaining = await inTenant((db) =>
+          db.pharmacyStockBalance.findMany({
+            where: { organizationId, inventoryLotId: r.inventoryLotId, onHandUnits: { gt: 0 } },
+          })
+        );
+        expect(remaining).toHaveLength(0);
+        const received = await inTenant((db) =>
+          db.pharmacyStockBalance.aggregate({
+            where: {
+              organizationId,
+              branchId: destination.branchId,
+              stockLocationId: destination.id,
+              disposition: 'AVAILABLE',
+            },
+            _sum: { onHandUnits: true },
+          })
+        );
+        expect(received._sum.onHandUnits).toBe(r.quantityUnits);
+      }
+      expect(
+        (
+          await inTenant((db) =>
+            db.pharmacyInterbranchTransfer.findUniqueOrThrow({ where: { id: replacementId } })
+          )
+        ).status
+      ).toBe('RECEIVED');
+    },
+    30000
+  );
+
   it('withdraws only an affected packed line and requires fresh approval to ship its unaffected sibling', async () => {
-    const affected = await stockFixture('mixed-held', '25000020', 10);
-    const healthy = await stockFixture('mixed-good', '25000021', 10);
+    const affected = await stockFixture('mixed-held', '25000020', 10, true);
+    const healthy = await stockFixture('mixed-good', '25000021', 10, true);
     const { createWarehouseOutbound, pickWarehouseLine, packWarehouseLine } =
       await import('./warehouse-outbound');
     const { approveTransfer, dispatchTransfer, setManufacturingBatchState } =
@@ -283,6 +583,97 @@ describe('warehouse branch replenishment pilot under PostgreSQL RLS', () => {
       inTenant((db) => dispatchTransfer(db, scope, order.transferId!, 'stale-multi'))
     ).rejects.toThrow();
     await approve();
+    // The recipient also expects seven units on an ordinary transfer for the withdrawn SKU.
+    // Its legacy line has no warehouse reservation; all three supply readers must retain it.
+    const receiving = { ...scope, branchId: destination.branchId, actorId: randomUUID() };
+    await inTenant(async (db) => {
+      await db.organizationDepartment.createMany({
+        data: [{ organizationId, key: 'PHARMACY', name: 'Pharmacy' }],
+        skipDuplicates: true,
+      });
+      await db.user.create({
+        data: {
+          id: receiving.actorId,
+          organizationId,
+          email: receiving.actorId + '@example.invalid',
+          name: 'Buyer',
+          department: 'PHARMACY',
+          title: 'Buyer',
+          status: 'ACTIVE',
+        },
+      });
+      await db.pharmacyBranchAssignment.createMany({
+        data: [scope.branchId, receiving.branchId].map((branchId) => ({
+          organizationId,
+          branchId,
+          userId: receiving.actorId,
+          active: true,
+        })),
+      });
+      const ordinary = await db.pharmacyInterbranchTransfer.create({
+        data: {
+          organizationId,
+          fromBranchId: scope.branchId,
+          toBranchId: receiving.branchId,
+          status: 'APPROVED',
+          allocatedById: scope.actorId,
+        },
+      });
+      await db.pharmacyInterbranchTransferLine.create({
+        data: {
+          organizationId,
+          transferId: ordinary.id,
+          sourceBranchId: scope.branchId,
+          sourceLotId: affected.shortDatedLotId,
+          sourceStockLocationId: affected.source.id,
+          destinationStockLocationId: affected.destinations[0]!.id,
+          quantityUnits: 7,
+        },
+      });
+      const { DEFAULT_LOST_DEMAND_TRIGGERS } = await import('./lost-demand-advice');
+      const demand = [affected, healthy].flatMap((f) =>
+        Array.from({ length: DEFAULT_LOST_DEMAND_TRIGGERS.requestCountThreshold }, () => ({
+          organizationId,
+          branchId: receiving.branchId,
+          requestedMedicineId: f.medicineId,
+          saleUnit: 'UNIT' as const,
+          quantity: 30,
+          reason: 'STOCKOUT' as const,
+          inventoryRuleSnapshot: {},
+          capturedByUserId: scope.actorId,
+        }))
+      );
+      await db.unfulfilledDemandEvent.createMany({ data: demand });
+    });
+    const { loadForecastingInputs } = await import('./forecasting-inputs');
+    const { readLostDemandAdvice } = await import('./lost-demand-advice-reader');
+    const { loadSignalFacts } = await import('./stock-signals-operations');
+    await inTenant(async (db) => {
+      const { advice } = await readLostDemandAdvice(db, receiving);
+      const { inbound } = await loadSignalFacts(db, receiving, new Date());
+      for (const [medicineId, expectedUnits] of [
+        [affected.medicineId, 7],
+        [healthy.medicineId, 10],
+      ] as const) {
+        const recommendation = advice.find((row) => row.medicineId === medicineId);
+        expect(recommendation?.onOrderUnits).toBe(expectedUnits);
+        // The donor has 10 free short-dated units per SKU. Only the seven units
+        // promised on the ordinary transfer still need deducting from that balance.
+        expect(recommendation?.transfer).toMatchObject({
+          fromBranchId: scope.branchId,
+          surplusUnits: medicineId === affected.medicineId ? 3 : 10,
+        });
+        expect(
+          inbound.filter((f) => f.medicineId === medicineId).reduce((n, f) => n + f.units, 0)
+        ).toBe(expectedUnits);
+        const forecast = await loadForecastingInputs(db, {
+          organizationId,
+          branchId: receiving.branchId,
+          medicineId,
+        });
+        expect(forecast.inbound.reduce((n, f) => n + f.lot.availableUnits, 0)).toBe(expectedUnits);
+      }
+    });
     await inTenant((db) => dispatchTransfer(db, scope, order.transferId!, 'ship-multi'));
     const balances = await inTenant((db) =>
       db.pharmacyStockBalance.findMany({

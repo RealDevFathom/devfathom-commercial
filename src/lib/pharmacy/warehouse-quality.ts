@@ -36,8 +36,11 @@ const conditions = {
   minimumStorageTemperatureC: true,
   maximumStorageTemperatureC: true,
 } as const;
-const monitored = (medicine: MedicineConditions) =>
-  medicine.coldChain || medicine.minimumStorageTemperatureC !== null;
+export function requiresWarehouseTemperatureEvidence(
+  medicine: Pick<MedicineConditions, 'coldChain' | 'minimumStorageTemperatureC'>
+) {
+  return medicine.coldChain || medicine.minimumStorageTemperatureC != null;
+}
 
 function warehouseExpiryBlocked(
   batch: { expiresAt: Date | null; medicine: { productFamily: string } },
@@ -70,7 +73,7 @@ export function warehouseTransportReason(
   medicine: MedicineConditions,
   evidence?: Pick<TransportEvidence, 'minimumC' | 'maximumC'> | null
 ) {
-  if (!monitored(medicine)) return null;
+  if (!requiresWarehouseTemperatureEvidence(medicine)) return null;
   if (medicine.minimumStorageTemperatureC == null || medicine.maximumStorageTemperatureC == null)
     return 'Product label temperature range is missing.';
   if (evidence?.minimumC == null || evidence.maximumC == null)
@@ -88,7 +91,7 @@ export function warehouseZoneReason(
   at = new Date()
 ) {
   if (!zone.active) return 'The stock location is inactive.';
-  if (!monitored(medicine)) return null;
+  if (!requiresWarehouseTemperatureEvidence(medicine)) return null;
   if (
     (medicine.coldChain && !zone.coldChain) ||
     zone.minimumTemperatureC == null ||
@@ -123,7 +126,7 @@ async function zoneReason(
     where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!zone) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
-  const reading = monitored(medicine)
+  const reading = requiresWarehouseTemperatureEvidence(medicine)
     ? await db.pharmacyTemperatureLog.findFirst({
         where: {
           organizationId: scope.organizationId,
@@ -1123,7 +1126,7 @@ export async function holdWarehouseZoneExposure(
   });
   for (const b of balances) {
     const medicine = b.lot.batch.medicine;
-    if (!monitored(medicine)) continue;
+    if (!requiresWarehouseTemperatureEvidence(medicine)) continue;
     // A backfilled reading before this lot entered the zone is not an exposure.
     const firstEntry = await db.pharmacyStockMovement.findFirst({
       where: {
