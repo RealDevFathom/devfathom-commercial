@@ -14,6 +14,7 @@ import {
   receiveInput,
 } from '@/components/pharmacy/inventory/transfers/transfer-form-data';
 import {
+  isDispatchHeld,
   RECEIVABLE_STATUSES,
   transferErrorMessage,
   transferVarianceUnits,
@@ -241,7 +242,7 @@ export default async function PharmacyTransfersPage({
           transferId,
           idempotencyKeyPrefix: `ui-dispatch:${transferId}`,
         });
-        if (result?.status === 'APPROVED')
+        if (result && isDispatchHeld(result))
           return url(
             branchId,
             'Dispatch held. Open Warehouse → Quality to review temperature evidence.',

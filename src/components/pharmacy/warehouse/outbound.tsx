@@ -4,6 +4,7 @@ import { trpc } from '@/lib/trpc';
 import { SectionCard } from '@/components/ui/section-card';
 import { PackingSlipPrintButton } from '@/components/pharmacy/inventory/transfers/packing-slip-print-button';
 import {
+  isDispatchHeld,
   packingSlipFor,
   SLIP_STATUSES,
   transferReference,
@@ -182,8 +183,8 @@ export function Outbound({ branchId }: { branchId: string }) {
                     )}
                     <ActionForm
                       label="Confirm dispatch"
-                      success={(result) =>
-                        result.status === 'APPROVED'
+                      success={(result: { status: string }) =>
+                        isDispatchHeld(result)
                           ? 'Dispatch held. Review temperature evidence in Quality before retrying.'
                           : 'Dispatch confirmed.'
                       }

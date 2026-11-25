@@ -133,3 +133,10 @@ export function transferErrorMessage(action: TransferAction, error: unknown): st
       return reason || 'The transfer action could not be completed.';
   }
 }
+
+/** A quality hold may also withdraw the pick and reset approval. */
+export function isDispatchHeld(transfer: { status: string }) {
+  return (
+    transfer.status === 'APPROVED' || transfer.status === 'ALLOCATED' || transfer.status === 'DRAFT'
+  );
+}

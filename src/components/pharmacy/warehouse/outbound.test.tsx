@@ -56,6 +56,7 @@ afterEach(() => {
 });
 
 it.each([
+  ['ALLOCATED', 'Dispatch held. Review temperature evidence in Quality before retrying.'],
   ['APPROVED', 'Dispatch held. Review temperature evidence in Quality before retrying.'],
   ['DISPATCHED', 'Dispatch confirmed.'],
 ])('reports the actual server state after dispatch (%s)', async (status, message) => {
