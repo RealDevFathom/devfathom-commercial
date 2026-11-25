@@ -40,3 +40,9 @@ export async function readBoundedBody(
   });
   return complete ? Buffer.concat(chunks) : null;
 }
+
+export async function readBoundedJson(request: Request, limit: number) {
+  const raw = await readBoundedBody(request, limit);
+  if (raw === null) return { tooLarge: true } as const;
+  return { tooLarge: false, value: JSON.parse(new TextDecoder().decode(raw)) as unknown } as const;
+}

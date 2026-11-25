@@ -4513,7 +4513,15 @@ function ScopedPharmacyCounterConsole({
             className="shrink-0 border-b border-border-subtle bg-surface-raised px-4 py-3 text-sm lg:px-6"
             data-counter-offline-waiting-online=""
           >
-            <OfflineQueue queued={offlineMode.queued} />
+            {offlineMode.message ? (
+              <p role="status" className="text-sm text-text-body">
+                {offlineMode.message}
+              </p>
+            ) : null}
+            <OfflineQueue
+              queued={offlineMode.queued}
+              resolveConflict={offlineMode.actions?.resolveConflict}
+            />
           </div>
         ) : null
       ) : (

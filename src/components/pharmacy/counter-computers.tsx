@@ -26,6 +26,7 @@ import {
 } from '@/lib/pharmacy/counter-offline-session';
 import {
   bindCounterBrowser,
+  establishCounterSession,
   counterSetupMessage,
   unbindCounterBrowser,
 } from '@/lib/pharmacy/counter-offline-transport';
@@ -565,7 +566,12 @@ function BranchCounters({
       return;
     }
     try {
-      const result = await rotate.mutateAsync({ branchId, deviceId: row.id });
+      const session = await establishCounterSession();
+      const result = await rotate.mutateAsync({
+        branchId,
+        deviceId: row.id,
+        sessionToken: session.sessionToken,
+      });
       try {
         await adoptSecretOnThisComputer(result.secret, thisComputer);
         setNotice({

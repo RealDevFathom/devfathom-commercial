@@ -1,5 +1,6 @@
 import { hasModule } from '@/lib/entitlements';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import {
   OWNER_DATA_EXPORT_DOWNLOAD_LIMIT,
   OWNER_DATA_EXPORT_DOWNLOAD_WINDOW_MS,
@@ -182,7 +183,9 @@ export async function POST(request: Request) {
   if (!isSameOrigin(request)) return json(403, { error: 'Forbidden' });
   let body: Record<string, unknown>;
   try {
-    const parsed: unknown = await request.json();
+    const input = await readBoundedJson(request, 4 * 1024);
+    if (input.tooLarge) return json(413, { error: 'Request body is too large.' });
+    const parsed = input.value;
     body = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
   } catch {
     body = {};

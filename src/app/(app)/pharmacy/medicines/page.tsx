@@ -20,7 +20,7 @@ export default async function MedicineReferencePage({
   const ctx = await createTRPCContext();
   const sessionUser = ctx.session?.user;
   // DEV-19: a pharmacist who holds the catalogue review permission but is not a
-  // workspace administrator reaches the approval queue only. The server checks
+  // workspace administrator reviews proposals in the queue. The server checks
   // every read and decision again.
   if (
     sessionUser &&
@@ -38,7 +38,7 @@ export default async function MedicineReferencePage({
           heading="Catalogue review"
           description="Approve or reject catalogue edits submitted for review."
         />
-        <CatalogueApprovalQueue />
+        <CatalogueApprovalQueue reviewerView />
       </div>
     );
   }
@@ -52,8 +52,10 @@ export default async function MedicineReferencePage({
         />
         <SectionCard title="Catalog administration permission required" titleLevel={2}>
           <p className="text-sm text-text-muted">
-            A workspace administrator must upload source files, inspect provenance, and publish
-            reference assertions. No connector data has been exposed or changed.
+            Your role cannot review proposed medicines. Ask a pharmacist with catalogue review
+            permission to review this import. A workspace administrator must upload source files,
+            inspect provenance, and publish reference assertions. No connector data has been exposed
+            or changed.
           </p>
         </SectionCard>
       </div>

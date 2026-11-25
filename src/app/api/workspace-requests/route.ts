@@ -1,5 +1,6 @@
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { rateLimit } from '@/lib/rate-limit';
 import { ipFromHeaders } from '@/server/audit';
 import { workspaceRequestSchema } from '@/app/login/register/request-schema';
@@ -31,25 +32,10 @@ export async function POST(request: Request) {
         { error: 'Too many requests. Please try again later.' },
         { status: 429, headers: { 'Retry-After': String(gate.retryAfter) } }
       );
-    // Bound actual streamed bytes, including requests without Content-Length.
-    const reader = request.body?.getReader();
-    if (!reader) return Response.json({ error: 'The form is empty.' }, { status: 400 });
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > MAX_BODY) {
-        await reader.cancel();
-        return Response.json(
-          { error: 'Use a licence document smaller than 1 MB.' },
-          { status: 413 }
-        );
-      }
-      chunks.push(value);
-    }
-    const bytes = Buffer.concat(chunks);
+    if (!request.body) return Response.json({ error: 'The form is empty.' }, { status: 400 });
+    const bytes = await readBoundedBody(request, MAX_BODY);
+    if (bytes === null)
+      return Response.json({ error: 'Use a licence document smaller than 1 MB.' }, { status: 413 });
     let form: FormData;
     try {
       form = await new Request(request.url, {

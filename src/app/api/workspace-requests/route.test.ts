@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 const mocks = vi.hoisted(() => ({ create: vi.fn(), gate: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: (run: (db: unknown) => unknown) =>
@@ -102,15 +103,17 @@ it('requires a real supported document and persists its bytes privately', async 
   expect(document).toMatchObject({ name: 'licence.pdf', type: 'application/pdf', checked: true });
 });
 it('bounds actual request bytes, including requests without a content length', async () => {
-  const req = new Request('https://app.example.test/api/workspace-requests', {
-    method: 'POST',
+  const limit = 1024 * 1024 + 64 * 1024;
+  const input = oversizedRequest(limit, {
+    url: 'https://app.example.test/api/workspace-requests',
     headers: {
       origin: 'https://app.example.test',
       'content-type': 'multipart/form-data; boundary=abc',
     },
-    body: 'x'.repeat(1200000),
   });
-  expect((await POST(req)).status).toBe(413);
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 16_384);
   expect(mocks.create).not.toHaveBeenCalled();
 });
 

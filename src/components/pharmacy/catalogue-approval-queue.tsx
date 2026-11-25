@@ -2,6 +2,7 @@
 
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 
+import { ReviewerApprovedImport, ProposedImport } from './proposed-import';
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -112,7 +113,8 @@ export function askReviewers(names: readonly string[]): string {
   return `Ask ${list} to approve this.`;
 }
 
-export function CatalogueApprovalQueue() {
+export function CatalogueApprovalQueue({ reviewerView = false }: { reviewerView?: boolean } = {}) {
+  const [reviewId, setReviewId] = useState<string | null>(null);
   const [pin, setPin] = useState('');
   const [query, setQuery] = useState('');
   const [medicineId, setMedicineId] = useState('');
@@ -154,9 +156,15 @@ export function CatalogueApprovalQueue() {
     ? ownApproval.ownEditReason
     : ownApproval.ownerFallbackReason;
   const decide = trpc.pharmacyMedicine.decideCatalogueEdit.useMutation({
-    onSuccess: async (result) => {
+    onMutate: ({ editId }) => queue.data?.find((edit) => edit.id === editId)?.operation,
+    onSuccess: async (result, _input, operation) => {
       setPin('');
       setDecisionNotice(decisionMessage(result));
+      if (reviewerView && result?.status === 'APPROVED' && operation === 'createStagedMedicines') {
+        const url = new URL(window.location.href);
+        url.searchParams.set('approvedImport', result.id);
+        window.history.replaceState(null, '', url);
+      }
       await utils.pharmacyMedicine.catalogueEdits.invalidate();
     },
     onError: () => {
@@ -297,6 +305,7 @@ export function CatalogueApprovalQueue() {
       {!queue.isPending && !queue.error && queue.data?.length === 0 ? (
         <p className="text-sm text-text-muted">No catalogue edits are awaiting review.</p>
       ) : null}
+      {reviewerView && <ReviewerApprovedImport />}
       <div className="space-y-4">
         {queue.data?.map((edit) => {
           const mode = approvalMode(edit.ownEdit);
@@ -343,6 +352,22 @@ export function CatalogueApprovalQueue() {
                     </div>
                   ))}
               </dl>
+              {edit.operation === 'createStagedMedicines' && canDecide && !ownerPinApproval && (
+                <div className="mb-4 space-y-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="touch"
+                    aria-expanded={reviewId === edit.id}
+                    onClick={() => setReviewId(reviewId === edit.id ? null : edit.id)}
+                  >
+                    {reviewId === edit.id
+                      ? 'Close proposed medicines'
+                      : 'Review proposed medicines'}
+                  </Button>
+                  {reviewId === edit.id && <ProposedImport editId={edit.id} />}
+                </div>
+              )}
               {canDecide && mode === 'OTHER_REVIEWER' ? (
                 <p role="note" className="mb-4 text-sm">
                   You submitted this edit, so another reviewer must approve it.{' '}

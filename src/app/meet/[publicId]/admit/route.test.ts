@@ -7,6 +7,7 @@
  * happen before any admission work is attempted (MEET-004 step 1).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../../tests/fixtures/bounded-request';
 
 const mocks = vi.hoisted(() => ({
   admitToMeeting: vi.fn(),
@@ -54,6 +55,27 @@ describe('POST /meet/[publicId]/admit', () => {
     mocks.admitAnonymousRequest.mockReturnValue({ ok: true });
     mocks.resolveTenantActor.mockResolvedValue(null);
     mocks.admitToMeeting.mockResolvedValue({ status: 'refused' });
+  });
+
+  it('cancels an oversized body before the throttle or admission sees it', async () => {
+    const limit = 2 * 1024;
+    const normalRequest = post({});
+    const input = oversizedRequest(limit, {
+      url: normalRequest.url,
+      headers: normalRequest.headers,
+      chunkSize: 1024,
+    });
+
+    const response = await POST(input.request, { params });
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: 'This meeting is unavailable or the access code is invalid.',
+    });
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 1024);
+    expect(mocks.admitAnonymousRequest).not.toHaveBeenCalled();
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(mocks.admitToMeeting).not.toHaveBeenCalled();
   });
 
   it('returns the admission for an accepted access code', async () => {

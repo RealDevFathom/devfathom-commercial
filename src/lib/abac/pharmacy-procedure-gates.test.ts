@@ -22,6 +22,11 @@ type RouterLike = { _def: { procedures: Record<string, unknown> } };
 /** Pharmacy routers called from server actions rather than mounted on the app router. */
 const STANDALONE_ROUTERS = [
   [
+    'pharmacyStagedReview',
+    () => import('@/server/routers/pharmacy-staged-review'),
+    'pharmacyStagedReviewRouter',
+  ],
+  [
     'pharmacyJournalEntryLookup',
     () => import('@/lib/pharmacy/accounts/journal-entry-lookup'),
     'journalEntryLookupRouter',

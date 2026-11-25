@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../../tests/fixtures/bounded-request';
 
 const m = vi.hoisted(() => ({
   actor: vi.fn(),
@@ -95,6 +96,21 @@ function post(body: unknown = { pin: PIN }) {
 const get = (query = '') =>
   new Request(`https://shop.example.com/api/pharmacy/data-export${query}`);
 const download = (job = 'job-1', pin: unknown = PIN) => post({ action: 'download', job, pin });
+
+it('stops reading at the request cap before resolving the owner or reading the PIN', async () => {
+  const limit = 4 * 1024;
+  const input = oversizedRequest(limit, {
+    url: 'https://shop.example.com/api/pharmacy/data-export',
+    headers: { origin: 'https://shop.example.com', 'content-type': 'application/json' },
+    chunkSize: 1024,
+  });
+
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 1024);
+  expect(m.actor).not.toHaveBeenCalled();
+  expect(m.verifyPin).not.toHaveBeenCalled();
+});
 
 const stream = (text: string) => ({
   body: new ReadableStream<Uint8Array>({

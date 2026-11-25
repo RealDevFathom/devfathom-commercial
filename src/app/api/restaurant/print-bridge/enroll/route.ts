@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { exchangePrintBridgeEnrollmentCode } from '@/lib/restaurant/print-bridge-enrollment';
 const bodySchema = z
   .object({
@@ -11,7 +12,10 @@ const bodySchema = z
   .strict();
 const headers = { 'Cache-Control': 'no-store' };
 export async function POST(request: Request) {
-  const parsed = bodySchema.safeParse(await request.json().catch(() => null));
+  const body = await readBoundedJson(request, 2 * 1024).catch(() => null);
+  if (body?.tooLarge)
+    return NextResponse.json({ error: 'Request body is too large.' }, { status: 413, headers });
+  const parsed = bodySchema.safeParse(body?.value);
   if (!parsed.success)
     return NextResponse.json({ error: 'Invalid enrollment code.' }, { status: 400, headers });
   try {

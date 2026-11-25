@@ -170,6 +170,7 @@ function fixture(
       findMany: vi.fn(async () => [] as { id: string; branchId: string; name: string }[]),
     },
     pharmacySale: {
+      findFirst: vi.fn(),
       findMany: vi.fn(async () => [
         {
           id: 'sale-a',
@@ -181,6 +182,7 @@ function fixture(
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     auditLog: { create: vi.fn(async () => ({ id: 'audit-a' })) },
+    pharmacyPackAuthenticationScan: { create: vi.fn() },
     $queryRaw: vi.fn(async () => [{ copyCount: ++printCopyCount }]),
     $executeRaw: vi.fn<(query: Prisma.Sql) => Promise<number>>(async () => 1),
     $transaction: vi.fn(),
@@ -1698,5 +1700,140 @@ describe('DEV-907 other-branch availability switch at the counter', () => {
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(searchCounterCatalog).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-1008 cart write authorization', () => {
+  const bill = { branchId: 'branch-a', saleId: 'sale-a' };
+  const line = {
+    ...bill,
+    saleLineId: 'line-a',
+    idempotencyKey: 'cart-policy-test',
+  };
+  const units = {
+    packLevelId: 'pack-a',
+    saleUnit: 'UNIT' as const,
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 1,
+  };
+  const writes: [string, (api: Caller) => Promise<unknown>][] = [
+    ['create', (api) => api.create({ branchId: bill.branchId, deviceId: 'device-a' })],
+    [
+      'addLine',
+      (api) =>
+        api.addLine({
+          ...bill,
+          ...units,
+          medicineId: 'med-a',
+          presentationId: 'pres-a',
+          idempotencyKey: line.idempotencyKey,
+        }),
+    ],
+    ['changeLine', (api) => api.changeLine({ ...line, ...units })],
+    ['removeLine', (api) => api.removeLine(line)],
+    ['hold', (api) => api.transition({ ...bill, action: 'hold' })],
+    ['resume', (api) => api.transition({ ...bill, action: 'resume' })],
+    ['convertQuotation', (api) => api.transition({ ...bill, action: 'convertQuotation' })],
+    [
+      'void',
+      (api) => api.transition({ ...bill, action: 'void', voidReason: { code: 'WRONG_ITEMS' } }),
+    ],
+    [
+      'applyBillDiscount',
+      (api) => api.applyBillDiscount({ ...bill, discount: { kind: 'PERCENT', bps: 0 } }),
+    ],
+    [
+      'linkCustomer',
+      (api) => api.linkCustomer({ ...bill, patientId: 'patient-a', displayName: 'Test Customer' }),
+    ],
+    ['scanLoyaltyCard', (api) => api.scanLoyaltyCard({ ...bill, cardToken: 'test-card' })],
+    [
+      'acknowledgeDuplicateSalt',
+      (api) => api.acknowledgeDuplicateSalt({ ...bill, ingredientKey: 'ingredient-a' }),
+    ],
+    [
+      'authenticatePack',
+      (api) => api.authenticatePack({ branchId: bill.branchId, payload: 'test-pack' }),
+    ],
+  ];
+
+  it.each(writes)(
+    '%s refuses an assigned receipt clerk at the cart-write permission boundary',
+    async (_name, write) => {
+      for (const capability of ['pharmacy:receipt', 'pharmacy.receipt']) {
+        const f = fixture([{ capability, effect: 'ALLOW' }]);
+        assign(f, [bill.branchId]);
+        await expect(write(f.caller())).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+        expect(f.db.user.findUnique).toHaveBeenCalledWith(
+          expect.objectContaining({ where: { id: f.user.id } })
+        );
+        expect(f.db.$transaction).not.toHaveBeenCalled();
+        expect(f.db.pharmacySale.findFirst).not.toHaveBeenCalled();
+        expect(f.db.auditLog.create).not.toHaveBeenCalled();
+        expect(f.context.audit.detail.action).toBeUndefined();
+        expect(f.db.pharmacyPackAuthenticationScan.create).not.toHaveBeenCalled();
+      }
+    }
+  );
+
+  it.each(['pharmacy:receipt', 'pharmacy.receipt'])(
+    'allows %s to read and reprint a settled receipt',
+    async (capability) => {
+      const f = fixture([{ capability, effect: 'ALLOW' }]);
+      assign(f, [bill.branchId]);
+      const api = f.caller();
+      await expect(api.counterReceipt(bill)).resolves.toMatchObject({ receiptNumber: 7 });
+      const print = { ...bill, locale: 'en' as const };
+      await expect(api.counterReceiptBrowserPrint(print)).resolves.toMatchObject({
+        copyNumber: 1,
+        reprint: false,
+      });
+      await expect(api.counterReceiptPrintJob(print)).resolves.toMatchObject({
+        copyNumber: 2,
+        reprint: true,
+      });
+    }
+  );
+
+  it.each(['cashier', 'pharmacist', 'pharmacist-cashier'])(
+    'allows an assigned %s to build a bill',
+    async (key) => {
+      const role = PHARMACY_ROLE_TEMPLATES.find((template) => template.key === key)!;
+      const f = fixture(role.capabilities.map((capability) => ({ capability, effect: 'ALLOW' })));
+      assign(f, [bill.branchId]);
+      await expect(
+        f.caller().create({ branchId: bill.branchId, deviceId: 'device-a' })
+      ).resolves.toMatchObject({ id: 'sale-new' });
+    }
+  );
+
+  it('requires a cart grant for a manager who also works the counter', async () => {
+    const role = PHARMACY_ROLE_TEMPLATES.find((template) => template.key === 'manager')!;
+    const rules = role.capabilities.map((capability) => ({ capability, effect: 'ALLOW' as const }));
+    const manager = fixture(rules);
+    assign(manager, [bill.branchId]);
+    const input = { branchId: bill.branchId, quotation: true };
+    await expect(manager.caller().create(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(manager.db.$transaction).not.toHaveBeenCalled();
+
+    const operator = fixture(rules, 'EMPLOYEE', [
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+    ]);
+    assign(operator, [bill.branchId]);
+    await expect(operator.caller().create(input)).resolves.toMatchObject({ id: 'sale-new' });
+  });
+
+  it('preserves an explicit receipt denial on a counter operator', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy.receipt', effect: 'DENY' },
+    ]);
+    assign(f, [bill.branchId]);
+    await expect(
+      f.caller().create({ branchId: bill.branchId, quotation: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.$transaction).not.toHaveBeenCalled();
   });
 });

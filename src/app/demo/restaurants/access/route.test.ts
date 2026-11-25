@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../../tests/fixtures/bounded-request';
 
 const mocks = vi.hoisted(() => ({
   createGrant: vi.fn(),
@@ -95,6 +96,25 @@ beforeEach(() => {
 });
 
 describe('POST demo access', () => {
+  it('stops reading at the demo access cap even if the declared length is smaller', async () => {
+    const limit = 1024;
+    const normalRequest = request({});
+    normalRequest.headers.set('content-length', '512');
+    const input = oversizedRequest(limit, {
+      url: normalRequest.url,
+      headers: normalRequest.headers,
+      chunkSize: 512,
+    });
+
+    const response = await POST(input.request);
+    expect(response.status).toBe(413);
+    expect(response.headers.get('cache-control')).toBe('no-store');
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 512);
+    expect(mocks.resolveSeat).not.toHaveBeenCalled();
+    expect(mocks.createIntent).not.toHaveBeenCalled();
+  });
+
   it.each(DEMO_PERSONA_KEYS)(
     'issues only the resolved %s intent and returns its destination',
     async (persona) => {

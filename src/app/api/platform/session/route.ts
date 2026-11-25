@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import {
   createPlatformSession,
   getPlatformSession,
@@ -54,7 +55,10 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     assertPlatformMutationOrigin(request);
-    const input = loginSchema.parse(await request.json());
+    const body = await readBoundedJson(request, 4 * 1024);
+    if (body.tooLarge)
+      return NextResponse.json({ error: 'Request body is too large.' }, { status: 413 });
+    const input = loginSchema.parse(body.value);
     const session = await createPlatformSession(
       input.email,
       input.password,

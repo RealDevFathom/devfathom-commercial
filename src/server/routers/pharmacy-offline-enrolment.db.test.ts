@@ -6,7 +6,7 @@
  *
  * Skipped unless TEST_DATABASE_URL names that role on a migrated disposable database.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -948,5 +948,84 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     });
     for (const lot of excluded) expect(byLot.has(lot.lotId)).toBe(false);
     expect(plan.lots.every((lot) => lot.stockLocationId === locationId)).toBe(true);
+  });
+});
+
+describeIfDatabase('DEV-957 phase 3 credential rotation', () => {
+  it('rotates a prepared counter with its own valid session and replaces the old credential', async () => {
+    const { device, secret } = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Local rotation fixture' })
+    );
+    const { reserveReceiptNumberBlock } = await import('@/lib/pharmacy/offline-receipt-leases');
+    await withTenantDb(ids.orgA, (db) =>
+      reserveReceiptNumberBlock(
+        db,
+        { organizationId: ids.orgA, branchId: ids.branchA, actorId: ownerA.id },
+        { deviceId: device.id, size: 1 }
+      )
+    );
+
+    const { session, organization, entitlements } = context(null, ownerA);
+    const actor = vi.spyOn(await import('@/lib/tenancy/tenant-actor'), 'resolveTenantActor');
+    const modules = vi.spyOn(await import('@/lib/entitlements'), 'resolveOrganizationEntitlements');
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', randomBytes(32).toString('base64'));
+    try {
+      actor.mockResolvedValueOnce({
+        session: session!,
+        organization: organization!,
+        support: null,
+      });
+      modules.mockResolvedValueOnce(entitlements);
+      const { pharmacyCounterRoute } = await import('./pharmacy-offline');
+      const established = await pharmacyCounterRoute('establish')(
+        new Request('https://tenant.test/api/pharmacy/counter/establish', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${secret}` },
+          body: '{}',
+        })
+      );
+      expect(established.status).toBe(201);
+      const { sessionToken } = await established.json();
+      const rotated = await act(ownerA, (api) =>
+        api.rotate({ branchId: ids.branchA, deviceId: device.id, sessionToken })
+      );
+      expect(rotated.deviceId).toBe(device.id);
+      await withTenantDb(ids.orgA, async (db) => {
+        expect(await devices.resolvePharmacyCounterBySecret(db, secret)).toBeNull();
+        expect((await devices.resolvePharmacyCounterBySecret(db, rotated.secret))?.id).toBe(
+          device.id
+        );
+      });
+    } finally {
+      actor.mockRestore();
+      modules.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps the current credential when a different computer tries to rotate a prepared counter', async () => {
+    const enrolled = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Prepared counter' })
+    );
+    const { reserveReceiptNumberBlock } = await import('@/lib/pharmacy/offline-receipt-leases');
+    await withTenantDb(ids.orgA, (db) =>
+      reserveReceiptNumberBlock(
+        db,
+        {
+          organizationId: ids.orgA,
+          branchId: ids.branchA,
+          actorId: ids.ownerA,
+        },
+        { deviceId: enrolled.device.id, size: 5 }
+      )
+    );
+    await expect(
+      act(ownerA, (api) => api.rotate({ branchId: ids.branchA, deviceId: enrolled.device.id }))
+    ).rejects.toThrow(/rotate.*this counter/i);
+    await withTenantDb(ids.orgA, async (db) => {
+      expect((await devices.resolvePharmacyCounterBySecret(db, enrolled.secret))?.id).toBe(
+        enrolled.device.id
+      );
+    });
   });
 });

@@ -104,7 +104,7 @@ export function normalizeExpiryBoundary(expiresAt: Date): Date {
 // Review round 2: only while offline cash selling is in force for the organisation
 // (`counterSetAsidesInForce`). While it is off a set-aside can never be sold offline, so
 // open ones are ignored here, never deleted.
-const DEVICE_QUOTA_HELD = Prisma.sql`CASE WHEN balance."disposition" = 'AVAILABLE' THEN COALESCE((
+export const DEVICE_QUOTA_HELD = Prisma.sql`CASE WHEN balance."disposition" = 'AVAILABLE' THEN COALESCE((
     SELECT SUM(quota."quotaUnits" - quota."consumedUnits") FROM "pharmacy_device_lot_quotas" quota
     WHERE quota."organizationId" = balance."organizationId"
       AND quota."branchId" = balance."branchId"
