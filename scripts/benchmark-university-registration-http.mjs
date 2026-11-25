@@ -13,6 +13,7 @@ import { Pool } from 'pg';
 const { values } = parseArgs({
   options: {
     run: { type: 'boolean' },
+    'cold-server': { type: 'boolean', default: false },
     origin: { type: 'string' },
     template: { type: 'string' },
     seconds: { type: 'string', default: '30' },
@@ -74,7 +75,7 @@ const registry = 25_000,
   capacity = 20,
   courses = 12;
 const db = new Pool({ connectionString: dbUrl.toString(), max: 3 });
-const agent = new http.Agent({ keepAlive: true, maxSockets: 320 });
+const agent = new http.Agent({ keepAlive: true, maxSockets: sessions });
 
 const tokens = Array.from({ length: sessions }, () => randomBytes(32).toString('base64url'));
 const hash = (token) => createHash('sha256').update(token).digest('hex');
@@ -325,6 +326,7 @@ async function measure(checks) {
     receipts = new Map(),
     httpSamples = [],
     scheduledSamples = [],
+    firstTenSeconds = [],
     commitSamples = [],
     counts = {},
     errors = {};
@@ -393,7 +395,7 @@ async function measure(checks) {
         continue;
       }
       // Bound outstanding work and drain the requests already dispatched on failure.
-      if (pending.size >= 300 || failures >= 20) {
+      if (pending.size >= sessions || failures >= 20) {
         cancelled = true;
         break;
       }
@@ -418,6 +420,7 @@ async function measure(checks) {
           const ended = performance.now();
           httpSamples.push(ended - dispatch);
           scheduledSamples.push(ended - due);
+          if (requestIndex < 10 * rps) firstTenSeconds.push(ended - due);
           byMinute[Math.floor(requestIndex / (rps * 60))].push(ended - due);
           if (status !== 200 || !data?.id || !['WAITLISTED', 'ENROLLED'].includes(data?.status)) {
             failures++;
@@ -525,6 +528,14 @@ async function measure(checks) {
     drainSeconds: +(drainMs / 1000).toFixed(2),
     throughput: +((success * 1000) / drainMs).toFixed(2),
     highestInflight: highWater,
+    maximumPendingRequests: sessions,
+    maximumKeepAliveSockets: agent.maxSockets,
+    startup: {
+      operatorConfirmedFreshServer: values['cold-server'],
+      authorizationPreflightRequests: Object.keys(checks).length,
+      successfulRegistrationWarmups: 0,
+      firstTenSecondsResponseMs: latency(firstTenSeconds),
+    },
     cancelled,
     failures,
     errors,
