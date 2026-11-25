@@ -192,7 +192,13 @@ async function cleanup() {
     await c.query('DELETE FROM organizations WHERE id=$1 AND slug=$2', [organizationId, slug]);
   });
 }
-function post({ token, section = 'missing', tenantHost = host, origin = 'http://' + tenantHost }) {
+function post({
+  token,
+  section = 'missing',
+  tenantHost = host,
+  origin = 'http://' + tenantHost,
+  freshSocket = false,
+}) {
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({ id: section });
     const headers = {
@@ -203,6 +209,15 @@ function post({ token, section = 'missing', tenantHost = host, origin = 'http://
       'Sec-Fetch-Site': 'same-origin',
     };
     if (token) headers.Cookie = 'university_learner_session=' + token;
+    let receivedStatus;
+    function fail(error) {
+      if (receivedStatus !== undefined && (receivedStatus < 200 || receivedStatus >= 300)) {
+        resolve({ status: receivedStatus, data: null });
+        return;
+      }
+      error.reusedSocket = req.reusedSocket;
+      reject(error);
+    }
     const req = http.request(
       {
         host: hostname,
@@ -210,13 +225,14 @@ function post({ token, section = 'missing', tenantHost = host, origin = 'http://
         path: '/apply/portal/register',
         method: 'POST',
         headers,
-        agent,
+        agent: freshSocket ? false : agent,
         signal: AbortSignal.timeout(25000),
       },
       (res) => {
         const chunks = [];
         res.on('data', (b) => chunks.push(b));
-        res.on('error', reject);
+        receivedStatus = res.statusCode;
+        res.on('error', fail);
         res.on('end', () => {
           const raw = Buffer.concat(chunks).toString();
           let data;
@@ -229,9 +245,34 @@ function post({ token, section = 'missing', tenantHost = host, origin = 'http://
         });
       }
     );
-    req.on('error', reject);
+    req.on('error', fail);
     req.end(body);
   });
+}
+const networkErrors = new Set([
+  'ECONNRESET',
+  'EPIPE',
+  'ETIMEDOUT',
+  'ECONNREFUSED',
+  'ENETUNREACH',
+  'ERR_STREAM_PREMATURE_CLOSE',
+  'ABORT_ERR',
+]);
+
+async function postRegistration(token, section, metrics) {
+  try {
+    return await post({ token, section });
+  } catch (error) {
+    const kind = error.code ?? error.name;
+    const firstAttempt = kind + (error.reusedSocket ? ' reused socket' : ' fresh connection');
+    metrics.firstAttemptTransportErrors[firstAttempt] =
+      (metrics.firstAttemptTransportErrors[firstAttempt] ?? 0) + 1;
+    if (!networkErrors.has(kind)) throw error;
+    metrics.networkRetries++;
+    const response = await post({ token, section, freshSocket: true });
+    if (response.status === 200) metrics.recoveredSubmissions++;
+    return response;
+  }
 }
 async function gates() {
   const checks = {};
@@ -276,6 +317,7 @@ const latency = (samples) => ({
   max: percentile(samples, 1),
 });
 async function measure(checks) {
+  const attempts = { firstAttemptTransportErrors: {}, networkRetries: 0, recoveredSubmissions: 0 };
   const firstRequests = new Set(),
     pending = new Set(),
     observedCommits = new Set(),
@@ -370,7 +412,7 @@ async function measure(checks) {
         awaitingVisibility.set(key, x);
       }
       const dispatch = performance.now();
-      const call = post({ token: tokens[sessionIndex], section })
+      const call = postRegistration(tokens[sessionIndex], section, attempts)
         .then(({ status, data }) => {
           counts[status] = (counts[status] || 0) + 1;
           const ended = performance.now();
@@ -410,17 +452,22 @@ async function measure(checks) {
     stopObserver = true;
     await observation;
   }
-  let replayConfirmed = false;
-  if (success === plan) {
-    const key = 'student-0/section-0-0',
-      original = receipts.get(key),
-      replay = await post({ token: tokens[0], section: 'section-0-0' });
-    replayConfirmed =
-      !!original &&
-      replay.status === 200 &&
-      replay.data?.id === original.id &&
-      replay.data?.status === original.status;
-  }
+  const original = receipts.get('student-0/section-0-0');
+  const replayMetrics = {
+    firstAttemptTransportErrors: {},
+    networkRetries: 0,
+    recoveredSubmissions: 0,
+  };
+  const replay = await postRegistration(tokens[0], 'section-0-0', replayMetrics).catch((error) => ({
+    status: null,
+    data: null,
+    transportError: error.code ?? error.name,
+  }));
+  const replayConfirmed =
+    !!original &&
+    replay.status === 200 &&
+    replay.data?.id === original.id &&
+    replay.data?.status === original.status;
   const enrollmentRows = (
     await db.query(
       'SELECT person_id,section_id,id,status FROM university_enrollments WHERE organization_id=$1',
@@ -469,6 +516,10 @@ async function measure(checks) {
     submitted,
     participatingSessions: Math.min(submitted, sessions),
     statusCounts: counts,
+    firstAttemptTransportErrors: attempts.firstAttemptTransportErrors,
+    networkRetries: attempts.networkRetries,
+    recoveredSubmissions: attempts.recoveredSubmissions,
+    httpAttempts: submitted + attempts.networkRetries,
     completed: success,
     completedInWindow,
     drainSeconds: +(drainMs / 1000).toFixed(2),
@@ -493,6 +544,11 @@ async function measure(checks) {
     events,
     receiptMismatches,
     replayConfirmed,
+    postWindowReplay: {
+      httpStatus: replay.status,
+      transportError: replay.transportError ?? null,
+      ...replayMetrics,
+    },
     overCapacity,
     gateHTTP: checks,
     ok,

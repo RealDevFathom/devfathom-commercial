@@ -1,6 +1,7 @@
 'use client';
 import { useState, useSyncExternalStore, type FormEvent, type ReactNode } from 'react';
 import { portalNotice } from '@/lib/university/portal-labels';
+import { postPortalAction } from '@/lib/university/portal-client';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,24 +14,6 @@ function useHydrated() {
     () => true,
     () => false
   );
-}
-type Result = {
-  error?: string;
-  challenge?: string;
-  id?: string;
-  received?: number[];
-  complete?: boolean;
-  status?: string;
-};
-async function post(action: string, body: object): Promise<Result> {
-  const response = await fetch('/apply/portal/' + encodeURIComponent(action), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const result: Result = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(result.error ?? 'Request unavailable. Please try again.');
-  return result;
 }
 export function Field({
   name,
@@ -111,7 +94,7 @@ export function PortalForm({
     setBusy(true);
     setMessage('');
     try {
-      const r = await post(selected, input);
+      const r = await postPortalAction(selected, input);
       if (selected === 'profile') {
         const number = form.elements.namedItem('number');
         if (number instanceof HTMLInputElement) number.value = '';
@@ -171,10 +154,10 @@ export function SignIn({ language }: { language: Language }) {
     try {
       const input = Object.fromEntries(new FormData(e.currentTarget));
       if (challenge) {
-        await post('verify', { challenge, code: input.code });
+        await postPortalAction('verify', { challenge, code: input.code });
         router.refresh();
       } else {
-        const result = await post('sign-in', { email: input.email });
+        const result = await postPortalAction('sign-in', { email: input.email });
         setChallenge(result.challenge ?? '');
       }
     } catch (err) {
@@ -282,7 +265,7 @@ export function UploadDocument({ language }: { language: Language }) {
       const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), (n) =>
         n.toString(16).padStart(2, '0')
       ).join('');
-      const start = await post('upload-start', {
+      const start = await postPortalAction('upload-start', {
         label: data.get('label'),
         filename: file.name,
         mime: file.type,
@@ -292,14 +275,14 @@ export function UploadDocument({ language }: { language: Language }) {
       if (!start.complete) {
         for (let i = 0; i < Math.ceil(bytes.length / chunk); i++) {
           if (!start.received?.includes(i))
-            await post('upload-part', {
+            await postPortalAction('upload-part', {
               id: start.id,
               part: i,
               base64: toBase64(bytes.subarray(i * chunk, (i + 1) * chunk)),
             });
           setMessage(Math.min(100, Math.round(((i + 1) * chunk * 100) / bytes.length)) + '%');
         }
-        await post('upload-finish', { id: start.id });
+        await postPortalAction('upload-finish', { id: start.id });
       }
       form.reset();
       setMessage(ur ? 'فائل محفوظ ہو گئی۔' : 'Document received.');
