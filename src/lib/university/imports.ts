@@ -137,7 +137,8 @@ export function reconcileHistoricalManifest(value: unknown): Manifest {
 }
 
 async function requireImportAccess(ctx: UniversityContext, manifest: Manifest) {
-  const view = await resolveOrganizationEntitlements(ctx.organizationId, ctx.db);
+  const view =
+    ctx.entitlements ?? (await resolveOrganizationEntitlements(ctx.organizationId, ctx.db));
   if (
     view.vertical !== 'UNIVERSITY' ||
     !['university-core', 'university-admissions', 'university-academics'].every((k) =>

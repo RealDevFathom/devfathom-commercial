@@ -27,7 +27,7 @@ vi.mock('@/lib/university/community', () => ({}));
 vi.mock('@/lib/university/academic-support', () => ({}));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: () => doubles.licensed,
-  resolveOrganizationEntitlements: () => ({ vertical: 'UNIVERSITY' }),
+  resolveCurrentOrganizationEntitlements: () => ({ vertical: 'UNIVERSITY' }),
 }));
 vi.mock('@/lib/tenancy/host', () => ({
   requestHost: (r: Request) => new URL(r.url).hostname,

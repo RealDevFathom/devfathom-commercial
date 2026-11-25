@@ -1,6 +1,6 @@
 import 'server-only';
 import { decideFromRules } from '@/lib/abac/capabilities';
-import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { hasModule, resolveCurrentOrganizationEntitlements } from '@/lib/entitlements';
 import type { EntitlementView } from '@/lib/module-catalog';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -108,10 +108,10 @@ export async function withUniversityStaff<T>(run: (ctx: StaffContext) => Promise
     throw new UniversityAccessError();
   const organizationId = actor.organization.id;
   const userId = actor.session.user.id;
+  const entitlements = await resolveCurrentOrganizationEntitlements(organizationId);
   return withTenantDb(
     organizationId,
     async (db) => {
-      const entitlements = await resolveOrganizationEntitlements(organizationId, db);
       return run(await universityStaffContext(db, organizationId, userId, entitlements));
     },
     { userId }

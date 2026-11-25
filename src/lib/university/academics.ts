@@ -254,7 +254,7 @@ async function matriculate(ctx: UniversityContext, input: Inputs) {
     'Student usage unavailable.'
   );
   if (!usage.already_active) {
-    const view = await resolveOrganizationEntitlements(org, db);
+    const view = ctx.entitlements ?? (await resolveOrganizationEntitlements(org, db));
     const limit = resolveEntitlementLimit(view.limits, {
       label: 'Active students',
       explicitKey: 'university.activeStudents.max',
@@ -277,7 +277,12 @@ async function matriculate(ctx: UniversityContext, input: Inputs) {
     'Intake unavailable.'
   );
   if (fees.tuition > 0) {
-    if (!hasModule(await resolveOrganizationEntitlements(org, db), 'university-finance'))
+    if (
+      !hasModule(
+        ctx.entitlements ?? (await resolveOrganizationEntitlements(org, db)),
+        'university-finance'
+      )
+    )
       invalid(
         'Enable university finance before matriculating into an intake with assessed tuition.'
       );
@@ -717,7 +722,12 @@ async function withdrawProgram(ctx: UniversityContext, input: Inputs) {
     AND NOT EXISTS(SELECT 1 FROM university_grades g WHERE g.organization_id=e.organization_id AND g.enrollment_id=e.id)`;
   for (const section of sections) await withdrawStudent(ctx, program.person_id, section.id);
   const { releaseUniversityServicesOnWithdrawal } = await import('./services');
-  if (hasModule(await resolveOrganizationEntitlements(org, db), 'university-services'))
+  if (
+    hasModule(
+      ctx.entitlements ?? (await resolveOrganizationEntitlements(org, db)),
+      'university-services'
+    )
+  )
     await releaseUniversityServicesOnWithdrawal(ctx, program.person_id);
   await emitUniversityEvent(ctx, 'student.program.withdrawn', program.id, {
     personId: program.person_id,
@@ -944,7 +954,7 @@ async function confer(ctx: UniversityContext, input: Inputs) {
     JOIN university_sections s ON (s.organization_id,s.id)=(e.organization_id,e.section_id) LEFT JOIN university_grade_appeals a ON (a.organization_id,a.grade_id)=(g.organization_id,g.id)
     WHERE g.organization_id=${org} AND e.person_id=${snapshot.cohort.person_id} AND s.intake_id=${snapshot.cohort.intake_id} AND (g.status='DRAFT' OR a.status IN ('OPEN','PENDING_AMENDMENT')) LIMIT 1`;
   if (pending) invalid('Resolve outstanding grades and appeals before degree conferral.');
-  const entitled = await resolveOrganizationEntitlements(org, db);
+  const entitled = ctx.entitlements ?? (await resolveOrganizationEntitlements(org, db));
   if (!(await checkConferralEligibility(db, org, input.studentProgramId)))
     invalid('Clear academic holds and resolve any interruption before conferral.');
   const researchEnabled = hasModule(entitled, 'university-research');

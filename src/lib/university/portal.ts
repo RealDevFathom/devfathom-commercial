@@ -4,7 +4,7 @@ import { cookies, headers } from 'next/headers';
 import { z } from 'zod';
 import type { EntitlementView } from '@/lib/module-catalog';
 import type { TenantOrganization } from '@/lib/tenancy/host';
-import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { hasModule, resolveCurrentOrganizationEntitlements } from '@/lib/entitlements';
 import {
   requestHost,
   resolveExplicitOrganizationByHost,
@@ -60,16 +60,14 @@ export async function inPortal<T>(request: Request, module: string, run: PortalW
   return inUniversity(await portalTenant(request), module, run);
 }
 async function inUniversity<T>(org: TenantOrganization, module: string, run: PortalWork<T>) {
-  return withTenantDb(org.id, async (db) => {
-    const ent = await resolveOrganizationEntitlements(org.id, db);
-    if (
-      ent.vertical !== 'UNIVERSITY' ||
-      !hasModule(ent, 'university-core') ||
-      !hasModule(ent, module)
-    )
-      throw new PortalError(404, 'University service unavailable.');
-    return run(db, org.id, ent);
-  });
+  const ent = await resolveCurrentOrganizationEntitlements(org.id);
+  if (
+    ent.vertical !== 'UNIVERSITY' ||
+    !hasModule(ent, 'university-core') ||
+    !hasModule(ent, module)
+  )
+    throw new PortalError(404, 'University service unavailable.');
+  return withTenantDb(org.id, (db) => run(db, org.id, ent));
 }
 export async function limitLogin(
   request: Request,
@@ -168,11 +166,18 @@ export async function withLearner<T>(
   run: (ctx: UniversityContext, person: PortalPerson) => Promise<T>
 ) {
   const token = (await cookies()).get(portalCookie)?.value;
-  return inPortal(request, module, async (db, organizationId) => {
+  return inPortal(request, module, async (db, organizationId, entitlements) => {
     const person = await readPerson(db, organizationId, token);
     if (!person) throw new PortalError(401, 'Sign in to continue.');
     return run(
-      { db, organizationId, userId: person.id, roleKey: 'university-learner', admin: false },
+      {
+        db,
+        organizationId,
+        userId: person.id,
+        roleKey: 'university-learner',
+        admin: false,
+        entitlements,
+      },
       person
     );
   });
@@ -238,6 +243,7 @@ export async function getPortalHome(mode: 'apply' | 'student') {
                 userId: person.id,
                 roleKey: 'university-learner',
                 admin: false,
+                entitlements: ent,
               },
               person.id
             )

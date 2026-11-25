@@ -10,7 +10,11 @@ import {
   withPlatformDb,
   withTenantDb,
 } from '@/lib/tenancy/scoped-db';
-import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import {
+  hasModule,
+  resolveCurrentOrganizationEntitlements,
+  resolveOrganizationEntitlements,
+} from '@/lib/entitlements';
 import { approvalAuthenticatorGate } from '@/lib/approval-authenticator-gate';
 import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { moduleForApiScope } from '@/lib/module-catalog';
@@ -71,7 +75,7 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
             id: true,
             role: true,
             status: true,
-            organization: { select: { id: true, status: true } },
+            organization: { select: { id: true, status: true, vertical: true } },
           },
         },
       },
@@ -103,9 +107,12 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
       })
     ).catch(() => {});
 
-    const entitlements = await withTenantDb(candidate.organizationId, (tenantDb) =>
-      resolveOrganizationEntitlements(candidate.organizationId, tenantDb)
-    );
+    const entitlements =
+      candidate.user.organization.vertical === 'UNIVERSITY'
+        ? await resolveCurrentOrganizationEntitlements(candidate.organizationId)
+        : await withTenantDb(candidate.organizationId, (tenantDb) =>
+            resolveOrganizationEntitlements(candidate.organizationId, tenantDb)
+          );
     if (!hasModule(entitlements, 'api')) {
       return NextResponse.json(
         { error: 'API access is not enabled for this organization.' },

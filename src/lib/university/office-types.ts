@@ -1,3 +1,4 @@
+import type { EntitlementView } from '@/lib/module-catalog';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export interface UniversityContext {
@@ -6,6 +7,7 @@ export interface UniversityContext {
   userId: string;
   roleKey: string;
   admin: boolean;
+  entitlements?: EntitlementView;
 }
 
 export interface UniversityField {

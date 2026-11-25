@@ -7,7 +7,7 @@ import {
   verticalBaselineModules,
   type EntitlementView,
 } from '@/lib/module-catalog';
-import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 type ModuleState = EntitlementView['modules'][number] & {
   limits: Record<string, number>;
@@ -22,15 +22,12 @@ function numericLimits(value: Prisma.JsonValue | null | undefined): Record<strin
   );
 }
 
-/**
- * Package defaults establish the baseline, live contracts can add commercial
- * modules, and organization overrides are final (including explicit disable).
- */
-export async function resolveOrganizationEntitlements(
-  organizationId: string,
-  db: Pick<ScopedDb, 'organization' | 'organizationModule' | 'organizationLimit' | 'user'>,
-  now = new Date()
-): Promise<EntitlementView> {
+type TenantEntitlementDb = Pick<
+  ScopedDb,
+  'organization' | 'organizationModule' | 'organizationLimit' | 'user'
+>;
+
+function readTenantState(db: TenantEntitlementDb, organizationId: string, now: Date) {
   const organizationPromise = db.organization.findUnique({
     where: { id: organizationId },
     select: {
@@ -43,88 +40,105 @@ export async function resolveOrganizationEntitlements(
       vertical: true,
     },
   });
-  const [tenantState, controlState] = await Promise.all([
-    Promise.all([
-      organizationPromise,
-      db.organizationModule.findMany({
-        where: { organizationId },
-        select: {
-          moduleId: true,
-          status: true,
-          seatLimit: true,
-          startsAt: true,
-          expiresAt: true,
-          overrides: true,
-        },
-      }),
-      db.organizationLimit.findMany({
-        where: {
-          organizationId,
-          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
-        },
-        select: { key: true, value: true },
-      }),
-      db.user.count({
-        where: {
-          organizationId,
-          status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
-        },
-      }),
-    ]),
-    // Catalog, package, and contract records are deliberately protected by the
-    // control-plane-only RLS policy. Resolve that half of the entitlement
-    // snapshot in a separate privileged transaction, never by weakening RLS.
-    withPlatformDb(async (platformDb) => {
-      const organization = await organizationPromise;
-      const [catalog, packageRecord, contracts] = await Promise.all([
-        platformDb.platformModule.findMany({
-          where: { active: true },
-          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
-          select: { id: true, key: true, name: true, band: true },
-        }),
-        organization?.packageId
-          ? platformDb.platformPackage.findUnique({
-              where: { id: organization.packageId },
-              select: {
-                moduleLinks: {
-                  where: { enabled: true },
-                  select: {
-                    limits: true,
-                    module: { select: { id: true, active: true } },
-                  },
-                },
-              },
-            })
-          : null,
-        platformDb.platformContract.findMany({
-          where: {
-            organizationId,
-            status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
-            startDate: { lte: now },
-            OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
-          },
-          orderBy: { endDate: 'desc' },
-          select: {
-            seatLimit: true,
-            endDate: true,
-            graceUntil: true,
-            modules: {
-              select: {
-                seatLimit: true,
-                limits: true,
-                module: { select: { id: true, active: true } },
-              },
-            },
-          },
-        }),
-      ]);
-      return { catalog, packageRecord, contracts };
+  return Promise.all([
+    organizationPromise,
+    db.organizationModule.findMany({
+      where: { organizationId },
+      select: {
+        moduleId: true,
+        status: true,
+        seatLimit: true,
+        startsAt: true,
+        expiresAt: true,
+        overrides: true,
+      },
+    }),
+    db.organizationLimit.findMany({
+      where: {
+        organizationId,
+        OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
+      },
+      select: { key: true, value: true },
+    }),
+    db.user.count({
+      where: {
+        organizationId,
+        status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] },
+      },
     }),
   ]);
+}
 
+/**
+ * Package defaults establish the baseline, live contracts can add commercial
+ * modules, and organization overrides are final (including explicit disable).
+ */
+export async function resolveOrganizationEntitlements(
+  organizationId: string,
+  db: TenantEntitlementDb,
+  now = new Date()
+): Promise<EntitlementView> {
+  return resolveFromTenantState(
+    organizationId,
+    await readTenantState(db, organizationId, now),
+    now
+  );
+}
+
+async function resolveFromTenantState(
+  organizationId: string,
+  tenantState: Awaited<ReturnType<typeof readTenantState>>,
+  now: Date
+): Promise<EntitlementView> {
   const [organization, overrides, limits, activeSeats] = tenantState;
-  const { catalog, packageRecord, contracts } = controlState;
   if (!organization) throw new Error('Organization not found.');
+
+  // The catalog, packages and contracts require control-plane RLS.
+  const { catalog, packageRecord, contracts } = await withPlatformDb(async (platformDb) => {
+    const [catalog, packageRecord, contracts] = await Promise.all([
+      platformDb.platformModule.findMany({
+        where: { active: true },
+        orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+        select: { id: true, key: true, name: true, band: true },
+      }),
+      organization?.packageId
+        ? platformDb.platformPackage.findUnique({
+            where: { id: organization.packageId },
+            select: {
+              moduleLinks: {
+                where: { enabled: true },
+                select: {
+                  limits: true,
+                  module: { select: { id: true, active: true } },
+                },
+              },
+            },
+          })
+        : null,
+      platformDb.platformContract.findMany({
+        where: {
+          organizationId,
+          status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
+          startDate: { lte: now },
+          OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+        },
+        orderBy: { endDate: 'desc' },
+        select: {
+          seatLimit: true,
+          endDate: true,
+          graceUntil: true,
+          modules: {
+            select: {
+              seatLimit: true,
+              limits: true,
+              module: { select: { id: true, active: true } },
+            },
+          },
+        },
+      }),
+    ]);
+    return { catalog, packageRecord, contracts };
+  });
 
   const states = new Map<string, ModuleState>();
   for (const catalogModule of catalog) {
@@ -226,6 +240,31 @@ export async function resolveOrganizationEntitlements(
     modules: serializedModules,
     limits: effectiveLimits,
   };
+}
+
+// Only callers queued before the first tenant read may share that read. A request
+// arriving after a grant changes must never join a previously started snapshot.
+const queuedEntitlementReads = new Map<string, Promise<EntitlementView>>();
+
+export function resolveCurrentOrganizationEntitlements(
+  organizationId: string
+): Promise<EntitlementView> {
+  const queued = queuedEntitlementReads.get(organizationId);
+  if (queued) return queued;
+
+  const pending = withTenantDb(organizationId, async (db) => {
+    queuedEntitlementReads.delete(organizationId);
+    const now = new Date();
+    return { tenantState: await readTenantState(db, organizationId, now), now };
+  })
+    .then(({ tenantState, now }) => resolveFromTenantState(organizationId, tenantState, now))
+    .finally(() => {
+      // Connection acquisition can fail before the tenant read starts.
+      if (queuedEntitlementReads.get(organizationId) === pending)
+        queuedEntitlementReads.delete(organizationId);
+    });
+  queuedEntitlementReads.set(organizationId, pending);
+  return pending;
 }
 
 export function hasModule(entitlements: EntitlementView, moduleKey: string): boolean {

@@ -8,7 +8,7 @@ import { universityOffices } from './offices';
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: (e: { enabledModules: string[] }, key: string) => e.enabledModules.includes(key),
-  resolveOrganizationEntitlements: vi.fn(),
+  resolveCurrentOrganizationEntitlements: vi.fn(),
 }));
 const academic = universityOffices.get('academics')!;
 function subject(rules: StaffContext['rules'], roleKey = 'university-registrar'): StaffContext {
