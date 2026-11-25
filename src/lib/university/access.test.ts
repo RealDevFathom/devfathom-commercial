@@ -2,13 +2,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import { moduleForPath } from '@/lib/module-catalog';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
-import { canAccessOffice, type StaffContext } from './access';
+import { canAccessOffice, withUniversityStaff, type StaffContext } from './access';
 import { universityOffices } from './offices';
 
-vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+const mocks = vi.hoisted(() => ({ actor: vi.fn(), entitlements: vi.fn(), withTenantDb: vi.fn() }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: (e: { enabledModules: string[] }, key: string) => e.enabledModules.includes(key),
-  resolveCurrentOrganizationEntitlements: vi.fn(),
+  resolveCurrentOrganizationEntitlements: mocks.entitlements,
 }));
 const academic = universityOffices.get('academics')!;
 function subject(rules: StaffContext['rules'], roleKey = 'university-registrar'): StaffContext {
@@ -21,6 +23,44 @@ function subject(rules: StaffContext['rules'], roleKey = 'university-registrar')
   } as StaffContext;
 }
 describe('university office roles and capability inheritance', () => {
+  it('finishes commercial authorization before opening each staff transaction, then verifies the current member', async () => {
+    mocks.actor.mockResolvedValue({
+      organization: { id: 'university' },
+      session: { user: { id: 'registrar' } },
+    });
+    const entitlements = {
+      organizationId: 'university',
+      enabledModules: ['university-core'],
+      vertical: 'UNIVERSITY',
+    };
+    let authorize!: () => void;
+    mocks.entitlements.mockReturnValueOnce(
+      new Promise((resolve) => {
+        authorize = () => resolve(entitlements);
+      })
+    );
+    const member = vi
+      .fn()
+      .mockResolvedValueOnce({ role: 'ADMIN', organizationRole: null, permissionOverrides: [] })
+      .mockResolvedValueOnce(null);
+    const db = { user: { findFirst: member }, $queryRaw: vi.fn() };
+    mocks.withTenantDb.mockImplementation(async (_id, fn) => fn(db));
+    const act = vi.fn(async (ctx: StaffContext) => ctx.userId);
+    const pending = withUniversityStaff(act);
+    await vi.waitFor(() => expect(mocks.entitlements).toHaveBeenCalledWith('university'));
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+    authorize();
+    expect(await pending).toBe('registrar');
+    expect(act.mock.calls[0]?.[0].entitlements).toBe(entitlements);
+    expect(mocks.withTenantDb).toHaveBeenCalledWith('university', expect.any(Function), {
+      userId: 'registrar',
+    });
+    mocks.entitlements.mockResolvedValueOnce(entitlements);
+    await expect(withUniversityStaff(act)).rejects.toThrow('access');
+    expect(act).toHaveBeenCalledTimes(1);
+    expect(member).toHaveBeenCalledTimes(2);
+  });
+
   it('requires an effective grant and applies explicit denial to inherited role and administrator grants', () => {
     expect(canAccessOffice(subject([]), academic)).toBe(false);
     expect(

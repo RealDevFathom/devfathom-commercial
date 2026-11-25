@@ -50,3 +50,15 @@ For 1BILL or Raast collections, obtain the institution’s merchant or biller ag
 - **Recovery.** Pause incoming writes during restoration. Restore the database and encryption key material through the institution’s established backup process. Compare restored event IDs with connector receipts, replay outstanding deliveries, and reconcile student headcounts, financial balances and issued awards before resuming writes.
 
 Run University tests with `bun run test src/lib/university`. For the integrated pilot test, set `TEST_DATABASE_URL` to a migrated, catalog-synchronized disposable PostgreSQL database using its non-owner application role. Set `TEST_MIGRATION_DATABASE_URL` to the disposable setup role for the isolated academic role tests. The registration benchmark uses a separate local database ending in `_test` and a setup role permitted to create isolated test fixtures. Run `node --conditions=react-server --import tsx scripts/benchmark-university-registration.ts --run` there. It models 2,500 active sessions across a 25,000-student registry for ten minutes. Exercise the tenant web entry points and external providers on representative infrastructure before opening a registration window. Staff coverage, learner authentication, connector contracts and production load are separate acceptance checks.
+
+### Authenticated registration load
+
+Start a local production build with its normal application role on a migrated PostgreSQL database whose name ends in `_test`. Synchronize the catalog and provision an active university with a package that includes academic registration. Set `TEST_MIGRATION_DATABASE_URL` to that same disposable database using its fixture setup role.
+
+Run the 30-second check against the server’s loopback origin. Replace `pilot` with the provisioned university slug and use the server’s listening port.
+
+```sh
+node scripts/benchmark-university-registration-http.mjs --run --origin=http://127.0.0.1:3000 --template=pilot
+```
+
+For the ten-minute acceptance run, append `--seconds=600`. The probe creates a dedicated test university with 25,000 student records and 2,500 learner sessions. At the default 100 requests per second, the ten-minute run sends 60,000 registrations through the tenant’s HTTP endpoint. It checks session isolation, origin validation, module revocation, receipts, committed enrollments, waitlists, capacity and replay behavior. The report includes HTTP p95 and p99 by minute and the time until an independent database connection first observes each new enrollment. Visibility sampling runs every 50 milliseconds. The probe removes the generated tenant and its fixtures after completion.
