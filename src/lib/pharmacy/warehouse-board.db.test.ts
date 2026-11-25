@@ -1,13 +1,14 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { warehouseBoard } from './warehouse-board';
 
-const url = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-if (url) process.env.DATABASE_URL = url;
+import { configureWarehouseTestDatabase } from '@/lib/test-support/warehouse-database';
 
-describe.skipIf(!url)('warehouse board under PostgreSQL row-level security', () => {
+configureWarehouseTestDatabase();
+
+describe('warehouse board under PostgreSQL row-level security', () => {
   it('counts a linked request once and keeps replenishment between other branches private', async () => {
+    const { warehouseBoard } = await import('./warehouse-board');
     const { withPlatformDb, withTenantDb } = await import('@/lib/tenancy/scoped-db');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
     await assertRlsEnforcingRole(withPlatformDb);

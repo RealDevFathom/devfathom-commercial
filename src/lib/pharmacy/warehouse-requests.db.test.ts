@@ -1,10 +1,11 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+
+import { configureWarehouseTestDatabase } from '@/lib/test-support/warehouse-database';
 import type { LedgerScope } from './stock-ledger';
 
-const url = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-if (url) process.env.DATABASE_URL = url;
+configureWarehouseTestDatabase();
 const tag = randomUUID();
 const org = 'wh-request-' + tag;
 const site = 'central-' + tag;
@@ -23,7 +24,7 @@ const input = {
 let tenancy: typeof import('@/lib/tenancy/scoped-db');
 let service: typeof import('./warehouse-requests');
 
-describe.skipIf(!url)('branch warehouse demand on PostgreSQL', () => {
+describe('branch warehouse demand on PostgreSQL', () => {
   beforeAll(async () => {
     tenancy = await import('@/lib/tenancy/scoped-db');
     service = await import('./warehouse-requests');

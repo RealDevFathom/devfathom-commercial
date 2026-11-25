@@ -1,14 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { configureWarehouseTestDatabase } from '@/lib/test-support/warehouse-database';
+
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   retirePharmacyRegulatoryRules,
   seedPharmacyRegulatoryProfile,
 } from '@/lib/test-support/pharmacy-regulatory';
 
-const url = process.env.TEST_DATABASE_URL;
-if (url) process.env.DATABASE_URL = url;
+configureWarehouseTestDatabase();
 const organizationId = 'wh_pilot_' + randomUUID();
 const scope = { organizationId, branchId: organizationId + '_store', actorId: 'picker' };
 const branchIds = [scope.branchId, organizationId + '_east', organizationId + '_west'];
@@ -111,7 +112,7 @@ async function stockFixture(label: string, productCode: string, eligibleUnits: n
   });
 }
 
-describe.skipIf(!url)('warehouse branch replenishment pilot under PostgreSQL RLS', () => {
+describe('warehouse branch replenishment pilot under PostgreSQL RLS', () => {
   beforeAll(async () => {
     tenancy = await import('@/lib/tenancy/scoped-db');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');

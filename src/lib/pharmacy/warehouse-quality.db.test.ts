@@ -1,11 +1,12 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
+
+import { configureWarehouseTestDatabase } from '@/lib/test-support/warehouse-database';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { shelfLabelCode } from './shelf-label-code';
 
-const url = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-if (url) process.env.DATABASE_URL = url;
+configureWarehouseTestDatabase();
 const tag = randomUUID(),
   organizationId = 'quality-' + tag,
   site = 'site-' + tag,
@@ -20,7 +21,7 @@ let tenancy: typeof import('@/lib/tenancy/scoped-db'),
 const run = <T>(work: (db: ScopedDb) => Promise<T>) => tenancy.withTenantDb(organizationId, work);
 const expiry = new Date('2090-01-01T00:00:00Z');
 
-describe.skipIf(!url)('warehouse temperature, custody and recall on PostgreSQL', () => {
+describe('warehouse temperature, custody and recall on PostgreSQL', () => {
   beforeAll(async () => {
     [tenancy, quality, operations, temperature] = await Promise.all([
       import('@/lib/tenancy/scoped-db'),
