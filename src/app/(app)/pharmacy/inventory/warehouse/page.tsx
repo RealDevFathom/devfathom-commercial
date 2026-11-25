@@ -14,9 +14,9 @@ export default async function WarehousePage({
   return (
     <div className="min-w-0 space-y-5">
       <PageHeader
-        eyebrow="Pharmacy inventory"
+        eyebrow="Pharmacy operations"
         heading="Warehouse"
-        description="Receive supplier stock, replenish branches, and trace each batch through dispatch and delivery."
+        description="Select your assigned site to open its warehouse or quality work queue."
       />
       <WarehouseWorkspace initialBranchId={branch} />
     </div>

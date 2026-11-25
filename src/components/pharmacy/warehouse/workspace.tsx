@@ -55,7 +55,15 @@ export function WarehouseWorkspace({ initialBranchId }: { initialBranchId?: stri
         </SelectField>
       </label>
       <WarehouseFeedback key={site.id}>
-        <Site branchId={site.id} />
+        {site.accessMode === 'inventory' ? (
+          <Site branchId={site.id} />
+        ) : site.accessMode === 'quality' ? (
+          <QualityReview branchId={site.id} canReview canOperateStock={false} />
+        ) : (
+          <SectionCard title="Warehouse access">
+            <Quiet>Refresh this page to check your warehouse access.</Quiet>
+          </SectionCard>
+        )}
       </WarehouseFeedback>
     </div>
   );

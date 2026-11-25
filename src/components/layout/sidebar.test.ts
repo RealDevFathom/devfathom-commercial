@@ -288,6 +288,16 @@ describe('pharmacy navigation', () => {
       }
     );
 
+    it('opens Warehouse to inventory staff and safety reviewers while restricting the Inventory destination to its stock roles', () => {
+      const quality = hrefs('EMPLOYEE', ['pharmacy:safety']);
+      expect(quality).toContain('/pharmacy/inventory/warehouse');
+      expect(quality).not.toContain('/pharmacy/inventory');
+      expect(hrefs('EMPLOYEE', ['pharmacy:inventory'])).toContain('/pharmacy/inventory/warehouse');
+      expect(hrefs('EMPLOYEE', ['pharmacy:counter'])).not.toContain(
+        '/pharmacy/inventory/warehouse'
+      );
+    });
+
     it('shows Substitution to a Pharmacy Safety holder without dispensing (DEV-35)', () => {
       const visible = hrefs('EMPLOYEE', ['pharmacy:safety']);
       expect(visible).toContain('/pharmacy/substitution');

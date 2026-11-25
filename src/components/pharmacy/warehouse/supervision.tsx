@@ -327,7 +327,15 @@ export function Arrivals({ branchId }: { branchId: string }) {
   );
 }
 
-export function QualityReview({ branchId, canReview }: { branchId: string; canReview: boolean }) {
+export function QualityReview({
+  branchId,
+  canReview,
+  canOperateStock = true,
+}: {
+  branchId: string;
+  canReview: boolean;
+  canOperateStock?: boolean;
+}) {
   const queue = trpc.pharmacyWarehouse.quality.useQuery({ branchId });
   const review = trpc.pharmacyWarehouse.reviewQuality.useMutation();
   return (
@@ -385,7 +393,7 @@ export function QualityReview({ branchId, canReview }: { branchId: string; canRe
                   <Field name="evidence" label="Supporting evidence reference" />
                 </ActionForm>
               )}
-              {row.status === 'RETURN' && (
+              {row.status === 'RETURN' && canOperateStock && (
                 <Link
                   className={buttonVariants({ variant: 'outline' })}
                   href={'/pharmacy/purchasing/returns?branch=' + encodeURIComponent(branchId)}
@@ -393,7 +401,7 @@ export function QualityReview({ branchId, canReview }: { branchId: string; canRe
                   Open supplier returns to record dispatch
                 </Link>
               )}
-              {row.status === 'DISPOSE' && (
+              {row.status === 'DISPOSE' && canOperateStock && (
                 <Link
                   className={buttonVariants({ variant: 'outline' })}
                   href={'/pharmacy/inventory?branch=' + encodeURIComponent(branchId)}

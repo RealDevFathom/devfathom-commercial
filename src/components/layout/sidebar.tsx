@@ -395,7 +395,7 @@ export const navigation: NavItem[] = [
     href: '/pharmacy/inventory/warehouse',
     icon: PackageSearch,
     adminOnly: true,
-    memberCapabilities: ['pharmacy:inventory'],
+    memberCapabilities: ['pharmacy:inventory', 'pharmacy:safety'],
     group: 'Pharmacy',
   },
   {

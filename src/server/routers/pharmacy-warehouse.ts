@@ -38,7 +38,13 @@ import { configureWarehouseSite } from '@/lib/pharmacy/warehouse-site';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { assertProcurementBranch } from '../pharmacy-procurement-scope';
-import { assertModuleLicensed, capabilityProcedure, router, type TRPCContext } from '../trpc';
+import {
+  assertModuleLicensed,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  router,
+  type TRPCContext,
+} from '../trpc';
 import {
   admittedInventoryBranchIds,
   admittedRecallBranchIds,
@@ -48,6 +54,21 @@ import {
 const inventory = capabilityProcedure('pharmacy:inventory');
 const safety = capabilityProcedure('pharmacy:safety');
 const procurement = capabilityProcedure('pharmacy:procurement');
+// These reads serve both warehouse operators and incident reviewers. Every stock,
+// request, setup and fulfilment procedure retains its own inventory capability.
+const warehouseRead = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  const actor = subjectFromSession(ctx.session.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta?.ip ?? null };
+  const hasInventory = await can(actor, 'pharmacy:inventory', undefined, options);
+  if (!hasInventory && !(await can(actor, 'pharmacy:safety', undefined, options))) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+  const warehouseAccess: 'inventory' | 'quality' = hasInventory ? 'inventory' : 'quality';
+  return next({ ctx: { warehouseAccess } });
+});
 const id = z.string().trim().min(1).max(200);
 const key = z.string().trim().min(1).max(128);
 const scan = z.string().trim().min(1).max(512);
@@ -92,9 +113,9 @@ async function mutate<T>(
 }
 
 export const pharmacyWarehouseRouter = router({
-  sites: inventory.query(async ({ ctx }) => {
+  sites: warehouseRead.query(async ({ ctx }) => {
     const branchIds = await admittedInventoryBranchIds(ctx);
-    return ctx.db.pharmacyBranch.findMany({
+    const rows = await ctx.db.pharmacyBranch.findMany({
       where: {
         organizationId: ctx.entitlements.organizationId,
         id: { in: [...branchIds] },
@@ -103,6 +124,16 @@ export const pharmacyWarehouseRouter = router({
       select: { id: true, name: true, warehouseEnabled: true, warehouseMinimumShelfLifeDays: true },
       orderBy: { name: 'asc' },
     });
+    return rows.map((row) =>
+      ctx.warehouseAccess === 'inventory'
+        ? { ...row, accessMode: 'inventory' as const }
+        : {
+            id: row.id,
+            name: row.name,
+            warehouseEnabled: row.warehouseEnabled,
+            accessMode: 'quality' as const,
+          }
+    );
   }),
   setup: inventory.input(site).query(async ({ ctx, input }) => {
     const scope = await admittedScopeFor(ctx, input.branchId);
@@ -156,7 +187,7 @@ export const pharmacyWarehouseRouter = router({
     .mutation(({ ctx, input }) =>
       mutate(ctx, input.branchId, (db, scope) => configureWarehouseSite(db, scope, input))
     ),
-  searchMedicines: inventory
+  searchMedicines: warehouseRead
     .input(site.extend({ query: z.string().trim().min(1).max(150) }))
     .query(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
@@ -164,6 +195,7 @@ export const pharmacyWarehouseRouter = router({
         where: {
           organizationId: scope.organizationId,
           saleable: true,
+          ...(ctx.warehouseAccess === 'quality' ? { coldChain: true } : {}),
           OR: [
             { id: input.query },
             { productName: { contains: input.query, mode: 'insensitive' } },
@@ -292,7 +324,7 @@ export const pharmacyWarehouseRouter = router({
     .mutation(({ ctx, input }) =>
       mutate(ctx, input.branchId, (db, scope) => recordWarehouseDispatchEvidence(db, scope, input))
     ),
-  quality: inventory
+  quality: warehouseRead
     .input(site)
     .query(async ({ ctx, input }) =>
       listWarehouseQuality(ctx.db, await admittedScopeFor(ctx, input.branchId))

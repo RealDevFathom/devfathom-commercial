@@ -388,7 +388,9 @@ export async function listWarehouseQuality(db: ScopedDb, scope: LedgerScope) {
       requiresReleaseBin: boolean;
     }>
   >(Prisma.sql`
-    SELECT q.*,m."productName",b."batchNumber",z.code AS "binCode",
+    SELECT q.id,q."branchId",q."inventoryLotId",q."stockLocationId",q."transferId",
+      q."quantityUnits",q.reason,q.status,q."createdAt",q."reviewReason",q."reviewEvidenceRef",
+      m."productName",b."batchNumber",z.code AS "binCode",
     (q."quarantineUnits" > 0 AND (NOT z.active OR z."warehouseStaging" OR z.kind NOT IN ('STORE','RACK_BIN','FRIDGE','SAFE')
       OR (m.controlled AND z.kind <> 'SAFE') OR (m."coldChain" AND NOT z."coldChain") OR
       (m."minimumStorageTemperatureC" IS NOT NULL AND (z."minimumTemperatureC" IS NULL OR z."maximumTemperatureC" IS NULL

@@ -474,6 +474,84 @@ describeIfDatabase('DEV-965 pharmacy permission gaps, against PostgreSQL with RL
   });
 
   describe('Warehouse safety scope', () => {
+    it('admits assigned safety reviewers to the quality desk while keeping inventory and other premises protected', async () => {
+      const orgMedicines = await withTenantDb(ORG, async (db) => {
+        const medicines = [];
+        for (const coldChain of [true, false]) {
+          medicines.push(
+            await db.medicine.create({
+              data: {
+                organizationId: ORG,
+                productFamily: 'PHARMACEUTICAL',
+                productName: `Desk lookup ${suffix} ${coldChain ? 'cold' : 'ambient'}`,
+                coldChain,
+                saleable: true,
+              },
+            })
+          );
+        }
+        for (const [branchId, lotId] of [
+          [MAIN, fixture.mainLotId],
+          [DHA, fixture.dhaLotId],
+        ]) {
+          const balance = await db.pharmacyStockBalance.findFirstOrThrow({
+            where: { organizationId: ORG, branchId, inventoryLotId: lotId },
+          });
+          await db.pharmacyWarehouseQualityIncident.create({
+            data: {
+              organizationId: ORG,
+              branchId,
+              inventoryLotId: lotId,
+              stockLocationId: balance.stockLocationId,
+              quantityUnits: 1,
+              reason: 'Inspection required',
+              sourceKey: `desk-${branchId}`,
+              createdById: P.safety,
+            },
+          });
+        }
+        return medicines;
+      });
+      await expect(as(P.cashier, (api) => api.warehouse.sites())).rejects.toMatchObject(PERMISSION);
+      const assigned = await as(P.safety, (api) => api.warehouse.sites());
+      expect(assigned).toEqual([
+        { id: MAIN, name: expect.any(String), warehouseEnabled: false, accessMode: 'quality' },
+      ]);
+      expect(
+        (await as(P.stock, (api) => api.warehouse.sites())).map((row) => row.accessMode)
+      ).toEqual(['inventory']);
+      expect(
+        (await as(P.owner, (api) => api.warehouse.sites())).map((row) => row.id).sort()
+      ).toEqual([MAIN, DHA].sort());
+      const incident = await as(P.safety, (api) => api.warehouse.quality({ branchId: MAIN }));
+      expect(incident.map((row) => row.inventoryLotId)).toEqual([fixture.mainLotId]);
+      expect(incident[0]).not.toHaveProperty('quarantineUnits');
+      const search = { branchId: MAIN, query: `Desk lookup ${suffix}` };
+      expect(
+        (await as(P.safety, (api) => api.warehouse.searchMedicines(search))).map((row) => row.id)
+      ).toEqual([orgMedicines[0]!.id]);
+      expect(
+        (await as(P.stock, (api) => api.warehouse.searchMedicines(search)))
+          .map((row) => row.id)
+          .sort()
+      ).toEqual(orgMedicines.map((row) => row.id).sort());
+      await expect(
+        as(P.safety, (api) => api.warehouse.quality({ branchId: DHA }))
+      ).rejects.toMatchObject(OUTSIDE);
+      await expect(
+        as(P.safety, (api) => api.warehouse.searchMedicines({ ...search, branchId: DHA }))
+      ).rejects.toMatchObject(OUTSIDE);
+      await expect(
+        as(P.safety, (api) => api.warehouse.setup({ branchId: MAIN }))
+      ).rejects.toMatchObject(PERMISSION);
+      await expect(
+        as(P.safety, (api) => api.warehouse.overview({ branchId: MAIN }))
+      ).rejects.toMatchObject(PERMISSION);
+      await expect(
+        as(P.safety, (api) => api.warehouse.requestQueue({ branchId: MAIN }))
+      ).rejects.toMatchObject(PERMISSION);
+    });
+
     it('keeps a labelled storage change pending until an authorized catalogue reviewer approves', async () => {
       const proposal = { branchId: MAIN, medicineId: fixture.medicineId, minimumC: 2, maximumC: 8 };
       const live = () =>
