@@ -141,6 +141,8 @@ function makeDb() {
     pharmacyRequisition: model(),
     pharmacyRequisitionLine: model(),
     pharmacyInterbranchTransfer: model(),
+    pharmacyWarehouseReservation: model(),
+    pharmacyWarehouseQualityIncident: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
     restaurantOperatorCredential: model(),

@@ -105,6 +105,19 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
   INVALID_MONEY: { message: 'Money must be a whole, non-negative amount.' },
   INVALID_RATE: { message: 'A rate must be between 0% and 100%.' },
   CROSS_TENANT_REFERENCE: { message: 'That record is not part of this workspace.' },
+  PREMISES_NOT_LICENSED: {
+    message:
+      'Record a current licence for this warehouse and verify its premises before posting this delivery.',
+  },
+  BRANCH_NOT_SAME_OWNER: { message: 'Choose an active warehouse in this workspace.' },
+  UNSALEABLE_DESTINATION: {
+    message: 'Choose an active receiving bin for this medicine. Controlled stock requires a safe.',
+    field: 'stockLocationId',
+  },
+  WAREHOUSE_PUTAWAY_REQUIRED: {
+    message:
+      'Confirm put-away for the accepted receipt lines in the warehouse before allocating them to branches.',
+  },
   CROSS_BRANCH_REFERENCE: { message: 'That record belongs to a different branch.' },
   MISSING_PACK_CONVERSION: {
     message: 'This pack level has no effective conversion. Set one on the medicine first.',

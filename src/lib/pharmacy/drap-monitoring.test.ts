@@ -177,6 +177,7 @@ describe('DRAP monitoring', () => {
               inventoryLotId: 'lot-a',
               stockLocationId: 'loc-a',
               onHandUnits: 12,
+              disposition: 'AVAILABLE',
             },
           ]),
         },
@@ -228,8 +229,20 @@ describe('DRAP monitoring', () => {
       quarantinePart.mockClear();
       const { db } = draftDb(matchedDraft);
       db.pharmacyStockBalance.findMany.mockResolvedValue([
-        { branchId: 'branch-b', inventoryLotId: 'lot-b', stockLocationId: 'loc-a', onHandUnits: 1 },
-        { branchId: 'branch-a', inventoryLotId: 'lot-a', stockLocationId: 'loc-a', onHandUnits: 1 },
+        {
+          branchId: 'branch-b',
+          inventoryLotId: 'lot-b',
+          stockLocationId: 'loc-a',
+          onHandUnits: 1,
+          disposition: 'AVAILABLE',
+        },
+        {
+          branchId: 'branch-a',
+          inventoryLotId: 'lot-a',
+          stockLocationId: 'loc-a',
+          onHandUnits: 1,
+          disposition: 'AVAILABLE',
+        },
       ]);
       await confirmDrapRecall(db as unknown as ScopedDb, scope, 'ingest-1');
       const statements = (db.$queryRaw.mock.calls as unknown[][]).map(

@@ -391,6 +391,14 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
   },
   {
+    label: 'Warehouse',
+    href: '/pharmacy/inventory/warehouse',
+    icon: PackageSearch,
+    adminOnly: true,
+    memberCapabilities: ['pharmacy:inventory'],
+    group: 'Pharmacy',
+  },
+  {
     label: 'Purchasing',
     href: '/pharmacy/purchasing',
     icon: ShoppingCart,
@@ -713,7 +721,11 @@ const PHARMACY_MENUS: readonly PharmacyMenu[] = [
       '/pharmacy/sop',
     ],
   },
-  { label: 'Stock', icon: PackageSearch, hrefs: ['/pharmacy/inventory', '/pharmacy/medicines'] },
+  {
+    label: 'Stock',
+    icon: PackageSearch,
+    hrefs: ['/pharmacy/inventory', '/pharmacy/inventory/warehouse', '/pharmacy/medicines'],
+  },
   { label: 'Buy', icon: ShoppingCart, hrefs: ['/pharmacy/purchasing'] },
   {
     label: 'Reports',

@@ -228,6 +228,68 @@ beforeAll(async () => {
 // ── PUR-06 acceptance: a claimed quantity cannot be sold ────────────────────
 
 describeIfDatabase('PUR-06 — a claimed quantity leaves saleable stock', () => {
+  it('a quality-reviewed return dispatches quarantined units through the supplier document', async () => {
+    const fixture = await scenario(ORG_A, 'warehouse-return');
+    const scope = scopeOf(fixture);
+    const { openWarehouseIncident, reviewWarehouseQuality } = await import('./warehouse-quality');
+    const { quarantinePart } = await import('./inventory-operations');
+    const result = await inOrg(ORG_A, async (db) => {
+      const lot = await stockLot(db, fixture, 40, 'warehouse-return');
+      const held = { inventoryLotId: lot.id, stockLocationId: fixture.locationId };
+      await quarantinePart(db, scope, {
+        ...held,
+        units: 30,
+        reason: 'Zone excursion',
+        idempotencyKeyPrefix: tag('wh-hold'),
+      });
+      const incident = await openWarehouseIncident(db, scope, {
+        ...held,
+        quantityUnits: 30,
+        quarantineUnits: 30,
+        reason: 'Zone excursion',
+        sourceKey: tag('qa'),
+      });
+      await reviewWarehouseQuality(db, scope, {
+        incidentId: incident.id,
+        decision: 'RETURN',
+        evidenceRef: 'Supplier QA instructions',
+        reason: 'Return recalled stock',
+      });
+      const draft = await deps.returns.createPurchaseReturn(db, scope, {
+        supplierId: fixture.supplierId,
+        kind: 'PURCHASE_RETURN',
+        reference: tag('return-doc'),
+        lines: [line(fixture, lot.id, 30, 36_000)],
+      });
+      const submitted = await deps.returns.submitPurchaseReturn(db, scope, {
+        purchaseReturnId: draft.id,
+        at: NOW,
+      });
+      await deps.returns.dispatchPurchaseReturn(db, scope, {
+        purchaseReturnId: draft.id,
+        at: NOW,
+        idempotencyKeyPrefix: tag('qa-return'),
+      });
+      return {
+        submitted,
+        balances: await db.pharmacyStockBalance.findMany({
+          where: { inventoryLotId: lot.id, onHandUnits: { gt: 0 } },
+          select: { disposition: true, onHandUnits: true },
+        }),
+        reviewed: await db.pharmacyWarehouseQualityIncident.findUniqueOrThrow({
+          where: { id: incident.id },
+        }),
+      };
+    });
+    expect(result.reviewed.supplierReturnLineId).toBe(result.submitted.lines[0]!.id);
+    expect(result.balances).toEqual(
+      expect.arrayContaining([
+        { disposition: 'AVAILABLE', onHandUnits: 10 },
+        { disposition: 'RETURN_TO_SUPPLIER', onHandUnits: 30 },
+      ])
+    );
+  });
+
   it('a DRAFT return reserves nothing, so the stock is still sellable', async () => {
     const fixture = await scenario(ORG_A, 'draft-inert');
     const result = await inOrg(ORG_A, async (db) => {

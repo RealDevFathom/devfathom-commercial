@@ -661,7 +661,7 @@ export async function postInterbranchTransferReceiptEntry(
   }
   if (
     movement.kind !== 'TRANSFER_IN' ||
-    movement.disposition !== 'AVAILABLE' ||
+    !['AVAILABLE', 'QUARANTINE', 'DAMAGED'].includes(movement.disposition) ||
     movement.quantityUnits <= 0 ||
     movement.stockLocationId !== line.destinationStockLocationId
   ) {

@@ -48,7 +48,7 @@ type Premises = { branchId: string; licenceNumber: string };
  * bound to this active branch's own address, not a placeholder, with a licence
  * number, evidence and a validity window that covers `at`.
  */
-async function licensedPremises(
+export async function licensedPremises(
   db: ScopedDb,
   organizationId: string,
   branchId: string,

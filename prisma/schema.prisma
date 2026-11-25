@@ -193,6 +193,10 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  warehouseEnabled                Boolean                         @default(false)
+  warehouseMinimumShelfLifeDays   Int                             @default(0)
+  warehouseRequestsReceived       PharmacyWarehouseRequest[]      @relation("WarehouseRequestSource")
+  warehouseRequestsMade           PharmacyWarehouseRequest[]      @relation("WarehouseRequestDestination")
   printBridges PharmacyPrintBridge[]
   printJobs PharmacyPrintJob[]
   customerPortalLinks    PharmacyCustomerPortalLink[]
@@ -297,6 +301,40 @@ model PharmacyBranch {
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
   @@map("pharmacy_branches")
+}
+
+enum PharmacyWarehouseRequestStatus {
+  REQUESTED
+  ALLOCATED
+  DIRECT_PURCHASE
+  REQUISITIONED
+  CANCELLED
+}
+
+model PharmacyWarehouseRequest {
+  id                         String                         @id @default(cuid())
+  organizationId             String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  warehouseBranchId          String
+  branchId                   String
+  destinationStockLocationId String
+  medicineId                 String
+  requestedUnits             Int
+  status                     PharmacyWarehouseRequestStatus
+  requestedById              String
+  signalId                   String?
+  idempotencyKey             String
+  orderId                    String?
+  requisitionId              String?
+  createdAt                  DateTime                       @default(now())
+  warehouse                  PharmacyBranch                 @relation("WarehouseRequestSource", fields: [organizationId, warehouseBranchId], references: [organizationId, id], onDelete: Restrict)
+  branch                     PharmacyBranch                 @relation("WarehouseRequestDestination", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  medicine                   Medicine                       @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, idempotencyKey], map: "ph_wh_request_retry_key")
+  @@unique([organizationId, signalId], map: "ph_wh_request_signal_key")
+  @@index([organizationId, warehouseBranchId, status], map: "ph_wh_request_source_idx")
+  @@index([organizationId, branchId, createdAt], map: "ph_wh_request_dest_idx")
+  @@map("pharmacy_warehouse_requests")
 }
 
 /// Active assignment of a tenant user to one pharmacy branch. Receipt reads use
@@ -653,6 +691,7 @@ model Ingredient {
 }
 
 model Medicine {
+  warehouseRequests            PharmacyWarehouseRequest[]
   id                           String                               @id @default(cuid())
   organizationId               String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   productName                  String
@@ -670,6 +709,8 @@ model Medicine {
   highAlert                    Boolean                              @default(false)
   lasa                         Boolean                              @default(false)
   coldChain                    Boolean                              @default(false)
+  minimumStorageTemperatureC   Float?
+  maximumStorageTemperatureC   Float?
   saleable                     Boolean                              @default(false)
   /// #718: shop-set retail price and category; NON_DRUG_RETAIL (FRONT_SHOP) items only.
   retailPriceMinor             Int?
@@ -1019,6 +1060,9 @@ enum PharmacyExpiryPrecision {
 
 enum PharmacyStockDisposition {
   AVAILABLE
+  WAREHOUSE_RESERVED
+  /// Accepted warehouse goods awaiting a confirmed put-away.
+  WAREHOUSE_RECEIVING
   QUARANTINE
   DAMAGED
   DESTROYED
@@ -2737,6 +2781,7 @@ model PharmacyCustomerPortalRequest {
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
 /// validated cold-chain zones a cold-chain medicine may be put away into.
 model PharmacyStockLocation {
+  warehouseStaging                          Boolean                   @default(false)
   id                                        String                    @id @default(cuid())
   organizationId                            String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                                  String
@@ -2827,6 +2872,60 @@ model PharmacyTemperatureLog {
   @@unique([organizationId, id], map: "pharmacy_temperature_logs_org_id_key")
   @@index([organizationId, branchId, stockLocationId, recordedAt], map: "pharmacy_temperature_logs_zone_time_idx")
   @@map("pharmacy_temperature_logs")
+}
+
+/// Measured transport envelope or an explicit report of missing evidence.
+model PharmacyWarehouseTransportEvidence {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  transferId       String
+  transferLineId   String?
+  phase            String
+  minimumC         Float?
+  maximumC         Float?
+  evidenceRef      String?
+  receivedUnits    Int?
+  damagedUnits     Int?
+  heldUnits        Int?
+  shortageUnits    Int?
+  destinationLotId String?
+  productScan      String?
+  lotScan          String?
+  binScan          String?
+  requestKey       String
+  actorId          String
+  createdAt        DateTime @default(now())
+
+  @@unique([organizationId, branchId, phase, requestKey], map: "pharmacy_wh_transport_request_key")
+  @@index([organizationId, transferId, phase, createdAt], map: "pharmacy_wh_transport_history")
+  @@map("pharmacy_warehouse_transport_evidence")
+}
+
+/// Review record retained after release or authorization of a regulated disposal/return.
+model PharmacyWarehouseQualityIncident {
+  id                   String    @id @default(cuid())
+  organizationId       String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  inventoryLotId       String
+  stockLocationId      String
+  transferId           String?
+  quantityUnits        Int
+  quarantineUnits      Int       @default(0)
+  supplierReturnLineId String?   @unique(map: "pharmacy_wh_return_line_key")
+  reason               String
+  sourceKey            String
+  status               String    @default("OPEN")
+  createdById          String
+  createdAt            DateTime  @default(now())
+  reviewedById         String?
+  reviewedAt           DateTime?
+  reviewEvidenceRef    String?
+  reviewReason         String?
+
+  @@unique([organizationId, inventoryLotId, stockLocationId, sourceKey], map: "pharmacy_wh_incident_source")
+  @@index([organizationId, branchId, status, createdAt], map: "pharmacy_wh_incident_queue")
+  @@map("pharmacy_warehouse_quality_incidents")
 }
 
 /// §8A invariant 18: the manufacturer's batch. Organization-scoped, not
@@ -14273,6 +14372,27 @@ model PharmacyGoodsReceipt {
   @@map("pharmacy_goods_receipts")
 }
 
+/// One put-away per accepted warehouse receipt line. The line identifies the lot, product and receiving bin.
+model PharmacyWarehousePutAway {
+  id                 String    @id @default(cuid())
+  organizationId     String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  goodsReceiptLineId String
+  quantityUnits      Int
+  createdAt          DateTime  @default(now())
+  completedAt        DateTime?
+  completedById      String?
+  destinationCode    String?
+  productScan        String?
+  batchScan          String?
+
+  line PharmacyGoodsReceiptLine @relation(fields: [organizationId, branchId, goodsReceiptLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_wh_putaway_line_fk")
+
+  @@unique([organizationId, branchId, goodsReceiptLineId], map: "pharmacy_wh_putaway_line_key")
+  @@index([organizationId, branchId, completedAt, createdAt], map: "pharmacy_wh_putaway_queue_idx")
+  @@map("pharmacy_warehouse_putaways")
+}
+
 /// PUR-02 receiving — what actually arrived, at batch granularity. Every field
 /// the PH-INV lot needs is here, because the lot is built from this row: a lot
 /// that could not name its batch, expiry, printed MRP or pack conversion would
@@ -14346,6 +14466,8 @@ model PharmacyGoodsReceiptLine {
   quarantineLocation PharmacyStockLocation?       @relation("PharmacyReceiptQuarantine", fields: [organizationId, quarantineLocationId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_grl_quarantine_fkey")
   inventoryLot       PharmacyInventoryLot?        @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_lot_fkey")
   exceptions         PharmacyReceivingException[]
+
+  warehousePutAway PharmacyWarehousePutAway?
 
   @@unique([organizationId, id], map: "pharmacy_grl_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_grl_org_branch_id_key")
@@ -17689,4 +17811,76 @@ model PharmacyCompetitorPriceObservation {
   @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
   @@index([organizationId, branchId, medicineId, packLevelId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
   @@map("pharmacy_competitor_price_observations")
+}
+
+
+/// One branch replenishment order may be fulfilled by several approved transfers.
+model PharmacyWarehouseOrder {
+  id             String                         @id @default(cuid())
+  organizationId String
+  branchId       String
+  toBranchId     String
+  transferId     String?
+  status         String                         @default("OPEN")
+  createdById    String
+  createdAt      DateTime                       @default(now())
+  demands        PharmacyWarehouseDemand[]
+  reservations   PharmacyWarehouseReservation[]
+
+  @@unique([organizationId, branchId, id], map: "warehouse_order_org_branch_key")
+  @@index([organizationId, branchId, status])
+  @@map("pharmacy_warehouse_orders")
+}
+
+model PharmacyWarehouseDemand {
+  id                         String                 @id @default(cuid())
+  organizationId             String
+  branchId                   String
+  orderId                    String
+  medicineId                 String
+  destinationStockLocationId String
+  requestedUnits             Int
+  order                      PharmacyWarehouseOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id])
+
+  @@unique([organizationId, branchId, orderId, id], map: "warehouse_demand_order_key")
+  @@unique([orderId, medicineId])
+  @@map("pharmacy_warehouse_demands")
+}
+
+/// Each reservation physically owns units in one WAREHOUSE_RESERVED ledger bucket.
+model PharmacyWarehouseReservation {
+  id                     String                 @id @default(cuid())
+  organizationId         String
+  branchId               String
+  orderId                String
+  demandId               String
+  transferId             String
+  transferLineId         String                 @unique
+  inventoryLotId         String
+  sourceStockLocationId  String
+  stagingStockLocationId String?
+  quantityUnits          Int
+  state                  String                 @default("RESERVED")
+  order                  PharmacyWarehouseOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id])
+
+  @@index([organizationId, branchId, transferId])
+  @@index([organizationId, inventoryLotId, state])
+  @@map("pharmacy_warehouse_reservations")
+}
+
+/// Completed commands provide auditable, exactly-once scan and allocation evidence.
+model PharmacyWarehouseCommand {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  orderId        String
+  actorId        String
+  kind           String
+  key            String
+  payload        Json
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, branchId, key])
+  @@index([organizationId, branchId, orderId])
+  @@map("pharmacy_warehouse_commands")
 }

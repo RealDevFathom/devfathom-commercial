@@ -37,6 +37,8 @@ export type ShelfLabelSource =
 export type ShelfLabelSheet = { title: string; rows: ShelfLabelRow[] };
 
 const UNAVAILABLE: Record<BlockReason, string> = {
+  WAREHOUSE_RESERVED: 'Stock is reserved for a warehouse shipment.',
+  WAREHOUSE_RECEIVING: 'This batch is awaiting warehouse put-away.',
   EXPIRED: 'This batch has expired.',
   RECALLED: 'This batch is recalled.',
   QUARANTINED: 'This batch is quarantined.',

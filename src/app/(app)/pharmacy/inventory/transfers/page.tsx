@@ -116,7 +116,7 @@ export default async function PharmacyTransfersPage({
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
-    select: { id: true, name: true, city: true },
+    select: { id: true, name: true, city: true, warehouseEnabled: true },
   });
   // DEV-660: the gated stock reads admit only a branch the actor is assigned to (or
   // any branch, for a verified tenant ADMIN), so only those branches are offered.
@@ -235,13 +235,19 @@ export default async function PharmacyTransfersPage({
           transferId,
           ...(soloPin ? { soloPin } : {}),
         });
-      } else if (action === 'dispatch')
-        await actionCaller.dispatchTransfer({
+      } else if (action === 'dispatch') {
+        const result = await actionCaller.dispatchTransfer({
           branchId,
           transferId,
           idempotencyKeyPrefix: `ui-dispatch:${transferId}`,
         });
-      else if (action === 'receive')
+        if (result?.status === 'APPROVED')
+          return url(
+            branchId,
+            'Dispatch held. Open Warehouse → Quality to review temperature evidence.',
+            'error'
+          );
+      } else if (action === 'receive')
         await actionCaller.receiveTransferWithVariance(receiveInput(data));
       else throw new Error('Choose a supported transfer action.');
       return url(branchId, SUCCESS[action]);
@@ -314,6 +320,23 @@ export default async function PharmacyTransfersPage({
         </form>
       </SectionCard>
 
+      {(branch.warehouseEnabled ||
+        inbound.some((row) =>
+          branches.some((site) => site.id === row.fromBranch.id && site.warehouseEnabled)
+        )) && (
+        <SectionCard title="Warehouse scans">
+          <p className="mb-3 text-sm text-text-muted">
+            Use the warehouse queue to pick, pack, and receive warehouse stock. A reported shipment
+            shortage can be closed below with a witnessed variance.
+          </p>
+          <Link
+            className={buttonVariants({ variant: 'outline' })}
+            href={`/pharmacy/inventory/warehouse?branch=${encodeURIComponent(branch.id)}`}
+          >
+            Open warehouse queue
+          </Link>
+        </SectionCard>
+      )}
       <SectionCard eyebrow="Owner setting" title="Branch transfers">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0 flex-1 space-y-1 text-sm text-text-muted">

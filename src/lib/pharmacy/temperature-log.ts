@@ -1,3 +1,4 @@
+import { holdWarehouseZoneExposure } from './warehouse-quality';
 import { requestExcursionEvidence } from '@/lib/cameras/excursion-evidence';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -215,6 +216,7 @@ export async function ingestTemperatureReadings(
         branchId: scope.branchId,
         active: true,
       },
+      include: { branch: { select: { warehouseEnabled: true } } },
     });
     if (!location) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
 
@@ -240,6 +242,8 @@ export async function ingestTemperatureReadings(
             : null,
       })),
     });
+    if (location.branch?.warehouseEnabled)
+      await holdWarehouseZoneExposure(tx, scope, location, readings);
     // CAM-3: an excursion in a zone a cold-chain camera watches requests a
     // still in this same transaction, so rolled-back readings request nothing.
     await requestExcursionEvidence(tx, scope, stockLocationId, new Date());

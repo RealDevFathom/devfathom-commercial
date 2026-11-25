@@ -324,6 +324,7 @@ export type ReceiveLotInput = {
    * at all, which is what a wholly rejected delivery looks like.
    */
   quantityUnits: number;
+  acceptedDisposition?: 'AVAILABLE' | 'WAREHOUSE_RECEIVING';
   idempotencyKey: string;
   /** Omit to book goods that have not arrived: the lot stays unreceived. */
   receivedAt?: Date;
@@ -402,7 +403,7 @@ export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: Receiv
       ? await postReceipt(db, scope, {
           inventoryLotId: lot.id,
           stockLocationId: input.stockLocationId,
-          disposition: 'AVAILABLE',
+          disposition: input.acceptedDisposition ?? 'AVAILABLE',
           units: input.quantityUnits,
           unitsPerPack: input.unitsPerPack,
           idempotencyKey: input.idempotencyKey,
@@ -443,7 +444,7 @@ async function postReceipt(
   input: {
     inventoryLotId: string;
     stockLocationId: string;
-    disposition: 'AVAILABLE' | 'QUARANTINE';
+    disposition: 'AVAILABLE' | 'QUARANTINE' | 'WAREHOUSE_RECEIVING';
     units: number;
     unitsPerPack: number;
     idempotencyKey: string;
@@ -952,7 +953,7 @@ export type TransferInput = {
  * quarantine, supplier-return and inter-branch flows, which carry their own
  * status change and approvals.
  */
-const SALEABLE_TRANSFER_DESTINATIONS: ReadonlySet<string> = new Set([
+export const SALEABLE_TRANSFER_DESTINATIONS: ReadonlySet<string> = new Set([
   'STORE',
   'RACK_BIN',
   'FRIDGE',
