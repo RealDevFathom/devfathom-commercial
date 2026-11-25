@@ -5,9 +5,9 @@ Use one central store and two receiving branches of the same organization. Wareh
 ## Prepare the sites
 
 1. Verify both ends of each transfer have active premises profiles, address matches, and current licence evidence. The owner enables recorded transfers in **Stock → Transfers**.
-2. Assign staff to their working branches. Inventory staff submit and fill requests, scan stock, and receive deliveries. Transfer approval uses the existing second-person or eligible solo-owner PIN flow. Safety reviewers record product temperature limits and decide quality incidents. Purchasing staff raise direct supplier requisitions for controlled medicines.
+2. Assign staff to their working branches. Inventory staff submit and fill requests, scan stock, and receive deliveries. Transfer approval uses the existing second-person or eligible solo-owner PIN flow. Warehouse safety staff propose product temperature limits and decide quality incidents. A catalogue reviewer approves product limits for all branches. An eligible owner follows the existing PIN approval flow when no other reviewer is available. Purchasing staff raise direct supplier requisitions for controlled medicines.
 3. In **Stock → Warehouse → Setup**, enable the central store and select empty staging bins. Provide temperature-appropriate staging for refrigerated shipments. Configure the minimum remaining shelf life at each receiving branch. Label receiving, storage, and staging bins with their existing location codes. Print lot shelf labels from pharmacy inventory.
-4. Count stock by bin and batch and reconcile discrepancies. Record labelled temperature limits for refrigerated products in **Quality** and verify that the relevant storage zones have current readings. Check that an online scanner enters the same product, lot, and bin identifiers as keyboard entry.
+4. Count stock by bin and batch and reconcile discrepancies. Submit the labelled range for each refrigerated product in **Quality**. Confirm the approved range is visible before handling it and verify that its storage zones have current readings. Check that an online scanner enters the same product, lot, and bin identifiers as keyboard entry.
 
 ## Run and reconcile a delivery
 

@@ -29,6 +29,8 @@ const editLabels: Record<string, string> = {
   highAlert: 'High alert',
   lasa: 'Look alike / sound alike',
   coldChain: 'Cold chain',
+  minimumStorageTemperatureC: 'Minimum storage temperature',
+  maximumStorageTemperatureC: 'Maximum storage temperature',
   code: 'Barcode',
   type: 'Type',
   level: 'Pack type',
@@ -74,6 +76,11 @@ function displayChange(field: string, value: unknown): string {
   if (value === null && field === 'reorderBranch') return 'Not set from this file';
   if (value === null) return field === 'sellingPriceMinor' ? 'Sell at MRP' : 'Clear value';
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
+  if (
+    (field === 'minimumStorageTemperatureC' || field === 'maximumStorageTemperatureC') &&
+    typeof value === 'number'
+  )
+    return `${value} °C`;
   if (RUPEE_FIELDS.has(field) && typeof value === 'number' && Number.isSafeInteger(value))
     return `Rs ${formatMinor(value)}`;
   if ((field === 'effectiveFrom' || field === 'uploadedAt') && typeof value === 'string') {
@@ -310,7 +317,11 @@ export function CatalogueApprovalQueue({ reviewerView = false }: { reviewerView?
         {queue.data?.map((edit) => {
           const mode = approvalMode(edit.ownEdit);
           return (
-            <article key={edit.id} className="min-w-0 rounded-md border border-border p-4">
+            <article
+              id={`catalogue-edit-${edit.id}`}
+              key={edit.id}
+              className="min-w-0 rounded-md border border-border p-4"
+            >
               <h3 className="mb-2 break-words font-semibold">{edit.medicine.productName}</h3>
               <p className="mb-2 text-sm text-text-muted">
                 {operationLabels[edit.operation] ?? 'Catalogue edit'}

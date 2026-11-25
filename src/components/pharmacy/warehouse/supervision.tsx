@@ -421,7 +421,13 @@ function Temperatures({ branchId }: { branchId: string }) {
     { branchId, query: search.trim() },
     { enabled: search.trim().length >= 2 }
   );
-  const save = trpc.pharmacyWarehouse.setProductTemperatures.useMutation();
+  const propose = trpc.pharmacyWarehouse.proposeProductTemperatures.useMutation();
+  const access = trpc.pharmacyMedicine.catalogueQueueAccess.useQuery(undefined, { retry: false });
+  const utils = trpc.useUtils();
+  const [lastProposal, setLastProposal] = useState<{
+    medicineId: string;
+    proposalId: string;
+  } | null>(null);
   const [medicineId, setMedicineId] = useState('');
   const coldMedicines = catalog.data?.filter((medicine) => medicine.coldChain) ?? [];
   const selected = coldMedicines.find((medicine) => medicine.id === medicineId) ?? coldMedicines[0];
@@ -459,38 +465,57 @@ function Temperatures({ branchId }: { branchId: string }) {
               ))}
             </SelectField>
           </label>
+          <p className="mb-3 text-sm text-text-muted">
+            {selected.minimumStorageTemperatureC == null ||
+            selected.maximumStorageTemperatureC == null
+              ? 'This medicine has no approved storage range.'
+              : `The approved storage range is ${selected.minimumStorageTemperatureC} °C to ${selected.maximumStorageTemperatureC} °C.`}{' '}
+            Changes apply to every branch after catalogue approval.
+          </p>
           <ActionForm
             key={[
               selected.id,
               selected.minimumStorageTemperatureC,
               selected.maximumStorageTemperatureC,
             ].join(':')}
-            label="Save labelled temperature range"
-            success="Product temperature range saved."
-            action={(data) =>
-              save.mutateAsync({
+            label="Submit temperature range for review"
+            success="Temperature proposal submitted for catalogue review."
+            action={async (data) => {
+              const proposal = await propose.mutateAsync({
                 branchId,
                 medicineId: selected.id,
                 minimumC: Number(read(data, 'min')),
                 maximumC: Number(read(data, 'max')),
-              })
-            }
+              });
+              setLastProposal({ medicineId: selected.id, proposalId: proposal.proposalId });
+              await utils.pharmacyMedicine.catalogueEdits.invalidate();
+            }}
           >
             <Field
               name="min"
-              label="Label minimum °C"
+              label="Proposed minimum °C"
               type="number"
               step="any"
               value={selected.minimumStorageTemperatureC ?? undefined}
             />
             <Field
               name="max"
-              label="Label maximum °C"
+              label="Proposed maximum °C"
               type="number"
               step="any"
               value={selected.maximumStorageTemperatureC ?? undefined}
             />
           </ActionForm>
+          {lastProposal?.medicineId === selected.id && access.data?.canDecide && (
+            <Link
+              className={buttonVariants({ variant: 'outline', className: 'mt-3' })}
+              href={
+                '/pharmacy/medicines#catalogue-edit-' + encodeURIComponent(lastProposal.proposalId)
+              }
+            >
+              Open submitted proposal in catalogue review
+            </Link>
+          )}
         </>
       )}
     </SectionCard>

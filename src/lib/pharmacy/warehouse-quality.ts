@@ -181,23 +181,6 @@ export async function warehouseStockQualityReason(
   return null;
 }
 
-export async function setWarehouseProductTemperatures(
-  db: ScopedDb,
-  scope: LedgerScope,
-  input: { medicineId: string; minimumC: number | null; maximumC: number | null }
-) {
-  assertEnvelope({ ...input, evidenceRef: 'product label' });
-  const changed = await db.medicine.updateMany({
-    where: { id: input.medicineId, organizationId: scope.organizationId },
-    data: {
-      minimumStorageTemperatureC: input.minimumC,
-      maximumStorageTemperatureC: input.maximumC,
-    },
-  });
-  if (changed.count !== 1) throw new PharmacyInventoryError('NOT_FOUND');
-  return { medicineId: input.medicineId, minimumC: input.minimumC, maximumC: input.maximumC };
-}
-
 type IncidentInput = {
   inventoryLotId: string;
   stockLocationId: string;

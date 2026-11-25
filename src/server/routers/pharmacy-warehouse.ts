@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { submitCatalogueEdit } from '@/lib/pharmacy/catalogue-approvals';
 import { BranchTransferPolicyError } from '@/lib/pharmacy/branch-transfer-policy';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { actorCanProcure, actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
@@ -24,7 +25,6 @@ import {
   recordWarehouseDispatchEvidence,
   listWarehouseQuality,
   reviewWarehouseQuality,
-  setWarehouseProductTemperatures,
   warehouseRecallTrace,
 } from '@/lib/pharmacy/warehouse-quality';
 import {
@@ -39,7 +39,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { assertProcurementBranch } from '../pharmacy-procurement-scope';
 import { assertModuleLicensed, capabilityProcedure, router, type TRPCContext } from '../trpc';
-import { admittedInventoryBranchIds, admittedScopeFor } from './pharmacy-inventory';
+import {
+  admittedInventoryBranchIds,
+  admittedRecallBranchIds,
+  admittedScopeFor,
+} from './pharmacy-inventory';
 
 const inventory = capabilityProcedure('pharmacy:inventory');
 const safety = capabilityProcedure('pharmacy:safety');
@@ -306,16 +310,34 @@ export const pharmacyWarehouseRouter = router({
     .mutation(({ ctx, input }) =>
       mutate(ctx, input.branchId, (db, scope) => reviewWarehouseQuality(db, scope, input))
     ),
-  setProductTemperatures: safety
+  proposeProductTemperatures: safety
     .input(
       site.extend({ medicineId: id, minimumC: z.number().finite(), maximumC: z.number().finite() })
     )
     .mutation(({ ctx, input }) =>
-      mutate(ctx, input.branchId, (db, scope) => setWarehouseProductTemperatures(db, scope, input))
+      mutate(ctx, input.branchId, async (db, scope) => {
+        const proposal = await submitCatalogueEdit(
+          db,
+          scope,
+          input.medicineId,
+          {
+            minimumStorageTemperatureC: input.minimumC,
+            maximumStorageTemperatureC: input.maximumC,
+          },
+          { reusePendingWarehouseTemperatures: true }
+        );
+        return {
+          medicineId: input.medicineId,
+          minimumC: input.minimumC,
+          maximumC: input.maximumC,
+          proposalId: proposal.id,
+          status: 'PENDING' as const,
+        };
+      })
     ),
   recallTrace: safety.input(site.extend({ noticeId: id })).query(async ({ ctx, input }) => {
     const scope = await admittedScopeFor(ctx, input.branchId);
-    const allowed = await admittedInventoryBranchIds(ctx);
-    return warehouseRecallTrace(ctx.db, scope.organizationId, input.noticeId, [...allowed]);
+    const allowed = await admittedRecallBranchIds(ctx);
+    return warehouseRecallTrace(ctx.db, scope.organizationId, input.noticeId, allowed);
   }),
 });

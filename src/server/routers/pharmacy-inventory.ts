@@ -488,6 +488,17 @@ export async function admittedInventoryBranchIds(ctx: TRPCContext): Promise<Set<
   return new Set(rows.map((row) => row.branchId));
 }
 
+/** Head-office recall history includes inactive premises. Branch staff see only active assignments. */
+export async function admittedRecallBranchIds(ctx: TRPCContext): Promise<string[] | undefined> {
+  const { organizationId, actorId } = actorFor(ctx);
+  if (await tenantAdminException(ctx, organizationId, actorId)) return undefined;
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: activeAssignmentOf(organizationId, actorId),
+    select: { branchId: true },
+  });
+  return assignments.map((row) => row.branchId);
+}
+
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
 
 const DAY_MS = 86_400_000;
@@ -2080,15 +2091,8 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        const { organizationId, actorId } = actorFor(ctx);
-        const branchIds = (await tenantAdminException(ctx, organizationId, actorId))
-          ? undefined
-          : (
-              await ctx.db.pharmacyBranchAssignment.findMany({
-                where: activeAssignmentOf(organizationId, actorId),
-                select: { branchId: true },
-              })
-            ).map((row) => row.branchId);
+        const { organizationId } = actorFor(ctx);
+        const branchIds = await admittedRecallBranchIds(ctx);
         return await recallTrace(ctx.db, organizationId, input.recallNoticeId, branchIds);
       } catch (error) {
         domainError(error);
