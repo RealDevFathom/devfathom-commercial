@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 import { WarehouseWorkspace } from './workspace';
 
@@ -83,3 +83,39 @@ it('keeps warehouse workflow navigation for an inventory operator and owner conf
     expect(screen.getByRole('button', { name: label })).toBeVisible();
   }
 });
+
+it.each([true, false])(
+  'opens approved holds in the supplier return picker only with return access (%s)',
+  (canSupplierReturn) => {
+    api.sites.mockReturnValue({
+      data: [{ id: 'branch', name: 'Branch', accessMode: 'inventory' }],
+    });
+    api.setup.mockReturnValue({ data: { canReview: false, canSupplierReturn } });
+    api.overview.mockReturnValue({ data: undefined });
+    api.quality.mockReturnValue({
+      data: [
+        {
+          id: 'review',
+          inventoryLotId: 'held lot',
+          stockLocationId: 'held/bin',
+          productName: 'Held stock',
+          quantityUnits: 7,
+          status: 'RETURN',
+          binCode: 'Q',
+          reason: 'Approved',
+        },
+      ],
+    });
+    render(<WarehouseWorkspace />);
+    fireEvent.click(screen.getByRole('button', { name: 'Quality' }));
+    const link = screen.queryByRole('link', { name: 'Open branch supplier returns' });
+    if (canSupplierReturn) {
+      expect(link).toHaveAttribute(
+        'href',
+        '/pharmacy/purchasing/returns?branch=branch&lot=held+lot&bin=held%2Fbin#draft-return'
+      );
+    } else {
+      expect(link).toBeNull();
+    }
+  }
+);

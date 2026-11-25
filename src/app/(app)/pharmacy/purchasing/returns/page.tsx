@@ -2,6 +2,7 @@ import { isSolePharmacist } from '@/lib/pharmacy/controlled-restoration-authoriz
 import { approvalSecretKindFor } from '@/lib/approval-authenticator';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { FollowUpQueue } from './follow-up-queue';
+import { ReturnDraftFields } from './return-draft-fields';
 import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
 import type * as React from 'react';
@@ -334,7 +335,7 @@ export default async function PharmacyReturnsPage({
       next = destination(
         ROUTE,
         {
-          message: `${created.reference} drafted. A draft reserves nothing, so the stock is still saleable until you submit it.`,
+          message: `${created.reference} drafted. Submit the return to reserve its quantities for dispatch.`,
           kind: 'success',
         },
         { branch, return: created.id }
@@ -365,7 +366,7 @@ export default async function PharmacyReturnsPage({
           branchId: branch,
           purchaseReturnId,
         });
-        message = 'Return submitted. The quantity is reserved and can no longer be sold.';
+        message = 'Return submitted. The quantity is reserved for supplier dispatch.';
       } else if (action === 'dispatch' || action === 'record-late') {
         await outcome.write(actionCaller.dispatchPurchaseReturn)({
           branchId: branch,
@@ -698,11 +699,16 @@ export default async function PharmacyReturnsPage({
             </SectionCard>
           )}
 
-          <SectionCard eyebrow="Returns" title="Raise a return or expiry claim" titleLevel={2}>
+          <SectionCard
+            id="draft-return"
+            eyebrow="Returns"
+            title="Raise a return or expiry claim"
+            titleLevel={2}
+          >
             {lots.length === 0 ? (
               <EmptyState
-                title="No available stock to return"
-                detail="A return is raised against a lot that is on hand and available at this branch. Nothing here qualifies — quarantined and already-claimed quantities are deliberately not offered."
+                title="No stock eligible for supplier return"
+                detail="This branch has no available units or unclaimed held quantities approved for supplier return."
                 steps={[
                   { label: 'Open the goods-in bench', href: `${PURCHASING_ROUTE}/receiving` },
                 ]}
@@ -714,87 +720,27 @@ export default async function PharmacyReturnsPage({
                 className="space-y-4"
               >
                 <input name="branchId" type="hidden" value={branchId} />
-                <div className="grid gap-4 sm:grid-cols-3">
-                  <TextField label="Reference" name="reference" notice={notice} required />
-                  <SelectField
-                    emptyHint="No suppliers yet — add one on the supplier page."
-                    label="Supplier"
-                    name="supplierId"
-                    notice={notice}
-                    options={workspace.suppliers.map((supplier) => ({
-                      value: supplier.id,
-                      label: supplier.name,
-                    }))}
-                    required
-                  />
-                  <SelectField
-                    defaultValue="PURCHASE_RETURN"
-                    emptyHint="—"
-                    label="Kind"
-                    name="kind"
-                    notice={notice}
-                    options={[
-                      { value: 'PURCHASE_RETURN', label: 'Purchase return' },
-                      { value: 'EXPIRY_CLAIM', label: 'Expiry claim' },
-                    ]}
-                  />
-                </div>
-                <fieldset className="space-y-3">
-                  <legend className="text-sm font-medium text-text-body">
-                    Lots — leave a slot empty to skip it
-                  </legend>
-                  {RETURN_SLOTS.map((slot) => (
-                    <div
-                      className="grid gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-3 sm:grid-cols-2 lg:grid-cols-5"
-                      key={slot}
-                    >
-                      <SelectField
-                        className="lg:col-span-2"
-                        emptyHint="No available lot at this branch."
-                        label={`Line ${slot + 1} — lot`}
-                        name={`lot-${slot}`}
-                        notice={notice}
-                        options={lots.map((balance) => ({
-                          value: `${balance.lot.id}|${balance.location.id}`,
-                          label: `${balance.lot.batch.medicine.productName} · ${batchPhrase(balance.lot.batch.batchNumber, 'batch')} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)} · ${balance.onHandUnits} available in ${balance.location.name}`,
-                        }))}
-                        placeholder="Skip this line"
-                      />
-                      <TextField
-                        inputMode="numeric"
-                        label="Units"
-                        min={1}
-                        name={`quantityUnits-${slot}`}
-                        notice={notice}
-                        type="number"
-                      />
-                      <TextField
-                        label="Return window ends"
-                        name={`returnWindowEndsAt-${slot}`}
-                        notice={notice}
-                        type="date"
-                        hint="The supplier's deadline."
-                      />
-                      <TextField
-                        inputMode="decimal"
-                        label="Expected credit (PKR)"
-                        name={`expectedCredit-${slot}`}
-                        notice={notice}
-                      />
-                      <TextField
-                        className="lg:col-span-5"
-                        label="Reason"
-                        name={`reason-${slot}`}
-                        notice={notice}
-                      />
-                    </div>
-                  ))}
-                </fieldset>
+                <ReturnDraftFields
+                  suppliers={workspace.suppliers.map((supplier) => ({
+                    value: supplier.id,
+                    label: supplier.name,
+                  }))}
+                  lots={lots.map((balance) => ({
+                    key: `${balance.lot.id}|${balance.location.id}`,
+                    label: `${balance.lot.batch.medicine.productName} · ${batchPhrase(balance.lot.batch.batchNumber, 'batch')} · ${formatLotExpiry(balance.lot.batch.expiresAt, (value) => `expires ${dateOnly(value)}`)}`,
+                    locationName: balance.location.name,
+                    availableUnits: balance.onHandUnits,
+                    approvedHeldReturns: balance.approvedHeldReturns,
+                  }))}
+                  slots={RETURN_SLOTS}
+                  linkedLotKey={`${param(query, 'lot')}|${param(query, 'bin')}`}
+                  notice={notice}
+                />
                 <TextAreaField label="Note" name="note" notice={notice} />
                 <SubmitButton>Draft return</SubmitButton>
                 <Derived
                   label="Hold"
-                  value="A draft reserves nothing. The stock stays saleable until the return is submitted."
+                  value="Submit the return to reserve its quantities. Quarantined and damaged units stay on hold until dispatch."
                 />
               </PurchasingActionForm>
             )}
@@ -1103,7 +1049,7 @@ function ReturnDetail({
             <p className="mt-1 text-xs text-text-muted">
               {line.supplierClaimId
                 ? 'Reserved: this quantity cannot be sold or claimed a second time.'
-                : 'Not reserved yet — this quantity is still saleable.'}
+                : 'Awaiting reservation on submission.'}
             </p>
           </li>
         ))}

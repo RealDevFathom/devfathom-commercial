@@ -218,6 +218,176 @@ describe('warehouse temperature, custody and recall on PostgreSQL', () => {
     });
   });
 
+  it('records witnessed disposal of a fully quarantined free lot without posting a zero-value journal', async () => {
+    const f = await fixture();
+    const disposerId = 'disposer-' + tag,
+      witnessId = 'witness-' + tag;
+    const pin = '5837';
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    const pinHash = await hashOperatorCredential('PIN', pin);
+    await tenancy.withPlatformDb((db) =>
+      db.organization.update({
+        where: { id: organizationId },
+        data: { requireApprovalAuthenticator: false },
+      })
+    );
+    const incident = await run(async (db) => {
+      const department = 'DISPOSAL';
+      await db.organizationDepartment.create({
+        data: { organizationId, key: department, name: 'Disposal' },
+      });
+      const role = await db.organizationRole.create({
+        data: {
+          organizationId,
+          key: 'disposal-inventory',
+          name: 'Inventory operator',
+          permissions: {
+            create: { organizationId, capability: 'pharmacy:inventory', effect: 'ALLOW' },
+          },
+        },
+      });
+      for (const id of [disposerId, witnessId]) {
+        await db.user.create({
+          data: {
+            organizationId,
+            id,
+            organizationRoleId: role.id,
+            department,
+            title: 'Store staff',
+            name: id,
+            email: id + '@test.invalid',
+          },
+        });
+        await db.pharmacyBranchAssignment.create({
+          data: { organizationId, branchId: site, userId: id },
+        });
+      }
+      await db.restaurantStaffProfile.create({
+        data: {
+          organizationId,
+          userId: witnessId,
+          displayName: 'Disposal witness',
+          credentials: { create: { organizationId, type: 'PIN', credentialHash: pinHash } },
+        },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          ...from,
+          inventoryLotId: f.lot.id,
+          stockLocationId: f.source.id,
+          kind: 'RECEIPT',
+          disposition: 'QUARANTINE',
+          quantityUnits: 10,
+          sealedPackDelta: 1,
+          looseUnitDelta: 0,
+          idempotencyKey: 'free-held:' + f.lot.id,
+        },
+      });
+      return quality.openWarehouseIncident(db, from, {
+        inventoryLotId: f.lot.id,
+        stockLocationId: f.source.id,
+        quantityUnits: 10,
+        quarantineUnits: 10,
+        reason: 'Damaged free stock',
+        sourceKey: 'free:' + f.lot.id,
+      });
+    });
+    await run((db) =>
+      quality.reviewWarehouseQuality(db, from, {
+        incidentId: incident.id,
+        decision: 'DISPOSE',
+        reason: 'Destruction approved',
+        evidenceRef: 'QA authorisation',
+      })
+    );
+    const { pharmacyInventoryRouter } = await import('@/server/routers/pharmacy-inventory');
+    const dispose = (witnessPin: string) =>
+      run((db) => {
+        const api = pharmacyInventoryRouter.createCaller({
+          db,
+          session: {
+            expires: 'later',
+            user: {
+              organizationId,
+              id: disposerId,
+              role: 'EMPLOYEE',
+              status: 'ACTIVE',
+              department: 'DISPOSAL',
+            },
+          },
+          organization: { id: organizationId, vertical: 'PHARMACY' },
+          entitlements: {
+            organizationId,
+            enabledModules: ['pharmacy-inventory'],
+            modules: [],
+            limits: {},
+            seatLimit: 10,
+            activeSeats: 2,
+          },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as never);
+        return api.writeOff({
+          branchId: site,
+          inventoryLotId: f.lot.id,
+          stockLocationId: f.source.id,
+          disposition: 'QUARANTINE',
+          units: 10,
+          witnessId,
+          witnessPin,
+          reason: 'Approved destruction',
+          evidenceRef: 'Disposal certificate',
+          idempotencyKey: 'free-dispose:' + f.lot.id,
+        });
+      });
+    await expect(dispose('9753')).rejects.toThrow();
+    const written = await dispose(pin);
+    expect(written.movement).toMatchObject({
+      kind: 'WRITE_OFF',
+      disposition: 'QUARANTINE',
+      quantityUnits: -10,
+    });
+    expect(written.custody).toMatchObject({
+      movementId: written.movement.id,
+      witnessId,
+      evidenceRef: 'Disposal certificate',
+    });
+    await expect(dispose(pin)).rejects.toThrow();
+    const result = await run(async (db) => ({
+      writeOffs: await db.pharmacyStockMovement.count({
+        where: { organizationId, inventoryLotId: f.lot.id, kind: 'WRITE_OFF' },
+      }),
+      balance: await db.pharmacyStockBalance.findFirstOrThrow({
+        where: { organizationId, inventoryLotId: f.lot.id, disposition: 'QUARANTINE' },
+      }),
+      journalCount: await db.financeJournalEntry.count({
+        where: {
+          organizationId,
+          sourceKind: 'PHARMACY_STOCK_WRITE_OFF',
+          sourceId: written.movement.id,
+        },
+      }),
+      custodyCount: await db.pharmacyCustodyRecord.count({
+        where: { organizationId, movementId: written.movement.id },
+      }),
+      audit: await db.auditLog.findFirstOrThrow({
+        where: {
+          organizationId,
+          targetId: written.movement.id,
+          action: 'pharmacy.writeOffWitnessConfirmed',
+        },
+      }),
+    }));
+    expect(result).toMatchObject({
+      writeOffs: 1,
+      balance: { onHandUnits: 0 },
+      custodyCount: 1,
+      journalCount: 0,
+      audit: { metadata: { witnessId, pinVerified: true } },
+    });
+  });
+
   it('keeps a storage exposure held after normal readings return, until reviewer release', async () => {
     const f = await fixture();
     await run((db) =>

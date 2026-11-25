@@ -807,6 +807,7 @@ describeIfDatabase('FIN-01 — expiry/damage write-off', () => {
       };
     });
 
+    if (!entry) throw new Error('Expected a journal entry for the valued write-off.');
     expectBalanced(entry);
     expect(entry.sourceId).toBe(movementId);
     expect(totalFor(entry, 'INVENTORY_WRITE_OFF', 'DEBIT')).toBe(12_500);

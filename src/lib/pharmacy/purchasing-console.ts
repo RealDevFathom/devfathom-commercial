@@ -40,6 +40,10 @@ import {
   type SupplierLicenceStatus,
 } from './purchasing';
 import { readSupplierCompliancePolicy, supersededLicenceIds } from './supplier-compliance-policy';
+import {
+  eligibleHeldSupplierReturns,
+  type HeldReturnAuthorization,
+} from './warehouse-supplier-returns';
 import { creditPosition } from './supplier-returns';
 import { goodsReceiptMovementKeys } from './goods-receipt-keys';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -918,21 +922,26 @@ export async function listPurchaseReturns(
   return readPage(rows, parsed, 'createdAt', (row) => ({ at: row.createdAt, id: row.id }));
 }
 
-/**
- * PUR-06 — the lots a return can actually be raised against: on hand, in this
- * branch, with a quantity that is not already reserved by another claim.
- * Offering a lot the domain would refuse is UX rule 12's dead end.
- */
+/** Ordinary return quantities and whole reviewed held lines offered by lot and bin. */
 export async function listReturnableLots(db: ScopedDb, scope: BranchScope) {
-  return db.pharmacyStockBalance.findMany({
+  const authorizations = await eligibleHeldSupplierReturns(db, scope);
+  const balances = await db.pharmacyStockBalance.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      disposition: 'AVAILABLE',
       onHandUnits: { gt: 0 },
+      OR: [
+        { disposition: 'AVAILABLE' },
+        ...authorizations.map(({ inventoryLotId, stockLocationId, disposition }) => ({
+          inventoryLotId,
+          stockLocationId,
+          disposition,
+        })),
+      ],
     },
     orderBy: [{ inventoryLotId: 'asc' }, { stockLocationId: 'asc' }],
     select: {
+      disposition: true,
       onHandUnits: true,
       location: { select: { id: true, name: true } },
       lot: {
@@ -951,6 +960,37 @@ export async function listReturnableLots(db: ScopedDb, scope: BranchScope) {
       },
     },
   });
+  const binKey = (lotId: string, binId: string) => JSON.stringify([lotId, binId]);
+  type HeldOption = Pick<HeldReturnAuthorization, 'supplierId' | 'quantityUnits' | 'disposition'>;
+  const heldByBin = new Map<string, HeldOption[]>();
+  for (const {
+    inventoryLotId,
+    stockLocationId,
+    supplierId,
+    quantityUnits,
+    disposition,
+  } of authorizations) {
+    const key = binKey(inventoryLotId, stockLocationId);
+    const options = heldByBin.get(key) ?? [];
+    options.push({ supplierId, quantityUnits, disposition });
+    heldByBin.set(key, options);
+  }
+  type ReturnableLot = Omit<(typeof balances)[number], 'disposition'> & {
+    approvedHeldReturns: HeldOption[];
+  };
+  const rows = new Map<string, ReturnableLot>();
+  for (const { lot, location, disposition, onHandUnits } of balances) {
+    const key = binKey(lot.id, location.id);
+    const row = rows.get(key) ?? {
+      lot,
+      location,
+      onHandUnits: 0,
+      approvedHeldReturns: heldByBin.get(key) ?? [],
+    };
+    if (disposition === 'AVAILABLE') row.onHandUnits = onHandUnits;
+    rows.set(key, row);
+  }
+  return [...rows.values()];
 }
 
 /**

@@ -166,10 +166,18 @@ export const pharmacyWarehouseRouter = router({
         actorCanProcure(ctx.db, actorId),
       ]
     );
+    const procurementEnabled = canPurchase && hasModule(ctx.entitlements, 'pharmacy-procurement');
     return {
       canConfigure,
       canReview,
-      canPurchase: canPurchase && hasModule(ctx.entitlements, 'pharmacy-procurement'),
+      canPurchase: procurementEnabled,
+      canSupplierReturn:
+        procurementEnabled &&
+        (await can(subjectFromSession(ctx.session.user), 'reports:financial', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta?.ip ?? null,
+        })),
       enabled: branch.warehouseEnabled,
       minimumShelfLifeDays: branch.warehouseMinimumShelfLifeDays,
       locations,

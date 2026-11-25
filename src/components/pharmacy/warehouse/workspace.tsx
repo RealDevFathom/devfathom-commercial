@@ -102,7 +102,13 @@ function Site({ branchId }: { branchId: string }) {
       {selected === 'Put-away' && <PutAway branchId={branchId} />}
       {selected === 'Pick and pack' && <Outbound branchId={branchId} />}
       {selected === 'Arrivals' && <Arrivals branchId={branchId} />}
-      {selected === 'Quality' && <QualityReview branchId={branchId} canReview={config.canReview} />}
+      {selected === 'Quality' && (
+        <QualityReview
+          branchId={branchId}
+          canReview={config.canReview}
+          canSupplierReturn={config.canSupplierReturn}
+        />
+      )}
       {selected === 'Setup' && <WarehouseSetup branchId={branchId} />}
     </div>
   );

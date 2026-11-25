@@ -33,6 +33,7 @@ import { appendControlledSupplierReturn, lockRegister } from './controlled-regis
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { eligibleHeldSupplierReturns } from './warehouse-supplier-returns';
 import { postSupplierClaimEntry } from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
@@ -218,24 +219,35 @@ export async function submitPurchaseReturn(
   const found = await loadReturn(db, scope, input.purchaseReturnId);
   assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'SUBMITTED');
 
-  const quality = await db.pharmacyWarehouseQualityIncident.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      status: 'RETURN',
-      supplierReturnLineId: null,
-      inventoryLotId: { in: found.lines.map((line) => line.inventoryLotId) },
-    },
-    orderBy: { createdAt: 'asc' },
-  });
+  // DEV-825: lock every line's lot balances in the global key order first, so
+  // the per-line claim checks below only re-enter locks this return holds.
+  await lockStockRowsFrom(
+    db,
+    scope.organizationId,
+    Prisma.sql`SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
+      balance."disposition"::text AS "disposition"
+      FROM "pharmacy_stock_balances" balance
+      WHERE balance."organizationId" = ${scope.organizationId}
+        AND balance."branchId" = ${scope.branchId}
+        AND balance."disposition" IN ('AVAILABLE', 'QUARANTINE', 'DAMAGED')
+        AND balance."inventoryLotId" IN (${Prisma.join(
+          found.lines.length ? found.lines.map((line) => line.inventoryLotId) : ['']
+        )})`,
+    { balance: true }
+  );
+  const quality = await eligibleHeldSupplierReturns(
+    db,
+    scope,
+    found.lines.map((line) => line.inventoryLotId)
+  );
   const heldLines = new Set<string>();
   for (const line of found.lines) {
     const index = quality.findIndex(
       (q) =>
+        q.supplierId === found.supplierId &&
         q.inventoryLotId === line.inventoryLotId &&
         q.stockLocationId === line.stockLocationId &&
-        (q.sourceKey.startsWith('damage:') ? q.quantityUnits : q.quarantineUnits) ===
-          line.quantityUnits
+        q.quantityUnits === line.quantityUnits
     );
     if (index < 0) continue;
     const [incident] = quality.splice(index, 1);
@@ -247,22 +259,6 @@ export async function submitPurchaseReturn(
     heldLines.add(line.id);
   }
 
-  // DEV-825: lock every line's lot balances in the global key order first, so
-  // the per-line claim checks below only re-enter locks this return holds.
-  await lockStockRowsFrom(
-    db,
-    scope.organizationId,
-    Prisma.sql`SELECT balance."branchId", balance."inventoryLotId", balance."stockLocationId",
-      balance."disposition"::text AS "disposition"
-      FROM "pharmacy_stock_balances" balance
-      WHERE balance."organizationId" = ${scope.organizationId}
-        AND balance."branchId" = ${scope.branchId}
-        AND balance."disposition" = 'AVAILABLE'
-        AND balance."inventoryLotId" IN (${Prisma.join(
-          found.lines.length ? found.lines.map((line) => line.inventoryLotId) : ['']
-        )})`,
-    { balance: true }
-  );
   for (const line of found.lines) {
     assertReturnWindowOpen({ returnWindowEndsAt: line.returnWindowEndsAt, at: input.at });
     if (!heldLines.has(line.id)) {

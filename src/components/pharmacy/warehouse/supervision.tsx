@@ -331,10 +331,12 @@ export function QualityReview({
   branchId,
   canReview,
   canOperateStock = true,
+  canSupplierReturn = false,
 }: {
   branchId: string;
   canReview: boolean;
   canOperateStock?: boolean;
+  canSupplierReturn?: boolean;
 }) {
   const queue = trpc.pharmacyWarehouse.quality.useQuery({ branchId });
   const review = trpc.pharmacyWarehouse.reviewQuality.useMutation();
@@ -393,12 +395,12 @@ export function QualityReview({
                   <Field name="evidence" label="Supporting evidence reference" />
                 </ActionForm>
               )}
-              {row.status === 'RETURN' && canOperateStock && (
+              {row.status === 'RETURN' && canSupplierReturn && (
                 <Link
                   className={buttonVariants({ variant: 'outline' })}
-                  href={'/pharmacy/purchasing/returns?branch=' + encodeURIComponent(branchId)}
+                  href={`/pharmacy/purchasing/returns?${new URLSearchParams({ branch: branchId, lot: row.inventoryLotId, bin: row.stockLocationId })}#draft-return`}
                 >
-                  Open supplier returns to record dispatch
+                  Open branch supplier returns
                 </Link>
               )}
               {row.status === 'DISPOSE' && canOperateStock && (

@@ -147,6 +147,8 @@ export function SelectField({
   emptyHint,
   hint,
   defaultValue,
+  value,
+  onChange,
   required,
   placeholder,
   className,
@@ -158,6 +160,8 @@ export function SelectField({
   emptyHint: React.ReactNode;
   hint?: React.ReactNode;
   defaultValue?: string;
+  value?: string;
+  onChange?: React.ChangeEventHandler<HTMLSelectElement>;
   required?: boolean;
   placeholder?: string;
   className?: string;
@@ -175,7 +179,12 @@ export function SelectField({
   return (
     <Field className={className} label={label} name={name} notice={notice} hint={hint}>
       {(control) => (
-        <select {...control} defaultValue={defaultValue ?? ''} required={required}>
+        <select
+          {...control}
+          {...(value === undefined ? { defaultValue: defaultValue ?? '' } : { value })}
+          onChange={onChange}
+          required={required}
+        >
           <option disabled={required} value="">
             {placeholder ?? 'Choose…'}
           </option>

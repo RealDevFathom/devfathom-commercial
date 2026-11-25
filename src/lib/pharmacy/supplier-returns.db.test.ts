@@ -86,6 +86,7 @@ type Scenario = {
   packLevelId: string;
   locationId: string;
   supplierId: string;
+  supplierName: string;
 };
 
 async function scenario(organizationId: string, label: string): Promise<Scenario> {
@@ -133,6 +134,7 @@ async function scenario(organizationId: string, label: string): Promise<Scenario
       packLevelId: packLevel.id,
       locationId: location.id,
       supplierId: supplier.id,
+      supplierName: supplier.name,
     };
   });
 }
@@ -157,7 +159,7 @@ async function stockLot(db: ScopedDb, fixture: Scenario, units: number, label: s
     packLevelId: fixture.packLevelId,
     stockLocationId: fixture.locationId,
     unitsPerPack: 10,
-    supplierName: 'Distributor Ltd',
+    supplierName: fixture.supplierName,
     supplierInvoiceRef: `INV-${tag(label)}`,
     unitCostMinor: 1200,
     printedMrpMinor: 2000,
@@ -228,66 +230,182 @@ beforeAll(async () => {
 // ── PUR-06 acceptance: a claimed quantity cannot be sold ────────────────────
 
 describeIfDatabase('PUR-06 — a claimed quantity leaves saleable stock', () => {
-  it('a quality-reviewed return dispatches quarantined units through the supplier document', async () => {
-    const fixture = await scenario(ORG_A, 'warehouse-return');
+  it.each([
+    { approved: 30, damaged: false, disposition: 'QUARANTINE' },
+    { approved: 40, damaged: false, disposition: 'QUARANTINE' },
+    { approved: 40, damaged: true, disposition: 'DAMAGED' },
+  ])(
+    'offers exactly the reviewed $approved units of $disposition through the returns picker and dispatches them',
+    async ({ approved, damaged, disposition }) => {
+      const fixture = await scenario(ORG_A, 'warehouse-return');
+      const scope = scopeOf(fixture);
+      const { openWarehouseIncident, reviewWarehouseQuality } = await import('./warehouse-quality');
+      const { quarantinePart } = await import('./inventory-operations');
+      const { listReturnableLots } = await import('./purchasing-console');
+      await inOrg(ORG_A, async (db) => {
+        const lot = await stockLot(db, fixture, 40, 'warehouse-return');
+        const held = { inventoryLotId: lot.id, stockLocationId: fixture.locationId };
+        const choice = async () =>
+          (await listReturnableLots(db, scope)).find(
+            (row) => row.lot.id === lot.id && row.location.id === fixture.locationId
+          );
+        await quarantinePart(db, scope, {
+          ...held,
+          units: approved,
+          damaged,
+          reason: 'Zone excursion',
+          idempotencyKeyPrefix: tag('wh-hold'),
+        });
+        const incident = await openWarehouseIncident(db, scope, {
+          ...held,
+          quantityUnits: approved,
+          quarantineUnits: damaged ? 0 : approved,
+          reason: 'Zone excursion',
+          sourceKey: (damaged ? 'damage:' : '') + tag('qa'),
+        });
+        const beforeReview = await choice();
+        if (approved === 40) expect(beforeReview).toBeUndefined();
+        else expect(beforeReview).toMatchObject({ onHandUnits: 10, approvedHeldReturns: [] });
+        const review = {
+          decision: 'RETURN' as const,
+          evidenceRef: 'Supplier QA instructions',
+          reason: 'Return recalled stock',
+        };
+        await reviewWarehouseQuality(db, scope, { incidentId: incident.id, ...review });
+        if (approved === 40) {
+          // An overlapping decision cannot spend the same physical units twice, including
+          // while the first document is submitted and its physical dispatch is pending.
+          const overlap = await openWarehouseIncident(db, scope, {
+            ...held,
+            quantityUnits: approved,
+            quarantineUnits: damaged ? 0 : approved,
+            reason: 'Second excursion',
+            sourceKey: (damaged ? 'damage:' : '') + tag('overlap'),
+          });
+          await reviewWarehouseQuality(db, scope, { incidentId: overlap.id, ...review });
+        }
+        const picked = await choice();
+        expect(picked).toMatchObject({
+          onHandUnits: 40 - approved,
+          approvedHeldReturns: [
+            { quantityUnits: approved, disposition, supplierId: fixture.supplierId },
+          ],
+        });
+        const option = picked!.approvedHeldReturns[0]!;
+        const draft = await deps.returns.createPurchaseReturn(db, scope, {
+          supplierId: option.supplierId,
+          kind: 'PURCHASE_RETURN',
+          reference: tag('return-doc'),
+          lines: [
+            {
+              ...line(
+                fixture,
+                picked!.lot.id,
+                option.quantityUnits,
+                option.quantityUnits * picked!.lot.unitCostMinor
+              ),
+              stockLocationId: picked!.location.id,
+            },
+          ],
+        });
+        const submitted = await deps.returns.submitPurchaseReturn(db, scope, {
+          purchaseReturnId: draft.id,
+          at: NOW,
+        });
+        expect((await choice())?.approvedHeldReturns ?? []).toEqual([]);
+        await deps.returns.dispatchPurchaseReturn(db, scope, {
+          purchaseReturnId: draft.id,
+          at: NOW,
+          idempotencyKeyPrefix: tag('qa-return'),
+        });
+        expect((await choice())?.approvedHeldReturns ?? []).toEqual([]);
+        const linked = await db.pharmacyWarehouseQualityIncident.findMany({
+          where: { ...held, supplierReturnLineId: submitted.lines[0]!.id },
+        });
+        expect(linked).toHaveLength(1);
+        expect(
+          await db.pharmacyStockBalance.findMany({
+            where: { inventoryLotId: lot.id, onHandUnits: { gt: 0 } },
+            orderBy: { disposition: 'asc' },
+            select: { disposition: true, onHandUnits: true },
+          })
+        ).toEqual([
+          ...(approved < 40 ? [{ disposition: 'AVAILABLE', onHandUnits: 40 - approved }] : []),
+          { disposition: 'RETURN_TO_SUPPLIER', onHandUnits: approved },
+        ]);
+      });
+    }
+  );
+
+  it('refuses another vendor, bin, or quantity for a fully held lot', async () => {
+    const fixture = await scenario(ORG_A, 'held-mismatch');
+    const other = await scenario(ORG_A, 'other-vendor');
     const scope = scopeOf(fixture);
     const { openWarehouseIncident, reviewWarehouseQuality } = await import('./warehouse-quality');
     const { quarantinePart } = await import('./inventory-operations');
-    const result = await inOrg(ORG_A, async (db) => {
-      const lot = await stockLot(db, fixture, 40, 'warehouse-return');
+    const { listReturnableLots } = await import('./purchasing-console');
+    const lotId = await inOrg(ORG_A, async (db) => {
+      const lot = await stockLot(db, fixture, 20, 'mismatch');
       const held = { inventoryLotId: lot.id, stockLocationId: fixture.locationId };
       await quarantinePart(db, scope, {
         ...held,
-        units: 30,
-        reason: 'Zone excursion',
-        idempotencyKeyPrefix: tag('wh-hold'),
+        units: 20,
+        reason: 'Damaged packaging',
+        idempotencyKeyPrefix: tag('hold'),
       });
-      const incident = await openWarehouseIncident(db, scope, {
-        ...held,
-        quantityUnits: 30,
-        quarantineUnits: 30,
-        reason: 'Zone excursion',
-        sourceKey: tag('qa'),
-      });
-      await reviewWarehouseQuality(db, scope, {
-        incidentId: incident.id,
-        decision: 'RETURN',
-        evidenceRef: 'Supplier QA instructions',
-        reason: 'Return recalled stock',
-      });
-      const draft = await deps.returns.createPurchaseReturn(db, scope, {
-        supplierId: fixture.supplierId,
-        kind: 'PURCHASE_RETURN',
-        reference: tag('return-doc'),
-        lines: [line(fixture, lot.id, 30, 36_000)],
-      });
-      const submitted = await deps.returns.submitPurchaseReturn(db, scope, {
-        purchaseReturnId: draft.id,
-        at: NOW,
-      });
-      await deps.returns.dispatchPurchaseReturn(db, scope, {
-        purchaseReturnId: draft.id,
-        at: NOW,
-        idempotencyKeyPrefix: tag('qa-return'),
-      });
-      return {
-        submitted,
-        balances: await db.pharmacyStockBalance.findMany({
-          where: { inventoryLotId: lot.id, onHandUnits: { gt: 0 } },
-          select: { disposition: true, onHandUnits: true },
-        }),
-        reviewed: await db.pharmacyWarehouseQualityIncident.findUniqueOrThrow({
-          where: { id: incident.id },
-        }),
-      };
+      for (const [bin, qty] of [
+        [fixture.locationId, 20],
+        [other.locationId, 10],
+        [fixture.locationId, 30],
+      ] as const) {
+        const incident = await openWarehouseIncident(db, scope, {
+          ...held,
+          stockLocationId: bin,
+          quantityUnits: qty,
+          quarantineUnits: qty,
+          reason: 'Vendor requested return',
+          sourceKey: tag('review'),
+        });
+        await reviewWarehouseQuality(db, scope, {
+          incidentId: incident.id,
+          decision: 'RETURN',
+          reason: 'Supplier instructions',
+          evidenceRef: tag('warranty'),
+        });
+      }
+      expect(
+        (await listReturnableLots(db, scope)).filter((row) => row.lot.id === lot.id)
+      ).toMatchObject([
+        {
+          location: { id: fixture.locationId },
+          onHandUnits: 0,
+          approvedHeldReturns: [
+            { supplierId: fixture.supplierId, disposition: 'QUARANTINE', quantityUnits: 20 },
+          ],
+        },
+      ]);
+      return lot.id;
     });
-    expect(result.reviewed.supplierReturnLineId).toBe(result.submitted.lines[0]!.id);
-    expect(result.balances).toEqual(
-      expect.arrayContaining([
-        { disposition: 'AVAILABLE', onHandUnits: 10 },
-        { disposition: 'RETURN_TO_SUPPLIER', onHandUnits: 30 },
-      ])
-    );
+    for (const [supplierId, stockLocationId, qty] of [
+      [other.supplierId, fixture.locationId, 20],
+      [fixture.supplierId, other.locationId, 10],
+      [fixture.supplierId, fixture.locationId, 10],
+    ] as const) {
+      await expect(
+        inOrg(ORG_A, async (db) => {
+          const draft = await deps.returns.createPurchaseReturn(db, scope, {
+            supplierId,
+            kind: 'PURCHASE_RETURN',
+            reference: tag('bad-draft'),
+            lines: [{ ...line(fixture, lotId, qty, 100), stockLocationId }],
+          });
+          return deps.returns.submitPurchaseReturn(db, scope, {
+            purchaseReturnId: draft.id,
+            at: NOW,
+          });
+        })
+      ).rejects.toMatchObject({ reason: 'ALREADY_CLAIMED' });
+    }
   });
 
   it('a DRAFT return reserves nothing, so the stock is still sellable', async () => {

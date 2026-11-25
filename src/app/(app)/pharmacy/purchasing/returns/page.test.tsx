@@ -1,5 +1,5 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, within } from '@testing-library/react';
 
 const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
@@ -220,4 +220,46 @@ it('shows a no-expiry return line as "No expiry", never 9998-12-31 (QA-3)', asyn
   const line = screen.getByText(/Batch RETAIL-NOEXP/);
   expect(line).toHaveTextContent('Batch RETAIL-NOEXP · No expiry ·');
   expect(line.textContent).not.toContain('9998');
+});
+
+it('keeps ordinary stock separate from exact approved quantities in the same bin', async () => {
+  reads.workspace.mockResolvedValue({
+    branches: [{ id: 'branch', name: 'Branch', stockLocations: [] }],
+    suppliers: [{ id: 'supplier', name: 'Supplier A' }],
+    medicines: [],
+    approvers: [],
+  });
+  reads.returnableLots.mockResolvedValue([
+    {
+      lot: {
+        id: 'mixed',
+        batch: {
+          batchNumber: 'MIXED',
+          expiresAt: NO_EXPIRY_MARKER,
+          medicine: { productName: 'Eye rinse' },
+        },
+      },
+      location: { id: 'bin', name: 'Return shelf' },
+      onHandUnits: 3,
+      approvedHeldReturns: [{ supplierId: 'supplier', disposition: 'DAMAGED', quantityUnits: 7 }],
+    },
+  ]);
+  render(await ReturnsPage({ searchParams: params() }));
+  const form = screen.getByRole('button', { name: 'Draft return' }).closest('form')!;
+  const fields = within(form);
+  fireEvent.change(fields.getByLabelText('Supplier'), { target: { value: 'supplier' } });
+  expect(
+    fields.getAllByText(/3 available · 7 damaged units approved for return in Return shelf/)
+  ).toHaveLength(3);
+  fireEvent.change(fields.getByLabelText('Line 1 — lot'), { target: { value: 'mixed|bin' } });
+  const quantity = fields.getAllByLabelText('Units')[0] as HTMLInputElement;
+  for (const [units, valid] of [
+    [2, true],
+    [4, false],
+    [7, true],
+    [10, false],
+  ] as const) {
+    fireEvent.change(quantity, { target: { value: String(units) } });
+    expect(quantity.validity.valid).toBe(valid);
+  }
 });
