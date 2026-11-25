@@ -1,3 +1,19 @@
+import { can, subjectFromSession } from '@/lib/abac';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
+import { hasModule } from '@/lib/entitlements';
+import { pharmacyRefundPostingMutation } from '@/server/pharmacy-finance-gate';
+import {
+  requirePharmacyFinance,
+  canManagePharmacyAccounts,
+  canAccessPharmacyFinance,
+} from '@/lib/pharmacy/finance-access';
+import {
+  providerRefundAccounts,
+  changeProviderRefund,
+  loadOriginalReview,
+  otherRefundCorrectionApprovers,
+  refundCalendarDay,
+} from '@/lib/pharmacy/card-terminal/provider-refunds';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -36,7 +52,7 @@ import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
 
-import { protectedProcedure, router } from '../trpc';
+import { protectedProcedure, router, type TRPCContext } from '../trpc';
 import { failPharmacySale, requireCounterReceiptAccess } from './pharmacy-sales';
 
 /**
@@ -76,23 +92,35 @@ export function cardTerminalOwnChargeMessage(name: string | null) {
     : `${CARD_TERMINAL_REVIEW_OWN_CHARGE} Ask another manager or owner at this branch to resolve it.`;
 }
 
+async function mayPostRefund(ctx: Parameters<typeof canManagePharmacyAccounts>[0]) {
+  return (
+    (await canAccessPharmacyFinance(ctx.session.user, { db: ctx.db, source: 'TRPC' })) &&
+    (await canManagePharmacyAccounts(ctx)) &&
+    (await can(subjectFromSession(ctx.session.user), 'admin:access', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  );
+}
+
 /**
  * Whether the signed-in person may resolve THIS attempt's review, for the counter to show the form
  * or a plain line. The server checks again on resolve, inside the write's transaction.
  */
 async function reviewAccessFor(
-  ctx: { db: unknown; session: { user: Parameters<typeof actorMayRefund>[1] } | null },
+  ctx: Parameters<typeof mayPostRefund>[0],
   scope: LedgerScope,
   attempt: { actorId: string }
 ): Promise<CardTerminalReviewAccess> {
   if (!(await actorMayRefund(ctx.db as ScopedDb, ctx.session!.user)))
-    return { mayResolve: false, selfResolve: false, askName: null };
+    return { mayPostRefund: false, mayResolve: false, selfResolve: false, askName: null };
+  const postingAllowed = await mayPostRefund(ctx);
   if (attempt.actorId !== scope.actorId)
-    return { mayResolve: true, selfResolve: false, askName: null };
+    return { mayPostRefund: postingAllowed, mayResolve: true, selfResolve: false, askName: null };
   const [other] = await otherCardTerminalReviewers(ctx.db as ScopedDb, scope);
   return other
-    ? { mayResolve: false, selfResolve: false, askName: other.name }
-    : { mayResolve: true, selfResolve: true, askName: null };
+    ? { mayPostRefund: false, mayResolve: false, selfResolve: false, askName: other.name }
+    : { mayPostRefund: postingAllowed, mayResolve: true, selfResolve: true, askName: null };
 }
 const attemptKey = z.string().regex(/^[A-Za-z0-9:_-]{8,128}$/);
 
@@ -165,7 +193,283 @@ function fail(error: unknown): never {
   return failPharmacySale(error);
 }
 
+async function requireReviewer(ctx: TRPCContext, branch: string) {
+  const scope = await requireCounterReceiptAccess(ctx, branch, true);
+  if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+    throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
+  return scope;
+}
+
+async function requireRefundAccountsAccess(ctx: TRPCContext, branch: string) {
+  if (!hasModule(ctx.entitlements, 'pharmacy-finance'))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy finance access is required to manage card provider refunds.',
+    });
+  return requireReviewer(ctx, branch);
+}
+
 export const pharmacyCardTerminalRouter = router({
+  providerRefunds: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireRefundAccountsAccess(ctx, input.branchId);
+      await requirePharmacyFinance(ctx);
+      const records = await providerRefundAccounts(ctx.db as ScopedDb, scope);
+      const historical = await ctx.db.$queryRaw<
+        {
+          id: string;
+          attemptId: string;
+          attemptKey: string;
+          status: string;
+          createdAt: Date;
+          originalActorId: string;
+          reference: string | null;
+          amountMinor: number | null;
+        }[]
+      >`
+      SELECT 'review:'||a.id AS id,a.id AS "attemptId",a."attemptKey",a.status,a."resolvedAt" AS "createdAt",a."resolvedById" AS "originalActorId",a."resolutionRef" AS reference,COALESCE(a."approvedAmountMinor", CASE WHEN a."reviewReason" IS DISTINCT FROM 'Terminal approved a different amount' THEN a."amountMinor" END) AS "amountMinor"
+      FROM pharmacy_card_terminal_attempts a WHERE a."organizationId"=${scope.organizationId} AND a."branchId"=${scope.branchId} AND a.status IN ('REVERSED','DECLINED') AND a."resolvedById" IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM pharmacy_terminal_refund_events e WHERE e."attemptId"=a.id)`;
+      const db = ctx.db as ScopedDb;
+      const peers = await otherRefundCorrectionApprovers(db, scope);
+      return {
+        booked: records.filter((row) => row.remainingMinor > 0),
+        records,
+        historical,
+        actorId: scope.actorId,
+        peers,
+        owner:
+          peers.length === 0 &&
+          (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId)),
+        today: await refundCalendarDay(ctx.db as ScopedDb, scope.organizationId),
+        canWrite: await mayPostRefund(ctx),
+      };
+    }),
+  reviewHistory: protectedProcedure
+    .input(z.object({ branchId, attemptKey }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireRefundAccountsAccess(ctx, input.branchId);
+      await requirePharmacyFinance(ctx);
+      const where = { organizationId: scope.organizationId, branchId: scope.branchId };
+      const attempt = await ctx.db.pharmacyCardTerminalAttempt.findFirst({
+        where: { ...where, attemptKey: input.attemptKey },
+        select: {
+          id: true,
+          status: true,
+          resolvedById: true,
+          resolvedAt: true,
+          resolutionReason: true,
+        },
+      });
+      if (!attempt)
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'No terminal review was found at this branch.',
+        });
+      const events = await ctx.db.pharmacyTerminalRefundEvent.findMany({
+        where: { ...where, attemptId: attempt.id },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          previousId: true,
+          kind: true,
+          amountMinor: true,
+          createdAt: true,
+          reason: true,
+          actorId: true,
+          secondApproverId: true,
+          journalId: true,
+          slipRef: true,
+          settledOn: true,
+          remainingMinor: true,
+          selfApproved: true,
+        },
+      });
+      const reviewerIds = new Set(
+        events.flatMap((e) => (e.secondApproverId ? [e.actorId, e.secondApproverId] : [e.actorId]))
+      );
+      if (attempt.resolvedById) reviewerIds.add(attempt.resolvedById);
+      const reviewers = await ctx.db.user.findMany({
+        where: { organizationId: scope.organizationId, id: { in: [...reviewerIds] } },
+        select: { id: true, name: true },
+      });
+      const names = new Map(reviewers.map((person) => [person.id, person.name]));
+      const nameFor = (id: string) => names.get(id) || 'Former team member';
+      return {
+        attempt: {
+          ...attempt,
+          reviewerName: attempt.resolvedById ? nameFor(attempt.resolvedById) : null,
+        },
+        originalReviewId: attempt.resolvedById ? 'review:' + attempt.id : null,
+        events: events.map((e) => ({
+          ...e,
+          actorName: nameFor(e.actorId),
+          secondApproverName: e.secondApproverId ? nameFor(e.secondApproverId) : null,
+        })),
+      };
+    }),
+  recordRefundAction: pharmacyRefundPostingMutation
+    .input(
+      z
+        .object({
+          branchId,
+          previousId: z.string().min(1).max(200),
+          commandKey: attemptKey,
+          kind: z.enum(['DECLINED', 'OWED', 'SETTLED', 'BOOK_HISTORICAL']),
+          resolutionReason: z.string().trim().min(3).max(200),
+          slipRef: z.string().trim().min(1).max(64),
+          managerPin: z.string().regex(/^\d{4,8}$/),
+          declareSelfApproval: z.literal(true).optional(),
+          settlementAmountMinor: z.number().int().positive().max(2147483647).optional(),
+          settledOn: z.string().date().optional(),
+          secondApproval: z
+            .object({
+              userId: z.string().min(1).max(128),
+              managerPin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
+          verifiedAmountMinor: z.number().int().positive().max(2147483647).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireRefundAccountsAccess(ctx, input.branchId);
+      const db = ctx.db as ScopedDb;
+      const action = 'pharmacyCardTerminal.recordRefundAction';
+      const pinArgs = {
+        organizationId: scope.organizationId,
+        action,
+        policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+      };
+      const previous = await db.pharmacyTerminalRefundEvent.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          id: input.previousId,
+        },
+      });
+      const attemptId =
+        previous?.attemptId ??
+        (input.previousId.startsWith('review:') ? input.previousId.slice(7) : '');
+      const attempt = await db.pharmacyCardTerminalAttempt.findFirst({
+        where: { organizationId: scope.organizationId, branchId: scope.branchId, id: attemptId },
+      });
+      if (!attempt) throw new TRPCError({ code: 'NOT_FOUND' });
+      if (input.kind === 'SETTLED' && (!input.settlementAmountMinor || !input.settledOn))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Enter the settlement amount and date.',
+        });
+      const originalActorId = previous?.refundId
+        ? (
+            await db.pharmacyTerminalRefundEvent.findFirstOrThrow({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                id: 'refund:' + previous.refundId,
+              },
+              select: { actorId: true },
+            })
+          ).actorId
+        : attempt.resolvedById;
+      const needsPeer =
+        (input.kind === 'DECLINED' || input.kind === 'OWED') &&
+        (previous?.actorId === scope.actorId || originalActorId === scope.actorId);
+      if (attempt.actorId === scope.actorId) {
+        const others = await otherCardTerminalReviewers(db, scope);
+        if (others.length)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: cardTerminalOwnChargeMessage(others[0].name),
+          });
+      }
+      if (needsPeer || input.secondApproval) {
+        const peers = await otherRefundCorrectionApprovers(db, scope);
+        if (
+          !peers.some((p) => p.id === input.secondApproval?.userId) &&
+          !(
+            needsPeer &&
+            !input.secondApproval &&
+            input.declareSelfApproval &&
+            peers.length === 0 &&
+            (await actorIsPharmacyOwner(db, scope.organizationId, scope.actorId))
+          )
+        )
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Independent approval is required. A sole owner must declare self-approval.',
+          });
+      }
+      const pin = await authenticateRefundPin({
+        ...pinArgs,
+        actorId: scope.actorId,
+        pin: input.managerPin,
+      });
+      if ('blocked' in pin) return pin;
+      if (input.secondApproval) {
+        const witness = await authenticateRefundPin({
+          ...pinArgs,
+          actorId: input.secondApproval.userId,
+          requestedById: scope.actorId,
+          pin: input.secondApproval.managerPin,
+        });
+        if ('blocked' in witness) return witness;
+      }
+      return ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        await requireRefundAccountsAccess({ ...ctx, db }, scope.branchId);
+        if (input.kind === 'BOOK_HISTORICAL') {
+          if (input.previousId !== 'review:' + attempt.id || attempt.status !== 'REVERSED')
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Choose an original refund-owed review.',
+            });
+          const root = await loadOriginalReview(db, scope, attemptId, input.verifiedAmountMinor);
+          annotateAudit(ctx, {
+            metadata: {
+              attemptId,
+              refundEventId: root.id,
+              verifiedBy: scope.actorId,
+              pinVerified: true,
+            },
+          });
+          return {
+            id: root.id,
+            kind: root.kind,
+            previousId: root.previousId,
+            amountMinor: root.amountMinor,
+          };
+        }
+        if (!previous) await loadOriginalReview(db, scope, attemptId, input.verifiedAmountMinor);
+        const event = await changeProviderRefund(
+          db,
+          scope,
+          {
+            previousId: input.previousId,
+            kind: input.kind,
+            settledOn: input.settledOn,
+            settlementAmountMinor: input.settlementAmountMinor,
+            verifiedAmountMinor: input.verifiedAmountMinor,
+            commandKey: input.commandKey,
+            slipRef: input.slipRef,
+            reason: input.resolutionReason,
+          },
+          {
+            pinVerified: true,
+            secondApproverId: input.secondApproval?.userId,
+            declareSelfApproval: input.declareSelfApproval,
+          }
+        );
+        return {
+          id: event.id,
+          kind: event.kind,
+          previousId: event.previousId,
+          amountMinor: event.amountMinor,
+        };
+      });
+    }),
   availability: protectedProcedure
     .input(z.object({ branchId, deviceId: z.string().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
@@ -245,6 +549,7 @@ export const pharmacyCardTerminalRouter = router({
           branchId,
           attemptKey,
           outcome: z.enum(['DECLINED', 'REVERSED']),
+          verifiedAmountMinor: z.number().int().positive().max(2147483647).optional(),
           // Both are typed by hand, so the request audit redacts them by key (a card number may be
           // typed by mistake); the attempt's own audit entry records them card-number masked.
           resolutionReason: z.string().trim().min(3).max(200),
@@ -255,80 +560,88 @@ export const pharmacyCardTerminalRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        // The refund rule: cashiers cannot resolve; a manager or owner re-enters their PIN.
-        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
-          throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
-        const { managerPin, resolutionReason, ...resolution } = input;
-        const store = storeFor(scope);
-        const attempt = await store.get(scope, input.attemptKey);
-        if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
-        // Second person: a charge you took is resolved by someone else who could resolve it at
-        // this branch (`otherCardTerminalReviewers`). Only when nobody could does the solo rule
-        // let you resolve it with your PIN. Refused here, before any PIN is asked, naming who can;
-        // the service checks again inside the write's transaction.
-        const ownCharge = attempt.actorId === scope.actorId;
-        if (ownCharge) {
-          const [other] = await otherCardTerminalReviewers(ctx.db as unknown as ScopedDb, scope);
-          if (other)
+      const resolve = async () => {
+        try {
+          const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+          // The refund rule: cashiers cannot resolve; a manager or owner re-enters their PIN.
+          if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+            throw new TRPCError({ code: 'FORBIDDEN', message: CARD_TERMINAL_REVIEW_FORBIDDEN });
+          const { managerPin, resolutionReason, ...resolution } = input;
+          const store = storeFor(scope);
+          const attempt = await store.get(scope, input.attemptKey);
+          if (!attempt) throw new CardTerminalError('ATTEMPT_NOT_FOUND');
+          // Second person: a charge you took is resolved by someone else who could resolve it at
+          // this branch (`otherCardTerminalReviewers`). Only when nobody could does the solo rule
+          // let you resolve it with your PIN. Refused here, before any PIN is asked, naming who can;
+          // the service checks again inside the write's transaction.
+          const ownCharge = attempt.actorId === scope.actorId;
+          if (ownCharge) {
+            const [other] = await otherCardTerminalReviewers(ctx.db as unknown as ScopedDb, scope);
+            if (other)
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: cardTerminalOwnChargeMessage(other.name),
+              });
+          }
+          const soloOwner = ownCharge;
+          // An independent transaction, so a refused PIN commits its lockout strike and its
+          // FAILURE audit row even though this request answers with a refusal.
+          const pin = await authenticateRefundPin({
+            organizationId: scope.organizationId,
+            actorId: scope.actorId,
+            pin: managerPin,
+            action: 'pharmacyCardTerminal.resolveReview',
+            policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+            errorCode: 'CARD_TERMINAL_REVIEW_PIN_REFUSED',
+          });
+          const approval = {
+            // The cashier who took the charge, and the person who resolves it.
+            ...refundApprovalAudit({
+              initiatedById: attempt.actorId,
+              approverId: scope.actorId,
+              pin,
+            }),
+            policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
+            soloOwner,
+            ...(input.verifiedAmountMinor === undefined
+              ? {}
+              : { verifiedAmountMinor: input.verifiedAmountMinor }),
+          };
+          annotateAudit(ctx, { metadata: { ...approval, branchId: scope.branchId } });
+          if ('blocked' in pin) return pin;
+          // Commits in its own tenant transaction with its audit entry, like every attempt step.
+          let resolved;
+          try {
+            resolved = await resolveCardTerminalReview(
+              { store },
+              scope,
+              { ...resolution, reason: resolutionReason },
+              approval,
+              // Re-checked inside the write's transaction, with the attempt row locked.
+              async (db) => (await otherCardTerminalReviewers(db, scope)).length === 0
+            );
+          } catch (error) {
+            if (
+              !(error instanceof CardTerminalError) ||
+              error.reason !== 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER'
+            )
+              throw error;
+            // Someone else became able to resolve it after the first check: nothing was written,
+            // and the request's audit row must not claim a self-approval.
+            annotateAudit(ctx, { metadata: { selfApproved: false, soloOwner: false } });
+            const [other] = await otherCardTerminalReviewers(ctx.db as unknown as ScopedDb, scope);
             throw new TRPCError({
               code: 'FORBIDDEN',
-              message: cardTerminalOwnChargeMessage(other.name),
+              message: cardTerminalOwnChargeMessage(other?.name ?? null),
             });
-        }
-        const soloOwner = ownCharge;
-        // An independent transaction, so a refused PIN commits its lockout strike and its
-        // FAILURE audit row even though this request answers with a refusal.
-        const pin = await authenticateRefundPin({
-          organizationId: scope.organizationId,
-          actorId: scope.actorId,
-          pin: managerPin,
-          action: 'pharmacyCardTerminal.resolveReview',
-          policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
-          errorCode: 'CARD_TERMINAL_REVIEW_PIN_REFUSED',
-        });
-        const approval = {
-          // The cashier who took the charge, and the person who resolves it.
-          ...refundApprovalAudit({
-            initiatedById: attempt.actorId,
-            approverId: scope.actorId,
-            pin,
-          }),
-          policy: CARD_TERMINAL_REVIEW_PIN_POLICY,
-          soloOwner,
-        };
-        annotateAudit(ctx, { metadata: { ...approval, branchId: scope.branchId } });
-        if ('blocked' in pin) return pin;
-        // Commits in its own tenant transaction with its audit entry, like every attempt step.
-        let resolved;
-        try {
-          resolved = await resolveCardTerminalReview(
-            { store },
-            scope,
-            { ...resolution, reason: resolutionReason },
-            approval,
-            // Re-checked inside the write's transaction, with the attempt row locked.
-            async (db) => (await otherCardTerminalReviewers(db, scope)).length === 0
-          );
+          }
+          return cardTerminalCounterView(resolved);
         } catch (error) {
-          if (
-            !(error instanceof CardTerminalError) ||
-            error.reason !== 'OWN_CHARGE_NEEDS_ANOTHER_APPROVER'
-          )
-            throw error;
-          // Someone else became able to resolve it after the first check: nothing was written,
-          // and the request's audit row must not claim a self-approval.
-          annotateAudit(ctx, { metadata: { selfApproved: false, soloOwner: false } });
-          const [other] = await otherCardTerminalReviewers(ctx.db as unknown as ScopedDb, scope);
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: cardTerminalOwnChargeMessage(other?.name ?? null),
-          });
+          fail(error);
         }
-        return cardTerminalCounterView(resolved);
-      } catch (error) {
-        fail(error);
-      }
+      };
+      if (input.outcome === 'DECLINED') return resolve();
+      const accounts = router({ postReview: pharmacyRefundPostingMutation.mutation(resolve) });
+      return accounts.createCaller(ctx).postReview();
     }),
 });

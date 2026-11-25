@@ -238,6 +238,24 @@ describe('DEV-879 manager or owner refunds with an authenticator code', () => {
     });
   });
 
+  it('records the second reviewer approving a correction for another person', async () => {
+    const db = fixture({ enrolled: ['manager'] });
+    await expect(
+      verifyRefundPin(db as never, {
+        ...input,
+        requestedById: 'owner',
+        action: 'pharmacyCardTerminal.recordRefundAction',
+        pin: currentCode(),
+      })
+    ).resolves.toEqual({ verified: true });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'manager',
+        metadata: expect.objectContaining({ approvalPurpose: 'APPROVAL', requestedById: 'owner' }),
+      }),
+    });
+  });
+
   it('refuses the enrolled manager’s fixed PIN for a refund and records the strike', async () => {
     const db = fixture({ enrolled: ['manager'] });
     await expect(verifyRefundPin(db as never, { ...input, pin: '1234' })).resolves.toHaveProperty(
@@ -271,7 +289,10 @@ describe('DEV-879 manager or owner refunds with an authenticator code', () => {
         data: expect.objectContaining({
           action: 'pharmacySales.refundTender',
           actorId: 'manager',
-          metadata: expect.objectContaining({ approvalMethod: 'PIN', approvalPurpose: 'OWN_ACTION' }),
+          metadata: expect.objectContaining({
+            approvalMethod: 'PIN',
+            approvalPurpose: 'OWN_ACTION',
+          }),
         }),
       });
       vi.clearAllMocks();

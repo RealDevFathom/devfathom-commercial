@@ -2,7 +2,7 @@ import { csvCell } from '@/lib/csv';
 
 /**
  * Posted cash-coverage KPI: recorded CASH + BANK closing balances against recorded
- * ACCOUNTS_PAYABLE + GOODS_RECEIVED_ACCRUAL closing balances, kept separate per recorded
+ * ACCOUNTS_PAYABLE + GOODS_RECEIVED_ACCRUAL + CARD_REFUNDS_PAYABLE closing balances, kept separate per recorded
  * currency. It is a posted-ledger indicator only: not a solvency, current or quick ratio.
  */
 export const LIQUIDITY_KPI_MAX_ROWS = 256;
@@ -10,7 +10,11 @@ export const LIQUIDITY_KPI_COVERAGE =
   'Posted branch journal lines only; unposted activity and coverage remain unknown.';
 
 const CASH_CODES = ['CASH', 'BANK'] as const;
-const LIABILITY_CODES = ['ACCOUNTS_PAYABLE', 'GOODS_RECEIVED_ACCRUAL'] as const;
+const LIABILITY_CODES = [
+  'ACCOUNTS_PAYABLE',
+  'GOODS_RECEIVED_ACCRUAL',
+  'CARD_REFUNDS_PAYABLE',
+] as const;
 const KPI_CODES = new Set<string>([...CASH_CODES, ...LIABILITY_CODES]);
 const RATIO_DECIMALS = 4;
 
@@ -25,6 +29,7 @@ export type LiquidityKpiCurrency = {
   /** Credit-positive recorded closing balances. */
   accountsPayableMinor: string;
   goodsReceivedAccrualMinor: string;
+  providerRefundLiabilityMinor: string;
   numeratorMinor: string;
   denominatorMinor: string;
   /** Exact `numerator/denominator` in minor units, or null when unavailable. */
@@ -109,7 +114,8 @@ export function projectLiquidityKpi(accounts: unknown): LiquidityKpi {
       const accountsPayable = -(codes.get('ACCOUNTS_PAYABLE') ?? ZERO);
       const goodsReceivedAccrual = -(codes.get('GOODS_RECEIVED_ACCRUAL') ?? ZERO);
       const numerator = cash + bank;
-      const denominator = accountsPayable + goodsReceivedAccrual;
+      const providerRefundLiability = -(codes.get('CARD_REFUNDS_PAYABLE') ?? ZERO);
+      const denominator = accountsPayable + goodsReceivedAccrual + providerRefundLiability;
       const hasLiabilities = LIABILITY_CODES.some((code) => codes.has(code));
       const unavailableReason = !hasLiabilities
         ? 'NO_RECORDED_LIABILITIES'
@@ -126,6 +132,7 @@ export function projectLiquidityKpi(accounts: unknown): LiquidityKpi {
         cashMinor: cash.toString(),
         bankMinor: bank.toString(),
         accountsPayableMinor: accountsPayable.toString(),
+        providerRefundLiabilityMinor: providerRefundLiability.toString(),
         goodsReceivedAccrualMinor: goodsReceivedAccrual.toString(),
         numeratorMinor: numerator.toString(),
         denominatorMinor: denominator.toString(),
@@ -154,6 +161,7 @@ export const LIQUIDITY_KPI_CSV_HEADER = [
   'ratio_truncated_4dp',
   'status',
   'flags',
+  'provider_refund_liability_minor',
 ] as const;
 
 /** Injection-safe CSV of the computed KPI rows. Reads nothing and mutates nothing. */
@@ -179,6 +187,7 @@ export function liquidityKpiCsv(
       row.ratioDecimal ?? '',
       row.unavailableReason ?? 'AVAILABLE',
       row.flags.join(' '),
+      row.providerRefundLiabilityMinor,
     ]),
   ]
     .map((line) => line.map(csvCell).join(','))

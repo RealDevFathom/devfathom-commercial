@@ -350,7 +350,7 @@ describe('POS sale voiding', () => {
             type: true,
             provider: true,
             amountMinor: true,
-            refunds: { select: { amountMinor: true } },
+            refunds: { select: { id: true, amountMinor: true } },
           },
         },
       ]);

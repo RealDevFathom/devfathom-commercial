@@ -48,6 +48,7 @@ export class FinancePostingError extends Error {
  * every report re-deciding what the sign of a credit account means.
  */
 export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSide>> = {
+  CARD_REFUNDS_PAYABLE: 'CREDIT',
   CUSTOMER_PREPAID: 'CREDIT',
   INVENTORY: 'DEBIT',
   INVENTORY_IN_TRANSIT: 'DEBIT',

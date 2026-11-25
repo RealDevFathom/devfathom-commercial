@@ -51,6 +51,7 @@ export function classifyCashEvidence(entry: CashFlowEvidence): {
 
   if (
     exact('PHARMACY_TENDER', ['SALES_CLEARING']) ||
+    exact('PHARMACY_TERMINAL_REFUND', ['CARD_REFUNDS_PAYABLE']) ||
     exact('PHARMACY_REFUND', ['SALES_CLEARING']) ||
     exact('PHARMACY_DAILY_CLOSE', ['CASH_OVER_SHORT']) ||
     exact('PHARMACY_BOOKKEEPING_TRANSACTION', ['ACCOUNTS_RECEIVABLE'], ['CUSTOMER_RECEIPT']) ||

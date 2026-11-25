@@ -184,14 +184,14 @@ function Results({
         {LIQUIDITY_KPI_COVERAGE}
       </p>
       <p className="mt-2 text-sm text-text-muted">
-        Coverage = (CASH + BANK) ÷ (accounts payable + goods-received accrual), each currency
-        separately. This is a posted-ledger indicator, not a solvency, current or quick ratio, and
-        currencies are never converted or combined.
+        Coverage = (CASH + BANK) ÷ (accounts payable + goods-received accrual + card provider
+        refunds payable), each currency separately. This is a posted-ledger indicator, not a
+        solvency, current or quick ratio, and currencies are never converted or combined.
       </p>
       {kpi.empty ? (
         <p className="mt-4 text-sm">
-          No posted CASH, BANK, accounts payable or goods-received accrual rows were returned; this
-          does not prove zero balances.
+          No posted CASH, BANK, accounts payable, goods-received accrual or provider refund
+          liability rows were returned; this does not prove zero balances.
         </p>
       ) : (
         <div className="overflow-x-auto">
@@ -204,6 +204,7 @@ function Results({
                   'Bank',
                   'Accounts payable',
                   'Goods-received accrual',
+                  'Card refunds payable',
                   'Cash and bank vs bills owed',
                   'Coverage',
                   'Status',
@@ -226,6 +227,7 @@ function Results({
                     row.bankMinor,
                     row.accountsPayableMinor,
                     row.goodsReceivedAccrualMinor,
+                    row.providerRefundLiabilityMinor,
                   ].map((value, index) => (
                     <td key={index} className="p-3 text-right font-mono">
                       {minor(value)}
@@ -342,7 +344,7 @@ export default async function LiquidityKpiPage({ searchParams }: { searchParams:
       <PageHeader
         eyebrow="Pharmacy accounts"
         heading="Posted cash coverage"
-        description="Compare posted cash and bank balances with posted payables and goods-received accruals, per recorded currency."
+        description="Compare posted cash and bank balances with posted payables, goods-received accruals and provider refund liabilities, per recorded currency."
       />
       <ControlForm controls={formControls} timeZone={timeZone} branches={branches} />
       {state.kind === 'loaded' ? (

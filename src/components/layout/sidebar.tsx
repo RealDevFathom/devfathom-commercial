@@ -632,7 +632,13 @@ export const navigation: NavItem[] = [
     adminOnly: true,
     group: 'Firm',
   },
-  { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
+  {
+    label: 'Settings',
+    href: '/settings',
+    icon: Settings,
+    group: 'Firm',
+    activePrefixes: ['/pharmacy/settings/provider-refunds'],
+  },
 ];
 
 const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];

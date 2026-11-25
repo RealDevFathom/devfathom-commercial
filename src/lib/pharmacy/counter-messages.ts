@@ -198,9 +198,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'A card terminal payment on this day is still open. Check its status on the counter, or have a manager review it, before closing the day.',
   // DEV-743: a terminal charge goes back through the card provider, never as cash.
   CARD_TERMINAL_REFUND_VIA_PROVIDER:
-    'This payment was taken on the card terminal, so it cannot be refunded here. Do not give cash. Refund it through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+    'Do not give cash. Record the amount owed without a cash fallback, refund it through the card provider’s own refund process, and keep the refund slip with this bill.',
   BILL_HAS_CARD_TERMINAL_PAYMENT:
-    'This bill was paid on the card terminal, so it cannot be voided or refunded here. Do not give cash. Refund the card payment through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+    'Do not give cash. Record the outstanding card refund before voiding this bill. Return the money through the card provider’s own refund process.',
   // DEV-743: resolving a card terminal payment under review.
   REVIEW_NOT_OPEN:
     'This card terminal payment is no longer waiting for review. It may already have been resolved. Refresh the bill to see where it stands.',

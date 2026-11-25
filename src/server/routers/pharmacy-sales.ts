@@ -1,3 +1,5 @@
+import { pharmacyRefundPostingMutation } from '@/server/pharmacy-finance-gate';
+import { anyCardTerminalTender } from '@/lib/pharmacy/card-terminal/open-attempts';
 import {
   authenticatePrepaidPin,
   prepaidPin,
@@ -767,7 +769,7 @@ async function refundTenderInTransaction(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
     },
-    select: { type: true },
+    select: { id: true, type: true, provider: true },
   });
   if (tender?.type !== 'CREDIT') {
     if (!receiptAccess)
@@ -778,10 +780,20 @@ async function refundTenderInTransaction(
     // Both callers (refundTender, returnAndRefund) have already required a manager or
     // owner with a fresh PIN (DEV-647), so any open till of the branch may pay the
     // refund out (DEV-821).
-    return refundPharmacyTender(db, scope, refund, {
-      requireCurrentBusinessDate: true,
-      drawerOperator: { kind: 'COUNTER', actorIsManager: true },
-    });
+    const terminalPosting = tender && (await anyCardTerminalTender(db, scope, [tender]));
+    const book = () =>
+      refundPharmacyTender(db, scope, refund, {
+        ...(terminalPosting ? { recordProviderRefundOwed: true } : {}),
+        requireCurrentBusinessDate: true,
+        drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+      });
+    if (terminalPosting) {
+      // This counter command also books a provider liability. Invoke the accounts write
+      // procedure in this transaction, after the existing refund and branch controls.
+      const accounts = router({ bookTerminalRefund: pharmacyRefundPostingMutation.mutation(book) });
+      return accounts.createCaller({ ...ctx, db }).bookTerminalRefund();
+    }
+    return book();
   }
   await khataScope(ctx, scope.branchId, 'write');
   await bindKhataBranch(db, scope);

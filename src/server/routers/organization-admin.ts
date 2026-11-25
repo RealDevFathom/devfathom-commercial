@@ -36,6 +36,8 @@ import {
   setPharmacyMemberSubRole,
 } from '@/lib/team/member-sub-role-edit';
 
+import { organizationPharmacySettingsRouter } from './organization-pharmacy-settings';
+
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
   .transform((value) => value || null);
@@ -127,6 +129,7 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  pharmacySettings: organizationPharmacySettingsRouter,
   // Shares POST /api/assistant's availability check: the launcher is enabled only when
   // the company switch is on and the AI provider is configured.
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
