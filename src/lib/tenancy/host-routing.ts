@@ -155,12 +155,23 @@ export function isSharedHost(hostValue: string | null | undefined): boolean {
  * Returns null when no base domain is configured, so the caller can omit the
  * link rather than render a broken one.
  */
-export function tenantHostUrl(slug: string, path = '/login'): string | null {
+export function tenantHostUrl(
+  slug: string,
+  path = '/login',
+  requestHost?: string | null
+): string | null {
   const baseDomain = configuredBaseDomain();
   if (!baseDomain || !slug) return null;
   const protocol =
     LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
-  return `${protocol}://${slug}.${baseDomain}${path}`;
+  const port =
+    protocol === 'http' && requestHost
+      ? requestHost
+          .split(',')[0]
+          ?.trim()
+          .match(/:(\d+)$/)?.[1]
+      : null;
+  return `${protocol}://${slug}.${baseDomain}${port ? `:${port}` : ''}${path}`;
 }
 
 /** Recovery must leave a mistyped tenant host, never link back into its login loop. */

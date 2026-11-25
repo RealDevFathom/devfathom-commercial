@@ -92,6 +92,13 @@ export const ALL_ACTIONS = [
   'pharmacy:discount',
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
+  'university:core',
+  'university:admissions',
+  'university:academics',
+  'university:finance',
+  'university:research',
+  'university:services',
+  'university:reporting',
   'hotel:reservations',
   'hotel:front-desk',
   'hotel:folio',
@@ -296,6 +303,13 @@ export const POLICIES: Record<Action, Policy[]> = {
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.
+  'university:core': [],
+  'university:admissions': [],
+  'university:academics': [],
+  'university:finance': [],
+  'university:research': [],
+  'university:services': [],
+  'university:reporting': [],
   'hotel:reservations': [],
   'hotel:front-desk': [],
   'hotel:folio': [],

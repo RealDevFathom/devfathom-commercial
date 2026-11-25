@@ -1,0 +1,2 @@
+ALTER TABLE university_procurement_requests ADD CONSTRAINT university_procurement_grant_fk
+  FOREIGN KEY(organization_id,grant_id) REFERENCES university_research_grants(organization_id,id);

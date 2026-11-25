@@ -7,7 +7,7 @@
 **Depth in everything we build.**
 
 A multi-tenant point-of-sale and AI growth platform for businesses in Pakistan,
-with dedicated verticals for **pharmacies**, **restaurants** and **hotels**, plus
+with dedicated verticals for **pharmacies**, **restaurants**, **hotels** and **universities**, plus
 a shared company workspace and a seller control plane.
 
 </div>
@@ -95,6 +95,14 @@ Currently setup/configuration only, under **Hotel settings**:
 - **Guest journey** templates
 
 Front-desk operations (reservations, check-in/out, folios) are not built yet.
+
+### University — Pakistan
+
+The staff workspace at `/university` covers admissions, academics, student finance, research,
+campus services and HEC reporting. Applicants use `/apply` and learners use `/student` on
+their university’s tenant host. Both portals support English and Urdu. See the
+[Pakistan university operating guide](docs/university/pakistan.md) for provisioning, fee
+reconciliation, connector contracts and cohort cutover.
 
 ## Platform features
 

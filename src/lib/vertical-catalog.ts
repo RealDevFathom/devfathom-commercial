@@ -30,6 +30,7 @@ export const AGENCY: OrganizationVertical = 'AGENCY';
 export const RESTAURANT: OrganizationVertical = 'RESTAURANT';
 export const PHARMACY: OrganizationVertical = 'PHARMACY';
 export const HOSPITALITY: OrganizationVertical = 'HOSPITALITY';
+export const UNIVERSITY: OrganizationVertical = 'UNIVERSITY';
 
 // ---------------------------------------------------------------------------
 // §2 / §2.1 — Vertical definitions
@@ -261,6 +262,12 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
     description: 'Counters, dispensing, inventory, procurement, safety, and reporting.',
     firstRunChecklist: PHARMACY_FIRST_RUN_CHECKLIST,
   },
+  UNIVERSITY: {
+    vertical: 'UNIVERSITY',
+    label: 'University',
+    description: 'Admissions, academic records, student accounts, research and campus services.',
+    firstRunChecklist: [],
+  },
   // H1-01 — the hospitality vertical's own first-run walk is the property
   // onboarding checklist (`src/lib/hotel/onboarding-checklist.ts`), which is
   // evaluated against hotel records rather than the shared restaurant/pharmacy
@@ -325,6 +332,17 @@ const INVITE_COPY_BY_VERTICAL: Record<OrganizationVertical, InviteCopy> = {
         'Every module and setting in the workspace, including billing and team; no dispensing.',
       'pharmacist-cashier': PHARMACIST_CASHIER_DESCRIPTION,
     },
+  },
+  UNIVERSITY: {
+    staffRoleLabel: 'University staff role',
+    staffRoleHelp: 'Choose the office this staff member can work in.',
+    noRoleOption: 'No university office',
+    namePlaceholder: 'Ali Raza',
+    emailPlaceholder: 'staff@university.edu.pk',
+    titlePlaceholder: 'Registrar',
+    phonePlaceholder: PHONE_PLACEHOLDER,
+    baseRoleLabels: WORKSPACE_BASE_ROLES,
+    roleTemplateBaseRoles: { 'university-admin': 'ADMIN' },
   },
   HOSPITALITY: {
     staffRoleLabel: 'Hotel staff role',
@@ -400,7 +418,12 @@ export const ALL_VERTICALS: readonly OrganizationVertical[] = [
   'RESTAURANT',
   'PHARMACY',
   'HOSPITALITY',
+  'UNIVERSITY',
 ];
+
+export function workspaceSubtitleForVertical(vertical?: OrganizationVertical): string {
+  return vertical === UNIVERSITY ? 'University workspace' : 'Company workspace';
+}
 
 export type DepartmentDefinition = {
   key: string;
@@ -430,6 +453,16 @@ export const PHARMACY_DEPARTMENTS: readonly DepartmentDefinition[] = [
   { key: 'COMPLIANCE', name: 'Compliance' },
 ];
 
+export const UNIVERSITY_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'REGISTRY', name: 'Registry' },
+  { key: 'ACADEMICS', name: 'Academic affairs' },
+  { key: 'ADMISSIONS', name: 'Admissions' },
+  { key: 'FINANCE', name: 'Finance' },
+  { key: 'RESEARCH', name: 'Research' },
+  { key: 'CAMPUS_SERVICES', name: 'Campus services' },
+  { key: 'QUALITY', name: 'Quality assurance' },
+];
+
 /** 06 §2 — the departments the hospitality role templates are filed under. */
 export const HOSPITALITY_DEPARTMENTS: readonly DepartmentDefinition[] = [
   { key: 'FRONT_OFFICE', name: 'Front Office' },
@@ -443,6 +476,7 @@ export const HOSPITALITY_DEPARTMENTS: readonly DepartmentDefinition[] = [
 export function departmentsForVertical(
   vertical: OrganizationVertical
 ): readonly DepartmentDefinition[] {
+  if (vertical === UNIVERSITY) return UNIVERSITY_DEPARTMENTS;
   if (vertical === HOSPITALITY) return HOSPITALITY_DEPARTMENTS;
   if (vertical === PHARMACY) return PHARMACY_DEPARTMENTS;
   return vertical === RESTAURANT ? RESTAURANT_DEPARTMENTS : AGENCY_DEPARTMENTS;
@@ -471,6 +505,7 @@ export function defaultDepartmentRowsForVertical(
  * rather than in the kitchen. Always a key present in `departmentsForVertical`.
  */
 export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  if (vertical === UNIVERSITY) return 'REGISTRY';
   if (vertical === HOSPITALITY) return 'FRONT_OFFICE';
   if (vertical === PHARMACY) return 'COUNTER';
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'LEADERSHIP';
@@ -485,6 +520,7 @@ export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): s
  * kitchen. Always a key present in `departmentsForVertical`.
  */
 export function memberDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  if (vertical === UNIVERSITY) return 'ACADEMICS';
   if (vertical === HOSPITALITY) return 'FRONT_OFFICE';
   if (vertical === PHARMACY) return 'COUNTER';
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'ENGINEERING';
@@ -626,6 +662,23 @@ export const RESTAURANT_MODULES: readonly CommercialModule[] = [
   },
 ];
 
+export const UNIVERSITY_MODULES: readonly CommercialModule[] = [
+  ['core', 'University', 'Administration'],
+  ['admissions', 'Admissions', 'Admissions'],
+  ['academics', 'Academic records', 'Academics'],
+  ['finance', 'Student and institutional finance', 'Finance'],
+  ['research', 'Research', 'Research'],
+  ['services', 'Campus services', 'Operations'],
+  ['reporting', 'Institutional reporting', 'Reporting'],
+].map(([suffix, name, category]) => ({
+  key: 'university-' + suffix,
+  name,
+  category,
+  routePrefix: suffix === 'core' ? '/university' : '/university/' + suffix,
+  vertical: 'UNIVERSITY',
+  mandatory: suffix === 'core',
+}));
+
 export const PHARMACY_MODULES: readonly CommercialModule[] = [
   ['pharmacy-core', 'Pharmacy Core', 'Core', '/pharmacy'],
   ['pharmacy-counter', 'Pharmacy Counter', 'Operations', '/pharmacy/counter'],
@@ -750,6 +803,11 @@ export const PHARMACY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
   { key: 'pharmacy.branches.max', countedUnit: 'Active pharmacy branches' },
   { key: 'pharmacy.counters.max', countedUnit: 'Active dispensing and sales counters' },
   { key: 'pharmacy.users.max', countedUnit: 'Active pharmacy users' },
+];
+
+export const UNIVERSITY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
+  { key: 'university.users.max', countedUnit: 'Licensed staff seats' },
+  { key: 'university.activeStudents.max', countedUnit: 'Distinct actively enrolled students' },
 ];
 
 /**
@@ -1141,6 +1199,68 @@ export const HOSPITALITY_CAPABILITIES: readonly string[] = [
 
 /** Every hospitality capability lives in one namespace (the `hotel:` prefix). */
 export const HOSPITALITY_CAPABILITY_NAMESPACES: readonly string[] = ['hotel'];
+
+export const UNIVERSITY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+  { key: 'university-admin', name: 'University administrator', capabilities: ['*'] },
+  {
+    key: 'university-registrar',
+    name: 'Registrar',
+    capabilities: [
+      'university:admissions',
+      'university:academics',
+      'university:services',
+      'university:research',
+      'university:reporting',
+      'university:core',
+    ],
+  },
+  {
+    key: 'university-admissions-officer',
+    name: 'Admissions officer',
+    capabilities: ['university:admissions'],
+  },
+  { key: 'university-instructor', name: 'Instructor', capabilities: ['university:academics'] },
+  {
+    key: 'university-advisor',
+    name: 'Academic advisor',
+    capabilities: ['university:academics', 'university:services'],
+  },
+  {
+    key: 'university-accessibility-officer',
+    name: 'Accessibility officer',
+    capabilities: ['university:academics'],
+  },
+  {
+    key: 'university-examinations-officer',
+    name: 'Examinations officer',
+    capabilities: ['university:academics', 'university:research'],
+  },
+  {
+    key: 'university-bursar',
+    name: 'Bursar',
+    capabilities: ['university:finance', 'university:services'],
+  },
+  {
+    key: 'university-finance-approver',
+    name: 'Finance approver',
+    capabilities: ['university:finance', 'university:services', 'university:core'],
+  },
+  {
+    key: 'university-research-officer',
+    name: 'Research officer',
+    capabilities: ['university:research', 'university:services'],
+  },
+  {
+    key: 'university-services-officer',
+    name: 'Campus services officer',
+    capabilities: ['university:services'],
+  },
+  {
+    key: 'university-analyst',
+    name: 'Institutional reporting analyst',
+    capabilities: ['university:reporting'],
+  },
+].map((role) => ({ ...role, isSystem: true }));
 
 /**
  * 06 §2 — the fifteen role templates, one per row of the pack's matrix.
@@ -1830,6 +1950,25 @@ const HOSPITALITY_VENUE_MODULES = [
   'hotel-reports',
 ] as const;
 
+export const UNIVERSITY_PACKAGES: readonly PackageDefinition[] = [
+  {
+    key: 'university-integrated',
+    name: 'University Integrated Suite',
+    vertical: 'UNIVERSITY',
+    moduleKeys: [
+      ...UNIVERSITY_MODULES.map((module) => module.key),
+      'hr',
+      'audit',
+      'identity',
+      'scim',
+      'data',
+      'api',
+      'webhooks',
+    ],
+    defaultLimits: { 'university.users.max': 250, 'university.activeStudents.max': 25000 },
+  },
+];
+
 export const HOSPITALITY_PACKAGES: readonly PackageDefinition[] = [
   {
     key: 'hotel-essentials',
@@ -1886,6 +2025,7 @@ export const HOSPITALITY_PACKAGES: readonly PackageDefinition[] = [
 
 /** Commercial modules owned by a vertical. */
 export function modulesForVertical(vertical: OrganizationVertical): readonly CommercialModule[] {
+  if (vertical === UNIVERSITY) return UNIVERSITY_MODULES;
   if (vertical === 'HOSPITALITY') return HOSPITALITY_MODULES;
   if (vertical === 'PHARMACY') return PHARMACY_MODULES;
   return vertical === 'RESTAURANT' ? RESTAURANT_MODULES : AGENCY_MODULES;
@@ -1909,15 +2049,21 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter(
-    (pkg) => pkg.vertical === vertical
-  );
+  return [
+    ...RESTAURANT_PACKAGES,
+    ...PHARMACY_PACKAGES,
+    ...HOSPITALITY_PACKAGES,
+    ...UNIVERSITY_PACKAGES,
+  ].filter((pkg) => pkg.vertical === vertical);
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find(
-    (pkg) => pkg.key === key
-  );
+  return [
+    ...RESTAURANT_PACKAGES,
+    ...PHARMACY_PACKAGES,
+    ...HOSPITALITY_PACKAGES,
+    ...UNIVERSITY_PACKAGES,
+  ].find((pkg) => pkg.key === key);
 }
 
 /** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`
@@ -1927,6 +2073,7 @@ const SEAT_LIMIT_METRIC_BY_VERTICAL: Partial<Record<OrganizationVertical, string
   RESTAURANT: 'restaurant.operators.max',
   PHARMACY: 'pharmacy.users.max',
   HOSPITALITY: 'hotel.users.max',
+  UNIVERSITY: 'university.users.max',
 };
 
 /**
@@ -1941,6 +2088,7 @@ export function packageDefaultSeats(pkg: PackageDefinition): number | undefined 
 }
 
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {
+  if (vertical === UNIVERSITY) return UNIVERSITY_ROLE_TEMPLATES;
   if (vertical === 'HOSPITALITY') return HOSPITALITY_ROLE_TEMPLATES;
   if (vertical === 'PHARMACY') return PHARMACY_ROLE_TEMPLATES;
   return vertical === 'RESTAURANT' ? RESTAURANT_ROLE_TEMPLATES : AGENCY_ROLE_TEMPLATES;
@@ -1960,6 +2108,7 @@ export function jobRoleTemplatesForVertical(
 export function limitKeysForVertical(
   vertical: OrganizationVertical
 ): readonly LimitKeyDefinition[] {
+  if (vertical === UNIVERSITY) return UNIVERSITY_LIMIT_KEYS;
   if (vertical === 'HOSPITALITY') return HOSPITALITY_LIMIT_KEYS;
   if (vertical === 'PHARMACY') return PHARMACY_LIMIT_KEYS;
   return vertical === 'RESTAURANT' ? RESTAURANT_LIMIT_KEYS : AGENCY_LIMIT_KEYS;

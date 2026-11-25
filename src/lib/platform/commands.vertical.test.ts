@@ -293,6 +293,48 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.departmentCreateMany.mockResolvedValue({ count: 0 });
   });
 
+  it('provisions the university administrator, staff offices and Pakistan launch defaults', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_1',
+      active: true,
+      defaultSeats: 250,
+      vertical: 'UNIVERSITY',
+      moduleLinks: [{ enabled: true, module: { key: 'university-core', active: true } }],
+    });
+    await run(
+      'organization.create',
+      createPayload({
+        vertical: 'UNIVERSITY',
+        timezone: undefined,
+        currency: undefined,
+      })
+    );
+    expect(mocks.orgCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          vertical: 'UNIVERSITY',
+          timezone: 'Asia/Karachi',
+          currency: 'PKR',
+        }),
+      })
+    );
+    const keys = mocks.roleCreate.mock.calls.map(([call]) => call.data.key);
+    expect(keys).toContain('university-admin');
+    expect(keys).toContain('university-registrar');
+    expect(keys).toContain('university-admissions-officer');
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(mocks.userCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          role: 'ADMIN',
+          department: 'REGISTRY',
+          organizationRoleId: 'role_x',
+        }),
+      })
+    );
+    expect(mocks.branchCreate).not.toHaveBeenCalled();
+  });
+
   it('stamps an AGENCY organization by default and writes no restaurant rows', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',

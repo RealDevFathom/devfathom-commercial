@@ -4043,6 +4043,62 @@ enum MeetingSessionSource {
 // ============================================
 
 model User {
+  universityAcademicHoldsPlacedBy UniversityAcademicHold[] @relation("UniversityAcademicHoldPlacedBy")
+  universityAcademicHoldsReleasedBy UniversityAcademicHold[] @relation("UniversityAcademicHoldReleasedBy")
+  universityAccommodationCases UniversityAccommodationCase[]
+  universityAdmissionAppeals UniversityAdmissionAppeal[]
+  universityAdvisingAssignmentsAssignedBy UniversityAdvisingAssignment[] @relation("UniversityAdvisingAssignmentAssignedBy")
+  universityAdvisingAssignmentsAdvisor UniversityAdvisingAssignment[] @relation("UniversityAdvisingAssignmentAdvisor")
+  universityApplications UniversityApplication[]
+  universityAssessmentAttendance UniversityAssessmentAttendance[]
+  universityAwardVerifications UniversityAwardVerification[]
+  universityAwards UniversityAward[]
+  universityCareerOpportunities UniversityCareerOpportunity[]
+  universityCensusApprovals UniversityCensusApproval[]
+  universityCensusReceipts UniversityCensusReceipt[]
+  universityCensusSnapshots UniversityCensusSnapshot[]
+  universityCommandInbox UniversityCommandInbox[]
+  universityCreditRecognitions UniversityCreditRecognition[]
+  universityExamAdjustments UniversityExamAdjustment[]
+  universityExamSittings UniversityExamSitting[]
+  universityFacilitiesCasesAssignedTo UniversityFacilitiesCase[] @relation("UniversityFacilitiesCaseAssignedTo")
+  universityFacilitiesCasesRaisedBy UniversityFacilitiesCase[] @relation("UniversityFacilitiesCaseRaisedBy")
+  universityGradeAppeals UniversityGradeAppeal[]
+  universityGradesApprovedBy UniversityGrade[] @relation("UniversityGradeApprovedBy")
+  universityGradesSubmittedBy UniversityGrade[] @relation("UniversityGradeSubmittedBy")
+  universityGrantDeliverables UniversityGrantDeliverable[]
+  universityHecAttestations UniversityHecAttestation[]
+  universityIdentityReviews UniversityIdentityReview[]
+  universityImportBatchesCancelledBy UniversityImportBatch[] @relation("UniversityImportBatchCancelledBy")
+  universityImportBatchesFinalizedBy UniversityImportBatch[] @relation("UniversityImportBatchFinalizedBy")
+  universityImportBatchesFinanceSignedBy UniversityImportBatch[] @relation("UniversityImportBatchFinanceSignedBy")
+  universityImportBatchesPreparedBy UniversityImportBatch[] @relation("UniversityImportBatchPreparedBy")
+  universityImportBatchesValidatedBy UniversityImportBatch[] @relation("UniversityImportBatchValidatedBy")
+  universityIntakes UniversityIntake[]
+  universityMeritLists UniversityMeritList[]
+  universityPerson UniversityPerson?
+  universityPrivateCases UniversityPrivateCase[]
+  universityProcurementRequestsDecisionBy UniversityProcurementRequest[] @relation("UniversityProcurementRequestDecisionBy")
+  universityProcurementRequestsCreatedBy UniversityProcurementRequest[] @relation("UniversityProcurementRequestCreatedBy")
+  universityResearchCasesCreatedBy UniversityResearchCase[] @relation("UniversityResearchCaseCreatedBy")
+  universityResearchCasesSupervisor UniversityResearchCase[] @relation("UniversityResearchCaseSupervisor")
+  universityResearchDecisions UniversityResearchDecision[]
+  universityResearchGrantsClosedBy UniversityResearchGrant[] @relation("UniversityResearchGrantClosedBy")
+  universityResearchGrantsCreatedBy UniversityResearchGrant[] @relation("UniversityResearchGrantCreatedBy")
+  universityRetentionHoldsCreatedBy UniversityRetentionHold[] @relation("UniversityRetentionHoldCreatedBy")
+  universityRetentionHoldsReleasedBy UniversityRetentionHold[] @relation("UniversityRetentionHoldReleasedBy")
+  universityRetentionPoliciesApprovedBy UniversityRetentionPolicy[] @relation("UniversityRetentionPolicyApprovedBy")
+  universityRetentionPoliciesProposedBy UniversityRetentionPolicy[] @relation("UniversityRetentionPolicyProposedBy")
+  universityRetentionReviewsApprovedBy UniversityRetentionReview[] @relation("UniversityRetentionReviewApprovedBy")
+  universityRetentionReviewsCreatedBy UniversityRetentionReview[] @relation("UniversityRetentionReviewCreatedBy")
+  universityRetentionReviewsFinishedBy UniversityRetentionReview[] @relation("UniversityRetentionReviewFinishedBy")
+  universitySections UniversitySection[]
+  universityStaffAppointments UniversityStaffAppointment[]
+  universityStaffScopes UniversityStaffScope[]
+  universityStudyInterruptionsApprovedBy UniversityStudyInterruption[] @relation("UniversityStudyInterruptionApprovedBy")
+  universityStudyInterruptionsReturnedBy UniversityStudyInterruption[] @relation("UniversityStudyInterruptionReturnedBy")
+  universityTranscripts UniversityTranscript[]
+  universityVerificationRequests UniversityVerificationRequest[]
   catalogueEdits                PharmacyCatalogueEdit[] @relation("CatalogueEditEditor")
   pharmacyPortalLinksCreated    PharmacyCustomerPortalLink[]    @relation("PharmacyPortalLinkCreator")
   pharmacyPortalRequestsDecided PharmacyCustomerPortalRequest[] @relation("PharmacyPortalRequestDecider")
@@ -5871,6 +5927,8 @@ model MeetingEntityLink {
 // ============================================
 
 model ApiToken {
+  universityConnectorTopics UniversityConnectorTopic[]
+  @@unique([organizationId, id], map: "university_api_token_tenant_id")
   id             String    @id @default(cuid())
   organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   name           String
@@ -6210,6 +6268,7 @@ enum OrganizationVertical {
   RESTAURANT
   PHARMACY
   HOSPITALITY
+  UNIVERSITY
 }
 
 enum PlatformModuleBand {
@@ -6227,6 +6286,21 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
+  universityCampuses UniversityCampus[]
+  universityCensusSnapshots UniversityCensusSnapshot[]
+  universityCommandInbox UniversityCommandInbox[]
+  universityConnectorTopics UniversityConnectorTopic[]
+  universityEvents UniversityEvent[]
+  universityFeeCollectionAccount UniversityFeeCollectionAccount?
+  universityFinanceClosedPeriods UniversityFinanceClosedPeriod[]
+  universityImportBatches UniversityImportBatch[]
+  universityPeople UniversityPerson[]
+  universityPortalChallenges UniversityPortalChallenge[]
+  universityResearchGrants UniversityResearchGrant[]
+  universityRetentionHolds UniversityRetentionHold[]
+  universityRetentionPolicies UniversityRetentionPolicy[]
+  universityRetentionReviews UniversityRetentionReview[]
+  universityRollCounter UniversityRollCounter?
   pharmacyChurnScoringRuns      PharmacyChurnScoringRun[]
   pharmacyDrapRecallFeedRuns    PharmacyDrapRecallFeedRun[]
   pharmacyMigrationSources      PharmacyMigrationSource[]
@@ -17693,4 +17767,1460 @@ model PharmacyCompetitorPriceObservation {
   @@unique([organizationId, id], map: "pharmacy_competitor_price_observations_org_id_key")
   @@index([organizationId, branchId, medicineId, packLevelId, observedAt], map: "pharmacy_competitor_price_obs_medicine_idx")
   @@map("pharmacy_competitor_price_observations")
+}
+
+// University domain. SQL migrations maintain row-level security, partial indexes, accounting controls and reporting views.
+
+model UniversityAcademicHold {
+  organizationId   String                   @map("organization_id")
+  id               String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId String                   @map("student_program_id")
+  scope            String
+  message          String
+  placedBy         String                   @map("placed_by")
+  placedAt         DateTime                 @default(now()) @map("placed_at") @db.Timestamptz(6)
+  releasedAt       DateTime?                @map("released_at") @db.Timestamptz(6)
+  releasedBy       String?                  @map("released_by")
+  releaseReference String?                  @map("release_reference")
+  placedByUser     User                     @relation("UniversityAcademicHoldPlacedBy", fields: [organizationId, placedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  releasedByUser   User?                    @relation("UniversityAcademicHoldReleasedBy", fields: [organizationId, releasedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  studentProgram   UniversityStudentProgram @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_academic_holds")
+}
+
+model UniversityAccommodationCase {
+  organizationId    String                     @map("organization_id")
+  id                String                     @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId  String                     @map("student_program_id")
+  evidenceReference String                     @map("evidence_reference")
+  reviewedBy        String                     @map("reviewed_by")
+  reviewedAt        DateTime                   @default(now()) @map("reviewed_at") @db.Timestamptz(6)
+  studentProgram    UniversityStudentProgram   @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_accommodation_case_organization_id_student_prog_fkey")
+  reviewedByUser    User                       @relation(fields: [organizationId, reviewedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  examAdjustments   UniversityExamAdjustment[]
+
+  @@id([organizationId, id])
+  @@map("university_accommodation_cases")
+}
+
+model UniversityAdmissionAppeal {
+  organizationId String                @map("organization_id")
+  id             String                @default(dbgenerated("(gen_random_uuid())::text"))
+  applicationId  String                @map("application_id")
+  reason         String
+  status         String                @default("OPEN")
+  decision       String?
+  decidedBy      String?               @map("decided_by")
+  submittedAt    DateTime              @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  application    UniversityApplication @relation(fields: [organizationId, applicationId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  decidedByUser  User?                 @relation(fields: [organizationId, decidedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_admission_appeals")
+}
+
+model UniversityAdvisingAssignment {
+  organizationId   String                   @map("organization_id")
+  id               String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId String                   @map("student_program_id")
+  advisorId        String                   @map("advisor_id")
+  assignedBy       String                   @map("assigned_by")
+  assignedAt       DateTime                 @default(now()) @map("assigned_at") @db.Timestamptz(6)
+  releasedAt       DateTime?                @map("released_at") @db.Timestamptz(6)
+  studentProgram   UniversityStudentProgram @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_advising_assignmen_organization_id_student_prog_fkey")
+  assignedByUser   User                     @relation("UniversityAdvisingAssignmentAssignedBy", fields: [organizationId, assignedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_advising_assignment_organization_id_assigned_by_fkey")
+  advisor          User                     @relation("UniversityAdvisingAssignmentAdvisor", fields: [organizationId, advisorId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_advising_assignments")
+}
+
+model UniversityAlumniPreference {
+  organizationId String           @map("organization_id")
+  personId       String           @map("person_id")
+  optedIn        Boolean          @map("opted_in")
+  changedAt      DateTime         @default(now()) @map("changed_at") @db.Timestamptz(6)
+  person         UniversityPerson @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, personId])
+  @@map("university_alumni_preferences")
+}
+
+model UniversityApplicationDraft {
+  organizationId       String           @map("organization_id")
+  personId             String           @map("person_id")
+  intakeId             String           @map("intake_id")
+  qualification        String           @default("")
+  equivalenceReference String           @default("") @map("equivalence_reference")
+  updatedAt            DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+  categoryId           String?          @map("category_id")
+  person               UniversityPerson @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, personId, intakeId])
+  @@map("university_application_drafts")
+}
+
+model UniversityApplication {
+  organizationId       String                      @map("organization_id")
+  id                   String                      @default(dbgenerated("(gen_random_uuid())::text"))
+  personId             String                      @map("person_id")
+  intakeId             String                      @map("intake_id")
+  status               String                      @default("SUBMITTED")
+  categoryId           String?                     @map("category_id")
+  decisionBy           String?                     @map("decision_by")
+  offeredListId        String?                     @map("offered_list_id")
+  offeredRank          Int?                        @map("offered_rank")
+  assessedAt           DateTime?                   @map("assessed_at") @db.Timestamptz(6)
+  schoolPercent        Decimal?                    @map("school_percent") @db.Decimal(6, 3)
+  entryTestPercent     Decimal?                    @map("entry_test_percent") @db.Decimal(6, 3)
+  meritScore           Decimal?                    @map("merit_score") @db.Decimal(6, 3)
+  qualification        String?
+  equivalenceReference String?                     @map("equivalence_reference")
+  decisionReason       String?                     @map("decision_reason")
+  submittedAt          DateTime                    @default(now()) @map("submitted_at") @db.Timestamptz(6)
+  retentionClosedAt    DateTime?                   @map("retention_closed_at") @db.Timestamptz(6)
+  admissionAppeals     UniversityAdmissionAppeal[]
+  decisionByUser       User?                       @relation(fields: [organizationId, decisionBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  category             UniversitySeatCategory?     @relation(fields: [organizationId, intakeId, categoryId], references: [organizationId, intakeId, id], onDelete: NoAction, onUpdate: NoAction)
+  intake               UniversityIntake            @relation(fields: [organizationId, intakeId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  offeredList          UniversityMeritList?        @relation(fields: [organizationId, offeredListId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person               UniversityPerson            @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  studentProgram       UniversityStudentProgram?
+
+  @@id([organizationId, id])
+  @@unique([organizationId, personId, intakeId])
+  @@index([organizationId, submittedAt(sort: Desc), id], map: "university_recent_applications")
+  @@map("university_applications")
+}
+
+model UniversityAssessmentAttendance {
+  organizationId String                @map("organization_id")
+  id             String                @default(dbgenerated("(gen_random_uuid())::text"))
+  examId         String                @map("exam_id")
+  personId       String                @map("person_id")
+  status         String
+  markedBy       String                @map("marked_by")
+  markedAt       DateTime              @default(now()) @map("marked_at") @db.Timestamptz(6)
+  exam           UniversityExamSitting @relation(fields: [organizationId, examId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  markedByUser   User                  @relation(fields: [organizationId, markedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person         UniversityPerson      @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, examId, personId], map: "university_assessment_attenda_organization_id_exam_id_perso_key")
+  @@map("university_assessment_attendance")
+}
+
+model UniversityAwardVerification {
+  organizationId       String                          @map("organization_id")
+  id                   String                          @default(dbgenerated("(gen_random_uuid())::text"))
+  awardId              String                          @map("award_id")
+  requestReference     String                          @map("request_reference")
+  outcome              String
+  universityEvidence   String                          @map("university_evidence")
+  decidedBy            String                          @map("decided_by")
+  decidedAt            DateTime                        @default(now()) @map("decided_at") @db.Timestamptz(6)
+  award                UniversityAward                 @relation(fields: [organizationId, awardId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  decidedByUser        User                            @relation(fields: [organizationId, decidedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  hecAttestations      UniversityHecAttestation[]
+  verificationRequests UniversityVerificationRequest[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, requestReference], map: "university_award_verification_organization_id_request_refer_key")
+  @@unique([organizationId, id, outcome])
+  @@map("university_award_verifications")
+}
+
+model UniversityAward {
+  organizationId       String                          @map("organization_id")
+  id                   String                          @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId     String                          @map("student_program_id")
+  transcriptId         String                          @map("transcript_id")
+  credentialNumber     String                          @map("credential_number")
+  issuedAt             DateTime                        @default(now()) @map("issued_at") @db.Timestamptz(6)
+  issuedBy             String                          @map("issued_by")
+  awardVerifications   UniversityAwardVerification[]
+  issuedByUser         User                            @relation(fields: [organizationId, issuedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  studentProgram       UniversityStudentProgram        @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  transcript           UniversityTranscript            @relation(fields: [organizationId, transcriptId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  verificationRequests UniversityVerificationRequest[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, credentialNumber])
+  @@unique([organizationId, studentProgramId])
+  @@map("university_awards")
+}
+
+model UniversityBankReceipt {
+  organizationId      String             @map("organization_id")
+  provider            String
+  transactionId       String             @map("transaction_id")
+  suppliedReference   String             @map("supplied_reference")
+  matchedReference    String?            @map("matched_reference")
+  paidPaisa           BigInt             @map("paid_paisa")
+  valueDate           DateTime           @map("value_date") @db.Date
+  status              String
+  exception           String?
+  settlementReference String?            @map("settlement_reference")
+  settledDate         DateTime?          @map("settled_date") @db.Date
+  actorId             String             @map("actor_id")
+  updatedAt           DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  challan             UniversityChallan? @relation(fields: [organizationId, matchedReference], references: [organizationId, reference], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, provider, transactionId])
+  @@index([organizationId, status, valueDate], map: "university_bank_receipts_queue_idx")
+  @@map("university_bank_receipts")
+}
+
+model UniversityCampus {
+  organizationId      String                         @map("organization_id")
+  id                  String                         @default(dbgenerated("(gen_random_uuid())::text"))
+  name                String
+  recognitionRef      String                         @map("recognition_ref")
+  organization        Organization                   @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  diningPlans         UniversityDiningPlan[]
+  examSittings        UniversityExamSitting[]
+  facilitiesCases     UniversityFacilitiesCase[]
+  procurementRequests UniversityProcurementRequest[]
+  programs            UniversityProgram[]
+  serviceResources    UniversityServiceResource[]
+  staffAppointments   UniversityStaffAppointment[]
+  staffScopes         UniversityStaffScope[]
+  units               UniversityUnit[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, name])
+  @@map("university_campuses")
+}
+
+model UniversityCareerApplication {
+  organizationId String                      @map("organization_id")
+  opportunityId  String                      @map("opportunity_id")
+  personId       String                      @map("person_id")
+  appliedAt      DateTime                    @default(now()) @map("applied_at") @db.Timestamptz(6)
+  opportunity    UniversityCareerOpportunity @relation(fields: [organizationId, opportunityId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_career_application_organization_id_opportunity__fkey")
+  person         UniversityPerson            @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, opportunityId, personId])
+  @@map("university_career_applications")
+}
+
+model UniversityCareerOpportunity {
+  organizationId     String                        @map("organization_id")
+  id                 String                        @default(dbgenerated("(gen_random_uuid())::text"))
+  title              String
+  employer           String
+  description        String
+  closesOn           DateTime                      @map("closes_on") @db.Date
+  postedBy           String                        @map("posted_by")
+  careerApplications UniversityCareerApplication[]
+  postedByUser       User                          @relation(fields: [organizationId, postedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_career_opportunities")
+}
+
+model UniversityCensusApproval {
+  organizationId String                   @map("organization_id")
+  snapshotId     String                   @map("snapshot_id")
+  approvedBy     String                   @map("approved_by")
+  approvedAt     DateTime                 @default(now()) @map("approved_at") @db.Timestamptz(6)
+  approvedByUser User                     @relation(fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  snapshot       UniversityCensusSnapshot @relation(fields: [organizationId, snapshotId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  censusReceipt  UniversityCensusReceipt?
+
+  @@id([organizationId, snapshotId])
+  @@map("university_census_approvals")
+}
+
+model UniversityCensusReceipt {
+  organizationId    String                   @map("organization_id")
+  snapshotId        String                   @map("snapshot_id")
+  officialReference String                   @map("official_reference")
+  recordedBy        String                   @map("recorded_by")
+  recordedAt        DateTime                 @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  recordedByUser    User                     @relation(fields: [organizationId, recordedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  snapshot          UniversityCensusApproval @relation(fields: [organizationId, snapshotId], references: [organizationId, snapshotId], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, snapshotId])
+  @@unique([organizationId, officialReference])
+  @@map("university_census_receipts")
+}
+
+model UniversityCensusSnapshot {
+  organizationId    String                    @map("organization_id")
+  id                String                    @default(dbgenerated("(gen_random_uuid())::text"))
+  periodStart       DateTime                  @map("period_start") @db.Date
+  censusDate        DateTime                  @map("census_date") @db.Date
+  revision          Int
+  templateReference String                    @map("template_reference")
+  revisionNote      String                    @map("revision_note")
+  payload           Json
+  sha256            String
+  createdBy         String                    @map("created_by")
+  createdAt         DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  censusApproval    UniversityCensusApproval?
+  createdByUser     User                      @relation(fields: [organizationId, createdBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization      Organization              @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, periodStart, censusDate, revision])
+  @@map("university_census_snapshots")
+}
+
+model UniversityChallan {
+  organizationId   String                    @map("organization_id")
+  reference        String
+  personId         String                    @map("person_id")
+  feeHead          String                    @map("fee_head")
+  amountPaisa      BigInt                    @map("amount_paisa")
+  commencementDate DateTime                  @map("commencement_date") @db.Date
+  dueDate          DateTime                  @map("due_date") @db.Date
+  createdAt        DateTime                  @default(now()) @map("created_at") @db.Timestamptz(6)
+  bankReceipts     UniversityBankReceipt[]
+  person           UniversityPerson          @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  feeDelegations   UniversityFeeDelegation[]
+  feeRefunds       UniversityFeeRefund[]
+  financeEntries   UniversityFinanceEntry[]
+
+  @@id([organizationId, reference])
+  @@index([organizationId, personId], map: "university_challans_person_idx")
+  @@map("university_challans")
+}
+
+model UniversityCommandInbox {
+  organizationId String       @map("organization_id")
+  kind           String
+  externalId     String       @map("external_id")
+  payloadHash    String       @map("payload_hash")
+  actorId        String       @map("actor_id")
+  tokenId        String       @map("token_id")
+  result         Json
+  processedAt    DateTime     @default(now()) @map("processed_at") @db.Timestamptz(6)
+  actor          User         @relation(fields: [organizationId, actorId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, kind, externalId])
+  @@map("university_command_inbox")
+}
+
+model UniversityConnectorTopic {
+  organizationId String       @map("organization_id")
+  kind           String
+  tokenId        String       @map("token_id")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  token          ApiToken     @relation(fields: [organizationId, tokenId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, kind])
+  @@map("university_connector_topics")
+}
+
+model UniversityCoursePrerequisite {
+  organizationId       String           @map("organization_id")
+  id                   String           @default(dbgenerated("(gen_random_uuid())::text"))
+  courseId             String           @map("course_id")
+  prerequisiteCourseId String           @map("prerequisite_course_id")
+  prerequisiteCourse   UniversityCourse @relation("UniversityCoursePrerequisitePrerequisiteCourse", fields: [organizationId, prerequisiteCourseId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_course_prerequisit_organization_id_prerequisite_fkey")
+  course               UniversityCourse @relation("UniversityCoursePrerequisiteCourse", fields: [organizationId, courseId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, courseId, prerequisiteCourseId], map: "university_course_prerequisit_organization_id_course_id_pre_key")
+  @@map("university_course_prerequisites")
+}
+
+model UniversityCourse {
+  organizationId                        String                         @map("organization_id")
+  id                                    String                         @default(dbgenerated("(gen_random_uuid())::text"))
+  intakeId                              String                         @map("intake_id")
+  code                                  String
+  name                                  String
+  credits                               Int
+  required                              Boolean
+  coursePrerequisitesPrerequisiteCourse UniversityCoursePrerequisite[] @relation("UniversityCoursePrerequisitePrerequisiteCourse")
+  coursePrerequisitesCourse             UniversityCoursePrerequisite[] @relation("UniversityCoursePrerequisiteCourse")
+  intake                                UniversityIntake               @relation(fields: [organizationId, intakeId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  creditRecognitionsSubstituteCourse    UniversityCreditRecognition[]  @relation("UniversityCreditRecognitionSubstituteCourse")
+  creditRecognitionsCourse              UniversityCreditRecognition[]  @relation("UniversityCreditRecognitionCourse")
+  sections                              UniversitySection[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, id, intakeId])
+  @@unique([organizationId, intakeId, code])
+  @@map("university_courses")
+}
+
+model UniversityCreditRecognition {
+  organizationId     String                   @map("organization_id")
+  id                 String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId   String                   @map("student_program_id")
+  courseId           String                   @map("course_id")
+  kind               String
+  sourceReference    String                   @map("source_reference")
+  substituteCourseId String?                  @map("substitute_course_id")
+  mark               Int?
+  evidenceReference  String                   @map("evidence_reference")
+  approvedBy         String                   @map("approved_by")
+  createdAt          DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  studentProgram     UniversityStudentProgram @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_credit_recognition_organization_id_student_prog_fkey")
+  substituteCourse   UniversityCourse?        @relation("UniversityCreditRecognitionSubstituteCourse", fields: [organizationId, substituteCourseId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_credit_recognition_organization_id_substitute_c_fkey")
+  approvedByUser     User                     @relation(fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  course             UniversityCourse         @relation("UniversityCreditRecognitionCourse", fields: [organizationId, courseId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, studentProgramId, sourceReference], map: "university_credit_recognition_organization_id_student_prog_key1")
+  @@unique([organizationId, studentProgramId, substituteCourseId], map: "university_credit_recognition_organization_id_student_prog_key2")
+  @@unique([organizationId, studentProgramId, courseId], map: "university_credit_recognition_organization_id_student_progr_key")
+  @@map("university_credit_recognitions")
+}
+
+model UniversityDiningMembership {
+  organizationId    String                       @map("organization_id")
+  id                String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  personId          String                       @map("person_id")
+  planId            String                       @map("plan_id")
+  startsOn          DateTime                     @map("starts_on") @db.Date
+  endsOn            DateTime                     @map("ends_on") @db.Date
+  remaining         Int
+  cancelledAt       DateTime?                    @map("cancelled_at") @db.Timestamptz(6)
+  person            UniversityPerson             @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  plan              UniversityDiningPlan         @relation(fields: [organizationId, planId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  diningRedemptions UniversityDiningRedemption[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, personId, planId, startsOn])
+  @@map("university_dining_memberships")
+}
+
+model UniversityDiningPlan {
+  organizationId    String                       @map("organization_id")
+  id                String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  campusId          String                       @map("campus_id")
+  name              String
+  meals             Int
+  feePaisa          BigInt                       @map("fee_paisa")
+  diningMemberships UniversityDiningMembership[]
+  campus            UniversityCampus             @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, campusId, name])
+  @@map("university_dining_plans")
+}
+
+model UniversityDiningRedemption {
+  organizationId String                     @map("organization_id")
+  reference      String
+  membershipId   String                     @map("membership_id")
+  redeemedAt     DateTime                   @default(now()) @map("redeemed_at") @db.Timestamptz(6)
+  membership     UniversityDiningMembership @relation(fields: [organizationId, membershipId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, reference])
+  @@map("university_dining_redemptions")
+}
+
+model UniversityDocumentPart {
+  organizationId String             @map("organization_id")
+  documentId     String             @map("document_id")
+  part           Int
+  ciphertext     String
+  document       UniversityDocument @relation(fields: [organizationId, documentId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, documentId, part])
+  @@map("university_document_parts")
+}
+
+model UniversityDocumentRead {
+  organizationId String             @map("organization_id")
+  documentId     String             @map("document_id")
+  actorId        String             @map("actor_id")
+  actorRealm     String             @map("actor_realm")
+  readAt         DateTime           @default(now()) @map("read_at") @db.Timestamptz(6)
+  document       UniversityDocument @relation(fields: [organizationId, documentId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@map("university_document_reads")
+  @@ignore
+}
+
+model UniversityDocument {
+  organizationId String                   @map("organization_id")
+  id             String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  personId       String                   @map("person_id")
+  label          String
+  filename       String
+  mime           String
+  fileHash       String                   @map("file_hash")
+  byteSize       Int                      @map("byte_size")
+  complete       Boolean                  @default(false)
+  createdAt      DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  lastActivityAt DateTime                 @default(now()) @map("last_activity_at") @db.Timestamptz(6)
+  documentParts  UniversityDocumentPart[]
+  documentReads  UniversityDocumentRead[] @ignore
+  person         UniversityPerson         @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, personId, fileHash, label])
+  @@map("university_documents")
+}
+
+model UniversityEnrollment {
+  organizationId String            @map("organization_id")
+  id             String            @default(dbgenerated("(gen_random_uuid())::text"))
+  personId       String            @map("person_id")
+  sectionId      String            @map("section_id")
+  status         String
+  queuedAt       DateTime          @default(dbgenerated("clock_timestamp()")) @map("queued_at") @db.Timestamptz(6)
+  revision       Int               @default(1)
+  person         UniversityPerson  @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  section        UniversitySection @relation(fields: [organizationId, sectionId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  grades         UniversityGrade[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, personId, sectionId])
+  @@index([organizationId, sectionId, status, queuedAt, id], map: "university_section_roster")
+  @@index([organizationId, queuedAt(sort: Desc), id], map: "university_recent_enrollments")
+  @@map("university_enrollments")
+}
+
+model UniversityEvent {
+  organizationId String       @map("organization_id")
+  id             String       @default(dbgenerated("(gen_random_uuid())::text"))
+  kind           String
+  sourceKey      String       @map("source_key")
+  payload        Json
+  occurredAt     DateTime     @default(dbgenerated("clock_timestamp()")) @map("occurred_at") @db.Timestamptz(6)
+  status         String       @default("PENDING")
+  acknowledgment String?
+  acknowledgedAt DateTime?    @map("acknowledged_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, kind, sourceKey])
+  @@index([organizationId, status, occurredAt, id], map: "university_events_delivery")
+  @@map("university_events")
+}
+
+model UniversityExamAdjustment {
+  organizationId    String                      @map("organization_id")
+  id                String                      @default(dbgenerated("(gen_random_uuid())::text"))
+  caseId            String                      @map("case_id")
+  examId            String                      @map("exam_id")
+  personId          String                      @map("person_id")
+  instruction       String
+  additionalMinutes Int                         @map("additional_minutes")
+  approvedBy        String                      @map("approved_by")
+  approvedByUser    User                        @relation(fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  case              UniversityAccommodationCase @relation(fields: [organizationId, caseId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  exam              UniversityExamSitting       @relation(fields: [organizationId, examId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person            UniversityPerson            @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, examId, personId])
+  @@map("university_exam_adjustments")
+}
+
+model UniversityExamSitting {
+  organizationId       String                           @map("organization_id")
+  id                   String                           @default(dbgenerated("(gen_random_uuid())::text"))
+  sectionId            String                           @map("section_id")
+  campusId             String                           @map("campus_id")
+  assessment           String
+  room                 String
+  startsAt             DateTime                         @map("starts_at") @db.Timestamptz(6)
+  endsAt               DateTime                         @map("ends_at") @db.Timestamptz(6)
+  scheduledBy          String                           @map("scheduled_by")
+  assessmentAttendance UniversityAssessmentAttendance[]
+  examAdjustments      UniversityExamAdjustment[]
+  campus               UniversityCampus                 @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  scheduledByUser      User                             @relation(fields: [organizationId, scheduledBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  section              UniversitySection                @relation(fields: [organizationId, sectionId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, sectionId, assessment])
+  @@index([organizationId, startsAt, endsAt], map: "university_exam_conflict")
+  @@map("university_exam_sittings")
+}
+
+model UniversityFacilitiesCase {
+  organizationId String           @map("organization_id")
+  id             String           @default(dbgenerated("(gen_random_uuid())::text"))
+  campusId       String           @map("campus_id")
+  location       String
+  description    String
+  priority       String
+  raisedBy       String           @map("raised_by")
+  assignedTo     String?          @map("assigned_to")
+  resolution     String?
+  closedAt       DateTime?        @map("closed_at") @db.Timestamptz(6)
+  openedAt       DateTime         @default(now()) @map("opened_at") @db.Timestamptz(6)
+  user           User?            @relation("UniversityFacilitiesCaseAssignedTo", fields: [organizationId, assignedTo], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  campus         UniversityCampus @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  raisedByUser   User             @relation("UniversityFacilitiesCaseRaisedBy", fields: [organizationId, raisedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_facilities_cases")
+}
+
+model UniversityFeeCollectionAccount {
+  organizationId String       @id @map("organization_id")
+  bankName       String       @map("bank_name")
+  beneficiary    String
+  iban           String
+  updatedBy      String       @map("updated_by")
+  updatedAt      DateTime     @default(now()) @map("updated_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("university_fee_collection_accounts")
+}
+
+model UniversityFeeDelegationAudit {
+  organizationId String                  @map("organization_id")
+  id             String                  @default(dbgenerated("(gen_random_uuid())::text"))
+  grantId        String                  @map("grant_id")
+  event          String
+  personId       String?                 @map("person_id")
+  occurredAt     DateTime                @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  effectiveAt    DateTime                @default(now()) @map("effective_at") @db.Timestamptz(6)
+  grant          UniversityFeeDelegation @relation(fields: [organizationId, grantId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person         UniversityPerson?       @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_fee_delegation_audit")
+}
+
+model UniversityFeeDelegation {
+  organizationId     String                         @map("organization_id")
+  id                 String                         @default(dbgenerated("(gen_random_uuid())::text"))
+  studentId          String                         @map("student_id")
+  recipientEmail     String                         @map("recipient_email")
+  recipientId        String?                        @map("recipient_id")
+  relationship       String
+  permission         String
+  challanReference   String?                        @map("challan_reference")
+  consentVersion     String                         @map("consent_version")
+  consentedAt        DateTime                       @default(now()) @map("consented_at") @db.Timestamptz(6)
+  expiresAt          DateTime                       @map("expires_at") @db.Timestamptz(6)
+  revokedAt          DateTime?                      @map("revoked_at") @db.Timestamptz(6)
+  feeDelegationAudit UniversityFeeDelegationAudit[]
+  challan            UniversityChallan?             @relation(fields: [organizationId, challanReference], references: [organizationId, reference], onDelete: NoAction, onUpdate: NoAction)
+  recipient          UniversityPerson?              @relation("UniversityFeeDelegationRecipient", fields: [organizationId, recipientId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  student            UniversityPerson               @relation("UniversityFeeDelegationStudent", fields: [organizationId, studentId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@index([organizationId, studentId, consentedAt], map: "university_delegations_student")
+  @@map("university_fee_delegations")
+}
+
+model UniversityFeeRefund {
+  organizationId        String            @map("organization_id")
+  id                    String
+  reference             String
+  requestDate           DateTime          @map("request_date") @db.Date
+  policyVersion         String            @map("policy_version")
+  evidence              String
+  beneficiary           String
+  basis                 Json
+  amountPaisa           BigInt            @map("amount_paisa")
+  status                String
+  requestedBy           String            @map("requested_by")
+  approvedBy            String?           @map("approved_by")
+  disbursementReference String?           @map("disbursement_reference")
+  challan               UniversityChallan @relation(fields: [organizationId, reference], references: [organizationId, reference], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, disbursementReference])
+  @@map("university_fee_refunds")
+}
+
+model UniversityFinanceClosedPeriod {
+  organizationId String       @map("organization_id")
+  monthStart     DateTime     @map("month_start") @db.Date
+  closedBy       String       @map("closed_by")
+  closedAt       DateTime     @default(now()) @map("closed_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, monthStart])
+  @@map("university_finance_closed_periods")
+}
+
+model UniversityFinanceEntry {
+  organizationId          String                             @map("organization_id")
+  entryKey                String                             @map("entry_key")
+  reference               String
+  kind                    String
+  debitAccount            String                             @map("debit_account")
+  creditAccount           String                             @map("credit_account")
+  amountPaisa             BigInt                             @map("amount_paisa")
+  reversalOf              String?                            @map("reversal_of")
+  postingDate             DateTime                           @default(dbgenerated("((now() AT TIME ZONE 'Asia/Karachi'::text))::date")) @map("posting_date") @db.Date
+  actorId                 String                             @map("actor_id")
+  reason                  String
+  challan                 UniversityChallan                  @relation(fields: [organizationId, reference], references: [organizationId, reference], onDelete: NoAction, onUpdate: NoAction)
+  originalEntry           UniversityFinanceEntry?            @relation("UniversityFinanceEntryReversalOf", fields: [organizationId, reversalOf], references: [organizationId, entryKey], onDelete: NoAction, onUpdate: NoAction)
+  financeEntryReversalOf  UniversityFinanceEntry?            @relation("UniversityFinanceEntryReversalOf")
+  financeGlAcknowledgment UniversityFinanceGlAcknowledgment?
+
+  @@id([organizationId, entryKey])
+  @@unique([organizationId, reversalOf])
+  @@index([organizationId, postingDate], map: "university_finance_entries_period_idx")
+  @@index([organizationId, reference], map: "university_finance_entries_ref_idx")
+  @@map("university_finance_entries")
+}
+
+model UniversityFinanceGlAcknowledgment {
+  organizationId   String                 @map("organization_id")
+  entryKey         String                 @map("entry_key")
+  journalReference String                 @map("journal_reference")
+  actorId          String                 @map("actor_id")
+  createdAt        DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  financeEntry     UniversityFinanceEntry @relation(fields: [organizationId, entryKey], references: [organizationId, entryKey], onDelete: NoAction, onUpdate: NoAction, map: "university_finance_gl_acknowledg_organization_id_entry_key_fkey")
+
+  @@id([organizationId, entryKey])
+  @@map("university_finance_gl_acknowledgments")
+}
+
+model UniversityGradeAppeal {
+  organizationId String          @map("organization_id")
+  id             String          @default(dbgenerated("(gen_random_uuid())::text"))
+  gradeId        String          @map("grade_id")
+  reason         String
+  status         String          @default("OPEN")
+  decision       String?
+  decidedBy      String?         @map("decided_by")
+  decidedByUser  User?           @relation(fields: [organizationId, decidedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  grade          UniversityGrade @relation(fields: [organizationId, gradeId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, gradeId])
+  @@map("university_grade_appeals")
+}
+
+model UniversityGrade {
+  organizationId  String                 @map("organization_id")
+  id              String                 @default(dbgenerated("(gen_random_uuid())::text"))
+  enrollmentId    String                 @map("enrollment_id")
+  revision        Int
+  mark            Int
+  status          String                 @default("DRAFT")
+  submittedBy     String                 @map("submitted_by")
+  approvedBy      String?                @map("approved_by")
+  publishedAt     DateTime?              @map("published_at") @db.Timestamptz(6)
+  gradeAppeal     UniversityGradeAppeal?
+  approvedByUser  User?                  @relation("UniversityGradeApprovedBy", fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  enrollment      UniversityEnrollment   @relation(fields: [organizationId, enrollmentId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  submittedByUser User                   @relation("UniversityGradeSubmittedBy", fields: [organizationId, submittedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, enrollmentId, revision])
+  @@map("university_grades")
+}
+
+model UniversityGrantDeliverable {
+  organizationId String                  @map("organization_id")
+  id             String                  @default(dbgenerated("(gen_random_uuid())::text"))
+  grantId        String                  @map("grant_id")
+  title          String
+  dueOn          DateTime                @map("due_on") @db.Date
+  receipt        String?
+  acceptedAt     DateTime?               @map("accepted_at") @db.Timestamptz(6)
+  acceptedBy     String?                 @map("accepted_by")
+  acceptedByUser User?                   @relation(fields: [organizationId, acceptedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  grant          UniversityResearchGrant @relation(fields: [organizationId, grantId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, grantId, title, dueOn])
+  @@map("university_grant_deliverables")
+}
+
+model UniversityHecAttestation {
+  organizationId    String                      @map("organization_id")
+  id                String                      @default(dbgenerated("(gen_random_uuid())::text"))
+  verificationId    String                      @map("verification_id")
+  universityOutcome String                      @default("VERIFIED") @map("university_outcome")
+  hecReference      String                      @map("hec_reference")
+  issuedOn          DateTime                    @map("issued_on") @db.Date
+  recordedBy        String                      @map("recorded_by")
+  recordedAt        DateTime                    @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  recordedByUser    User                        @relation(fields: [organizationId, recordedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  awardVerification UniversityAwardVerification @relation(fields: [organizationId, verificationId, universityOutcome], references: [organizationId, id, outcome], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, hecReference])
+  @@unique([organizationId, verificationId])
+  @@map("university_hec_attestations")
+}
+
+model UniversityHousingWaitlist {
+  organizationId String                       @map("organization_id")
+  id             String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  personId       String                       @map("person_id")
+  resourceId     String                       @map("resource_id")
+  startsOn       DateTime                     @map("starts_on") @db.Date
+  endsOn         DateTime                     @map("ends_on") @db.Date
+  status         String                       @default("WAITING")
+  queuedAt       DateTime                     @default(dbgenerated("clock_timestamp()")) @map("queued_at") @db.Timestamptz(6)
+  allocationId   String?                      @map("allocation_id")
+  allocation     UniversityServiceAllocation? @relation(fields: [organizationId, allocationId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person         UniversityPerson             @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  resource       UniversityServiceResource    @relation(fields: [organizationId, resourceId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@index([organizationId, resourceId, status, queuedAt, id], map: "university_housing_fair_order")
+  @@map("university_housing_waitlist")
+}
+
+model UniversityIdentityReview {
+  organizationId        String                     @map("organization_id")
+  id                    String                     @default(dbgenerated("(gen_random_uuid())::text"))
+  personId              String                     @map("person_id")
+  actorId               String                     @map("actor_id")
+  revision              Int
+  kind                  String
+  reviewId              String?                    @map("review_id")
+  reason                String
+  occurredAt            DateTime                   @default(now()) @map("occurred_at") @db.Timestamptz(6)
+  actor                 User                       @relation(fields: [organizationId, actorId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person                UniversityPerson           @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  review                UniversityIdentityReview?  @relation("UniversityIdentityReviewReview", fields: [organizationId, reviewId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  identityReviewsReview UniversityIdentityReview[] @relation("UniversityIdentityReviewReview")
+
+  @@id([organizationId, id])
+  @@index([organizationId, personId, revision, occurredAt], map: "university_identity_review_history")
+  @@map("university_identity_reviews")
+}
+
+model UniversityImportBatch {
+  organizationId      String                       @map("organization_id")
+  id                  String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  sourceSystem        String                       @map("source_system")
+  sourceBatch         String                       @map("source_batch")
+  revision            Int
+  digest              String
+  evidence            String
+  manifest            Json
+  controls            Json
+  state               String                       @default("STAGED")
+  preparedBy          String                       @map("prepared_by")
+  validatedBy         String?                      @map("validated_by")
+  financeSignedBy     String?                      @map("finance_signed_by")
+  finalizedBy         String?                      @map("finalized_by")
+  cancelledBy         String?                      @map("cancelled_by")
+  cancellationReason  String?                      @map("cancellation_reason")
+  createdAt           DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  validatedAt         DateTime?                    @map("validated_at") @db.Timestamptz(6)
+  financeSignedAt     DateTime?                    @map("finance_signed_at") @db.Timestamptz(6)
+  finalizedAt         DateTime?                    @map("finalized_at") @db.Timestamptz(6)
+  cancelledAt         DateTime?                    @map("cancelled_at") @db.Timestamptz(6)
+  cancelledByUser     User?                        @relation("UniversityImportBatchCancelledBy", fields: [organizationId, cancelledBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  finalizedByUser     User?                        @relation("UniversityImportBatchFinalizedBy", fields: [organizationId, finalizedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  financeSignedByUser User?                        @relation("UniversityImportBatchFinanceSignedBy", fields: [organizationId, financeSignedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization        Organization                 @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  preparedByUser      User                         @relation("UniversityImportBatchPreparedBy", fields: [organizationId, preparedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  validatedByUser     User?                        @relation("UniversityImportBatchValidatedBy", fields: [organizationId, validatedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  importPersonLinks   UniversityImportPersonLink[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, sourceSystem, sourceBatch, revision])
+  @@map("university_import_batches")
+}
+
+model UniversityImportPersonLink {
+  organizationId  String                @map("organization_id")
+  sourceSystem    String                @map("source_system")
+  sourceStudentId String                @map("source_student_id")
+  personId        String                @map("person_id")
+  firstBatchId    String                @map("first_batch_id")
+  firstBatch      UniversityImportBatch @relation(fields: [organizationId, firstBatchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_import_person_link_organization_id_first_batch__fkey")
+  person          UniversityPerson      @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, sourceSystem, sourceStudentId])
+  @@unique([organizationId, sourceSystem, personId], map: "university_import_person_link_organization_id_source_system_key")
+  @@map("university_import_person_links")
+}
+
+model UniversityIntake {
+  organizationId    String                   @map("organization_id")
+  id                String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  programId         String                   @map("program_id")
+  label             String
+  curriculumVersion String                   @map("curriculum_version")
+  gradeScale        Json                     @default("[[85, 4], [80, 3.7], [75, 3.3], [70, 3], [65, 2.7], [60, 2.3], [55, 2], [50, 1], [0, 0]]") @map("grade_scale")
+  minimumCgpa       Decimal                  @default(0) @map("minimum_cgpa") @db.Decimal(4, 2)
+  meritVersion      String                   @default("1") @map("merit_version")
+  schoolWeight      Int                      @default(100) @map("school_weight")
+  requiredCredits   Int                      @map("required_credits")
+  researchRequired  Boolean                  @default(false) @map("research_required")
+  tuitionPaisa      BigInt                   @default(0) @map("tuition_paisa")
+  passMark          Int                      @map("pass_mark")
+  capacity          Int
+  opensOn           DateTime                 @map("opens_on") @db.Date
+  closesOn          DateTime                 @map("closes_on") @db.Date
+  startsOn          DateTime                 @map("starts_on") @db.Date
+  status            String                   @default("DRAFT")
+  approvedBy        String?                  @map("approved_by")
+  applications      UniversityApplication[]
+  courses           UniversityCourse[]
+  approvedByUser    User?                    @relation(fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  program           UniversityProgram        @relation(fields: [organizationId, programId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  meritLists        UniversityMeritList[]
+  seatCategories    UniversitySeatCategory[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, programId, label])
+  @@map("university_intakes")
+}
+
+model UniversityLibraryLoan {
+  organizationId String           @map("organization_id")
+  id             String           @default(dbgenerated("(gen_random_uuid())::text"))
+  personId       String           @map("person_id")
+  barcode        String
+  title          String
+  dueOn          DateTime         @map("due_on") @db.Date
+  borrowedAt     DateTime         @default(now()) @map("borrowed_at") @db.Timestamptz(6)
+  returnedAt     DateTime?        @map("returned_at") @db.Timestamptz(6)
+  person         UniversityPerson @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_library_loans")
+}
+
+model UniversityMeritList {
+  organizationId  String                  @map("organization_id")
+  id              String                  @default(dbgenerated("(gen_random_uuid())::text"))
+  intakeId        String                  @map("intake_id")
+  version         Int
+  formulaVersion  String                  @map("formula_version")
+  schoolWeight    Int                     @map("school_weight")
+  candidates      Json
+  publishedAt     DateTime                @default(now()) @map("published_at") @db.Timestamptz(6)
+  publishedBy     String                  @map("published_by")
+  applications    UniversityApplication[]
+  intake          UniversityIntake        @relation(fields: [organizationId, intakeId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  publishedByUser User                    @relation(fields: [organizationId, publishedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, intakeId, version])
+  @@map("university_merit_lists")
+}
+
+model UniversityPerson {
+  organizationId          String                           @map("organization_id")
+  id                      String                           @default(dbgenerated("(gen_random_uuid())::text"))
+  email                   String
+  fullName                String                           @default("") @map("full_name")
+  nationality             String                           @default("")
+  identityKind            String?                          @map("identity_kind")
+  identityCiphertext      String?                          @map("identity_ciphertext")
+  staffUserId             String?                          @map("staff_user_id")
+  createdAt               DateTime                         @default(now()) @map("created_at") @db.Timestamptz(6)
+  identityRevision        Int                              @default(1) @map("identity_revision")
+  alumniPreference        UniversityAlumniPreference?
+  applicationDrafts       UniversityApplicationDraft[]
+  applications            UniversityApplication[]
+  assessmentAttendance    UniversityAssessmentAttendance[]
+  careerApplications      UniversityCareerApplication[]
+  challans                UniversityChallan[]
+  diningMemberships       UniversityDiningMembership[]
+  documents               UniversityDocument[]
+  enrollments             UniversityEnrollment[]
+  examAdjustments         UniversityExamAdjustment[]
+  feeDelegationAudit      UniversityFeeDelegationAudit[]
+  feeDelegationsRecipient UniversityFeeDelegation[]        @relation("UniversityFeeDelegationRecipient")
+  feeDelegationsStudent   UniversityFeeDelegation[]        @relation("UniversityFeeDelegationStudent")
+  housingWaitlist         UniversityHousingWaitlist[]
+  identityReviews         UniversityIdentityReview[]
+  importPersonLinks       UniversityImportPersonLink[]
+  libraryLoans            UniversityLibraryLoan[]
+  organization            Organization                     @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  staffUser               User?                            @relation(fields: [organizationId, staffUserId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  portalSessions          UniversityPortalSession[]
+  privateCases            UniversityPrivateCase[]
+  serviceAllocations      UniversityServiceAllocation[]
+  verificationRequests    UniversityVerificationRequest[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, email])
+  @@unique([organizationId, staffUserId])
+  @@map("university_people")
+}
+
+model UniversityPortalChallenge {
+  organizationId String       @map("organization_id")
+  id             String
+  email          String
+  codeHash       String       @map("code_hash")
+  attempts       Int          @default(0)
+  expiresAt      DateTime     @map("expires_at") @db.Timestamptz(6)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@index([organizationId, expiresAt], map: "university_challenges_expiry")
+  @@map("university_portal_challenges")
+}
+
+model UniversityPortalSession {
+  organizationId String           @map("organization_id")
+  tokenHash      String           @map("token_hash")
+  personId       String           @map("person_id")
+  expiresAt      DateTime         @map("expires_at") @db.Timestamptz(6)
+  person         UniversityPerson @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, tokenHash])
+  @@index([organizationId, expiresAt], map: "university_sessions_expiry")
+  @@map("university_portal_sessions")
+}
+
+model UniversityPrivateCase {
+  organizationId String           @map("organization_id")
+  id             String           @default(dbgenerated("(gen_random_uuid())::text"))
+  personId       String           @map("person_id")
+  kind           String
+  message        String
+  openedAt       DateTime         @default(now()) @map("opened_at") @db.Timestamptz(6)
+  status         String           @default("OPEN")
+  resolution     String?
+  resolvedAt     DateTime?        @map("resolved_at") @db.Timestamptz(6)
+  resolvedBy     String?          @map("resolved_by")
+  person         UniversityPerson @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  resolvedByUser User?            @relation(fields: [organizationId, resolvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@index([organizationId, personId, openedAt], map: "university_private_subject")
+  @@map("university_private_cases")
+}
+
+model UniversityProcurementRequest {
+  organizationId   String                   @map("organization_id")
+  id               String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  reference        String
+  campusId         String                   @map("campus_id")
+  grantId          String?                  @map("grant_id")
+  category         String
+  supplier         String
+  description      String
+  amountPaisa      BigInt                   @map("amount_paisa")
+  neededOn         DateTime                 @map("needed_on") @db.Date
+  createdBy        String                   @map("created_by")
+  status           String                   @default("REQUESTED")
+  decisionBy       String?                  @map("decision_by")
+  decisionReason   String?                  @map("decision_reason")
+  receiptReference String?                  @map("receipt_reference")
+  receivedOn       DateTime?                @map("received_on") @db.Date
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  grant            UniversityResearchGrant? @relation(fields: [organizationId, grantId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_procurement_grant_fk")
+  decisionByUser   User?                    @relation("UniversityProcurementRequestDecisionBy", fields: [organizationId, decisionBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_procurement_request_organization_id_decision_by_fkey")
+  campus           UniversityCampus         @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser    User                     @relation("UniversityProcurementRequestCreatedBy", fields: [organizationId, createdBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, reference])
+  @@index([organizationId, grantId, status], map: "university_procurement_award")
+  @@map("university_procurement_requests")
+}
+
+model UniversityProgram {
+  organizationId         String             @map("organization_id")
+  id                     String             @default(dbgenerated("(gen_random_uuid())::text"))
+  campusId               String             @map("campus_id")
+  name                   String
+  code                   String
+  pqrReference           String             @map("pqr_reference")
+  accreditationReference String             @map("accreditation_reference")
+  validFrom              DateTime           @map("valid_from") @db.Date
+  validTo                DateTime           @map("valid_to") @db.Date
+  unitId                 String?            @map("unit_id")
+  intakes                UniversityIntake[]
+  campus                 UniversityCampus   @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  unit                   UniversityUnit?    @relation(fields: [organizationId, campusId, unitId], references: [organizationId, campusId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, campusId, code, validFrom])
+  @@map("university_programs")
+}
+
+model UniversityResearchCase {
+  organizationId    String                       @map("organization_id")
+  id                String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId  String                       @map("student_program_id")
+  title             String
+  supervisorId      String                       @map("supervisor_id")
+  status            String                       @default("PROPOSAL")
+  createdBy         String                       @map("created_by")
+  createdAt         DateTime                     @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdByUser     User                         @relation("UniversityResearchCaseCreatedBy", fields: [organizationId, createdBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  studentProgram    UniversityStudentProgram     @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  supervisor        User                         @relation("UniversityResearchCaseSupervisor", fields: [organizationId, supervisorId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  researchDecisions UniversityResearchDecision[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, studentProgramId])
+  @@map("university_research_cases")
+}
+
+model UniversityResearchDecision {
+  organizationId    String                 @map("organization_id")
+  id                String                 @default(dbgenerated("(gen_random_uuid())::text"))
+  caseId            String                 @map("case_id")
+  kind              String
+  priorStatus       String                 @map("prior_status")
+  nextStatus        String                 @map("next_status")
+  evidenceReference String                 @map("evidence_reference")
+  recordedBy        String                 @map("recorded_by")
+  recordedAt        DateTime               @default(now()) @map("recorded_at") @db.Timestamptz(6)
+  case              UniversityResearchCase @relation(fields: [organizationId, caseId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  recordedByUser    User                   @relation(fields: [organizationId, recordedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, caseId, kind, evidenceReference])
+  @@index([organizationId, caseId, recordedAt], map: "university_research_decision_history")
+  @@map("university_research_decisions")
+}
+
+model UniversityResearchGrant {
+  organizationId      String                         @map("organization_id")
+  id                  String                         @default(dbgenerated("(gen_random_uuid())::text"))
+  code                String
+  sponsor             String
+  title               String
+  budgetMinor         BigInt                         @map("budget_minor")
+  currency            String                         @default("PKR")
+  startsOn            DateTime                       @map("starts_on") @db.Date
+  endsOn              DateTime                       @map("ends_on") @db.Date
+  restrictions        String
+  allowedCategories   String[]                       @default([]) @map("allowed_categories")
+  status              String                         @default("ACTIVE")
+  createdBy           String                         @map("created_by")
+  createdAt           DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  closedBy            String?                        @map("closed_by")
+  closedAt            DateTime?                      @map("closed_at") @db.Timestamptz(6)
+  closureReference    String?                        @map("closure_reference")
+  grantDeliverables   UniversityGrantDeliverable[]
+  procurementRequests UniversityProcurementRequest[]
+  closedByUser        User?                          @relation("UniversityResearchGrantClosedBy", fields: [organizationId, closedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser       User                           @relation("UniversityResearchGrantCreatedBy", fields: [organizationId, createdBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization        Organization                   @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, code])
+  @@map("university_research_grants")
+}
+
+model UniversityRetainedAccessAudit {
+  organizationId String                       @map("organization_id")
+  id             String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  candidateId    String                       @map("candidate_id")
+  actorId        String                       @map("actor_id")
+  actorRealm     String                       @map("actor_realm")
+  readAt         DateTime                     @map("read_at") @db.Timestamptz(6)
+  candidate      UniversityRetentionCandidate @relation(fields: [organizationId, candidateId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_retained_access_au_organization_id_candidate_id_fkey")
+
+  @@id([organizationId, id])
+  @@map("university_retained_access_audit")
+}
+
+model UniversityRetentionCandidate {
+  organizationId      String                          @map("organization_id")
+  id                  String                          @default(dbgenerated("(gen_random_uuid())::text"))
+  reviewId            String                          @map("review_id")
+  targetKey           String                          @map("target_key")
+  referenceTime       DateTime                        @map("reference_time") @db.Timestamptz(6)
+  status              String                          @default("PENDING")
+  retainedAccessAudit UniversityRetainedAccessAudit[]
+  review              UniversityRetentionReview       @relation(fields: [organizationId, reviewId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, reviewId, targetKey], map: "university_retention_candidat_organization_id_review_id_tar_key")
+  @@map("university_retention_candidates")
+}
+
+model UniversityRetentionHold {
+  organizationId     String       @map("organization_id")
+  id                 String       @default(dbgenerated("(gen_random_uuid())::text"))
+  scope              String
+  targetKey          String       @map("target_key")
+  authorityReference String       @map("authority_reference")
+  createdBy          String       @map("created_by")
+  createdAt          DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  releasedBy         String?      @map("released_by")
+  releasedAt         DateTime?    @map("released_at") @db.Timestamptz(6)
+  releaseReference   String?      @map("release_reference")
+  createdByUser      User         @relation("UniversityRetentionHoldCreatedBy", fields: [organizationId, createdBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization       Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  releasedByUser     User?        @relation("UniversityRetentionHoldReleasedBy", fields: [organizationId, releasedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_retention_holds")
+}
+
+model UniversityRetentionPolicy {
+  organizationId     String                      @map("organization_id")
+  id                 String                      @default(dbgenerated("(gen_random_uuid())::text"))
+  kind               String
+  retainDays         Int                         @map("retain_days")
+  effectiveOn        DateTime                    @map("effective_on") @db.Date
+  authorityReference String                      @map("authority_reference")
+  proposedBy         String                      @map("proposed_by")
+  proposedAt         DateTime                    @default(now()) @map("proposed_at") @db.Timestamptz(6)
+  approvedBy         String?                     @map("approved_by")
+  approvedAt         DateTime?                   @map("approved_at") @db.Timestamptz(6)
+  approvedByUser     User?                       @relation("UniversityRetentionPolicyApprovedBy", fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization       Organization                @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  proposedByUser     User                        @relation("UniversityRetentionPolicyProposedBy", fields: [organizationId, proposedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  retentionReviews   UniversityRetentionReview[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, kind, effectiveOn])
+  @@map("university_retention_policies")
+}
+
+model UniversityRetentionReview {
+  organizationId      String                         @map("organization_id")
+  id                  String                         @default(dbgenerated("(gen_random_uuid())::text"))
+  policyId            String                         @map("policy_id")
+  createdBy           String                         @map("created_by")
+  createdAt           DateTime                       @default(now()) @map("created_at") @db.Timestamptz(6)
+  status              String                         @default("PREVIEW")
+  approvedBy          String?                        @map("approved_by")
+  approvedAt          DateTime?                      @map("approved_at") @db.Timestamptz(6)
+  approvalReference   String?                        @map("approval_reference")
+  finishedBy          String?                        @map("finished_by")
+  finishedAt          DateTime?                      @map("finished_at") @db.Timestamptz(6)
+  retentionCandidates UniversityRetentionCandidate[]
+  approvedByUser      User?                          @relation("UniversityRetentionReviewApprovedBy", fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  createdByUser       User                           @relation("UniversityRetentionReviewCreatedBy", fields: [organizationId, createdBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  finishedByUser      User?                          @relation("UniversityRetentionReviewFinishedBy", fields: [organizationId, finishedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  organization        Organization                   @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  policy              UniversityRetentionPolicy      @relation(fields: [organizationId, policyId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_retention_reviews")
+}
+
+model UniversityRollCounter {
+  organizationId String       @id @map("organization_id")
+  lastNumber     BigInt       @map("last_number")
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@map("university_roll_counters")
+}
+
+model UniversitySeatCategory {
+  organizationId String                  @map("organization_id")
+  id             String                  @default(dbgenerated("(gen_random_uuid())::text"))
+  intakeId       String                  @map("intake_id")
+  label          String
+  capacity       Int
+  applications   UniversityApplication[]
+  intake         UniversityIntake        @relation(fields: [organizationId, intakeId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, intakeId, id])
+  @@unique([organizationId, intakeId, label])
+  @@map("university_seat_categories")
+}
+
+model UniversitySection {
+  organizationId String                  @map("organization_id")
+  id             String                  @default(dbgenerated("(gen_random_uuid())::text"))
+  intakeId       String                  @map("intake_id")
+  courseId       String                  @map("course_id")
+  instructorId   String                  @map("instructor_id")
+  term           String
+  label          String
+  room           String
+  weekday        Int
+  startMinute    Int                     @map("start_minute")
+  endMinute      Int                     @map("end_minute")
+  capacity       Int
+  enrollments    UniversityEnrollment[]
+  examSittings   UniversityExamSitting[]
+  intake         UniversityCourse        @relation(fields: [organizationId, courseId, intakeId], references: [organizationId, id, intakeId], onDelete: NoAction, onUpdate: NoAction)
+  instructor     User                    @relation(fields: [organizationId, instructorId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  teachingLoad   UniversityTeachingLoad?
+
+  @@id([organizationId, id])
+  @@unique([organizationId, courseId, term, label])
+  @@map("university_sections")
+}
+
+model UniversityServiceAllocation {
+  organizationId  String                      @map("organization_id")
+  id              String                      @default(dbgenerated("(gen_random_uuid())::text"))
+  resourceId      String                      @map("resource_id")
+  personId        String                      @map("person_id")
+  startsOn        DateTime                    @map("starts_on") @db.Date
+  endsOn          DateTime                    @map("ends_on") @db.Date
+  releasedAt      DateTime?                   @map("released_at") @db.Timestamptz(6)
+  releaseReason   String?                     @map("release_reason")
+  chargeReference String?                     @map("charge_reference")
+  housingWaitlist UniversityHousingWaitlist[]
+  person          UniversityPerson            @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  resource        UniversityServiceResource   @relation(fields: [organizationId, resourceId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_service_allocations")
+}
+
+model UniversityServiceResource {
+  organizationId     String                        @map("organization_id")
+  id                 String                        @default(dbgenerated("(gen_random_uuid())::text"))
+  campusId           String                        @map("campus_id")
+  code               String
+  label              String
+  kind               String
+  capacity           Int
+  feePaisa           BigInt                        @map("fee_paisa")
+  housingWaitlist    UniversityHousingWaitlist[]
+  serviceAllocations UniversityServiceAllocation[]
+  campus             UniversityCampus              @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, campusId, code])
+  @@map("university_service_resources")
+}
+
+model UniversityStaffAppointment {
+  organizationId String                   @map("organization_id")
+  id             String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  userId         String                   @map("user_id")
+  campusId       String                   @map("campus_id")
+  reference      String
+  position       String
+  startsOn       DateTime                 @map("starts_on") @db.Date
+  endsOn         DateTime                 @map("ends_on") @db.Date
+  monthlyPaisa   BigInt                   @map("monthly_paisa")
+  loadMinutes    Int                      @map("load_minutes")
+  campus         UniversityCampus         @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  user           User                     @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  teachingLoads  UniversityTeachingLoad[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, reference])
+  @@map("university_staff_appointments")
+}
+
+model UniversityStaffScope {
+  organizationId String            @map("organization_id")
+  id             String            @default(dbgenerated("(gen_random_uuid())::text"))
+  userId         String            @map("user_id")
+  level          String
+  campusId       String?           @map("campus_id")
+  unitId         String?           @map("unit_id")
+  campus         UniversityCampus? @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  unit           UniversityUnit?   @relation(fields: [organizationId, campusId, unitId], references: [organizationId, campusId, id], onDelete: NoAction, onUpdate: NoAction)
+  user           User              @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@unique([organizationId, userId, level, campusId, unitId])
+  @@map("university_staff_scopes")
+}
+
+model UniversityStudentProgram {
+  organizationId      String                         @map("organization_id")
+  id                  String                         @default(dbgenerated("(gen_random_uuid())::text"))
+  personId            String                         @map("person_id")
+  intakeId            String                         @map("intake_id")
+  status              String                         @default("ACTIVE")
+  matriculatedAt      DateTime                       @default(now()) @map("matriculated_at") @db.Timestamptz(6)
+  endedAt             DateTime?                      @map("ended_at") @db.Timestamptz(6)
+  rollNumber          String                         @map("roll_number")
+  academicHolds       UniversityAcademicHold[]
+  accommodationCases  UniversityAccommodationCase[]
+  advisingAssignments UniversityAdvisingAssignment[]
+  award               UniversityAward?
+  creditRecognitions  UniversityCreditRecognition[]
+  researchCase        UniversityResearchCase?
+  intake              UniversityApplication          @relation(fields: [organizationId, personId, intakeId], references: [organizationId, personId, intakeId], onDelete: NoAction, onUpdate: NoAction)
+  studyInterruptions  UniversityStudyInterruption[]
+  transcripts         UniversityTranscript[]
+
+  @@id([organizationId, id])
+  @@unique([organizationId, personId, intakeId])
+  @@unique([organizationId, rollNumber])
+  @@index([organizationId, matriculatedAt(sort: Desc), id], map: "university_recent_students")
+  @@map("university_student_programs")
+}
+
+model UniversityStudyInterruption {
+  organizationId   String                   @map("organization_id")
+  id               String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId String                   @map("student_program_id")
+  startsOn         DateTime                 @map("starts_on") @db.Date
+  expectedReturn   DateTime                 @map("expected_return") @db.Date
+  leaveReference   String                   @map("leave_reference")
+  approvedBy       String                   @map("approved_by")
+  returnedOn       DateTime?                @map("returned_on") @db.Date
+  returnReference  String?                  @map("return_reference")
+  returnedBy       String?                  @map("returned_by")
+  studentProgram   UniversityStudentProgram @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_study_interruption_organization_id_student_prog_fkey")
+  approvedByUser   User                     @relation("UniversityStudyInterruptionApprovedBy", fields: [organizationId, approvedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  returnedByUser   User?                    @relation("UniversityStudyInterruptionReturnedBy", fields: [organizationId, returnedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_study_interruptions")
+}
+
+model UniversityTeachingLoad {
+  organizationId String                     @map("organization_id")
+  sectionId      String                     @map("section_id")
+  appointmentId  String                     @map("appointment_id")
+  appointment    UniversityStaffAppointment @relation(fields: [organizationId, appointmentId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  section        UniversitySection          @relation(fields: [organizationId, sectionId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, sectionId])
+  @@map("university_teaching_loads")
+}
+
+model UniversityTranscript {
+  organizationId   String                   @map("organization_id")
+  id               String                   @default(dbgenerated("(gen_random_uuid())::text"))
+  studentProgramId String                   @map("student_program_id")
+  snapshot         Json
+  issuedAt         DateTime                 @default(now()) @map("issued_at") @db.Timestamptz(6)
+  issuedBy         String                   @map("issued_by")
+  awards           UniversityAward[]
+  issuedByUser     User                     @relation(fields: [organizationId, issuedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  studentProgram   UniversityStudentProgram @relation(fields: [organizationId, studentProgramId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_transcripts")
+}
+
+model UniversityUnit {
+  organizationId      String                 @map("organization_id")
+  campusId            String                 @map("campus_id")
+  id                  String                 @default(dbgenerated("(gen_random_uuid())::text"))
+  name                String
+  level               String
+  parentId            String?                @map("parent_id")
+  programs            UniversityProgram[]
+  staffScopes         UniversityStaffScope[]
+  campus              UniversityCampus       @relation(fields: [organizationId, campusId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  parent              UniversityUnit?        @relation("UniversityUnitCampusIdParent", fields: [organizationId, campusId, parentId], references: [organizationId, campusId, id], onDelete: NoAction, onUpdate: NoAction)
+  unitsCampusIdParent UniversityUnit[]       @relation("UniversityUnitCampusIdParent")
+
+  @@id([organizationId, id])
+  @@unique([organizationId, campusId, id])
+  @@unique([organizationId, campusId, name])
+  @@map("university_units")
+}
+
+model UniversityVerificationRequest {
+  organizationId String                       @map("organization_id")
+  id             String                       @default(dbgenerated("(gen_random_uuid())::text"))
+  personId       String                       @map("person_id")
+  awardId        String                       @map("award_id")
+  recipient      String
+  status         String                       @default("REQUESTED")
+  requestedAt    DateTime                     @default(now()) @map("requested_at") @db.Timestamptz(6)
+  verifiedBy     String?                      @map("verified_by")
+  decisionNote   String?                      @map("decision_note")
+  verificationId String?                      @map("verification_id")
+  verification   UniversityAwardVerification? @relation(fields: [organizationId, verificationId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_verification_reque_organization_id_verification_fkey")
+  verifiedByUser User?                        @relation(fields: [organizationId, verifiedBy], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "university_verification_reques_organization_id_verified_by_fkey")
+  award          UniversityAward              @relation(fields: [organizationId, awardId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+  person         UniversityPerson             @relation(fields: [organizationId, personId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@id([organizationId, id])
+  @@map("university_verification_requests")
 }

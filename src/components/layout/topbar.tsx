@@ -31,7 +31,11 @@ import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { getSearchCategoryAccess } from '@/lib/search-access';
 import { cn } from '@/lib/utils';
-import { inviteCopyForVertical } from '@/lib/vertical-catalog';
+import {
+  inviteCopyForVertical,
+  workspaceSubtitleForVertical,
+  type OrganizationVertical,
+} from '@/lib/vertical-catalog';
 import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
@@ -105,12 +109,14 @@ const getInitials = (name: string) =>
 /** The workspace mark and name, linking to the dashboard. */
 export function WorkspaceBrandLink({
   brand,
-  subtitle = 'Company workspace',
+  subtitle,
+  vertical,
   textClassName = 'hidden leading-tight sm:block',
   className,
 }: {
   brand?: TenantBrand;
   subtitle?: string;
+  vertical?: OrganizationVertical;
   textClassName?: string;
   /** Extra classes for the link, e.g. the counter's 44px touch target (DEV-1005). */
   className?: string;
@@ -140,7 +146,9 @@ export function WorkspaceBrandLink({
         <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
           {brand?.displayName ?? 'DevFathom'}
         </span>
-        <span className="block text-xs text-muted-foreground">{subtitle}</span>
+        <span className="block text-xs text-muted-foreground">
+          {subtitle ?? workspaceSubtitleForVertical(vertical)}
+        </span>
       </div>
     </Link>
   );
@@ -510,6 +518,7 @@ export function Topbar({
   brand?: TenantBrand;
 } = {}) {
   const { data: session } = useSession();
+  const { vertical } = useEntitlements();
   const roleLabel = useWorkspaceRoleLabel();
   // DEV-957 phase 2 (shared till): never the last person's name on a page opened offline.
   const browserOnline = useBrowserOnline();
@@ -528,7 +537,7 @@ export function Topbar({
         </button>
       )}
 
-      <WorkspaceBrandLink brand={brand} />
+      <WorkspaceBrandLink brand={brand} vertical={vertical} />
 
       <div className="hidden h-8 w-px bg-border-subtle md:block" />
 
@@ -571,10 +580,10 @@ export function Topbar({
   );
 }
 
-/** Projects are an agency workspace module that no pharmacy package licenses. */
+/** Pharmacy and university workspaces have no agency projects destination. */
 export function ProjectsShortcut() {
   const { vertical } = useEntitlements();
-  if (vertical === 'PHARMACY') return null;
+  if (vertical === 'PHARMACY' || vertical === 'UNIVERSITY') return null;
   return (
     <Link href="/projects" className="studio-icon-button hidden md:flex" aria-label="Open projects">
       <Plus className="h-4 w-4" />

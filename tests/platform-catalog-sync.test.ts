@@ -5,6 +5,7 @@ import type { Prisma } from '../src/generated/prisma/client';
 import { syncPlatformCatalog } from '../prisma/catalog-sync';
 import {
   HOSPITALITY_PACKAGES,
+  UNIVERSITY_PACKAGES,
   PHARMACY_PACKAGES,
   packageDefaultSeats,
   RESTAURANT_PACKAGES,
@@ -12,7 +13,12 @@ import {
 
 describe('catalog sync legacy seat defaults (#191)', () => {
   it.each([1, 7, 3000])('reconciles already-seeded packages with %i seats', async (seats) => {
-    const definitions = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES];
+    const definitions = [
+      ...RESTAURANT_PACKAGES,
+      ...PHARMACY_PACKAGES,
+      ...HOSPITALITY_PACKAGES,
+      ...UNIVERSITY_PACKAGES,
+    ];
     const packages = definitions.map((definition) => ({
       key: definition.key,
       defaultSeats: seats,
