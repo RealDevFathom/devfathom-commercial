@@ -2102,12 +2102,20 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter + counter family, assigned branch or ADMIN',
     lines: ['take-payment/follow-up-outofstock-requests'],
   },
+  'pharmacySales.checkBillLinePack': {
+    gate: 'auditedProtectedProcedure; requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN; bill owner or manager',
+    lines: ['take-payment/take-payment-branches-by'],
+  },
   'pharmacySales.authenticatePack': {
     gate: 'assignedBranchScope then requireCartWriteAccess -> pharmacy:counter or exact pharmacy:dispense (counter family not DENIED)',
     lines: [
       'take-payment/ring-up-medicines',
       'dispense-prescriptions/ring-up-medicines-without-counter',
     ],
+  },
+  'pharmacySales.recordCounterDemand': {
+    gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN',
+    lines: ['take-payment/take-payment-branches-by'],
   },
   'pharmacySales.captureDemand': {
     gate: 'requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN',
@@ -2308,6 +2316,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
   },
+  'pharmacySales.discountBillLine': {
+    gate: 'protectedProcedure; requireCounterReceiptAccess(canonical true) -> pharmacy:counter, assigned branch or ADMIN; bill owner or manager; DISCOUNT approval',
+    lines: ['take-payment/take-payment-branches-by'],
+  },
   'pharmacySales.applyBillDiscount': {
     gate: "requireCartWriteAccess (pharmacy:counter or pharmacy:dispense, assigned branch or ADMIN) + the owner's whole-bill discount switch on; approved as an item discount: the operator's own pharmacy:discount, or a pharmacy:manage approver's approval code (solo: the sole approver's own approval code); removing it (zero) needs no approval",
     lines: [
@@ -2506,6 +2518,16 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: [
       'take-payment/see-returns-refund-value',
       'dispense-prescriptions/see-returns-refund-value',
+    ],
+  },
+  'pharmacySales.returnLines': {
+    gate: 'requireCounterReceiptAccess default as returnLine/returnAndRefund (receipt, dispensing or counter capability family; DENY wins), assigned branch or ADMIN AND pharmacy:manage AND own approval code; khata refund needs pharmacy:counter; controlled line needs pharmacy:dispense + witness approval code',
+    lines: [
+      'run-branches/refund-sales-take-returns',
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/use-counter-without-counter',
+      'dispense-prescriptions/void-return-controlledmedicine-sale',
+      'dispense-prescriptions/witness-controlled-stock-going',
     ],
   },
   'pharmacySales.returnLine': {

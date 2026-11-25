@@ -16,6 +16,7 @@ export function apportionDiscount(totalMinor: number, weights: readonly number[]
 type Money = { grossMinor?: number | null; discountMinor?: number | null };
 type ReturnMoney = Money & { canonicalUnits: number };
 type SoldMoney = {
+  lineAllocationDiscounts?: unknown;
   tierAllocationDiscounts?: unknown;
   /** DEV-956: each allocation's share of the line's whole-bill discount. */
   billAllocationDiscounts?: unknown;
@@ -41,6 +42,7 @@ export function saleAllocationMoney<T extends Money & { id: string; canonicalUni
     grossMinor: row.grossMinor ?? historicalGross[i]!,
     discountMinor:
       (row.discountMinor ?? historicalDiscount[i]!) +
+      billAllocationDiscount(line.lineAllocationDiscounts, row.id) +
       tierAllocationDiscount(line.tierAllocationDiscounts, row.id) +
       billAllocationDiscount(line.billAllocationDiscounts, row.id),
   }));

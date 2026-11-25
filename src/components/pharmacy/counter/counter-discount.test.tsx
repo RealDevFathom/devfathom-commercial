@@ -225,3 +225,30 @@ describe('DEV-961 with DEV-977 phase 3: the sheet follows the approvals setting'
     if (mode === 'CODE') expect(sheet).not.toHaveTextContent(/with their PIN when/);
   });
 });
+
+describe('A4 approval help for a selected bill line', () => {
+  it.each([
+    ['CODE', 'current approval code'],
+    ['PIN', 'staff PIN'],
+  ] as const)('uses the %s mode helper inside the sheet', async (mode, expected) => {
+    render(
+      <ApprovalSecretKindContext.Provider value={mode}>
+        <CounterDiscountEntry
+          branchId="branch-a"
+          held={null}
+          disabled={false}
+          onHold={vi.fn()}
+          onClear={vi.fn()}
+          billLines={{
+            lines: [{ saleLineId: 'line-a', medicineName: 'Test medicine' }],
+            apply: vi.fn(),
+          }}
+        />
+      </ApprovalSecretKindContext.Provider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
+    fireEvent.click(screen.getByRole('button', { name: /^Bill line$/ }));
+    const sheet = await screen.findByRole('dialog', { name: 'Discount on a bill line' });
+    expect(within(sheet).getByText(/server checks this line’s price/)).toHaveTextContent(expected);
+  });
+});

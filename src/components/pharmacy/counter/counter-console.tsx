@@ -81,6 +81,8 @@ import {
 } from './counter-receipt-view';
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
+import { CounterPackCheck } from './counter-pack-check';
+import { CounterDemandSheet } from './counter-demand-sheet';
 import { CounterReturnPanel } from './counter-return-panel';
 import { CounterControlledAuthorization, CounterRxPanel } from './counter-rx-panel';
 import { CounterRxSelfSign } from './counter-rx-self-sign';
@@ -1524,7 +1526,8 @@ function ScopedPharmacyCounterConsole({
     return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone, pharmacistCheckOff });
   }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
-  const blocked = hasBlockingAlert(alerts);
+  const packBlocked = cart?.lines.some((line) => line.packCheckBlocked) === true;
+  const blocked = hasBlockingAlert(alerts) || packBlocked;
   const safetyLabel = blocked
     ? `${alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK').length} safety block · payment locked`
     : `No safety blocks · ${alerts.length} notes to pass on`;
@@ -1532,6 +1535,7 @@ function ScopedPharmacyCounterConsole({
     ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
+  const demandSaleId = currentBill && cart.status === 'OPEN' ? cart.saleId : undefined;
   const currentBillClosed = billClosed(cart, saleId);
   useEffect(() => {
     if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
@@ -1791,25 +1795,27 @@ function ScopedPharmacyCounterConsole({
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
         : tenderReadRequired
           ? 'Refresh this bill to verify payment before taking more money.'
-          : blocked
-            ? 'Resolve the safety block in the prescription panel before taking payment.'
-            : billState === 'idle'
-              ? 'Add an item to start a sale before taking payment.'
-              : billState === 'loading'
-                ? 'Checking the bill. Please wait before taking payment.'
-                : billState === 'error' || billState === 'stale'
-                  ? 'Refresh the bill to check the balance before taking payment.'
-                  : billState === 'settled'
-                    ? 'This bill is already paid. Start a new sale.'
-                    : billState === 'unavailable'
-                      ? cart?.status === 'HELD'
-                        ? 'Resume this bill before taking payment.'
-                        : currentBill && lineCount === 0
-                          ? 'Add an item to this bill before taking payment.'
-                          : 'Refresh the bill or start a new sale before taking payment.'
-                      : busy
-                        ? 'Wait for the current counter action to finish before taking payment.'
-                        : null;
+          : packBlocked
+            ? 'Resolve the pack check or remove the blocked line before taking payment.'
+            : blocked
+              ? 'Resolve the safety block in the prescription panel before taking payment.'
+              : billState === 'idle'
+                ? 'Add an item to start a sale before taking payment.'
+                : billState === 'loading'
+                  ? 'Checking the bill. Please wait before taking payment.'
+                  : billState === 'error' || billState === 'stale'
+                    ? 'Refresh the bill to check the balance before taking payment.'
+                    : billState === 'settled'
+                      ? 'This bill is already paid. Start a new sale.'
+                      : billState === 'unavailable'
+                        ? cart?.status === 'HELD'
+                          ? 'Resume this bill before taking payment.'
+                          : currentBill && lineCount === 0
+                            ? 'Add an item to this bill before taking payment.'
+                            : 'Refresh the bill or start a new sale before taking payment.'
+                        : busy
+                          ? 'Wait for the current counter action to finish before taking payment.'
+                          : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -3676,7 +3682,7 @@ function ScopedPharmacyCounterConsole({
     try {
       const demand = await captureDemand.mutateAsync({
         branchId,
-        ...(saleId ? { saleId } : {}),
+        ...(demandSaleId ? { saleId: demandSaleId } : {}),
         ...(deviceId ? { terminalId: deviceId } : {}),
         requestedQty: Math.max(requestedCanonicalUnits ?? quantity, capturedUnits),
         ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
@@ -3717,7 +3723,7 @@ function ScopedPharmacyCounterConsole({
     focusSearch,
     query,
     quantity,
-    saleId,
+    demandSaleId,
     saleUnit,
     selectedOption,
     requestedCanonicalUnits,
@@ -4357,7 +4363,7 @@ function ScopedPharmacyCounterConsole({
         ref={actionsButtonRef}
         type="button"
         variant="ghost"
-        className="order-last h-11 shrink-0 gap-2 px-3"
+        className="order-last h-11 shrink-0 gap-2 px-3 xl:px-2"
         aria-expanded={actionsOpen}
         aria-controls="counter-actions"
         onClick={() => setActionsOpen(!actionsOpen)}
@@ -4407,6 +4413,26 @@ function ScopedPharmacyCounterConsole({
         <div
           className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
         >
+          <CounterPackCheck
+            key={`pack:${branchId}:${saleId}`}
+            branchId={branchId}
+            saleId={saleId ?? ''}
+            lines={cart?.lines ?? []}
+            disabled={
+              busy || !connectionOnline || cart?.status !== 'OPEN' || cart.totals.tenderedMinor > 0
+            }
+            refresh={refreshCart}
+          />
+          <CounterDemandSheet
+            key={branchId}
+            branchId={branchId}
+            saleId={demandSaleId}
+            query={activeRow?.displayName ?? query}
+            medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
+            customer={customerQuery.data?.customer ?? null}
+            disabled={busy || !connectionOnline}
+            onSaved={(message) => setNotice({ tone: 'success', message })}
+          />
           {canSettlePayments ? (
             <CounterKhataPaymentPanel
               branchId={branchId}
@@ -5376,6 +5402,30 @@ function ScopedPharmacyCounterConsole({
                     held={heldDiscount}
                     disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
                     returnFocus={searchRef}
+                    key={`discount:${branchId}:${cart?.saleId}`}
+                    billLines={
+                      currentBill && cart && cart.status === 'OPEN' && !cart.totals.tenderedMinor
+                        ? {
+                            lines: cart.lines,
+                            apply: async (saleLineId, discount, requestId, discountApproval) => {
+                              await utils.client.pharmacySales.discountBillLine.mutate({
+                                branchId,
+                                saleId: cart.saleId,
+                                saleLineId,
+                                discount,
+                                requestId,
+                                deviceId: currentCounterDeviceId(),
+                                discountApproval,
+                              });
+                              await refreshCart();
+                              setNotice({
+                                tone: 'success',
+                                message: 'Discount recorded against the selected bill line.',
+                              });
+                            },
+                          }
+                        : undefined
+                    }
                     wholeBill={sheetWholeBill}
                     approvers={sheetApprovers}
                     onOpenChange={setDiscountSheetOpen}

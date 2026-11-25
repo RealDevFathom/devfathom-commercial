@@ -224,7 +224,10 @@ import {
   replaySaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
+  saleHasPaymentActivity,
   captureDemand,
+  discountBillLine,
+  recordCounterDemand,
   changeSaleStatus,
   createSale,
   demandAggregate,
@@ -235,6 +238,7 @@ import {
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
+  returnSaleLines,
   readReturnHistory,
   quoteSaleLineReturn,
   saleReturnValueMinor,
@@ -285,6 +289,7 @@ import {
   setDemandOutcome,
   settleLostSales,
   updateLostSalesSettings,
+  MAX_COUNTER_DEMAND_QUANTITY,
 } from '@/lib/pharmacy/lost-sales';
 import {
   adminProcedure,
@@ -2857,6 +2862,61 @@ export const pharmacySalesRouter = router({
       });
       return { enabled: saved.enabled };
     }),
+  discountBillLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          deviceId: z.string().min(1).optional(),
+          requestId: z.uuid(),
+          discount: z.discriminatedUnion('kind', [
+            z.object({ kind: z.literal('PERCENT'), bps: maxDiscountBpsSchema }).strict(),
+            z
+              .object({
+                kind: z.literal('AMOUNT'),
+                minor: z.number().int().positive().max(2000000000),
+              })
+              .strict(),
+          ]),
+          discountApproval: counterApprovalPin.optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySaleLine',
+        targetId: input.saleLineId,
+      });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+        const approval = await authorizeCounterApproval(
+          ctx.db,
+          scope,
+          'DISCOUNT',
+          input.discountApproval
+        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await requirePharmacyTodayOpenForTrading(db, scope);
+          await assertLineMedicineSellable(db, scope, input.saleLineId);
+          return discountBillLine(db, scope, {
+            saleId: input.saleId,
+            saleLineId: input.saleLineId,
+            discount: input.discount,
+            idempotencyKey: input.requestId,
+            actorIsManager: await actorMayRefund(db, ctx.session!.user),
+            cashShift: (bill) => lineChangeCashShift(db, scope, input.deviceId, bill),
+            approval,
+            confirmApproval: () => confirmCounterApproval(db, scope, 'DISCOUNT', approval),
+          });
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
   /**
    * DEV-956: give, change or remove (zero) the one whole-bill discount on an open, unpaid bill,
    * as an amount or a percentage. It is approved exactly as an item discount is: the operator's
@@ -4051,6 +4111,112 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  returnLines: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          requestId: z.uuid(),
+          reason: z.string().trim().min(1).max(500),
+          managerPin: z.string().regex(/^\d{4,8}$/),
+          controlledWitness: counterApprovalPin.optional(),
+          lines: z
+            .array(
+              z
+                .object({
+                  saleLineId: z.string().min(1),
+                  canonicalUnits: z.number().int().positive(),
+                  lotId: z.string().min(1).optional(),
+                  disposition: z.enum(['RESTOCK', 'QUARANTINE']),
+                  quarantineLocationId: z.string().min(1).optional(),
+                  integrityDecision: z.string().trim().min(1).max(500),
+                })
+                .strict()
+            )
+            .min(2)
+            .max(100),
+          refund: z
+            .object({
+              originalTenderId: z.string().min(1),
+              deviceId: z.string().min(1),
+              businessDate: z.date(),
+              amountMinor: z.number().int().positive().optional(),
+              manualCashFallback: z.boolean(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true, targetType: 'PharmacySale', targetId: input.saleId });
+      try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        if (!(await actorMayRefund(ctx.db, ctx.session!.user)))
+          throw new TRPCError({ code: 'FORBIDDEN', message: RETURN_FORBIDDEN });
+        const { managerPin, ...request } = input;
+        const pin = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: managerPin,
+          action: 'pharmacySales.returnLines',
+        });
+        annotateAudit(ctx, {
+          metadata: refundApprovalAudit({
+            initiatedById: scope.actorId,
+            approverId: scope.actorId,
+            pin,
+          }),
+        });
+        if ('blocked' in pin) return { blocked: RETURN_PIN_BLOCKED };
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const refund = request.refund;
+          if (
+            refund &&
+            !(await db.pharmacyTender.findFirst({
+              where: {
+                id: refund.originalTenderId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                saleId: request.saleId,
+              },
+              select: { id: true },
+            }))
+          )
+            throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+          let result;
+          try {
+            result = await returnSaleLines(db, scope, request);
+          } catch (e) {
+            // The group verifies its witness before its first stock or return write.
+            if (e instanceof ControlledRestorationDenied && !e.forbidden)
+              return { blocked: e.message };
+            throw e;
+          }
+          if (!refund) return result;
+          const amountMinor = refund.amountMinor ?? result.returnedMinor;
+          if (amountMinor <= 0 || amountMinor > result.returnedMinor)
+            throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+          const paid = await refundTenderInTransaction(
+            ctx,
+            db,
+            scope,
+            {
+              ...refund,
+              amountMinor,
+              reason: request.reason,
+              idempotencyKey: result.returnId + ':refund',
+            },
+            true
+          );
+          return { ...result, refund: paid };
+        });
+      } catch (e) {
+        fail(e);
+      }
+    }),
   returnLine: protectedProcedure
     .input(
       z
@@ -4239,6 +4405,43 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  recordCounterDemand: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1).optional(),
+          requestId: z.uuid(),
+          requestedText: z.string().trim().min(1).max(250),
+          requestedMedicineId: z.string().min(1).optional(),
+          quantity: z.number().int().positive().max(MAX_COUNTER_DEMAND_QUANTITY),
+          reason: z.enum([
+            'STOCKOUT',
+            'NOT_CARRIED',
+            'PACK_UNAVAILABLE',
+            'PRICE_REJECTED',
+            'SUBSTITUTE_DECLINED',
+          ]),
+          followUp: z
+            .object({
+              customerId: z.string().min(1),
+              channel: z.enum(['SMS', 'WHATSAPP']),
+              reserveOnArrival: z.boolean(),
+            })
+            .strict()
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const { branchId, ...request } = input;
+        const scope = await requireCounterReceiptAccess(ctx, branchId, true);
+        return await ctx.db.$transaction((tx) => recordCounterDemand(txDb(tx), scope, request));
+      } catch (error) {
+        fail(error);
+      }
+    }),
   captureDemand: protectedProcedure
     .input(
       z
@@ -4275,7 +4478,12 @@ export const pharmacySalesRouter = router({
         const { branchId: branch, ...demand } = input;
         // DEV-817: the counter's gate, before any demand row is written.
         const scope = await requireCounterReceiptAccess(ctx, branch, true);
-        return redactDemandContact(await captureDemand(ctx.db, scope, demand));
+        const event = demand.saleId
+          ? await ctx.db.$transaction((tx) =>
+              captureDemand(txDb(tx), scope, { ...demand, shareBillDemand: true })
+            )
+          : await captureDemand(ctx.db, scope, demand);
+        return redactDemandContact(event);
       } catch (error) {
         fail(error);
       }
@@ -4951,6 +5159,102 @@ export const pharmacySalesRouter = router({
       }
     }),
 
+  checkBillLinePack: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          saleLineId: z.string().min(1),
+          payload: z.string().trim().min(1).max(512),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'PharmacySaleLine',
+        targetId: input.saleLineId,
+      });
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        const [sale] = await db.$queryRaw<
+          { status: string; createdByUserId: string }[]
+        >`SELECT status,"createdByUserId" FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+        if (
+          !sale ||
+          (sale.createdByUserId !== scope.actorId && !(await actorMayRefund(db, ctx.session!.user)))
+        )
+          throw new TRPCError({ code: 'FORBIDDEN' });
+        if (sale.status !== 'OPEN' || (await saleHasPaymentActivity(db, scope, input.saleId)))
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'Pack checks require an open, unpaid bill.',
+          });
+        const where = {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          saleId: input.saleId,
+        };
+        const line = await db.pharmacySaleLine.findFirst({
+          where: { ...where, id: input.saleLineId },
+          include: { allocations: { include: { lot: { include: { batch: true } } } } },
+        });
+        if (!line) throw new TRPCError({ code: 'NOT_FOUND' });
+        const scan = await authenticatePharmacyPack(db, {
+          ...scope,
+          source: 'DISPENSING',
+          payload: input.payload,
+        });
+        const code = scan.parsed;
+        const barcode =
+          code &&
+          (await db.medicineBarcode.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              normalizedCode: code.gtin,
+              presentationId: line.presentationId,
+            },
+            select: { packLevelId: true },
+          }));
+        const packLevelId = barcode ? (barcode.packLevelId ?? line.packLevelId) : null;
+        const serial = await db.pharmacySoldPackSerial.findFirst({
+          where: { ...where, saleLineId: line.id, releasedAt: null },
+        });
+        const matched = Boolean(
+          scan.status === 'VERIFIED' &&
+          code &&
+          packLevelId === line.packLevelId &&
+          (!serial || (serial.serialNumber === code.serial && serial.gtin === code.gtin)) &&
+          line.allocations.some(
+            (a) =>
+              a.lot.receivedAt &&
+              a.lot.packLevelId === packLevelId &&
+              (!serial?.inventoryLotId || a.lot.id === serial.inventoryLotId) &&
+              a.lot.batch.state === 'ACTIVE' &&
+              (!code.batch || a.lot.batch.batchNumber === code.batch) &&
+              a.lot.batch.medicineId === line.medicineId &&
+              (!code.expiry ||
+                a.lot.batch.expiresAt?.toISOString().slice(2, 10).replaceAll('-', '') ===
+                  code.expiry)
+          )
+        );
+        await db.pharmacySaleLine.update({
+          where: { id: line.id },
+          data: { packCheckBlocked: !matched },
+        });
+        await db.pharmacySaleEvent.create({
+          data: {
+            ...where,
+            actorId: scope.actorId,
+            kind: 'PACK_CHECK',
+            payload: { saleLineId: line.id, scanId: scan.id, matched },
+          },
+        });
+        return { matched, batchChecked: Boolean(code?.batch) };
+      });
+    }),
   /** SAFE-05: advisory pack authentication; only the existing recall path blocks. */
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
