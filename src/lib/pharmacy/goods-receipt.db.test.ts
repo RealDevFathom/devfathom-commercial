@@ -356,6 +356,60 @@ beforeAll(async () => {
 }, 120_000);
 
 describeIfDatabase('Warehouse receiving and put-away', () => {
+  it('offers a reviewed receipt lot to its recorded supplier after the distributor changes name', async () => {
+    const f = await fixture(ORG_A, tag('return-supplier'), 'return-supplier');
+    const scope = scopeOf(f);
+    const { quarantinePart } = await import('./inventory-operations');
+    const { openWarehouseIncident, reviewWarehouseQuality } = await import('./warehouse-quality');
+    const { listReturnableLots } = await import('./purchasing-console');
+    await inOrg(ORG_A, async (db) => {
+      const draft = await draftReceipt(db, f, 'return-supplier', {
+        line: { receivedPacks: 2, bonusPacks: 0 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scope, {
+        goodsReceiptId: draft.id,
+        at: RECEIVED_AT,
+      });
+      const inventoryLotId = posted.lines[0]!.inventoryLotId!;
+      const original = await db.pharmacySupplier.findUniqueOrThrow({ where: { id: f.supplierId } });
+      await db.pharmacySupplier.update({
+        where: { id: f.supplierId },
+        data: { name: tag('New distributor name') },
+      });
+      await db.pharmacySupplier.create({ data: { organizationId: ORG_A, name: original.name } });
+      const stock = { inventoryLotId, stockLocationId: f.storeId };
+      await quarantinePart(db, scope, {
+        ...stock,
+        units: 20,
+        reason: 'Transport excursion',
+        idempotencyKeyPrefix: tag('hold'),
+      });
+      const incident = await openWarehouseIncident(db, scope, {
+        ...stock,
+        quantityUnits: 20,
+        quarantineUnits: 20,
+        sourceKey: tag('incident'),
+        reason: 'Transit excursion',
+      });
+      await reviewWarehouseQuality(db, scope, {
+        incidentId: incident.id,
+        decision: 'RETURN',
+        reason: 'Warranty return',
+        evidenceRef: tag('review'),
+      });
+      const options = await listReturnableLots(db, scope);
+      expect(options.filter((row) => row.lot.id === inventoryLotId)).toMatchObject([
+        {
+          location: { id: f.storeId },
+          onHandUnits: 0,
+          approvedHeldReturns: [
+            { supplierId: f.supplierId, disposition: 'QUARANTINE', quantityUnits: 20 },
+          ],
+        },
+      ]);
+    });
+  });
+
   it('holds accepted units, keeps rejects in quarantine, validates the physical scans and releases once', async () => {
     const inbound = await import('./warehouse-inbound');
     const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');

@@ -83,12 +83,18 @@ let routers: {
   marketing: (typeof import('./pharmacy-marketing'))['pharmacyMarketingRouter'];
 };
 
-function context(db: ScopedDb, userId: string) {
+function context(db: ScopedDb, userId: string, procurementLicensed = false) {
   return {
     db,
     entitlements: {
       organizationId: ORG,
-      enabledModules: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-inventory', 'pharmacy-crm'],
+      enabledModules: [
+        'pharmacy-core',
+        'pharmacy-counter',
+        'pharmacy-inventory',
+        'pharmacy-crm',
+        ...(procurementLicensed ? ['pharmacy-procurement'] : []),
+      ],
       modules: [],
       limits: {},
       seatLimit: 20,
@@ -120,11 +126,15 @@ type Callers = {
 };
 
 /** One request by `userId`, in ORG's tenant transaction. */
-function as<T>(userId: string, run: (api: Callers) => Promise<T>): Promise<T> {
+function as<T>(
+  userId: string,
+  run: (api: Callers) => Promise<T>,
+  procurementLicensed = false
+): Promise<T> {
   return withTenantDb(
     ORG,
     (db) => {
-      const ctx = context(db, userId);
+      const ctx = context(db, userId, procurementLicensed);
       return run({
         sales: routers.sales.createCaller(ctx),
         inventory: routers.inventory.createCaller(ctx),
@@ -550,6 +560,36 @@ describeIfDatabase('DEV-965 pharmacy permission gaps, against PostgreSQL with RL
       await expect(
         as(P.safety, (api) => api.warehouse.requestQueue({ branchId: MAIN }))
       ).rejects.toMatchObject(PERMISSION);
+    });
+
+    it('links warehouse staff to supplier returns only with licensed procurement and financial access', async () => {
+      const setup = (api: Callers) => api.warehouse.setup({ branchId: MAIN });
+      expect(await as(P.owner, setup)).toMatchObject({
+        canPurchase: false,
+        canSupplierReturn: false,
+      });
+      expect(await as(P.owner, setup, true)).toMatchObject({
+        canPurchase: true,
+        canSupplierReturn: true,
+      });
+      expect(await as(P.stock, setup, true)).toMatchObject({
+        canPurchase: false,
+        canSupplierReturn: false,
+      });
+      await withTenantDb(ORG, (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            userId: P.granted,
+            capability: 'pharmacy:procurement',
+            effect: 'ALLOW',
+            reason: 'Warehouse procurement',
+          },
+        })
+      );
+      expect(await as(P.granted, setup, true)).toMatchObject({
+        canPurchase: true,
+        canSupplierReturn: false,
+      });
     });
 
     it('keeps a labelled storage change pending until an authorized catalogue reviewer approves', async () => {
