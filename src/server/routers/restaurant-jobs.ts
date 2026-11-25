@@ -225,7 +225,10 @@ export const restaurantJobsRouter = router({
         return { requeuedFrom: dead.id, jobId: job.id, status: job.status };
       } catch (error) {
         if (error instanceof SchedulerError) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+          throw new TRPCError({
+            code: error.reason === 'WEBHOOK_CAPACITY' ? 'TOO_MANY_REQUESTS' : 'BAD_REQUEST',
+            message: error.message,
+          });
         }
         throw error;
       }

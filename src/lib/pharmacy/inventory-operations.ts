@@ -9,6 +9,8 @@ import {
 } from './finance-postings';
 import {
   assertNotHeldForCounter,
+  counterHoldsOn,
+  heldForCounterMessage,
   releaseCounterQuotasAffectedBy,
   releaseCounterQuotasForSafety,
   type CounterQuotaSafetyCause,
@@ -502,6 +504,27 @@ export async function approveCount(
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
+    if (variance < 0) {
+      const holds = await counterHoldsOn(db, scope, line);
+      if (holds.length) {
+        const balance = await db.pharmacyStockBalance.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId: line.inventoryLotId,
+            stockLocationId: line.stockLocationId,
+            disposition: 'AVAILABLE',
+          },
+          select: { onHandUnits: true },
+        });
+        const freeUnits = balance?.onHandUnits ?? 0;
+        if (freeUnits + variance < holds.reduce((sum, hold) => sum + hold.heldUnits, 0))
+          throw new PharmacyInventoryError(
+            'HELD_FOR_COUNTER',
+            heldForCounterMessage({ holds, freeUnits, action: 'removed by this count' })
+          );
+      }
+    }
     await db.pharmacyStockMovement.create({
       data: {
         organizationId: scope.organizationId,

@@ -7,6 +7,7 @@
  */
 import { SSO_START_LIMITS } from '@/lib/sso-limits';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 
 type StateRow = {
   id: string;
@@ -139,7 +140,11 @@ vi.mock('@node-saml/node-saml', () => ({
       return `https://idp.example/saml?RelayState=${relayState}&ID=${requestId}`;
     }
     async validatePostResponseAsync({ SAMLResponse }: { SAMLResponse: string }) {
-      const inResponseTo = SAMLResponse;
+      const inResponseTo = SAMLResponse.startsWith('_req')
+        ? SAMLResponse
+        : (Buffer.from(SAMLResponse, 'base64')
+            .toString()
+            .match(/InResponseTo="([^"]+)"/)?.[1] ?? '');
       if (!(await this.options.cacheProvider.getAsync(inResponseTo))) {
         throw new Error('InResponseTo is not valid');
       }
@@ -298,6 +303,44 @@ describe('SAML browser binding (F10)', () => {
       route('conn_saml')
     );
   }
+
+  it('stops reading an oversized callback before consuming SAML state', async () => {
+    const flow = await startInBrowser();
+    const limit = 512 * 1024;
+    const input = oversizedRequest(limit, {
+      url: 'https://acme.example/api/sso/saml/conn_saml/callback',
+      headers: {
+        ...cookieHeader(flow.binding),
+        'content-type': 'application/x-www-form-urlencoded',
+      },
+    });
+
+    expect((await samlCallback(input.request, route('conn_saml'))).status).toBe(413);
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 16_384);
+    expect(states.every((state) => state.usedAt === null)).toBe(true);
+    expect(mocks.provisionIdentityUser).not.toHaveBeenCalled();
+  });
+
+  it('completes a URL-encoded sign-in with a large synthetic assertion', async () => {
+    const flow = await startInBrowser();
+    const samlResponse = Buffer.from(
+      `<Response InResponseTo="${flow.requestId}"><Attribute>${'x'.repeat(64 * 1024)}</Attribute></Response>`
+    ).toString('base64');
+    const body = new URLSearchParams({ SAMLResponse: samlResponse, RelayState: flow.relayState });
+    const response = await samlCallback(
+      new Request('https://acme.example/api/sso/saml/conn_saml/callback', {
+        method: 'POST',
+        headers: cookieHeader(flow.binding),
+        body,
+      }),
+      route('conn_saml')
+    );
+
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('https://acme.example/sso/complete');
+    expect(mocks.provisionIdentityUser).toHaveBeenCalledOnce();
+  });
 
   it('binds both the RelayState and the AuthnRequest ID to the browser', async () => {
     const { binding } = await startInBrowser();

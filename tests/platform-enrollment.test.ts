@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- Partial Prisma delegates model only the operations exercised by these boundary tests. */
+import { oversizedRequest } from './fixtures/bounded-request';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
 
@@ -279,4 +280,38 @@ describe('enrollment integration guards', () => {
     );
     expect(state.user.encryptedTotpSecret).toBe('synthetic-secret');
   });
+});
+
+it('stops reading an oversized platform sign-in before creating a session', async () => {
+  const limit = 4 * 1024;
+  const input = oversizedRequest(limit, {
+    url: 'http://admin.localhost/api/platform/session',
+    headers: { origin: 'http://admin.localhost', 'content-type': 'application/json' },
+    chunkSize: 1024,
+  });
+
+  expect((await login(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 1024);
+  expect(db.platformSession.create).not.toHaveBeenCalled();
+});
+
+it('stops reading an oversized MFA body after verifying the enrollment session', async () => {
+  const session = await signIn();
+  const updatesBefore = db.platformUser.update.mock.calls.length;
+  const limit = 1024;
+  const input = oversizedRequest(limit, {
+    url: 'http://admin.localhost/api/platform/mfa',
+    headers: {
+      origin: 'http://admin.localhost',
+      cookie: `df_platform_session=${session.token}`,
+      'content-type': 'application/json',
+    },
+    chunkSize: 1024,
+  });
+
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 1024);
+  expect(db.platformUser.update).toHaveBeenCalledTimes(updatesBefore);
 });

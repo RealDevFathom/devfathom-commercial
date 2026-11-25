@@ -1,8 +1,12 @@
+// @vitest-environment node
+import { multipartUpload } from '../../../../../../tests/fixtures/multipart-upload';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 
 const mocks = vi.hoisted(() => ({
+  acquireSlot: vi.fn(),
+  resolveTenantActor: vi.fn(),
   attachEvidence: vi.fn(),
   can: vi.fn(),
   createTRPCContext: vi.fn(),
@@ -10,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   putUpload: vi.fn(),
 }));
 
+vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.acquireSlot }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/lib/abac', () => ({
   can: mocks.can,
   subjectFromSession: () => ({ id: 'user-1' }),
@@ -68,16 +74,23 @@ function request(overrides?: {
     headers.set('x-forwarded-proto', 'https');
   }
   if (overrides?.fetchSite) headers.set('sec-fetch-site', overrides.fetchSite);
-  return {
-    formData: async () => form,
+  if (overrides && 'file' in overrides)
+    vi.spyOn(Response.prototype, 'formData').mockResolvedValueOnce(form);
+  return new Request(overrides?.url ?? 'https://devfathom.test/api/restaurant/sop/evidence', {
+    method: 'POST',
     headers,
-    url: overrides?.url ?? 'https://devfathom.test/api/restaurant/sop/evidence',
-  } as Request;
+    body: form,
+  });
 }
 
 beforeEach(() => {
+  mocks.acquireSlot.mockResolvedValue(async () => {});
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.resolveTenantActor.mockResolvedValue({
+    session: { user: { id: 'user-1' } },
+    organization: { id: 'org-1' },
+  });
   mocks.createTRPCContext.mockResolvedValue({
     db: {
       restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff-1' }]) },
@@ -469,4 +482,48 @@ it('failed cleanup after attach failure is visible and sanitized', async () => {
   expect(response.headers.get('location')).toContain('cleanup+is+incomplete');
   expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
   expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+});
+
+it.each([24, 25])('accepts a %i MB multipart file with its full byte count', async (size) => {
+  const response = await POST(multipartUpload('/api/restaurant/sop/evidence', size));
+  expect(response.status).toBe(303);
+  expect(mocks.putUpload).toHaveBeenCalledOnce();
+  expect(mocks.putUpload.mock.calls[0]![2].byteLength).toBe(size * 1024 * 1024);
+  expect(response.headers.get('Content-Security-Policy')).toContain("'nonce-");
+});
+
+it('refuses a 26 MB multipart file with a plain size message before storage', async () => {
+  const response = await POST(multipartUpload('/api/restaurant/sop/evidence', 26));
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain('Choose a file of 25 MB or smaller.');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+});
+
+it('returns 401 without reading the request stream when the session is missing', async () => {
+  mocks.resolveTenantActor.mockResolvedValueOnce(null);
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+    controller.close()
+  );
+  const body = new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 });
+  const req = new Request('https://devfathom.test/api/restaurant/sop/evidence', {
+    method: 'POST',
+    headers: { origin: 'https://devfathom.test' },
+    body,
+    duplex: 'half',
+  } as RequestInit);
+  const response = await POST(req);
+  expect(response.status).toBe(401);
+  expect(pull).not.toHaveBeenCalled();
+  expect(req.bodyUsed).toBe(false);
+  expect(mocks.acquireSlot).not.toHaveBeenCalled();
+  expect(mocks.putUpload).not.toHaveBeenCalled();
+});
+
+it('refuses a large upload for the signed-in user when both slots are occupied', async () => {
+  mocks.acquireSlot.mockResolvedValueOnce(null);
+  const response = await POST(multipartUpload('/api/restaurant/sop/evidence', 9));
+  expect(response.status).toBe(429);
+  expect(await response.text()).toContain('Wait for one to finish');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-1');
+  expect(mocks.putUpload).not.toHaveBeenCalled();
 });

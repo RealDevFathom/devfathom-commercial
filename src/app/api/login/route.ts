@@ -3,6 +3,7 @@ import { ipFromHeaders } from '@/server/audit';
 import { rateLimit } from '@/lib/rate-limit';
 import { emailSchema } from '@/lib/email-address';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost, tenantHostUrl } from '@/lib/tenancy/host-routing';
 import { safeCallbackUrl } from '@/lib/auth/callback-url';
@@ -99,7 +100,9 @@ export async function POST(request: Request) {
 
   let parsed: z.infer<typeof bodySchema>;
   try {
-    parsed = bodySchema.parse(await request.json());
+    const body = await readBoundedJson(request, 32 * 1024);
+    if (body.tooLarge) return json({ error: 'Request body is too large.' }, { status: 413 });
+    parsed = bodySchema.parse(body.value);
   } catch {
     // Malformed input is reported exactly like a wrong password.
     return json(UNIFORM_FAILURE, { status: 401 });

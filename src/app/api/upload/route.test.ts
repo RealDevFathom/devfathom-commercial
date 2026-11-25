@@ -1,12 +1,15 @@
 // @vitest-environment node
+import { multipartUpload } from '../../../../tests/fixtures/multipart-upload';
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
+  acquireSlot: vi.fn(),
   actor: vi.fn(),
   put: vi.fn(),
   remove: vi.fn(),
   tenant: vi.fn(),
   register: vi.fn(),
 }));
+vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.acquireSlot }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.tenant }));
 vi.mock('@/lib/storage', async (original) => ({
@@ -16,7 +19,7 @@ vi.mock('@/lib/storage', async (original) => ({
 }));
 import { StorageUnavailableError } from '@/lib/storage';
 import { PasswordChangeRequiredError } from '@/lib/auth/session-state';
-import { POST } from './route';
+import { DELETE, OPTIONS, POST } from './route';
 function request(name = 'proof.png', type = 'image/png') {
   const form = new FormData();
   form.set('file', new File(['proof'], name, { type }));
@@ -24,6 +27,7 @@ function request(name = 'proof.png', type = 'image/png') {
 }
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.acquireSlot.mockResolvedValue(async () => {});
   mocks.actor.mockResolvedValue({
     organization: { id: 'org-a' },
     session: { user: { id: 'user-a' } },
@@ -104,4 +108,61 @@ test('a failed registration removes the stored object and returns no link', asyn
   expect(await response.text()).not.toContain('/api/files/');
   const stored = mocks.put.mock.calls[0]![1];
   expect(mocks.remove).toHaveBeenCalledWith('org-a', stored);
+});
+
+test.each([24, 25])('accepts a %i MB multipart file with its full byte count', async (size) => {
+  const response = await POST(multipartUpload('/api/upload', size));
+  expect(response.status).toBe(200);
+  expect(mocks.put).toHaveBeenCalledOnce();
+  expect(mocks.put.mock.calls[0]![2].byteLength).toBe(size * 1024 * 1024);
+  expect(response.headers.get('Content-Security-Policy')).toContain("'nonce-");
+});
+
+test('refuses a 26 MB multipart file with a plain size message before storage', async () => {
+  const response = await POST(multipartUpload('/api/upload', 26));
+  expect(response.status).toBe(413);
+  expect(await response.text()).toContain('Choose a file of 25 MB or smaller.');
+  expect(mocks.put).not.toHaveBeenCalled();
+});
+
+test('applies the proxy request and response headers before resolving the upload actor', async () => {
+  const incoming = request();
+  incoming.headers.set('host', 'internal-runtime');
+  incoming.headers.set('x-forwarded-host', 'Tenant.Example.test:3000, internal-runtime');
+  incoming.headers.set('x-devfathom-host', 'untrusted.example.test');
+  incoming.headers.set('x-devfathom-request-method', 'GET');
+  incoming.headers.set('x-devfathom-request-id', 'fixture-id');
+  incoming.headers.set('x-nonce', 'untrusted');
+  incoming.headers.set('cookie', 'fixture=present');
+  const response = await POST(incoming);
+  const headers = mocks.actor.mock.calls[0]![0].request.headers as Headers;
+  expect(headers.get('x-devfathom-host')).toBe('tenant.example.test:3000');
+  expect(headers.get('x-devfathom-request-method')).toBe('POST');
+  expect(headers.get('x-devfathom-request-id')).toBe('fixture-id');
+  expect(headers.get('cookie')).toBe('fixture=present');
+  expect(headers.get('x-nonce')).not.toBe('untrusted');
+  expect(headers.get('Content-Security-Policy')).toContain(`'nonce-${headers.get('x-nonce')}'`);
+  expect(response.headers.get('Content-Security-Policy')).toBe(
+    headers.get('Content-Security-Policy')
+  );
+});
+
+test('retains the automatic method responses and their CSP', () => {
+  const url = 'https://tenant.example.test/api/upload';
+  const options = OPTIONS(new Request(url, { method: 'OPTIONS' }));
+  expect(options.status).toBe(204);
+  expect(options.headers.get('Allow')).toBe('OPTIONS, POST');
+  expect(options.headers.get('Content-Security-Policy')).toContain("'nonce-");
+  const unsupported = DELETE(new Request(url, { method: 'DELETE' }));
+  expect(unsupported.status).toBe(405);
+  expect(unsupported.headers.get('Content-Security-Policy')).toContain("'nonce-");
+});
+
+test('refuses a large upload for the signed-in user when both slots are occupied', async () => {
+  mocks.acquireSlot.mockResolvedValueOnce(null);
+  const response = await POST(multipartUpload('/api/upload', 9));
+  expect(response.status).toBe(429);
+  expect((await response.json()).error).toContain('Wait for one to finish');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-a');
+  expect(mocks.put).not.toHaveBeenCalled();
 });

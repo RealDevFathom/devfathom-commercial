@@ -15,6 +15,7 @@ type Line = {
   discountMinor: number;
   tierAllocationDiscounts?: unknown;
   /** DEV-956: each allocation's share of the whole-bill discount, already in discountMinor. */
+  lineAllocationDiscounts?: unknown;
   billAllocationDiscounts?: unknown;
   tierDiscountMinor?: number;
   tierName?: string | null;
@@ -67,6 +68,7 @@ export function prepaidLineDiscount(
       0,
       (a.grossMinor ?? 0) -
         (a.discountMinor ?? 0) -
+        billAllocationDiscount(line.lineAllocationDiscounts, a.id) -
         billAllocationDiscount(line.billAllocationDiscounts, a.id) -
         minimumPriceForMargin(a.canonicalUnits * a.lot.unitCostMinor, limits.minMarginBps)
     )

@@ -1103,3 +1103,31 @@ describeIfDatabase('DEV-957 phase 2 (review round 2): with offline cash selling 
     }
   });
 });
+
+describeIfDatabase('DEV-957 phase 3 live switch', () => {
+  it('honours a booked retry but refuses the next sealed sale when the live switch is off', async () => {
+    const made = await fixture('live-switch', { units: 12, looseUnits: 12 });
+    await readyForReplay(made);
+    const { client, lease, snapshots } = await prepared(made, { leaseSize: 3, quotaUnits: 10 });
+    const first = chainOf(made).seal(
+      unitCommand(made, { lease, receiptNumber: lease.blockStart, sequence: 1, snapshots })
+    );
+    const next = chainOf(made).seal(
+      unitCommand(made, { lease, receiptNumber: lease.blockStart + 1, sequence: 2, snapshots })
+    );
+    expect((await client.replay(first)).status).toBe(200);
+    selling.on = false;
+    try {
+      expect(await (await client.replay(first)).json()).toMatchObject({ replayed: true });
+      const refused = await client.replay(next);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({ error: 'offline_selling_off' });
+      expect(await onHand(made)).toBe(11);
+      expect(
+        await inOrg((db) => db.pharmacyOfflineCommand.count({ where: { deviceId: made.deviceId } }))
+      ).toBe(1);
+    } finally {
+      selling.on = true;
+    }
+  });
+});

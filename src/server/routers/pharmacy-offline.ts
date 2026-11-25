@@ -440,32 +440,61 @@ export const pharmacyOfflineRouter = router({
         return { device: { id: device.id, name: device.name, branchId: device.branchId }, secret };
       })
     ),
-  rotate: adminProcedure.input(branchInput.extend({ deviceId: id })).mutation(({ ctx, input }) =>
-    ctx.db.$transaction(async (tx) => {
-      const db = tx as ScopedDb;
-      const scope = {
-        organizationId: ctx.entitlements.organizationId,
-        branchId: input.branchId,
-        actorId: ctx.session.user.id,
-      };
-      await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
-      const current = await db.pharmacyRegisteredDevice.findFirst({
-        where: {
-          id: input.deviceId,
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-        },
-      });
-      if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
-      const { device, secret } = await rotatePharmacyCounterSecret(
-        db,
-        scope,
-        current.id,
-        current.deviceSecretHash
-      ).catch(deviceRefusal);
-      return { deviceId: device.id, secret };
-    })
-  ),
+  rotate: adminProcedure
+    .input(branchInput.extend({ deviceId: id, sessionToken: z.string().max(4096).optional() }))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        // Receipt leasing takes SHARE on this row. A first lease cannot race this check.
+        await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_registered_devices
+        WHERE id=${input.deviceId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+        const current = await db.pharmacyRegisteredDevice.findFirst({
+          where: {
+            id: input.deviceId,
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+          },
+        });
+        if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
+        // A never-prepared counter has no leased number and cannot hold a sealed sale.
+        const issued = await db.pharmacyReceiptNumberLease.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            deviceId: current.id,
+          },
+          select: { id: true },
+        });
+        if (issued) {
+          try {
+            verifyToken(input.sessionToken ?? '', {
+              scope,
+              deviceId: current.id,
+              credentialHash: current.deviceSecretHash,
+            });
+          } catch {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message:
+                'Rotate the credential on this counter after its waiting receipts are settled.',
+            });
+          }
+        }
+        const { device, secret } = await rotatePharmacyCounterSecret(
+          db,
+          scope,
+          current.id,
+          current.deviceSecretHash
+        ).catch(deviceRefusal);
+        return { deviceId: device.id, secret };
+      })
+    ),
   revoke: adminProcedure.input(branchInput.extend({ deviceId: id })).mutation(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const db = tx as ScopedDb;
@@ -903,7 +932,10 @@ export async function replayCounterCommand(
   // Review round 2: the switch is enforced here, not only at the counter. A sale is
   // accepted only when the RULES it carries (verified above) say offline cash selling
   // was on when the counter was handed them.
-  if (!signedRulesAllowOfflineSelling(verifiedRulesPayload(command, scope, deviceId)))
+  if (
+    !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, scope, deviceId)) ||
+    !(await readOfflineCashSelling(db, scope.organizationId)).enabled
+  )
     throw new CounterTransportError('offline_selling_off', 409);
   // #519: recall state is derived, never assumed. A lot the signed lease told
   // the counter was recalled, or one the server holds as recalled (or cannot
@@ -1140,7 +1172,10 @@ function establishToken(ctx: PharmacyCounterContext) {
   ).toString('base64url');
   return payload + '.' + sessionMac(payload);
 }
-function verifyToken(token: string, ctx: PharmacyCounterContext) {
+function verifyToken(
+  token: string,
+  ctx: Pick<PharmacyCounterContext, 'scope' | 'deviceId'> & { credentialHash: string }
+) {
   const [payload, signature, ...extra] = token.split('.');
   if (
     !payload ||
@@ -1158,7 +1193,7 @@ function verifyToken(token: string, ctx: PharmacyCounterContext) {
     parsed.data.organizationId !== ctx.scope.organizationId ||
     parsed.data.branchId !== ctx.scope.branchId ||
     parsed.data.deviceId !== ctx.deviceId ||
-    parsed.data.credentialHash !== hashDeviceSecret(ctx.deviceSecret)
+    parsed.data.credentialHash !== ctx.credentialHash
   )
     throw new CounterTransportError('invalid_terminal_session', 401);
 }
@@ -1493,7 +1528,10 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             },
           };
         }
-        verifyToken(request.headers.get('x-terminal-session') ?? '', ctx);
+        verifyToken(request.headers.get('x-terminal-session') ?? '', {
+          ...ctx,
+          credentialHash: hashDeviceSecret(ctx.deviceSecret),
+        });
         if (operation === 'renew') {
           // DEV-957 phase 2: the counter rotates its own secret while it is still valid.
           // The new secret goes back once, for this browser's non-extractable signing key

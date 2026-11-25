@@ -27,5 +27,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ act
   if (!action.success || action.data === 'me') return portalResponse.notFound();
   const context = await portalContext(request);
   if (!context) return portalResponse.notFound();
-  return context.handle(action.data, await readPortalRequestBody(request));
+  const input = await readPortalRequestBody(request);
+  if (!input) return portalResponse.tooLarge();
+  return context.handle(action.data, input.body);
 }

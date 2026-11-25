@@ -22,6 +22,7 @@ function PinMode({ children }: { children: ReactNode }) {
 const render = (ui: ReactElement) => renderUi(ui, { wrapper: PinMode });
 const mocks = vi.hoisted(() => ({
   returnLine: vi.fn(),
+  returnLines: vi.fn(),
   returnAndRefund: vi.fn(),
   refund: vi.fn(),
   refetch: vi.fn(),
@@ -43,6 +44,7 @@ vi.mock('@/lib/trpc', () => ({
       },
       counterReceipt: { useQuery: () => ({}) },
       returnLine: { useMutation: () => ({ mutateAsync: mocks.returnLine }) },
+      returnLines: { useMutation: () => ({ mutateAsync: mocks.returnLines }) },
       returnAndRefund: { useMutation: () => ({ mutateAsync: mocks.returnAndRefund }) },
       refundTender: { useMutation: () => ({ mutateAsync: mocks.refund }) },
       refundAccess: { useQuery: () => mocks.refundAccess },

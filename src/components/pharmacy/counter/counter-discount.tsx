@@ -3,6 +3,8 @@
 import { type RefObject, useId, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { SelectField } from '@/components/ui/select-field';
+import { browserUuid } from '@/lib/browser-uuid';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogDescription, DialogPortal, DialogTrigger } from '@/components/ui/dialog';
@@ -82,6 +84,7 @@ export function CounterDiscountEntry({
   onClear,
   returnFocus,
   wholeBill,
+  billLines,
   approvers,
   onOpenChange,
 }: {
@@ -94,6 +97,15 @@ export function CounterDiscountEntry({
   returnFocus?: RefObject<HTMLElement | null>;
   /** DEV-977 phase 3: offered only while the owner has the whole-bill discount on. */
   wholeBill?: CounterDiscountWholeBill;
+  billLines?: {
+    lines: { saleLineId: string; medicineName: string }[];
+    apply: (
+      saleLineId: string,
+      discount: CounterHeldDiscount,
+      requestId: string,
+      approval?: { staffProfileId: string; pin: string }
+    ) => Promise<void>;
+  };
   /** DEV-977 phase 3: who can approve, read while the sheet is open (the supervisor block). */
   approvers?: CounterDiscountApprovers;
   /** Told when the sheet opens and closes, so the approvers are read only while it is open. */
@@ -108,7 +120,18 @@ export function CounterDiscountEntry({
   const [kind, setKind] = useState<CounterHeldDiscount['kind']>('PERCENT');
   const [value, setValue] = useState('');
   const [error, setError] = useState<string | null>(null);
-  const [target, setTarget] = useState<'ITEM' | 'BILL'>('ITEM');
+  const [target, setTarget] = useState<'ITEM' | 'BILL' | 'LINE'>('ITEM');
+  const [lineId, setLineId] = useState('');
+  const [approverId, setApproverId] = useState('');
+  const [secret, setSecret] = useState('');
+  const attempt = useRef<{ fingerprint: string; id: string } | null>(null);
+  const resetLine = () => {
+    setSecret('');
+    setApproverId('');
+    setLineId('');
+    attempt.current = null;
+  };
+  const toLine = target === 'LINE';
   const [sending, setSending] = useState(false);
   // The whole bill can only be chosen while it is offered; otherwise the sheet is the next item's.
   const toBill = target === 'BILL' && Boolean(wholeBill);
@@ -148,6 +171,7 @@ export function CounterDiscountEntry({
         setOpen(next);
         onOpenChange?.(next);
         if (!next) {
+          resetLine();
           setTarget('ITEM');
           setError(null);
         }
@@ -198,6 +222,36 @@ export function CounterDiscountEntry({
                 }
                 discount = { kind, bps };
               }
+              if (toLine) {
+                if (!billLines || !lineId) {
+                  setError('Choose a bill line.');
+                  return;
+                }
+                if ((secret || approverId) && (!approverId || !/^\d{4,8}$/.test(secret))) {
+                  setError('Choose the approving manager or owner and enter their approval.');
+                  setSecret('');
+                  return;
+                }
+                const fingerprint = JSON.stringify([branchId, lineId, discount]);
+                if (attempt.current?.fingerprint !== fingerprint)
+                  attempt.current = { fingerprint, id: browserUuid() };
+                setSending(true);
+                setError(null);
+                const approval = secret ? { staffProfileId: approverId, pin: secret } : undefined;
+                setSecret('');
+                void billLines
+                  .apply(lineId, discount, attempt.current.id, approval)
+                  .then(() => {
+                    setValue('');
+                    setTarget('ITEM');
+                    resetLine();
+                    setOpen(false);
+                    onOpenChange?.(false);
+                  })
+                  .catch((e) => setError(counterErrorMessage(e)))
+                  .finally(() => setSending(false));
+                return;
+              }
               if (toBill && wholeBill) {
                 if (wholeBill.disabled) return;
                 // DEV-977 phase 3: the bill's own procedure and approval, unchanged.
@@ -232,15 +286,23 @@ export function CounterDiscountEntry({
           >
             <CounterSheetHeader
               eyebrow="Discount"
-              title={toBill ? 'Discount on the whole bill' : 'Discount on the next item'}
+              title={
+                toLine
+                  ? 'Discount on a bill line'
+                  : toBill
+                    ? 'Discount on the whole bill'
+                    : 'Discount on the next item'
+              }
             />
             <DialogDescription className="sr-only">
               {toBill
                 ? 'One discount shared over the items of this bill.'
-                : 'A manual discount on the next item you add to this bill.'}
+                : toLine
+                  ? 'Apply a manual discount to the selected item on this bill.'
+                  : 'A manual discount on the next item you add to this bill.'}
             </DialogDescription>
             <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4.5 text-sm">
-              {wholeBill ? (
+              {wholeBill || billLines?.lines.length ? (
                 // DEV-977 phase 3 (Counter v2 A4): where the discount goes. "Next item" is the
                 // existing item discount, given when the item is added; "Whole bill" is the
                 // existing whole-bill discount, shared over the bill's items by the server.
@@ -255,29 +317,69 @@ export function CounterDiscountEntry({
                         ['ITEM', 'Next item'],
                         ['BILL', 'Whole bill'],
                       ] as const
-                    ).map(([option, label]) => (
+                    )
+                      .filter(([option]) => option !== 'BILL' || wholeBill)
+                      .map(([option, label]) => (
+                        <Button
+                          key={option}
+                          type="button"
+                          variant={target === option ? 'default' : 'ghost'}
+                          className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+                          aria-pressed={target === option}
+                          disabled={disabled || (option === 'BILL' && wholeBill?.disabled)}
+                          onClick={() => {
+                            resetLine();
+                            setTarget(option);
+                            setError(null);
+                          }}
+                        >
+                          {label}
+                        </Button>
+                      ))}
+                    {!!billLines?.lines.length && (
                       <Button
-                        key={option}
                         type="button"
-                        variant={target === option ? 'default' : 'ghost'}
-                        className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
-                        aria-pressed={target === option}
-                        disabled={disabled || (option === 'BILL' && wholeBill.disabled)}
+                        size="touch"
+                        variant={toLine ? 'default' : 'ghost'}
+                        aria-pressed={toLine}
+                        disabled={sending || disabled}
                         onClick={() => {
-                          setTarget(option);
+                          setTarget('LINE');
+                          setLineId(billLines.lines[0]!.saleLineId);
                           setError(null);
                         }}
                       >
-                        {label}
+                        Bill line
                       </Button>
-                    ))}
+                    )}
                   </div>
+                  {toLine && (
+                    <>
+                      <Label htmlFor={id + '-line'}>Bill line to discount</Label>
+                      <SelectField
+                        id={id + '-line'}
+                        value={lineId}
+                        onChange={(e) => {
+                          setLineId(e.target.value);
+                          setSecret('');
+                        }}
+                      >
+                        {billLines?.lines.map((l, i) => (
+                          <option key={l.saleLineId} value={l.saleLineId}>
+                            {i + 1}. {l.medicineName}
+                          </option>
+                        ))}
+                      </SelectField>
+                    </>
+                  )}
                   <p className="text-xs text-text-muted">
-                    {wholeBill.disabled
-                      ? 'The whole bill can be discounted only before any payment is taken.'
-                      : toBill
-                        ? 'Shared over the bill’s items by price. Adding an item afterwards removes it, so give it once the bill is complete.'
-                        : 'Comes off the next item you add to this bill.'}
+                    {toLine
+                      ? 'Applies only to the selected line.'
+                      : wholeBill?.disabled
+                        ? 'The whole bill can be discounted only before any payment is taken.'
+                        : toBill
+                          ? 'Shared over the bill’s items by price. Adding an item afterwards removes it, so give it once the bill is complete.'
+                          : 'Comes off the next item you add to this bill.'}
                   </p>
                 </fieldset>
               ) : null}
@@ -350,14 +452,15 @@ export function CounterDiscountEntry({
               ) : null}
               <CounterNote tone="warning">
                 <p id={`${id}-help`}>
-                  {toBill ? approvalCopy.discountApprovalBill : approvalCopy.discountApproval}
+                  {toLine
+                    ? approvalCopy.discountApprovalLine
+                    : toBill
+                      ? approvalCopy.discountApprovalBill
+                      : approvalCopy.discountApproval}
                 </p>
               </CounterNote>
               {approvers ? (
-                // DEV-977 phase 3 (Counter v2 A4): the supervisor block. It names who can approve
-                // (the existing approvers read); the approval itself is still asked for, with the
-                // approver's own code or PIN, in the counter's approval dialog, and only when the server
-                // says this member needs one. No PIN is typed here.
+                // Existing lines take approval in this sheet. The other targets open their own approval dialog.
                 <section
                   aria-labelledby={`${id}-supervisor`}
                   className="space-y-2.5 border-t border-border-subtle pt-4"
@@ -374,10 +477,45 @@ export function CounterDiscountEntry({
                         A manager or owner must approve a discount you cannot give on your own.
                       </b>{' '}
                       {approvalCopy.discountSupervisorHow}{' '}
-                      {toBill ? 'when you apply it to the bill' : 'when you add the item'}. The
-                      approval and both names are saved with the sale.
+                      {toLine
+                        ? 'when you apply it to this line'
+                        : toBill
+                          ? 'when you apply it to the bill'
+                          : 'when you add the item'}
+                      . The approval and both names are saved with the sale.
                     </p>
                   </CounterNote>
+                  {toLine && approvers.status === 'ready' && approvers.list.length > 0 && (
+                    <>
+                      <Label htmlFor={id + '-approver'}>Approving manager or owner</Label>
+                      <SelectField
+                        id={id + '-approver'}
+                        value={approverId}
+                        onChange={(e) => {
+                          setApproverId(e.target.value);
+                          setSecret('');
+                        }}
+                      >
+                        <option value="">Use my own discount right</option>
+                        {approvers.list.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.name}
+                          </option>
+                        ))}
+                      </SelectField>
+                      <Label htmlFor={id + '-secret'}>{approvalCopy.approverLabel}</Label>
+                      <Input
+                        id={id + '-secret'}
+                        type="password"
+                        inputMode="numeric"
+                        autoComplete="off"
+                        maxLength={8}
+                        disabled={!approverId || sending}
+                        value={secret}
+                        onChange={(e) => setSecret(e.target.value)}
+                      />
+                    </>
+                  )}
                   {approvers.status === 'loading' ? (
                     <p role="status" className="text-text-muted">
                       Checking who can approve…
@@ -418,6 +556,7 @@ export function CounterDiscountEntry({
                 variant="outline"
                 className="min-h-11 shadow-none hover:translate-y-0 active:translate-y-0"
                 onClick={() => {
+                  resetLine();
                   setOpen(false);
                   setTarget('ITEM');
                   setError(null);
@@ -431,7 +570,15 @@ export function CounterDiscountEntry({
                 className="min-h-11"
                 disabled={disabled || sending || (toBill && wholeBill?.disabled)}
               >
-                {toBill ? (sending ? 'Applying…' : 'Apply to bill') : 'Apply to next item'}
+                {toLine
+                  ? sending
+                    ? 'Applying…'
+                    : 'Apply to selected line'
+                  : toBill
+                    ? sending
+                      ? 'Applying…'
+                      : 'Apply to bill'
+                    : 'Apply to next item'}
               </Button>
             </CounterSheetFooter>
           </form>

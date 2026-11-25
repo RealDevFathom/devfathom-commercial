@@ -148,7 +148,7 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
           <p className="text-text-body">
             <span className="font-medium text-text-strong">Still works: </span>
             {selling
-              ? `cash sales of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for. Each sale is saved and sealed on this computer and waits there: this version does not send offline sales to the server yet.`
+              ? `cash sales of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for. Each sale is saved and sealed on this computer until it reconnects and sends the waiting receipts in order.`
               : offline.sellingOn
                 ? `price check of the ${readiness.itemsAvailable} medicine${readiness.itemsAvailable === 1 ? '' : 's'} this counter holds offline stock for.`
                 : `price check of the ${readiness.itemsAvailable} medicine batch${readiness.itemsAvailable === 1 ? '' : 'es'} on the signed price list.`}

@@ -129,6 +129,17 @@ describe('migration timestamp order and wrapping rules', () => {
     }
   });
 
+  it.each([
+    'counter_line_pack_check',
+    'counter_line_discount',
+    'counter_line_discount_allocations',
+  ])('bounds lock acquisition before changing the schema for %s', (suffix) => {
+    const name = ledger.find((entry) => entry.slice(15) === suffix);
+    expect(name).toBeDefined();
+    const sql = readFileSync(join(MIGRATIONS_DIR, name!, 'migration.sql'), 'utf8');
+    expect(sql.trimStart()).toMatch(/^BEGIN;\s+SET LOCAL lock_timeout = '5s';/);
+  });
+
   it('wraps new migrations in BEGIN; ... COMMIT;', () => {
     for (const name of added) {
       const sql = readFileSync(join(MIGRATIONS_DIR, name, 'migration.sql'), 'utf8');

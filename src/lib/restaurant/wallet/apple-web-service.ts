@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { consumeBoundedBody, readBoundedJson } from '@/lib/http/read-bounded-body';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { loyaltyBalance } from '@/lib/restaurant/loyalty';
 import { walletAliasFingerprint } from './alias';
@@ -80,7 +81,9 @@ export async function registerApplePass(
   if (!ID_PATTERN.test(input.deviceLibraryIdentifier)) return EMPTY_401();
   const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
   if (!authenticated) return EMPTY_401();
-  const body = (await request.json().catch(() => null)) as { pushToken?: unknown } | null;
+  const inputBody = await readBoundedJson(request, 2 * 1024).catch(() => null);
+  if (inputBody?.tooLarge) return new Response(null, { status: 413 });
+  const body = inputBody?.value as { pushToken?: unknown } | null | undefined;
   if (!body || typeof body.pushToken !== 'string' || !ID_PATTERN.test(body.pushToken))
     return new Response(null, { status: 400 });
   const created = await withTenantDb(authenticated.pass.organizationId, async (db) => {
@@ -219,7 +222,12 @@ export async function sendUpdatedApplePass(
 }
 
 export async function acceptAppleLogs(request: Request) {
+  const gate = await rateLimit(`wallet-apple:log:ip:${clientIp(request)}`, 600, 60_000);
+  if (!gate.ok) {
+    return new Response(null, { status: 429, headers: { 'Retry-After': String(gate.retryAfter) } });
+  }
   // Apple log entries can echo pass payloads. Never retain or reflect the body.
-  await request.arrayBuffer().catch(() => undefined);
+  const withinLimit = await consumeBoundedBody(request, 64_000).catch(() => true);
+  if (!withinLimit) return new Response(null, { status: 413 });
   return EMPTY_200();
 }

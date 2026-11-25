@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import type { Action } from '@/lib/abac/policies';
 import { protectedProcedure, router } from '../trpc';
+import { CATALOGUE_REVIEW_ACTION } from './pharmacy-medicine';
 import { pharmacyReportAccess } from './pharmacy-reports';
 import { canAccessPharmacyCounter, canClosePharmacyDay } from './pharmacy-sales';
 
@@ -28,6 +29,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:procurement',
   'pharmacy:prescriptions',
   'pharmacy:dispense',
+  CATALOGUE_REVIEW_ACTION,
   'reports:operational',
   'pharmacy:counter',
   'pharmacy:close',

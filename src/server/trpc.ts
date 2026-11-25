@@ -367,13 +367,14 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
 });
 
 /** The refusal for a missing capability, shared by every capability guard below. */
-function capabilityRefusal(action: Action) {
+function capabilityRefusal(action: Action, refusalMessage?: string) {
   return new TRPCError({
     code: 'FORBIDDEN',
     message:
-      action === 'pharmacy:dispense'
+      refusalMessage ??
+      (action === 'pharmacy:dispense'
         ? 'Selling a prescription-only or restricted medicine needs the pharmacist dispensing permission.'
-        : 'You do not have permission for this action.',
+        : 'You do not have permission for this action.'),
   });
 }
 
@@ -385,7 +386,8 @@ async function assertCapabilities(
   ctx: TRPCContext,
   path: string,
   type: 'query' | 'mutation' | 'subscription',
-  actions: readonly Action[]
+  actions: readonly Action[],
+  refusalMessage?: string
 ): Promise<Session> {
   const session = ctx.session;
   if (!session?.user) {
@@ -412,7 +414,7 @@ async function assertCapabilities(
       source: 'TRPC',
       ip: ctx.requestMeta.ip,
     });
-    if (!allowed) throw capabilityRefusal(action);
+    if (!allowed) throw capabilityRefusal(action, refusalMessage);
   }
   return session;
 }
@@ -422,10 +424,10 @@ async function assertCapabilities(
 // within the revalidation window. Resource-level conditions (e.g. "this
 // resignation is PENDING and not your own") are checked INSIDE the resolver via
 // a second `can(...)` call with the loaded resource's attributes.
-function requireCapability(action: Action) {
+function requireCapability(action: Action, refusalMessage?: string) {
   return gated(
     t.middleware(async ({ ctx, next, path, type }) => {
-      const session = await assertCapabilities(ctx, path, type, [action]);
+      const session = await assertCapabilities(ctx, path, type, [action], refusalMessage);
       return next({ ctx: { ...ctx, session } });
     }),
     { kind: 'capability', action }
@@ -511,8 +513,11 @@ export const hrProcedure = baseProcedure
  * Generic capability-gated procedure. Use for any action in the ABAC catalogue,
  * e.g. `capabilityProcedure('resignation:readAll')`. Audits like adminProcedure.
  */
-export function capabilityProcedure(action: Action) {
-  return baseProcedure.use(auditAll).use(requireCapability(action)).use(requireLicensedModule);
+export function capabilityProcedure(action: Action, refusalMessage?: string) {
+  return baseProcedure
+    .use(auditAll)
+    .use(requireCapability(action, refusalMessage))
+    .use(requireLicensedModule);
 }
 
 /**
@@ -521,7 +526,10 @@ export function capabilityProcedure(action: Action) {
  * submit, and the approver's authority when an approved edit replays it on the
  * server. The selector may read only server-built context, never client input.
  */
-export function contextualCapabilityProcedure(select: (ctx: TRPCContext) => readonly Action[]) {
+export function contextualCapabilityProcedure(
+  select: (ctx: TRPCContext) => readonly Action[],
+  refusalMessage?: string
+) {
   return baseProcedure
     .use(auditAll)
     .use(
@@ -530,7 +538,7 @@ export function contextualCapabilityProcedure(select: (ctx: TRPCContext) => read
           const actions = select(ctx);
           // An empty selection would authorize nothing; refuse rather than allow.
           if (actions.length === 0) throw capabilityRefusal('admin:access');
-          const session = await assertCapabilities(ctx, path, type, actions);
+          const session = await assertCapabilities(ctx, path, type, actions, refusalMessage);
           return next({ ctx: { ...ctx, session } });
         }),
         { kind: 'contextual' }

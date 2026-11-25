@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 import { beforeEach, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
@@ -188,4 +189,14 @@ it('dispatches only eligible members and retries the same usable link without re
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+it('stops reading before password reset validation or enqueue', async () => {
+  const limit = 4 * 1024;
+  const input = oversizedRequest(limit, { chunkSize: 1024 });
+
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 1024);
+  expect(m.createJob).not.toHaveBeenCalled();
 });

@@ -397,6 +397,11 @@ export async function decideCatalogueEdit(
     soloOwnerAuthority?: boolean;
     /** DEV-19: an owner with no other active reviewer may self-approve with a PIN. */
     ownerWithoutOtherReviewer?: boolean;
+    authorizeProposal?: (
+      tx: ScopedDb,
+      operation: string,
+      changes: Prisma.JsonValue
+    ) => Promise<void>;
   } = {}
 ) {
   return db.$transaction(async (tx) => {
@@ -428,6 +433,7 @@ export async function decideCatalogueEdit(
           selfApproval: proposal.editorId === scope.actorId,
         }
       ));
+    await options.authorizeProposal?.(scoped, proposal.operation, proposal.changes);
     const approvalReason =
       solo && options.ownerWithoutOtherReviewer ? NO_OTHER_REVIEWER : undefined;
     const at = new Date();

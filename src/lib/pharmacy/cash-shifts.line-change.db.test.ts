@@ -83,7 +83,10 @@ type Shop = {
 };
 
 /** A fresh organization and branch that runs cash shifts, with a manager and two cashiers. */
-async function shop(label: string): Promise<Shop> {
+async function shop(
+  label: string,
+  managerAdmission: 'pharmacy:counter' | 'pharmacy:dispense' = 'pharmacy:counter'
+): Promise<Shop> {
   const organizationId = `lcshift_${label}_${run}`;
   const branchId = `${organizationId}_branch`;
   const manager = `${organizationId}_manager`;
@@ -118,7 +121,7 @@ async function shop(label: string): Promise<Shop> {
     });
     await seedDepartments(db, [organizationId], ['LEADERSHIP']);
     for (const [id, grants] of [
-      [manager, ['pharmacy:manage', 'pharmacy:counter']],
+      [manager, ['pharmacy:manage', managerAdmission]],
       [cashier, ['pharmacy:counter']],
       [cashier2, ['pharmacy:counter']],
     ] as const) {
@@ -620,3 +623,622 @@ describeDatabase(
     });
   }
 );
+
+describeDatabase('DEV-988 explicit bill line pack check', () => {
+  it('records a mismatch, blocks payment and line replacement, and releases only a matching allocated batch', async () => {
+    const s = await shop('packcheck');
+    const device = 'pack-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const line = lines[0]!;
+    const check = (payload: string) =>
+      asMember(s, s.cashier, (c) =>
+        c.checkBillLinePack({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          saleLineId: line.id,
+          payload,
+        })
+      );
+    expect(await check('unlisted-pack')).toMatchObject({ matched: false });
+    await expect(
+      tenant(s.as(s.cashier), (db) =>
+        db.pharmacyCardTerminalAttempt.create({
+          data: {
+            organizationId: s.owner.organizationId,
+            branchId: s.owner.branchId,
+            saleId: sale.id,
+            deviceId: device,
+            terminalId: 'counter-1',
+            provider: 'QA_TERMINAL',
+            attemptKey: randomUUID(),
+            amountMinor: 1000,
+            currency: 'PKR',
+            businessDate: s.today,
+            actorId: s.cashier,
+          },
+        })
+      )
+    ).rejects.toThrow(/PACK_CHECK_REQUIRED/);
+    await expect(cash(s, s.cashier, device, sale.id, 1000)).rejects.toThrow(/pack.check/i);
+    await expect(changeLine(s, s.cashier, sale.id, line, 2, device)).rejects.toThrow(/pack.check/i);
+    const gtin = '01234567890128';
+    const batch = await tenant(s.owner, async (db) => {
+      const alloc = await db.pharmacySaleLineAllocation.findFirstOrThrow({
+        where: { saleLineId: line.id },
+        include: { lot: { include: { batch: true, packLevel: true } } },
+      });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          presentationId: alloc.lot.packLevel.presentationId,
+          packLevelId: line.packLevelId,
+          type: 'GTIN',
+          code: gtin,
+          normalizedCode: gtin,
+        },
+      });
+      await db.pharmacyManufacturingBatch.update({
+        where: { id: alloc.lot.batch.id },
+        data: { batchNumber: 'TESTPACK' },
+      });
+      return 'TESTPACK';
+    });
+    expect(await check(`(01)${gtin}(10)${batch}(17)310101`)).toMatchObject({
+      matched: true,
+      batchChecked: true,
+    });
+    await cash(s, s.cashier, device, sale.id, 1000);
+    const checks = await tenant(s.owner, (db) =>
+      db.pharmacySaleEvent.findMany({
+        where: { saleId: sale.id, kind: 'PACK_CHECK' },
+        orderBy: { occurredAt: 'asc' },
+      })
+    );
+    expect(checks.map((row) => row.payload)).toMatchObject([
+      { saleLineId: line.id, matched: false },
+      { saleLineId: line.id, matched: true },
+    ]);
+  }, 60000);
+});
+
+describeDatabase('DEV-977 existing line discount', () => {
+  it('requires a verified approval and records the authorized discount against the selected line and its allocations', async () => {
+    const s = await shop('discount');
+    const device = 'discount-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 2],
+      [500, 1],
+    ]);
+    const input = {
+      branchId: s.owner.branchId,
+      saleId: sale.id,
+      saleLineId: lines[0]!.id,
+      deviceId: device,
+      discount: { kind: 'PERCENT' as const, bps: 100 },
+      requestId: randomUUID(),
+    };
+    const apply = () => asMember(s, s.cashier, (c) => c.discountBillLine(input));
+    await expect(apply()).rejects.toThrow(/approve|approval/i);
+    await tenant(s.owner, async (db) => {
+      await db.userPermissionOverride.create({
+        data: {
+          userId: s.cashier,
+          capability: 'pharmacy:discount',
+          effect: 'ALLOW',
+          reason: 'Synthetic line discount test',
+        },
+      });
+    });
+    const result = await apply();
+    expect(result).toMatchObject({ discountMinor: 20 });
+    await expect(apply()).resolves.toMatchObject({ discountMinor: 20 });
+    await tenant(s.owner, async (db) => {
+      const line = await db.pharmacySaleLine.findUniqueOrThrow({
+        where: { id: input.saleLineId },
+        include: { allocations: true },
+      });
+      expect(line).toMatchObject({ discountMinor: 20, approvedByUserId: s.cashier });
+      const { saleAllocationMoney } = await import('./sale-line-money');
+      expect(saleAllocationMoney(line).map((a) => a.discountMinor)).toEqual([20]);
+      expect(line.allocations.map((a) => a.discountMinor)).toEqual([0]);
+      expect(await db.pharmacySaleLine.findFirst({ where: { id: lines[1]!.id } })).toMatchObject({
+        discountMinor: 0,
+      });
+
+      await db.organization.update({
+        where: { id: s.owner.organizationId },
+        data: { pharmacyBillDiscountEnabled: true },
+      });
+      const { applyBillDiscount } = await import('./bill-discount-service');
+      const wholeBill = await applyBillDiscount(db, s.owner, {
+        saleId: sale.id,
+        request: { kind: 'AMOUNT', minor: 5 },
+        approval: {
+          approvedByUserId: s.cashier,
+          approvalPolicy: line.approvalPolicy!,
+          selfApproved: true,
+        },
+      });
+      expect(wholeBill).toMatchObject({
+        status: 'APPLIED',
+        excluded: [{ saleLineId: line.id, reason: 'OWN_DISCOUNT' }],
+        lines: [{ saleLineId: lines[1]!.id, discountMinor: 5 }],
+      });
+      expect(await db.pharmacySaleLine.findUniqueOrThrow({ where: { id: line.id } })).toMatchObject(
+        {
+          discountMinor: 20,
+          billDiscountMinor: 0,
+        }
+      );
+    });
+  }, 60000);
+});
+
+describeDatabase('DEV-977 multi-line returns', () => {
+  it('requires the same fresh witness as a single return when a sold medicine becomes controlled', async () => {
+    const s = await shop('returnwitness');
+    const device = 'return-witness-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 1],
+      [500, 1],
+    ]);
+    await cash(s, s.cashier, device, sale.id, 1500);
+    const selected = await tenant(s.owner, async (db) => {
+      await db.medicine.update({ where: { id: lines[1]!.medicineId }, data: { controlled: true } });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: s.manager,
+          capability: 'pharmacy:dispense',
+          effect: 'ALLOW',
+          reason: 'Test on-duty pharmacist',
+        },
+      });
+      const allocations = await db.pharmacySaleLineAllocation.findMany({
+        where: { saleLineId: { in: lines.map((l) => l.id) } },
+      });
+      return lines.map((l) => ({
+        saleLineId: l.id,
+        canonicalUnits: 1,
+        lotId: allocations.find((a) => a.saleLineId === l.id)!.inventoryLotId,
+        disposition: 'RESTOCK' as const,
+        integrityDecision: 'Unopened pack',
+      }));
+    });
+    const reason = 'Wrong items';
+    await expect(
+      tenant(s.owner, (db) =>
+        sales.returnSaleLine(db, s.owner, {
+          ...selected[1]!,
+          reason,
+          idempotencyKey: randomUUID(),
+        })
+      )
+    ).rejects.toThrow(/fresh witness PIN/);
+    await expect(
+      tenant(s.owner, (db) =>
+        sales.returnSaleLines(db, s.owner, {
+          saleId: sale.id,
+          requestId: randomUUID(),
+          reason,
+          lines: selected,
+        })
+      )
+    ).rejects.toThrow(/fresh witness PIN/);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySaleReturn.count({ where: { originalSaleId: sale.id } })
+      )
+    ).toBe(0);
+  }, 60000);
+
+  it('returns the selected sale lines together, refuses excess units atomically and replays the group once', async () => {
+    const s = await shop('returngroup');
+    const device = 'returns-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 2],
+      [500, 1],
+    ]);
+    await cash(s, s.cashier, device, sale.id, 2500);
+    const lots = await tenant(s.owner, (db) =>
+      db.pharmacySaleLineAllocation.findMany({
+        where: { saleLineId: { in: lines.map((l) => l.id) } },
+      })
+    );
+    const selected = lines.map((l) => ({
+      saleLineId: l.id,
+      canonicalUnits: 1,
+      lotId: lots.find((a) => a.saleLineId === l.id)!.inventoryLotId,
+      disposition: 'RESTOCK' as const,
+      integrityDecision: 'Inspected: intact',
+    }));
+    const input = {
+      saleId: sale.id,
+      requestId: randomUUID(),
+      reason: 'Wrong items',
+      lines: selected,
+    };
+    const run = (items: typeof selected) =>
+      tenant(s.owner, (db) => sales.returnSaleLines(db, s.owner, { ...input, lines: items }));
+    await expect(run([selected[0]!, { ...selected[1]!, canonicalUnits: 2 }])).rejects.toThrow(
+      /RETURN_EXCEEDS_SOLD/
+    );
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySaleReturn.count({ where: { originalSaleId: sale.id } })
+      )
+    ).toBe(0);
+    const result = await run(selected);
+    expect(await run(selected)).toMatchObject({ returnId: result.returnId, returnedMinor: 1500 });
+    const rows = await tenant(s.owner, (db) =>
+      db.pharmacySaleReturnLine.findMany({ where: { returnId: result.returnId } })
+    );
+    expect(rows.map((r) => r.saleLineId).sort()).toEqual(lines.map((l) => l.id).sort());
+    await expect(
+      tenant(s.owner, (db) =>
+        sales.returnSaleLines(db, s.owner, { ...input, requestId: randomUUID() })
+      )
+    ).rejects.toThrow(/RETURN_EXCEEDS_SOLD/);
+  }, 60000);
+});
+
+describeDatabase('reviewed counter invariants', () => {
+  async function credential(s: Shop) {
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    const hash = await hashOperatorCredential('PIN', '3846');
+    return tenant(s.owner, async (db) => {
+      const profile = await db.restaurantStaffProfile.create({
+        data: { userId: s.manager, displayName: 'Synthetic supervisor' },
+      });
+      await db.restaurantOperatorCredential.create({
+        data: { staffProfileId: profile.id, type: 'PIN', credentialHash: hash },
+      });
+      return profile.id;
+    });
+  }
+
+  it('commits a wrong approval strike before checking the bill and applies no discount', async () => {
+    const s = await shop('reviewstrike');
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const profile = await credential(s);
+    await tenant(s.owner, (db) =>
+      db.organization.update({
+        where: { id: s.owner.organizationId },
+        data: { requireApprovalAuthenticator: false },
+      })
+    );
+    await expect(
+      asMember(s, s.cashier, (c) =>
+        c.discountBillLine({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          saleLineId: 'missing-test-line',
+          requestId: randomUUID(),
+          discount: { kind: 'AMOUNT', minor: 10 },
+          discountApproval: { staffProfileId: profile, pin: '8402' },
+        })
+      )
+    ).rejects.toThrow(/approval|approve/i);
+    await tenant(s.owner, async (db) => {
+      expect(
+        (
+          await db.restaurantOperatorCredential.findFirstOrThrow({
+            where: { staffProfileId: profile },
+          })
+        ).failedAttempts
+      ).toBe(1);
+      expect(
+        (await db.pharmacySaleLine.findUniqueOrThrow({ where: { id: lines[0]!.id } })).discountMinor
+      ).toBe(0);
+      expect(
+        await db.pharmacySaleEvent.count({ where: { saleId: sale.id, kind: 'LINE_DISCOUNT' } })
+      ).toBe(0);
+    });
+  });
+
+  it('refuses the same synthetic authenticator code on a second line', async () => {
+    const s = await shop('reviewcode');
+    const device = 'reviewcode';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 1],
+      [1000, 1],
+    ]);
+    const profile = await credential(s);
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const { createHmac } = await import('node:crypto');
+    // A test-only, 20-byte zero key encodes to 32 base32 A characters.
+    await tenant(s.owner, async (db) => {
+      await db.organization.update({
+        where: { id: s.owner.organizationId },
+        data: { requireApprovalAuthenticator: true },
+      });
+      await db.approvalAuthenticator.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          userId: s.manager,
+          encryptedSecret: encryptSecret('A'.repeat(32)),
+          enabledAt: new Date(),
+        },
+      });
+    });
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+    const mac = createHmac('sha1', Buffer.alloc(20)).update(counter).digest();
+    const code = String(
+      (mac.readUInt32BE(mac[mac.length - 1]! & 15) & 0x7fffffff) % 1000000
+    ).padStart(6, '0');
+    const give = (id: string) =>
+      asMember(s, s.cashier, (c) =>
+        c.discountBillLine({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          saleLineId: id,
+          deviceId: device,
+          requestId: randomUUID(),
+          discount: { kind: 'AMOUNT', minor: 10 },
+          discountApproval: { staffProfileId: profile, pin: code },
+        })
+      );
+    await expect(give(lines[0]!.id)).resolves.toMatchObject({ discountMinor: 10 });
+    await expect(give(lines[1]!.id)).rejects.toThrow(/approval|approve/i);
+    await tenant(s.owner, async (db) => {
+      expect(
+        (await db.pharmacySaleLine.findUniqueOrThrow({ where: { id: lines[1]!.id } })).discountMinor
+      ).toBe(0);
+      expect(
+        (
+          await db.restaurantOperatorCredential.findFirstOrThrow({
+            where: { staffProfileId: profile },
+          })
+        ).failedAttempts
+      ).toBe(1);
+    });
+  });
+
+  it('refunds the exact discounted value and permits one simultaneous return of the same lines', async () => {
+    const s = await shop('reviewrefund', 'pharmacy:dispense');
+    const device = 'refund-till';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [
+      [1000, 1],
+      [500, 1],
+    ]);
+    await credential(s);
+    await tenant(s.owner, async (db) => {
+      await db.organization.update({
+        where: { id: s.owner.organizationId },
+        data: { requireApprovalAuthenticator: false },
+      });
+      await db.userPermissionOverride.create({
+        data: {
+          userId: s.cashier,
+          capability: 'pharmacy:discount',
+          effect: 'ALLOW',
+          reason: 'Test discount operator',
+        },
+      });
+    });
+    await asMember(s, s.cashier, (c) =>
+      c.discountBillLine({
+        branchId: s.owner.branchId,
+        saleId: sale.id,
+        saleLineId: lines[0]!.id,
+        deviceId: device,
+        requestId: randomUUID(),
+        discount: { kind: 'AMOUNT', minor: 23 },
+      })
+    );
+    await cash(s, s.cashier, device, sale.id, 1477);
+    const { items, tender } = await tenant(s.owner, async (db) => {
+      const allocations = await db.pharmacySaleLineAllocation.findMany({
+        where: { saleLineId: { in: lines.map((l) => l.id) } },
+      });
+      const tender = await db.pharmacyTender.findFirstOrThrow({ where: { saleId: sale.id } });
+      return {
+        tender,
+        items: lines.map((l) => ({
+          saleLineId: l.id,
+          canonicalUnits: 1,
+          lotId: allocations.find((a) => a.saleLineId === l.id)!.inventoryLotId,
+          disposition: 'RESTOCK' as const,
+          integrityDecision: 'Intact',
+        })),
+      };
+    });
+    await expect(
+      tenant(s.owner, (db) => sales.quoteSaleLineReturn(db, s.owner, items[0]!))
+    ).resolves.toEqual({ valueMinor: 977 });
+    await expect(
+      tenant(s.owner, (db) => sales.quoteSaleLineReturn(db, s.owner, items[1]!))
+    ).resolves.toEqual({ valueMinor: 500 });
+    const refund = () =>
+      asMember(s, s.manager, (c) =>
+        c.returnLines({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          requestId: randomUUID(),
+          reason: 'Synthetic purchase return',
+          managerPin: '3846',
+          lines: items,
+          refund: {
+            originalTenderId: tender.id,
+            deviceId: device,
+            businessDate: s.today,
+            manualCashFallback: false,
+          },
+        })
+      );
+    const raced = await Promise.allSettled([refund(), refund()]);
+    expect(raced.filter((r) => r.status === 'fulfilled').map((r) => r.value)).toMatchObject([
+      { returnedMinor: 1477 },
+    ]);
+    const refusal = raced.find((r) => r.status === 'rejected');
+    expect(refusal?.reason.message).toMatch(/exceed|already returned|remaining/i);
+    await tenant(s.owner, async (db) => {
+      const returns = await db.pharmacySaleReturn.findMany({ where: { originalSaleId: sale.id } });
+      expect(returns).toHaveLength(1);
+      expect(await db.pharmacySaleReturnLine.count({ where: { returnId: returns[0]!.id } })).toBe(
+        2
+      );
+      expect(
+        await db.pharmacyRefund.findMany({
+          where: { originalTenderId: tender.id },
+          select: { amountMinor: true },
+        })
+      ).toEqual([{ amountMinor: 1477 }]);
+    });
+  });
+});
+
+describeDatabase('reviewed pack, demand and discount storage rules', () => {
+  it('matches a registered presentation barcode without a pack level or batch', async () => {
+    const s = await shop('presentationpack');
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const line = lines[0]!;
+    const gtin = '01234567890128';
+    await tenant(s.owner, async (db) => {
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: line.packLevelId } });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          presentationId: pack.presentationId,
+          type: 'GTIN',
+          code: gtin,
+          normalizedCode: gtin,
+        },
+      });
+    });
+    await expect(
+      asMember(s, s.cashier, (c) =>
+        c.checkBillLinePack({
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          saleLineId: line.id,
+          payload: '(01)' + gtin,
+        })
+      )
+    ).resolves.toEqual({ matched: true, batchChecked: false });
+  }, 60_000);
+
+  it('requires a fresh pack check after removing and re-adding the same medicine, even without an encoded batch', async () => {
+    const s = await shop('reviewpack');
+    const device = 'recheck';
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const line = lines[0]!;
+    const check = (saleLineId: string, payload: string) =>
+      asMember(s, s.cashier, (c) =>
+        c.checkBillLinePack({ branchId: s.owner.branchId, saleId: sale.id, saleLineId, payload })
+      );
+    const gtin = '01234567890128';
+    const presentationId = await tenant(s.owner, async (db) => {
+      const p = await db.packLevel.findUniqueOrThrow({ where: { id: line.packLevelId } });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          presentationId: p.presentationId,
+          packLevelId: p.id,
+          type: 'GTIN',
+          code: gtin,
+          normalizedCode: gtin,
+        },
+      });
+      return p.presentationId;
+    });
+    expect(await check(line.id, 'synthetic-unmatched-pack')).toMatchObject({ matched: false });
+    await removeLine(s, s.cashier, sale.id, line, device);
+    const { line: next } = await tenant(s.as(s.cashier), (db) =>
+      sales.addSaleLine(db, s.as(s.cashier), {
+        saleId: sale.id,
+        medicineId: line.medicineId,
+        presentationId,
+        packLevelId: line.packLevelId,
+        saleUnit: 'UNIT',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: randomUUID(),
+      })
+    );
+    expect(next.packCheckBlocked).toBe(true);
+    await expect(cash(s, s.cashier, device, sale.id, 1000)).rejects.toThrow(/pack.check/i);
+    expect(await check(next.id, '(01)' + gtin + '(21)TEST-SERIAL')).toMatchObject({
+      matched: true,
+      batchChecked: false,
+    });
+    await cash(s, s.cashier, device, sale.id, 1000);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySaleEvent.count({ where: { saleId: sale.id, kind: 'PACK_CHECK' } })
+      )
+    ).toBe(2);
+  });
+
+  it('shares one demand event between the two entry points per bill and medicine', async () => {
+    const s = await shop('reviewdemand');
+    const { sale, lines } = await billBy(s, s.cashier, [[500, 1]]);
+    const input = {
+      branchId: s.owner.branchId,
+      saleId: sale.id,
+      requestedMedicineId: lines[0]!.medicineId,
+      requestedText: 'Synthetic request',
+      quantity: 2,
+      reason: 'STOCKOUT' as const,
+    };
+    const [asked, shortfall] = await Promise.all([
+      asMember(s, s.cashier, (c) => c.recordCounterDemand({ ...input, requestId: randomUUID() })),
+      asMember(s, s.cashier, (c) =>
+        c.captureDemand({
+          ...input,
+          saleUnit: 'UNIT',
+          inventoryRuleSnapshot: { query: 'Synthetic request' },
+        })
+      ),
+    ]);
+    expect(asked.id).toBe(shortfall.id);
+    await expect(
+      asMember(s, s.cashier, (c) =>
+        c.recordCounterDemand({ ...input, requestId: randomUUID(), quantity: 10001 })
+      )
+    ).rejects.toThrow();
+    expect(
+      await tenant(s.owner, (db) =>
+        db.unfulfilledDemandEvent.count({
+          where: { saleId: sale.id, requestedMedicineId: lines[0]!.medicineId },
+        })
+      )
+    ).toBe(1);
+  });
+
+  it.each([false, true])(
+    'refuses a direct allocation discount on a paid bill (completed=%s)',
+    async (completed) => {
+      const s = await shop('reviewfreeze' + completed);
+      const device = 'freeze';
+      await openDrawer(s, device, 0);
+      const { sale, lines } = await billBy(s, s.cashier, [[500, 1]]);
+      await cash(s, s.cashier, device, sale.id, completed ? 500 : 100);
+      const lineId = lines[0]!.id;
+      const allocation = await tenant(s.owner, (db) =>
+        db.pharmacySaleLineAllocation.findFirstOrThrow({ where: { saleLineId: lineId } })
+      );
+      await expect(
+        tenant(s.owner, (db) =>
+          db.pharmacySaleLine.update({
+            where: { id: lineId },
+            data: {
+              lineAllocationDiscounts: { [allocation.id]: 10 },
+              discountKind: 'DISCOUNT',
+              discountMinor: 10,
+              approvedByUserId: s.manager,
+              approvalPolicy: 'DISCOUNT_MANAGER_PIN',
+            },
+          })
+        )
+      ).rejects.toThrow(/paid or closed/);
+    }
+  );
+});

@@ -127,6 +127,7 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Payment has already been started or taken on this bill, so its lines can no longer be changed or removed.',
   LINE_HAS_DISPENSING_RECORD:
     'This line carries dispensing records (controlled register, prescription, pharmacist review, substitution or a scanned pack), so it cannot be changed here. Void the bill to take it off.',
+  PACK_CHECK_REQUIRED: 'Scan a matching pack for the blocked bill line, or remove the line.',
   LINE_CHANGE_NEEDS_READD:
     'This line has a discount, voucher or batch override approved for its quantity. Remove the line and add it again with the new quantity.',
   LINE_ON_ORDER_BILL:

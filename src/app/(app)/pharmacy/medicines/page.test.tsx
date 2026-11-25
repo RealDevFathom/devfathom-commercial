@@ -65,6 +65,9 @@ describe('DEV-19 medicine page access', () => {
     expect(
       screen.getByRole('heading', { name: 'Catalog administration permission required' })
     ).toBeVisible();
+    expect(
+      screen.getByText(/Ask a pharmacist with catalogue review permission to review this import/)
+    ).toBeVisible();
     expect(screen.queryByText('Catalogue approval queue')).toBeNull();
     expect(mocks.staged).not.toHaveBeenCalled();
   });
