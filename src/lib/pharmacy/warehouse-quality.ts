@@ -29,12 +29,23 @@ type Zone = {
   expectedTemperatureReadingIntervalMinutes: number;
 };
 const conditions = {
+  productFamily: true,
   coldChain: true,
   minimumStorageTemperatureC: true,
   maximumStorageTemperatureC: true,
 } as const;
 const monitored = (medicine: MedicineConditions) =>
   medicine.coldChain || medicine.minimumStorageTemperatureC !== null;
+
+function warehouseExpiryBlocked(
+  batch: { expiresAt: Date | null; medicine: { productFamily: string } },
+  at = new Date()
+) {
+  return (
+    (!batch.expiresAt && batch.medicine.productFamily !== 'FRONT_SHOP') ||
+    hasKnownExpiryPassed(batch.expiresAt, at)
+  );
+}
 
 function assertEnvelope(input: TransportEvidence) {
   const { minimumC, maximumC } = input;
@@ -146,8 +157,7 @@ export async function warehouseStockQualityReason(
 ) {
   const lot = await scopedLot(db, scope, inventoryLotId);
   if (lot.batch.state !== 'ACTIVE') return 'The manufacturing batch is on hold or recalled.';
-  if (!lot.batch.expiresAt || hasKnownExpiryPassed(lot.batch.expiresAt, at))
-    return 'The batch expiry is missing or has passed.';
+  if (warehouseExpiryBlocked(lot.batch, at)) return 'The batch expiry is missing or has passed.';
   const ids = [...new Set(stockLocationIds)];
   const incident = await db.pharmacyWarehouseQualityIncident.findFirst({
     where: {
@@ -488,8 +498,7 @@ export async function reviewWarehouseQuality(
     if (
       item.sourceKey.startsWith('damage:') ||
       lot.batch.state !== 'ACTIVE' ||
-      !lot.batch.expiresAt ||
-      hasKnownExpiryPassed(lot.batch.expiresAt, new Date()) ||
+      warehouseExpiryBlocked(lot.batch) ||
       (await zoneReason(db, scope, lot.batch.medicine, releaseLocationId))
     )
       throw new PharmacyInventoryError('BLOCKED_STOCK');
@@ -722,7 +731,7 @@ export async function receiveWarehouseTransferLine(
     let reason =
       source.batch.state !== 'ACTIVE'
         ? 'The batch is on hold or recalled.'
-        : !source.batch.expiresAt || hasKnownExpiryPassed(source.batch.expiresAt, new Date())
+        : warehouseExpiryBlocked(source.batch)
           ? 'The batch expiry is missing or has passed.'
           : null;
     reason ??= warehouseTransportReason(
@@ -730,6 +739,12 @@ export async function receiveWarehouseTransferLine(
       await latestDispatchEvidence(db, scope.organizationId, transfer.id)
     );
     reason ??= warehouseTransportReason(source.batch.medicine, evidence);
+    if (
+      destination.warehouseStaging ||
+      !['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE'].includes(destination.kind)
+    ) {
+      reason ??= 'Receiving bin requires a confirmed move to storage before release.';
+    }
     reason ??= await zoneReason(db, scope, source.batch.medicine, destination.id);
     const outstandingHold = await db.pharmacyWarehouseQualityIncident.findFirst({
       where: {
