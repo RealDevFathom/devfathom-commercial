@@ -624,6 +624,9 @@ describe.skipIf(!owner || !runtime)('card terminal refund accounting', () => {
         },
       })
     );
+    await expect(
+      change(root, 'OWED', { pinVerified: true, secondApproverId: 'accountant-' + suffix })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     const self = await change(root, 'OWED', { pinVerified: true, declareSelfApproval: true });
     expect(self).toMatchObject({
       previousId: root,
