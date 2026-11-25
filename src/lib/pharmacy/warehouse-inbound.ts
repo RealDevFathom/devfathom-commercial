@@ -1,11 +1,10 @@
 import { Prisma } from '@/generated/prisma/client';
-import { can } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { licensedPremises } from './branch-transfer-policy';
 import { parseGs1DataMatrix } from './gs1-datamatrix';
 import { PharmacyInventoryError } from './inventory';
 import { normalizeMedicineText } from './medicine';
-import { assertStoredBranchMayOperate } from './regulatory';
+import { assertControlledWarehouseStorage } from './warehouse-controlled-storage';
 import {
   expiryInstant,
   normalizeExpiryBoundary,
@@ -237,27 +236,13 @@ export async function completeWarehousePutAway(
     );
   }
   if (lot.batch.medicine.controlled) {
-    if (destination.kind !== 'SAFE')
-      throw new PharmacyInventoryError(
-        'UNSALEABLE_DESTINATION',
-        'Controlled stock must be put away in a safe.'
-      );
-    const user = await db.user.findFirst({
-      where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
-      include: { organizationRole: { include: { permissions: true } }, permissionOverrides: true },
-    });
-    if (!user || !(await can(user, 'pharmacy:dispense', undefined, { db, now: at }))) {
-      throw new PharmacyInventoryError(
-        'COAUTH_REQUIRED',
-        'A qualified pharmacist must confirm controlled stock put-away.'
-      );
-    }
-    await assertStoredBranchMayOperate(db, scope.organizationId, scope.branchId, {
-      name: 'warehouse.controlledPutAway',
-      at,
-      requiresQualifiedPerson: true,
-      requiresPharmacistPresence: true,
-    });
+    await assertControlledWarehouseStorage(
+      db,
+      scope,
+      destination.kind,
+      'warehouse.controlledPutAway',
+      at
+    );
   }
   await lockStockBalances(db, scope, [
     { inventoryLotId, stockLocationId: line.stockLocationId, disposition: 'WAREHOUSE_RECEIVING' },

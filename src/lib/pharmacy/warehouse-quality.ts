@@ -1,3 +1,4 @@
+import { assertControlledWarehouseStorage } from './warehouse-controlled-storage';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { PharmacyInventoryError } from './inventory';
@@ -30,6 +31,7 @@ type Zone = {
 };
 const conditions = {
   productFamily: true,
+  controlled: true,
   coldChain: true,
   minimumStorageTemperatureC: true,
   maximumStorageTemperatureC: true,
@@ -388,7 +390,7 @@ export async function listWarehouseQuality(db: ScopedDb, scope: LedgerScope) {
   >(Prisma.sql`
     SELECT q.*,m."productName",b."batchNumber",z.code AS "binCode",
     (q."quarantineUnits" > 0 AND (NOT z.active OR z."warehouseStaging" OR z.kind NOT IN ('STORE','RACK_BIN','FRIDGE','SAFE')
-      OR (m."coldChain" AND NOT z."coldChain") OR
+      OR (m.controlled AND z.kind <> 'SAFE') OR (m."coldChain" AND NOT z."coldChain") OR
       (m."minimumStorageTemperatureC" IS NOT NULL AND (z."minimumTemperatureC" IS NULL OR z."maximumTemperatureC" IS NULL
         OR z."minimumTemperatureC"<m."minimumStorageTemperatureC" OR z."maximumTemperatureC">m."maximumStorageTemperatureC")))) AS "requiresReleaseBin" FROM pharmacy_warehouse_quality_incidents q
     JOIN pharmacy_inventory_lots l ON l.id=q."inventoryLotId" AND l."organizationId"=q."organizationId"
@@ -476,6 +478,14 @@ export async function reviewWarehouseQuality(
           'BLOCKED_STOCK',
           'Scan an active storage bin for the released stock.'
         );
+      if (lot.batch.medicine.controlled) {
+        await assertControlledWarehouseStorage(
+          db,
+          scope,
+          destination.kind,
+          'warehouse.controlledQualityRelease'
+        );
+      }
       releaseLocationId = destination.id;
     }
     if (

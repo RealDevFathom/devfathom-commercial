@@ -1,7 +1,11 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import {
+  seedPharmacyRegulatoryProfile,
+  retirePharmacyRegulatoryRules,
+} from '@/lib/test-support/pharmacy-regulatory';
 import { configureWarehouseTestDatabase } from '@/lib/test-support/warehouse-database';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { shelfLabelCode } from './shelf-label-code';
@@ -19,6 +23,7 @@ let tenancy: typeof import('@/lib/tenancy/scoped-db'),
   operations: typeof import('./inventory-operations'),
   temperature: typeof import('./temperature-log');
 const run = <T>(work: (db: ScopedDb) => Promise<T>) => tenancy.withTenantDb(organizationId, work);
+const testRules: string[] = [];
 const expiry = new Date('2090-01-01T00:00:00Z');
 
 describe('warehouse temperature, custody and recall on PostgreSQL', () => {
@@ -59,7 +64,11 @@ describe('warehouse temperature, custody and recall on PostgreSQL', () => {
         });
     });
   });
-  async function fixture() {
+  afterAll(async () => {
+    if (testRules.length) await retirePharmacyRegulatoryRules(tenancy.withPlatformDb, testRules);
+  });
+
+  async function fixture(controlled = false) {
     const code = randomUUID();
     return run(async (db) => {
       const medicine = await db.medicine.create({
@@ -67,6 +76,7 @@ describe('warehouse temperature, custody and recall on PostgreSQL', () => {
           organizationId,
           productName: 'Refrigerated medicine ' + code,
           productFamily: 'PHARMACEUTICAL',
+          controlled,
           coldChain: true,
           minimumStorageTemperatureC: 2,
           maximumStorageTemperatureC: 8,
@@ -198,6 +208,143 @@ describe('warehouse temperature, custody and recall on PostgreSQL', () => {
       })
     );
     expect(await run(balances)).toEqual([{ disposition: 'AVAILABLE', onHandUnits: 10 }]);
+  });
+
+  it('releases controlled stock only to a qualified cold safe with pharmacist custody', async () => {
+    const f = await fixture(true);
+    testRules.push(await seedPharmacyRegulatoryProfile(tenancy.withPlatformDb, run, site));
+    const setup = await run(async (db) => {
+      await db.organizationDepartment.create({
+        data: { organizationId, key: 'Pharmacy', name: 'Pharmacy' },
+      });
+      const role = await db.organizationRole.create({
+        data: {
+          organizationId,
+          key: 'quality-staff',
+          name: 'Safety reviewer',
+          permissions: {
+            create: { organizationId, capability: 'pharmacy:safety', effect: 'ALLOW' },
+          },
+        },
+      });
+      await db.user.create({
+        data: {
+          id: actorId,
+          organizationId,
+          organizationRoleId: role.id,
+          email: actorId + '@test.invalid',
+          name: 'Safety reviewer',
+          department: 'Pharmacy',
+          title: 'Reviewer',
+        },
+      });
+      const safe = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId,
+          branchId: site,
+          code: 'SAFE-' + f.lot.id,
+          name: 'Cold safe',
+          kind: 'SAFE',
+          coldChain: true,
+          minimumTemperatureC: 2,
+          maximumTemperatureC: 8,
+        },
+      });
+      const warmSafe = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId,
+          branchId: site,
+          code: 'WARM-' + f.lot.id,
+          name: 'Ambient safe',
+          kind: 'SAFE',
+        },
+      });
+      await db.pharmacyTemperatureLog.create({
+        data: {
+          organizationId,
+          branchId: site,
+          stockLocationId: safe.id,
+          actorId,
+          temperatureC: 4,
+          recordedAt: new Date(),
+          outOfRange: false,
+        },
+      });
+      await db.pharmacyStockMovement.create({
+        data: {
+          ...from,
+          inventoryLotId: f.lot.id,
+          stockLocationId: f.source.id,
+          kind: 'RECEIPT',
+          disposition: 'QUARANTINE',
+          quantityUnits: 10,
+          sealedPackDelta: 1,
+          looseUnitDelta: 0,
+          idempotencyKey: 'held:' + f.lot.id,
+        },
+      });
+      const incident = await quality.openWarehouseIncident(db, from, {
+        inventoryLotId: f.lot.id,
+        stockLocationId: f.source.id,
+        quantityUnits: 10,
+        quarantineUnits: 10,
+        reason: 'Storage review',
+        sourceKey: 'storage:' + f.lot.id,
+      });
+      return { safe, warmSafe, incident, role };
+    });
+    const decision = {
+      incidentId: setup.incident.id,
+      decision: 'RELEASE' as const,
+      reason: 'Storage review complete',
+      evidenceRef: 'QA-7',
+    };
+    const review = (code?: string) =>
+      run((db) =>
+        quality.reviewWarehouseQuality(db, from, { ...decision, destinationBinCode: code })
+      );
+    const state = () =>
+      run(async (db) => ({
+        movements: await db.pharmacyStockMovement.findMany({
+          where: { organizationId, inventoryLotId: f.lot.id },
+          select: { id: true, kind: true, quantityUnits: true },
+          orderBy: { id: 'asc' },
+        }),
+        balances: await db.pharmacyStockBalance.findMany({
+          where: { organizationId, inventoryLotId: f.lot.id, onHandUnits: { gt: 0 } },
+          select: { stockLocationId: true, disposition: true, onHandUnits: true },
+        }),
+        status: (
+          await db.pharmacyWarehouseQualityIncident.findUniqueOrThrow({
+            where: { id: setup.incident.id },
+          })
+        ).status,
+      }));
+    const before = await state();
+    const queue = await run((db) => quality.listWarehouseQuality(db, from));
+    expect(queue.find((row) => row.id === setup.incident.id)?.requiresReleaseBin).toBe(true);
+    await expect(review(setup.safe.code)).rejects.toMatchObject({ reason: 'COAUTH_REQUIRED' });
+    await run((db) =>
+      db.organizationRolePermission.create({
+        data: {
+          organizationId,
+          organizationRoleId: setup.role.id,
+          capability: 'pharmacy:dispense',
+          effect: 'ALLOW',
+        },
+      })
+    );
+    await expect(review()).rejects.toMatchObject({ reason: 'UNSALEABLE_DESTINATION' });
+    await expect(review(f.source.code)).rejects.toMatchObject({ reason: 'UNSALEABLE_DESTINATION' });
+    await expect(review(setup.warmSafe.code)).rejects.toMatchObject({ reason: 'BLOCKED_STOCK' });
+    expect(await state()).toEqual(before);
+    await review(setup.safe.code);
+    const after = await state();
+    expect(after.status).toBe('RELEASE');
+    expect(after.movements).toHaveLength(before.movements.length + 2);
+    expect(after.balances).toEqual([
+      { stockLocationId: setup.safe.id, disposition: 'AVAILABLE', onHandUnits: 10 },
+    ]);
   });
 
   it('captures cold-chain receipt, damage, open shortage, redelivery, replay and recall destinations', async () => {
