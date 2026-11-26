@@ -72,9 +72,19 @@ export async function POST(request: Request) {
   }
 
   const config = readWhatsAppConfig();
-  const provider = createWhatsAppProvider(config);
   const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
   if (rawBody === null) return json({ error: 'Body too large.' }, 413);
+  if (config.provider === 'waha') {
+    const { receiveWahaEvent } = await import('@/lib/pharmacy/whatsapp/waha-webhook');
+    const status = await receiveWahaEvent(
+      rawBody,
+      request.headers,
+      new URL(request.url).searchParams.get('endpoint') ?? '',
+      config
+    );
+    return json(status === 200 ? { received: true } : { error: 'Webhook rejected.' }, status);
+  }
+  const provider = createWhatsAppProvider(config);
   if (!provider.verifyWebhook(rawBody, request.headers.get('x-hub-signature-256'))) {
     return json({ error: 'Invalid signature.' }, 401);
   }

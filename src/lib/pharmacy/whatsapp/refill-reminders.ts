@@ -31,6 +31,8 @@ import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
+  bindWhatsAppTenant,
+  hasWhatsAppSender,
   createWhatsAppProvider,
   readWhatsAppConfig,
   type WhatsAppConfig,
@@ -244,12 +246,12 @@ async function deliverRefillReminder(
   channels: ReminderChannels,
   result: RefillReminderRunResult
 ) {
-  const { now, config, provider, smsConfig, smsProvider, whatsappReady } = channels;
+  const { now, smsConfig, smsProvider, whatsappReady } = channels;
+  const config = bindWhatsAppTenant(channels.config, item.organizationId);
+  const provider = config.provider === 'waha' ? createWhatsAppProvider(config) : channels.provider;
   const recipient = await withTenantDb(item.organizationId, async (db) => {
     const whatsappBound =
-      whatsappReady &&
-      config.organizationId === item.organizationId &&
-      Boolean(config.phoneNumberId);
+      whatsappReady && config.organizationId === item.organizationId && hasWhatsAppSender(config);
     if (!whatsappBound && !smsEnabledFor(smsConfig, item.organizationId)) return null;
     const organization = await db.organization.findUnique({
       where: { id: item.organizationId },

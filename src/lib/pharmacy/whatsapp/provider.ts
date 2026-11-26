@@ -1,3 +1,4 @@
+import { WahaWhatsAppProvider, readWahaWording, type WahaWording } from './waha-provider';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
@@ -28,7 +29,8 @@ export type KhataTemplateParameter = (typeof KHATA_TEMPLATE_PARAMETERS)[number];
 export type KhataParameterOrder = readonly KhataTemplateParameter[];
 
 export type WhatsAppConfig = {
-  provider: 'meta' | 'mock';
+  provider: 'meta' | 'mock' | 'waha';
+  wahaWording?: WahaWording;
   accessToken: string | null;
   phoneNumberId: string | null;
   /** Explicit owner of this deployment's configured sender. */
@@ -63,7 +65,12 @@ export type WhatsAppInboundMessage = {
 };
 
 export interface WhatsAppProvider {
-  readonly name: 'meta' | 'mock';
+  readonly name: 'meta' | 'mock' | 'waha';
+  sendMedia?(input: {
+    to: string;
+    bytes: Uint8Array;
+    mime: 'application/pdf' | 'image/png' | 'image/jpeg';
+  }): Promise<WhatsAppSendResult>;
   sendTemplate(input: {
     to: string;
     template: WhatsAppTemplateKey;
@@ -78,7 +85,13 @@ export interface WhatsAppProvider {
 
 export class WhatsAppProviderError extends Error {
   constructor(
-    readonly reason: 'NOT_CONFIGURED' | 'TEMPLATE_NOT_CONFIGURED' | 'SEND_FAILED',
+    readonly reason:
+      | 'NOT_CONFIGURED'
+      | 'TEMPLATE_NOT_CONFIGURED'
+      | 'SEND_FAILED'
+      | 'WAHA_POLICY'
+      | 'WAHA_DISCONNECTED'
+      | 'NOT_ON_WHATSAPP',
     detail?: string,
     readonly definitive = reason !== 'SEND_FAILED'
   ) {
@@ -133,9 +146,10 @@ export function templateLanguageCode(
 }
 
 export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
+  const selected = envValue(env, 'PHARMACY_WHATSAPP_PROVIDER');
   const leadDays = Number(envValue(env, 'PHARMACY_WHATSAPP_REMINDER_LEAD_DAYS') ?? 3);
-  return {
-    provider: envValue(env, 'PHARMACY_WHATSAPP_PROVIDER') === 'meta' ? 'meta' : 'mock',
+  const config: WhatsAppConfig = {
+    provider: selected === 'waha' ? 'waha' : selected === 'meta' ? 'meta' : 'mock',
     accessToken: envValue(env, 'PHARMACY_WHATSAPP_ACCESS_TOKEN'),
     phoneNumberId: envValue(env, 'PHARMACY_WHATSAPP_PHONE_NUMBER_ID'),
     organizationId: envValue(env, 'PHARMACY_WHATSAPP_ORGANIZATION_ID'),
@@ -173,6 +187,29 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
     reminderLeadDays:
       Number.isSafeInteger(leadDays) && leadDays >= 0 && leadDays <= 30 ? leadDays : 3,
   };
+  if (config.provider === 'waha') {
+    config.organizationId = null;
+    config.phoneNumberId = null;
+    config.wahaWording = readWahaWording(env);
+    const language = config.templateLanguage === 'ur' ? 'ur' : 'en';
+    for (const key of Object.keys(config.templates) as WhatsAppTemplateKey[]) {
+      config.templates[key] = config.wahaWording[key]?.[language] ? 'waha-' + key : null;
+    }
+    for (const lang of ['en', 'ur'] as const)
+      config.khataTemplates[lang] = config.wahaWording.khataReminder?.[lang]
+        ? 'waha-khata-' + lang
+        : null;
+  }
+  return config;
+}
+
+export function bindWhatsAppTenant(config: WhatsAppConfig, organizationId: string): WhatsAppConfig {
+  return config.provider === 'waha' ? { ...config, organizationId } : config;
+}
+export function hasWhatsAppSender(config: WhatsAppConfig) {
+  return config.provider === 'waha'
+    ? Boolean(config.organizationId)
+    : Boolean(config.phoneNumberId);
 }
 
 export function verifyMetaSignature(
@@ -396,6 +433,7 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
 export function createWhatsAppProvider(
   config: WhatsAppConfig = readWhatsAppConfig()
 ): WhatsAppProvider {
+  if (config.provider === 'waha') return new WahaWhatsAppProvider(config);
   if (config.provider !== 'meta') return new MockWhatsAppProvider(config);
   const provider = new MetaWhatsAppProvider(config);
   if (config.liveSendApproved) return provider;

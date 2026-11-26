@@ -124,6 +124,14 @@ export default async function PharmacyOnboardingPage() {
               >
                 <UserCheck aria-hidden /> One pharmacist per shift
               </Link>
+              {process.env.PHARMACY_WHATSAPP_PROVIDER === 'waha' && (
+                <Link
+                  href="/pharmacy/settings/whatsapp"
+                  className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+                >
+                  Connect WhatsApp
+                </Link>
+              )}
               <Link
                 href="/pharmacy/settings/data-export"
                 className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}

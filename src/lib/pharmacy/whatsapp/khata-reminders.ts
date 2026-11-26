@@ -37,6 +37,8 @@ import {
 import { isUtilityReminderQuietHour, reminderLocalHour } from './reminder-quiet-hours';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
+  bindWhatsAppTenant,
+  hasWhatsAppSender,
   createWhatsAppProvider,
   readWhatsAppConfig,
   type KhataTemplateParameter,
@@ -210,7 +212,7 @@ type KhataRecipientResult =
 function baseConfigurationErrors(config: WhatsAppConfig): string[] {
   const errors: string[] = [];
   if (!config.organizationId) errors.push('ORGANIZATION_NOT_CONFIGURED');
-  if (!config.phoneNumberId) errors.push('PHONE_NUMBER_NOT_CONFIGURED');
+  if (!hasWhatsAppSender(config)) errors.push('PHONE_NUMBER_NOT_CONFIGURED');
   if (config.provider === 'meta' && !config.accessToken) errors.push('ACCESS_TOKEN_NOT_CONFIGURED');
   // Live Meta sending requires the explicit owner-approval flag, not just credentials.
   if (config.provider === 'meta' && !config.liveSendApproved) errors.push('LIVE_SEND_NOT_APPROVED');
@@ -293,7 +295,10 @@ export async function processDueWhatsAppKhataReminders(
   } = {}
 ): Promise<KhataReminderRunResult> {
   const now = options.now ?? new Date();
-  const config = options.config ?? readWhatsAppConfig();
+  const selection = options.config ?? readWhatsAppConfig();
+  const config = options.account
+    ? bindWhatsAppTenant(selection, options.account.organizationId)
+    : selection;
   const provider = options.provider ?? createWhatsAppProvider(config);
   const smsConfig = options.smsConfig ?? readSmsConfig();
   const smsProvider = options.smsProvider ?? createSmsProvider(smsConfig);
@@ -315,7 +320,8 @@ export async function processDueWhatsAppKhataReminders(
   result.configured = result.configurationErrors.length === 0;
   // `configured` reports the WhatsApp channel. A bound SMS sender still runs
   // the job for customers it can reach, without WhatsApp credentials.
-  const whatsappReady = result.configured && Boolean(config.organizationId && config.phoneNumberId);
+  const whatsappReady =
+    result.configured && Boolean(config.organizationId && hasWhatsAppSender(config));
   const smsReady = smsConfig.provider !== 'disabled' && Boolean(smsConfig.organizationId);
   const organizationId = whatsappReady
     ? config.organizationId
