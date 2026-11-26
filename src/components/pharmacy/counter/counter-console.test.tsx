@@ -8694,6 +8694,81 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     });
   }
 
+  it.each(['search', 'scan'])(
+    'DEV-1041: %s adds one loose unit from a multi-unit pack',
+    async (source) => {
+      const row = {
+        ...twoUnitRow(),
+        dosageForm: 'Powder',
+        printedMrpMinor: 58600,
+        unitsPerPack: 100,
+      };
+      mocks.mutations.addLine!.mockResolvedValue({});
+      mocks.searchQuery.mockResolvedValue({ rows: [row], truncated: false });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      if (source === 'scan') {
+        const input = screen.getByLabelText('Scan or search');
+        fireEvent.change(input, { target: { value: '123456' } });
+        fireEvent.keyDown(input, { key: 'Enter' });
+      } else {
+        act(() => mocks.searchProps.mock.lastCall![0].onAdd!(row));
+      }
+      await waitFor(() =>
+        expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+          expect.objectContaining({
+            quantity: 1,
+            saleUnit: 'UNIT',
+            canonicalUnitsPerSaleUnit: 1,
+          })
+        )
+      );
+      expect(mocks.mutations.addLine!.mock.calls[0]![0]).not.toHaveProperty('unitPriceMinor');
+      const addsAs = within(screen.getByRole('radiogroup', { name: 'Adds as' }));
+      for (const [name, key] of [
+        ['Unit', 'F5'],
+        ['Pack', 'F3'],
+        ['Strip', 'F4'],
+      ] as const) {
+        const radio = addsAs.getByRole('radio', { name: new RegExp(name) });
+        expect(radio).toHaveAttribute('aria-keyshortcuts', key);
+        expect(radio).toHaveAttribute('aria-checked', String(name === 'Unit'));
+      }
+    }
+  );
+
+  it('DEV-1041: uses the smallest offered size when loose sale is unavailable and explains it on the line', async () => {
+    const pack = {
+      ...STRIP,
+      kind: 'PACK' as const,
+      levelLabel: 'BOX',
+      canonicalUnitsPerSaleUnit: 40,
+    };
+    const row = barcodeRow({
+      dosageForm: 'Powder',
+      unitsPerPack: 40,
+      onHandUnits: 80,
+      saleUnits: [pack, STRIP],
+    });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    mocks.queries.counterCart = { ...query(editableCart()), refetch: mocks.refetch };
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.lastCall![0].onAdd!(row));
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+        expect.objectContaining({
+          saleUnit: 'STRIP',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 10,
+        })
+      )
+    );
+    expect(
+      within(screen.getByRole('region', { name: 'Cart' })).getByText(
+        /smallest sellable size is one strip/i
+      )
+    ).toBeInTheDocument();
+  });
+
   it('adds a pressed result in one step, in the unit chosen under Adds as', async () => {
     mocks.mutations.addLine!.mockResolvedValue({});
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
