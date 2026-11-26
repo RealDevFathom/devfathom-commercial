@@ -153,7 +153,11 @@ export function SopEvidenceUpload({
         onConflict(serverMessage(request) ?? PHARMACY_SOP_CHANGED_MESSAGE);
         return;
       }
-      const retryable = request.status >= 500 || request.status === 0 || request.status === 429;
+      const retryable =
+        request.status >= 500 ||
+        request.status === 0 ||
+        request.status === 408 ||
+        request.status === 429;
       update({
         kind: 'failed',
         interrupted: request.status === 0,
