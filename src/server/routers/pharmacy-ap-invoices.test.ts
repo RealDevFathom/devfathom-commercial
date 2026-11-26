@@ -87,7 +87,7 @@ import { pharmacyApInvoicesRouter } from './pharmacy-ap-invoices';
 
 const TX = {
   tx: true,
-  $queryRaw: vi.fn(),
+  $queryRaw: async () => [{ limitMinor: null }],
   pharmacyApInvoiceSettlement: { findFirst: async () => null },
   pharmacyApInvoice: { findFirst: async () => ({ createdByUserId: 'another-maker' }) },
 };

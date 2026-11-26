@@ -137,6 +137,7 @@ export async function payApInvoiceFromForm(
     const pin = field(form, 'pin');
     await caller.pay({
       ...(pin ? { pin } : {}),
+      ...(field(form, 'approverEmail') ? { approverEmail: field(form, 'approverEmail') } : {}),
       branchId: field(form, 'branchId'),
       invoiceId: field(form, 'invoiceId'),
       commandKey: field(form, 'commandKey'),

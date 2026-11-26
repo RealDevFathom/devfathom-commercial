@@ -341,6 +341,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
+  'pharmacyFinance.setSupplierPaymentLimit': {
+    gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
+    lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
+  },
   'pharmacyFinance.reconcile': {
     gate: `${bookkeepingGate} + finance:manage`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],

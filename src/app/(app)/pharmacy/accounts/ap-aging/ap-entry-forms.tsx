@@ -259,6 +259,10 @@ export function PayApInvoiceForm({
           </StudioSelect>
         </label>
         <label className="text-sm">
+          Approving administrator’s email (above the limit)
+          <Input name="approverEmail" type="email" autoComplete="off" />
+        </label>
+        <label className="text-sm">
           Administrator approval PIN or code (when required)
           <Input type="password" name="pin" autoComplete="off" inputMode="numeric" maxLength={8} />
         </label>

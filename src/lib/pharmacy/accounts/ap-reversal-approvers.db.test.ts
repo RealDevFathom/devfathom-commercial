@@ -979,12 +979,10 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
         });
       const payer = maker.role === 'ADMIN' ? maker : employeeJobPayer;
       const pay = () =>
-        router
-          .createCaller(contextFor(payer))
-          .postSupplierPaymentDraft({
-            ...command,
-            ...(payer.role === 'ADMIN' ? { pin: PIN } : {}),
-          });
+        router.createCaller(contextFor(payer)).postSupplierPaymentDraft({
+          ...command,
+          ...(payer.role === 'ADMIN' ? { pin: PIN } : {}),
+        });
       const txn = await pay();
       expect(txn.status).toBe('POSTED');
       expect((await pay()).journalEntryId).toBe(txn.journalEntryId);
@@ -1138,6 +1136,66 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       code: 'FORBIDDEN',
       message: 'Administrator access is required to reopen a locked period.',
     });
+  });
+  it('enforces the business payment threshold at posting and records the approving administrator', async () => {
+    const { pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance');
+    const api = (p: Candidate) => pharmacyFinanceRouter.createCaller(contextFor(p));
+    const owner = candidates.find((person) => person.key === 'owner_counter')!;
+    const set = (limitMinor: number | null) =>
+      api(owner).setSupplierPaymentLimit({ branchId, limitMinor });
+    const create = async (amountMinor: number, key: string) =>
+      api(financeEmployee).post({
+        branchId,
+        reference: id(key),
+        kind: 'SUPPLIER_PAYMENT',
+        amountMinor,
+        occurredAt: new Date(),
+        idempotencyKey: id(key),
+      });
+    const pay = (draftId: string, approval: { pin?: string; approverEmail?: string } = {}) =>
+      api(financePayer).postSupplierPaymentDraft({ branchId, draftId, ...approval });
+    await expect(
+      api(financeEmployee).setSupplierPaymentLimit({ branchId, limitMinor: 100 })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Only an administrator can change the supplier payment approval limit.',
+    });
+    await set(null);
+    expect((await pay((await create(101, 'unlimited')).id)).status).toBe('POSTED');
+    await set(100);
+    try {
+      for (const amount of [99, 100])
+        expect((await pay((await create(amount, 'limit-' + amount)).id)).status).toBe('POSTED');
+      const draft = await create(101, 'above-limit');
+      await expect(pay(draft.id)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Enter the approving administrator’s PIN or authenticator code.',
+      });
+      await expect(
+        pay(draft.id, { approverEmail: userId(financeEmployee) + '@ap-approvers.test', pin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      const credentials = { approverEmail: userId(owner) + '@ap-approvers.test', pin: PIN };
+      expect((await pay(draft.id, credentials)).status).toBe('POSTED');
+      expect((await pay(draft.id)).id).toBe(draft.id);
+      const approvals = await inTenant((db) =>
+        db.auditLog.findMany({
+          where: {
+            organizationId,
+            action: 'pharmacyFinance.postSupplierPaymentDraft.approved',
+            actorId: userId(financePayer),
+          },
+        })
+      );
+      expect(approvals).toHaveLength(1);
+      expect(approvals[0]?.metadata).toMatchObject({
+        approverId: userId(owner),
+        amountMinor: 101,
+        selfApproval: false,
+      });
+      expect(JSON.stringify(approvals[0]?.metadata)).not.toContain(PIN);
+    } finally {
+      await set(null);
+    }
   });
   it('reserves all five AP approval and reversal commands and refuses payment to a read-only employee', async () => {
     const api = callerFor(financeEmployee);

@@ -554,12 +554,52 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
+  setSupplierPaymentLimit: bookkeepingMutation
+    .input(
+      z
+        .object({ branchId: id, limitMinor: z.number().int().min(0).max(2_147_483_647).nullable() })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only an administrator can change the supplier payment approval limit.',
+        });
+      const organizationId = ctx.entitlements.organizationId;
+      return ctx.db.$transaction(async (tx) => {
+        const [previous] = await tx.$queryRaw<
+          { limitMinor: number | null }[]
+        >`SELECT "supplierPaymentApprovalLimitMinor" AS "limitMinor" FROM organizations WHERE id=${organizationId} FOR UPDATE`;
+        if (!previous) throw new TRPCError({ code: 'NOT_FOUND' });
+        const saved = await tx.organization.update({
+          where: { id: organizationId },
+          data: { supplierPaymentApprovalLimitMinor: input.limitMinor },
+          select: { supplierPaymentApprovalLimitMinor: true },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            actorId: ctx.session.user.id,
+            action: 'pharmacyFinance.setSupplierPaymentLimit',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            source: 'TRPC',
+            outcome: 'SUCCESS',
+            metadata: { previousLimitMinor: previous.limitMinor, limitMinor: input.limitMinor },
+          },
+        });
+        return saved;
+      });
+    }),
+
   postSupplierPaymentDraft: bookkeepingMutation
     .input(
       z
         .object({
           branchId: id,
           draftId: id,
+          approverEmail: z.email().max(254).optional(),
           pin: z
             .string()
             .regex(/^\d{4,8}$/)

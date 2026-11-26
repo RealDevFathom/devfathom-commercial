@@ -648,7 +648,7 @@ export const pharmacyApInvoicesRouter = router({
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
-        const { pin, ...command } = input;
+        const { pin, approverEmail, ...command } = input;
         await lockPharmacyLedgerScope(db, scope);
         const prior = await db.pharmacyApInvoiceSettlement.findFirst({
           where: {
@@ -682,7 +682,7 @@ export const pharmacyApInvoicesRouter = router({
               reference: command.reference,
               action: 'pharmacyApInvoices.pay',
             },
-            { pin }
+            { pin, approverEmail }
           );
         }
         const result = await payApInvoice(db, scope, command);

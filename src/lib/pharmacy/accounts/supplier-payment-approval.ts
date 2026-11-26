@@ -14,22 +14,46 @@ export async function authorizeSupplierPayment(
   payment: { recordedBy: string; amountMinor: number; reference: string; action: string },
   approval: { pin?: string; approverEmail?: string }
 ) {
-  const selfApproval = payment.recordedBy === scope.actorId;
-  if (!selfApproval) return;
-  const administrator = await db.user.findFirst({
-    where: {
-      organizationId: scope.organizationId,
-      id: scope.actorId,
-      role: 'ADMIN',
-      status: 'ACTIVE',
-    },
+  // The policy and payment serialize with a concurrent change to this business setting.
+  const [business] = await db.$queryRaw<
+    { limitMinor: number | null }[]
+  >`SELECT "supplierPaymentApprovalLimitMinor" AS "limitMinor" FROM organizations WHERE id=${scope.organizationId} FOR SHARE`;
+  if (!business)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Business payment settings are unavailable.',
+    });
+  const payingOwn = payment.recordedBy === scope.actorId;
+  const aboveLimit = business.limitMinor !== null && payment.amountMinor > business.limitMinor;
+  if (!payingOwn && !aboveLimit) return;
+  const actor = await db.user.findFirst({
+    where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
     select: { id: true, role: true, status: true, department: true },
   });
+  const isAdministrator =
+    actor?.role === 'ADMIN' &&
+    (await can(subjectFromSession(actor), 'admin:access', undefined, { db }));
+  if (payingOwn && !isAdministrator)
+    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_MAKER_REFUSAL });
+  if (!payingOwn && isAdministrator) return;
+  const administrator = payingOwn
+    ? actor
+    : approval.approverEmail &&
+      (await db.user.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          email: { equals: approval.approverEmail, mode: 'insensitive' },
+          role: 'ADMIN',
+          status: 'ACTIVE',
+        },
+        select: { id: true, role: true, status: true, department: true },
+      }));
   if (
     !administrator ||
     !(await can(subjectFromSession(administrator), 'admin:access', undefined, { db }))
   )
-    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_MAKER_REFUSAL });
+    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_APPROVAL_REQUIRED });
+  const selfApproval = payment.recordedBy === administrator.id;
   if (!approval.pin)
     throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_APPROVAL_REQUIRED });
   const verified = await authenticateRefundPin({
@@ -38,7 +62,7 @@ export async function authorizeSupplierPayment(
     requestedById: scope.actorId,
     pin: approval.pin,
     action: payment.action,
-    policy: 'SUPPLIER_PAYMENT_SELF_APPROVAL',
+    policy: payingOwn ? 'SUPPLIER_PAYMENT_SELF_APPROVAL' : 'SUPPLIER_PAYMENT_LIMIT_APPROVAL',
     administratorApproval: true,
   });
   if ('blocked' in verified)
@@ -56,6 +80,7 @@ export async function authorizeSupplierPayment(
         branchId: scope.branchId,
         approverId: administrator.id,
         selfApproval,
+        limitMinor: business.limitMinor,
         recordedBy: payment.recordedBy,
         amountMinor: payment.amountMinor,
         reference: payment.reference,

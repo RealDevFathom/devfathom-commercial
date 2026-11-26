@@ -78,6 +78,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyFinance.post': ['contextual', 'finance:manage', 'finance:read'],
   'pharmacyFinance.postSupplierPaymentDraft': ['contextual', 'finance:manage', 'finance:read'],
   'pharmacyFinance.publishTaxProfile': ['contextual', 'finance:manage', 'finance:read'],
+  'pharmacyFinance.setSupplierPaymentLimit': ['contextual', 'finance:manage', 'finance:read'],
   'pharmacyFinance.reconcile': ['contextual', 'finance:manage', 'finance:read'],
   'pharmacyFinance.reopenPeriod': ['contextual', 'finance:manage', 'finance:read'],
   'pharmacyFinance.reverse': ['contextual', 'finance:manage', 'finance:read'],

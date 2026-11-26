@@ -168,6 +168,12 @@ export default async function PharmacyFinancePage({
           workspaceInstantFromInput(`${field(data, key)}T12:00`, actionCtx.organization?.timezone)
         );
       const actionCaller = pharmacyFinanceRouter.createCaller(actionCtx);
+      if (action === 'supplierLimit') {
+        const raw = field(data, 'limit');
+        const limitMinor = raw === '' ? null : typedAmount(financeAmountMinor(raw));
+        await actionCaller.setSupplierPaymentLimit({ branchId, limitMinor });
+        redirect(destination(branchId, 'Supplier payment approval limit saved.'));
+      }
       if (action === 'post') {
         const kind = field(data, 'transactionKind') as
           | 'SUPPLIER_PAYMENT'
@@ -207,6 +213,7 @@ export default async function PharmacyFinancePage({
           branchId,
           draftId: field(data, 'draftId'),
           pin: field(data, 'pin') || undefined,
+          approverEmail: field(data, 'approverEmail') || undefined,
         });
         redirect(destination(branchId, 'Transaction posted and journal balanced.'));
       }
@@ -321,6 +328,14 @@ export default async function PharmacyFinancePage({
     }
   }
 
+  const limit = isAdmin
+    ? (
+        await ctx.db.organization.findUnique({
+          where: { id: ctx.entitlements.organizationId },
+          select: { supplierPaymentApprovalLimitMinor: true },
+        })
+      )?.supplierPaymentApprovalLimitMinor
+    : null;
   const now = new Date();
   const timeZone = ctx.organization?.timezone;
   const dated = (value: Date | string) => formatWorkspaceDate(value, timeZone);
@@ -572,6 +587,30 @@ export default async function PharmacyFinancePage({
         ) : null}
       </SectionCard>
       <div className="grid gap-6 xl:grid-cols-2">
+        {isAdmin && (
+          <SectionCard title="Supplier payment approval">
+            <form action={perform} className="grid gap-3">
+              <input type="hidden" name="branchId" value={branch.id} />
+              <input type="hidden" name="action" value="supplierLimit" />
+              <label className="text-sm">
+                Supplier payments above this amount need an administrator’s approval.
+                <Input
+                  type="number"
+                  name="limit"
+                  min="0"
+                  step="0.01"
+                  defaultValue={limit == null ? '' : (limit / 100).toFixed(2)}
+                />
+              </label>
+              <p className="text-sm text-text-muted">
+                Leave empty for no limit. The amount is measured in the payment currency.
+              </p>
+              <Button disabled={!workspace.mayManageAccounts} type="submit">
+                Save approval limit
+              </Button>
+            </form>
+          </SectionCard>
+        )}
         <SectionCard title="Record money movement" eyebrow="Cash and bank">
           <form action={perform} className="grid gap-4 sm:grid-cols-2">
             <input type="hidden" name="action" value="post" />
@@ -775,6 +814,10 @@ export default async function PharmacyFinancePage({
                           <input type="hidden" name="action" value="postSupplierDraft" />
                           <input type="hidden" name="branchId" value={branch.id} />
                           <input type="hidden" name="draftId" value={item.id} />
+                          <label className="text-sm">
+                            Approving administrator’s email (above the limit)
+                            <Input name="approverEmail" type="email" autoComplete="off" />
+                          </label>
                           <label className="text-sm">
                             Administrator approval PIN or code (when required)
                             <Input

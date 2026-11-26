@@ -42,6 +42,7 @@ export const payApInvoiceSchema = z
   .object({
     branchId: id,
     invoiceId: id,
+    approverEmail: z.email().max(254).optional(),
     pin: z
       .string()
       .regex(/^\d{4,8}$/)
