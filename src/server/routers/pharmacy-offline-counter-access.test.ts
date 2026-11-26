@@ -83,7 +83,10 @@ vi.mock('@/lib/pharmacy/manual-payment-settings', () => ({
 
 const fakeDb = {
   $queryRaw: vi.fn(async () => []),
-  pharmacyBranch: { findFirst: vi.fn(async () => ({ id: BRANCH })) },
+  pharmacyBranch: {
+    findFirst: vi.fn(async () => ({ id: BRANCH })),
+    findFirstOrThrow: vi.fn(async () => ({ name: 'Test branch', offlineReconnectHours: 2 })),
+  },
   user: {
     findUnique: vi.fn(async () => ({
       status: state.memberStatus,
@@ -192,6 +195,9 @@ describe('DEV-831 offline counter operator authorization', () => {
     const snapshot = await call('snapshot', token);
     expect(snapshot.status).toBe(200);
     expect(mocks.issueOfflineSnapshot).toHaveBeenCalledTimes(5);
+    for (const [, , signed] of mocks.issueOfflineSnapshot.mock.calls) {
+      expect(signed.expiresAt.getTime() - signed.issuedAt.getTime()).toBe(2 * 3_600_000);
+    }
     // Past the gate, replay validates the signed command body.
     const replay = await call('replay', token, {});
     expect(replay.status).toBe(400);
