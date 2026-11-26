@@ -1077,7 +1077,6 @@ async function loadCounterReceipt(
   ]);
   if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
   return readCounterReceipt(ctx.db, scope, saleId, {
-    useRecordedLocation: true,
     name: branch.name,
     currency: organization?.currency ?? 'PKR',
   });

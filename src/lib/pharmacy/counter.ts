@@ -1238,7 +1238,7 @@ export async function readCounterReceipt(
   db: ScopedDb,
   scope: CounterScope,
   saleId: string,
-  branch: { name: string; currency: string; useRecordedLocation?: boolean }
+  branch: { name: string; currency: string }
 ): Promise<CounterReceipt> {
   const sale = await saleInScope(db, scope, saleId);
   if (sale.lines.length === 0) throw new PharmacyCounterError('NOT_FOUND');
@@ -1320,11 +1320,8 @@ export async function readCounterReceipt(
     changeGivenMinor: tender.changeGivenMinor,
   }));
 
-  // Older sales recorded the branch and device IDs but not their display names.
-  const legacyPrint =
-    branch.useRecordedLocation && sale.receiptNumber !== null && !snapshot?.seller;
   const device =
-    !legacyPrint && !snapshot?.seller && sale.receiptDeviceId
+    !snapshot?.seller && sale.receiptDeviceId
       ? await db.pharmacyRegisteredDevice.findFirst({
           where: {
             id: sale.receiptDeviceId,
@@ -1342,8 +1339,7 @@ export async function readCounterReceipt(
       : counterLabel(sale.receiptDeviceId, device?.name),
     ...(snapshot?.seller?.registeredName ? { registeredName: snapshot.seller.registeredName } : {}),
     offlineReference: sale.offlineReceiptReference ?? null,
-    branchName:
-      snapshot?.seller?.branchName ?? (legacyPrint ? `Branch ${scope.branchId}` : branch.name),
+    branchName: snapshot?.seller?.branchName ?? branch.name,
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,
     cashierName: cashier?.name ?? null,

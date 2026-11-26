@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 /**
  * Receipt authorization against PostgreSQL as a NOSUPERUSER NOBYPASSRLS role.
  * Skipped unless TEST_DATABASE_URL names that role on a migrated disposable database.
@@ -293,6 +294,16 @@ beforeAll(async () => {
         effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
       },
     });
+    const legacyDeviceId = `legacy-till-${suffix}`;
+    await tx.pharmacyRegisteredDevice.create({
+      data: {
+        id: legacyDeviceId,
+        branchId: ids.branchA,
+        name: 'Collection counter',
+        deviceSecretHash: createHash('sha256').update(legacyDeviceId).digest('hex'),
+        enrolledByActorId: ids.admin,
+      },
+    });
     for (const [id, receiptNumber] of [
       [ids.printableSale, 8],
       // Receipt 9 must remain exclusive to branch B for the lookup isolation assertions.
@@ -310,7 +321,7 @@ beforeAll(async () => {
           status: 'COMPLETED',
           createdByUserId: ids.dispenser,
           receiptNumber,
-          receiptDeviceId: 'device-a',
+          receiptDeviceId: id === ids.legacyBrowserSale ? legacyDeviceId : 'device-a',
           businessDate: new Date('2026-10-01T00:00:00.000Z'),
           completedAt: new Date('2026-10-01T08:00:00.000Z'),
           lines: {
@@ -451,13 +462,25 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
 
   it('conservatively seeds legacy receipts at cutover and preserves new original eligibility on rerun', async () => {
     // Simulate receipts issued before the cutover, with no authoritative print state.
-    await withTenantDb(ids.orgA, (tx) => tx.pharmacyReceiptPrintState.deleteMany({
-      where: { saleId: { in: [ids.legacyThermalSale, ids.legacyBrowserSale, ids.saleB] } },
-    }));
-    const cutover = readFileSync(join(process.cwd(),
-      'prisma/migrations/20261110111300_pharmacy_receipt_print_cutover/migration.sql'), 'utf8');
-    const correction = readFileSync(join(process.cwd(),
-      'prisma/migrations/20261118124500_pharmacy_receipt_print_state_correction/migration.sql'), 'utf8');
+    await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyReceiptPrintState.deleteMany({
+        where: { saleId: { in: [ids.legacyThermalSale, ids.legacyBrowserSale, ids.saleB] } },
+      })
+    );
+    const cutover = readFileSync(
+      join(
+        process.cwd(),
+        'prisma/migrations/20261110111300_pharmacy_receipt_print_cutover/migration.sql'
+      ),
+      'utf8'
+    );
+    const correction = readFileSync(
+      join(
+        process.cwd(),
+        'prisma/migrations/20261118124500_pharmacy_receipt_print_state_correction/migration.sql'
+      ),
+      'utf8'
+    );
     // The whole file, with its own transaction and settings, as the schema owner, twice.
     const owner = new pg.Client({ connectionString: ownerUrl });
     await owner.connect();
@@ -470,21 +493,34 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     } finally {
       await owner.end();
     }
-    const states = await withTenantDb(ids.orgA, (tx) => tx.pharmacyReceiptPrintState.findMany({
-      where: { branchId: ids.branchA, saleId: { in: [ids.legacyThermalSale, ids.legacyBrowserSale, ids.printableSale] } },
-    }));
+    const states = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyReceiptPrintState.findMany({
+        where: {
+          branchId: ids.branchA,
+          saleId: { in: [ids.legacyThermalSale, ids.legacyBrowserSale, ids.printableSale] },
+        },
+      })
+    );
     expect(states.find((row) => row.saleId === ids.printableSale)?.copyCount).toBe(0);
     expect(states.find((row) => row.saleId === ids.legacyThermalSale)?.copyCount).toBe(1);
     expect(states.find((row) => row.saleId === ids.legacyBrowserSale)?.copyCount).toBe(1);
     // Migration backfill is not restricted to the operator's assigned branch.
-    await expect(withTenantDb(ids.orgA, (tx) => tx.pharmacyReceiptPrintState.findFirst({
-      where: { branchId: ids.branchB, saleId: ids.saleB },
-    }))).resolves.toMatchObject({ copyCount: 1 });
+    await expect(
+      withTenantDb(ids.orgA, (tx) =>
+        tx.pharmacyReceiptPrintState.findFirst({
+          where: { branchId: ids.branchB, saleId: ids.saleB },
+        })
+      )
+    ).resolves.toMatchObject({ copyCount: 1 });
 
     // Ordinary tenant access still cannot see another organization's print state.
-    await expect(withTenantDb(ids.orgB, (tx) => tx.pharmacyReceiptPrintState.findMany({
-      where: { saleId: ids.legacyThermalSale },
-    }))).resolves.toEqual([]);
+    await expect(
+      withTenantDb(ids.orgB, (tx) =>
+        tx.pharmacyReceiptPrintState.findMany({
+          where: { saleId: ids.legacyThermalSale },
+        })
+      )
+    ).resolves.toEqual([]);
 
     // A later edit of an already-issued receipt must never reset eligibility,
     // even if its print state is missing. Only new issuance establishes zero.
@@ -496,22 +532,38 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         where: { id: ids.legacyThermalSale },
         data: { completedAt: new Date('2026-10-01T08:00:00.000Z') },
       });
-      expect(await tx.pharmacyReceiptPrintState.findFirst({
-        where: { branchId: ids.branchA, saleId: ids.legacyThermalSale },
-      })).toBeNull();
+      expect(
+        await tx.pharmacyReceiptPrintState.findFirst({
+          where: { branchId: ids.branchA, saleId: ids.legacyThermalSale },
+        })
+      ).toBeNull();
     });
-    await expect(act(ids.orgA, dispenser, (api) => api.counterReceiptPrintJob({
-      branchId: ids.branchA, saleId: ids.legacyThermalSale, locale: 'en',
-    }))).resolves.toMatchObject({ status: 'READY', copyNumber: 2, reprint: true });
-    await expect(act(ids.orgA, dispenser, (api) => api.counterReceiptBrowserPrint({
-      branchId: ids.branchA, saleId: ids.legacyBrowserSale, locale: 'en',
-    }))).resolves.toMatchObject({ copyNumber: 2, reprint: true });
+    await expect(
+      act(ids.orgA, dispenser, (api) =>
+        api.counterReceiptPrintJob({
+          branchId: ids.branchA,
+          saleId: ids.legacyThermalSale,
+          locale: 'en',
+        })
+      )
+    ).resolves.toMatchObject({ status: 'READY', copyNumber: 2, reprint: true });
+    await expect(
+      act(ids.orgA, dispenser, (api) =>
+        api.counterReceiptBrowserPrint({
+          branchId: ids.branchA,
+          saleId: ids.legacyBrowserSale,
+          locale: 'en',
+        })
+      )
+    ).resolves.toMatchObject({ copyNumber: 2, reprint: true });
   });
 
   it('never grants an original to missing state, including concurrent mixed transports', async () => {
-    await withTenantDb(ids.orgA, (tx) => tx.pharmacyReceiptPrintState.deleteMany({
-      where: { branchId: ids.branchA, saleId: ids.untrackedSale },
-    }));
+    await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyReceiptPrintState.deleteMany({
+        where: { branchId: ids.branchA, saleId: ids.untrackedSale },
+      })
+    );
     const input = { branchId: ids.branchA, saleId: ids.untrackedSale, locale: 'en' as const };
     const results = await Promise.all([
       act(ids.orgA, dispenser, (api) => api.counterReceiptPrintJob(input)),
@@ -519,9 +571,11 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     ]);
     expect(results.map((result) => result.copyNumber).sort()).toEqual([2, 3]);
     expect(results.every((result) => result.reprint)).toBe(true);
-    const persisted = await withTenantDb(ids.orgA, (tx) => tx.pharmacyReceiptPrintState.findFirst({
-      where: { branchId: ids.branchA, saleId: ids.untrackedSale },
-    }));
+    const persisted = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyReceiptPrintState.findFirst({
+        where: { branchId: ids.branchA, saleId: ids.untrackedSale },
+      })
+    );
     expect(persisted?.copyCount).toBe(3);
   });
 
@@ -538,34 +592,58 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         }),
       }));
       expect(persisted.state?.copyCount).toBe(0);
-      expect(persisted.audit).toEqual([expect.objectContaining({
-        organizationId: ids.orgA, actorId: ids.dispenser, outcome: 'FAILURE',
-        errorCode: 'BROWSER_PRINT_NOT_READY', metadata: { branchId: ids.branchA, locale: 'en' },
-      })]);
-      await expect(act(ids.orgA, dispenser, (api) => transport === 'browser'
-        ? api.counterReceiptBrowserPrint(input)
-        : api.counterReceiptPrintJob(input)))
-        .resolves.toMatchObject({ copyNumber: 1, reprint: false });
-      await expect(act(ids.orgA, dispenser, (api) => api.counterReceiptPrintJob(input)))
-        .resolves.toMatchObject({ copyNumber: 2, reprint: true });
+      expect(persisted.audit).toEqual([
+        expect.objectContaining({
+          organizationId: ids.orgA,
+          actorId: ids.dispenser,
+          outcome: 'FAILURE',
+          errorCode: 'BROWSER_PRINT_NOT_READY',
+          metadata: { branchId: ids.branchA, locale: 'en' },
+        }),
+      ]);
+      await expect(
+        act(ids.orgA, dispenser, (api) =>
+          transport === 'browser'
+            ? api.counterReceiptBrowserPrint(input)
+            : api.counterReceiptPrintJob(input)
+        )
+      ).resolves.toMatchObject({ copyNumber: 1, reprint: false });
+      await expect(
+        act(ids.orgA, dispenser, (api) => api.counterReceiptPrintJob(input))
+      ).resolves.toMatchObject({ copyNumber: 2, reprint: true });
     }
   );
 
   it('establishes original eligibility atomically when an open sale is issued after cutover', async () => {
     await withTenantDb(ids.orgA, async (tx) => {
-      await tx.pharmacySale.create({ data: {
-        id: ids.laterIssuedSale, branchId: ids.branchA, status: 'OPEN', createdByUserId: ids.dispenser,
-      } });
-      expect(await tx.pharmacyReceiptPrintState.findFirst({
-        where: { saleId: ids.laterIssuedSale },
-      })).toBeNull();
-      await tx.pharmacySale.update({ where: { id: ids.laterIssuedSale }, data: {
-        status: 'COMPLETED', receiptNumber: 16, receiptDeviceId: 'device-a',
-        businessDate: new Date('2026-10-01T00:00:00.000Z'), completedAt: new Date(),
-      } });
-      expect(await tx.pharmacyReceiptPrintState.findFirst({
-        where: { saleId: ids.laterIssuedSale },
-      })).toMatchObject({ copyCount: 0, organizationId: ids.orgA, branchId: ids.branchA });
+      await tx.pharmacySale.create({
+        data: {
+          id: ids.laterIssuedSale,
+          branchId: ids.branchA,
+          status: 'OPEN',
+          createdByUserId: ids.dispenser,
+        },
+      });
+      expect(
+        await tx.pharmacyReceiptPrintState.findFirst({
+          where: { saleId: ids.laterIssuedSale },
+        })
+      ).toBeNull();
+      await tx.pharmacySale.update({
+        where: { id: ids.laterIssuedSale },
+        data: {
+          status: 'COMPLETED',
+          receiptNumber: 16,
+          receiptDeviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          completedAt: new Date(),
+        },
+      });
+      expect(
+        await tx.pharmacyReceiptPrintState.findFirst({
+          where: { saleId: ids.laterIssuedSale },
+        })
+      ).toMatchObject({ copyCount: 0, organizationId: ids.orgA, branchId: ids.branchA });
     });
   });
 
@@ -692,10 +770,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         locale: 'en',
       })
     );
-    const confirm = (
-      user: typeof dispenser | typeof admin,
-      locale: 'en' | 'ur' = 'en'
-    ) =>
+    const confirm = (user: typeof dispenser | typeof admin, locale: 'en' | 'ur' = 'en') =>
       act(ids.orgA, user, (api) =>
         api.counterReceiptBrowserPrintDispatched({
           branchId: ids.branchA,
@@ -736,9 +811,7 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     expect(allocations).toEqual([
       expect.objectContaining({ actorId: ids.dispenser, locale: 'en' }),
     ]);
-    expect(dispatches).toEqual([
-      expect.objectContaining({ actorId: ids.dispenser, locale: 'en' }),
-    ]);
+    expect(dispatches).toEqual([expect.objectContaining({ actorId: ids.dispenser, locale: 'en' })]);
 
     await expect(
       withTenantDb(ids.orgA, (tx) =>
@@ -815,10 +888,12 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
       ).resolves.toEqual([]);
       const unassignedReceipt = await api.lookupReceiptByNumber({
-        branchId: ids.branchA, receiptNumber: 9,
+        branchId: ids.branchA,
+        receiptNumber: 9,
       });
       const missingReceipt = await api.lookupReceiptByNumber({
-        branchId: ids.branchA, receiptNumber: 99999,
+        branchId: ids.branchA,
+        receiptNumber: 99999,
       });
       expect(unassignedReceipt).toEqual([]);
       expect(unassignedReceipt).toEqual(missingReceipt);
@@ -993,6 +1068,13 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
   });
 });
 describeIfDatabase('receipt design revision and protected facts', () => {
+  it('shows the legacy sale’s branch and registered counter names on the counter receipt', async () => {
+    const receipt = await act(ids.orgA, dispenser, (api) =>
+      api.counterReceipt({ branchId: ids.branchA, saleId: ids.legacyBrowserSale })
+    );
+    expect(receipt).toMatchObject({ branchName: 'Counter A', counterLabel: 'Collection counter' });
+    expect(JSON.stringify(receipt)).not.toContain(ids.branchA);
+  });
   it('saves only the selected branch, audits the revision, and leaves a recorded sale and its copy state intact', async () => {
     const admin = { id: ids.counterAdmin, role: 'ADMIN' as const, organizationId: ids.orgA };
     const saleId = ids.printableSale;
