@@ -35,7 +35,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
 import { TradingOverview } from './trading-overview';
-import { reportMoney } from './business-chart';
+import { reportMoney } from '@/components/dashboard/business-chart';
 
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
 type CommandQuery = {

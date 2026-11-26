@@ -1,13 +1,14 @@
 'use client';
 
 import Link from 'next/link';
+import { BusinessOverview } from '@/components/dashboard/business-overview';
 import type { WatchRow } from '@/lib/pharmacy/owner-watch';
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
-import { BusinessChart, reportMoney } from './business-chart';
+import { BusinessChart, reportMoney } from '@/components/dashboard/business-chart';
 import type { TradingSection } from '@/lib/pharmacy/owner-trading';
 
 const labels = {
@@ -36,11 +37,7 @@ function TradingPanel({
   const [title, period] = labels[section];
   const money = (v: number) => reportMoney(v, currency);
   return (
-    <SectionCard
-      title={title}
-      eyebrow={period}
-      className={section === 'summary' ? 'lg:col-span-2' : undefined}
-    >
+    <SectionCard title={title} eyebrow={period}>
       {actions}
       {query.error ? (
         <div role="alert" className="space-y-2">
@@ -182,8 +179,7 @@ export function TradingOverview({ branchId, financial, currency, branches }: Pro
   const [profit, setProfit] = useState(false);
   const props = { branchId, currency };
   return (
-    <div className="grid min-w-0 gap-4 lg:grid-cols-2">
-      <TradingPanel {...props} section="summary" />
+    <BusinessOverview summary={<TradingPanel {...props} section="summary" />}>
       {financial && <TradingPanel {...props} section="days" />}
       <PositionPanels branchId={branchId} financial={financial} />
       {financial && (
@@ -217,6 +213,6 @@ export function TradingOverview({ branchId, financial, currency, branches }: Pro
           {branches > 1 && <TradingPanel {...props} section="branches" />}
         </>
       )}
-    </div>
+    </BusinessOverview>
   );
 }

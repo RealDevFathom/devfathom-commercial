@@ -129,6 +129,15 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
   });
 
+  it('exposes the owner overview as a navigable business dashboard region', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(
+      within(screen.getByRole('region', { name: 'Business dashboard' })).getByRole('heading', {
+        name: 'Trading today',
+      })
+    ).toBeVisible();
+  });
+
   it('omits the money and cost tiles when only operational reports are granted', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.queryByRole('heading', { name: "Today's trade" })).not.toBeInTheDocument();
