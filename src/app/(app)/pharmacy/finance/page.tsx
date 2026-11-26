@@ -22,6 +22,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import {
   pharmacyActionErrorMessage,
   isPharmacyActionForbidden,
+  supplierPaymentRefusalNotice,
   PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
   PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE,
 } from '@/lib/pharmacy/action-error-message';
@@ -315,13 +316,10 @@ export default async function PharmacyFinancePage({
       redirect(
         destination(
           branchId || branch.id,
-          error instanceof Error &&
-            (error.message === 'Someone else must pay an invoice you recorded.' ||
-              error.message === 'Enter the approving administrator’s PIN or authenticator code.')
-            ? error.message
-            : isPharmacyActionForbidden(error)
+          supplierPaymentRefusalNotice(error) ??
+            (isPharmacyActionForbidden(error)
               ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
-              : pharmacyActionErrorMessage('finance'),
+              : pharmacyActionErrorMessage('finance')),
           'error'
         )
       );

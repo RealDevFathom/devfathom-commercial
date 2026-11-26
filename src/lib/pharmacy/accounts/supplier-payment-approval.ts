@@ -2,11 +2,8 @@ import { TRPCError } from '@trpc/server';
 import { can, subjectFromSession } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { BookkeepingScope } from '../bookkeeping';
+import { SupplierPaymentRefusal } from '../action-error-message';
 import { authenticateRefundPin } from '../refund-authorization';
-
-export const SUPPLIER_MAKER_REFUSAL = 'Someone else must pay an invoice you recorded.';
-export const SUPPLIER_APPROVAL_REQUIRED =
-  'Enter the approving administrator’s PIN or authenticator code.';
 
 export async function authorizeSupplierPayment(
   db: ScopedDb,
@@ -33,8 +30,7 @@ export async function authorizeSupplierPayment(
   const isAdministrator =
     actor?.role === 'ADMIN' &&
     (await can(subjectFromSession(actor), 'admin:access', undefined, { db }));
-  if (payingOwn && !isAdministrator)
-    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_MAKER_REFUSAL });
+  if (payingOwn && !isAdministrator) throw new SupplierPaymentRefusal('RECORDED_BY_PAYER');
   if (!payingOwn && isAdministrator) return;
   const administrator = payingOwn
     ? actor
@@ -52,10 +48,9 @@ export async function authorizeSupplierPayment(
     !administrator ||
     !(await can(subjectFromSession(administrator), 'admin:access', undefined, { db }))
   )
-    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_APPROVAL_REQUIRED });
+    throw new SupplierPaymentRefusal('APPROVAL_REQUIRED');
   const selfApproval = payment.recordedBy === administrator.id;
-  if (!approval.pin)
-    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_APPROVAL_REQUIRED });
+  if (!approval.pin) throw new SupplierPaymentRefusal('APPROVAL_REQUIRED');
   const verified = await authenticateRefundPin({
     organizationId: scope.organizationId,
     actorId: administrator.id,
@@ -65,8 +60,7 @@ export async function authorizeSupplierPayment(
     policy: payingOwn ? 'SUPPLIER_PAYMENT_SELF_APPROVAL' : 'SUPPLIER_PAYMENT_LIMIT_APPROVAL',
     administratorApproval: true,
   });
-  if ('blocked' in verified)
-    throw new TRPCError({ code: 'FORBIDDEN', message: SUPPLIER_APPROVAL_REQUIRED });
+  if ('blocked' in verified) throw new SupplierPaymentRefusal('APPROVAL_REQUIRED');
   await db.auditLog.create({
     data: {
       organizationId: scope.organizationId,

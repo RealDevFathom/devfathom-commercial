@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
+import { supplierPaymentRefusalNotice } from '@/lib/pharmacy/action-error-message';
 import { AP_INVOICE_MAX_MINOR } from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import { parseMajorToMinor } from '@/lib/pharmacy/khata-payment-slip';
 import { workspaceInstantFromInput } from '@/lib/timezone';
@@ -57,13 +58,8 @@ const PAY_REASONS: Record<string, string> = {
 
 function failure(error: unknown, reasons: Record<string, string>, fallback: string) {
   unstable_rethrow(error);
-  if (
-    error instanceof TRPCError &&
-    error.code === 'FORBIDDEN' &&
-    (error.message === 'Someone else must pay an invoice you recorded.' ||
-      error.message === 'Enter the approving administrator’s PIN or authenticator code.')
-  )
-    return { status: 'error' as const, message: error.message };
+  const paymentNotice = supplierPaymentRefusalNotice(error);
+  if (paymentNotice) return { status: 'error' as const, message: paymentNotice };
   if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)) {
     return {
       status: 'error' as const,
