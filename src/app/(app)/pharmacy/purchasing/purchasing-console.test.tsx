@@ -1410,16 +1410,13 @@ describe('purchasing PIN controls', () => {
       })
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
-    const picker = within(screen.getByLabelText('Approved by'));
-    expect(
-      picker.getByRole('option', { hidden: true, name: 'Bilal (bilal@example.test)' })
-    ).toBeDefined();
-    expect(
-      picker.queryByRole('option', { hidden: true, name: 'Other branch (other@example.test)' })
-    ).toBeNull();
-    expect(
-      picker.queryByRole('option', { hidden: true, name: 'Owner (owner@example.test)' })
-    ).toBeNull();
+    const trigger = screen.getByRole('combobox', { name: 'Approved by', exact: true });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+    const picker = within(await screen.findByRole('listbox'));
+    expect(picker.getByRole('option', { name: 'Bilal (bilal@example.test)' })).toBeDefined();
+    expect(picker.queryByRole('option', { name: 'Other branch (other@example.test)' })).toBeNull();
+    expect(picker.queryByRole('option', { name: 'Owner (owner@example.test)' })).toBeNull();
   });
   it('offers a masked, labelled approval PIN without autocomplete', async () => {
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));

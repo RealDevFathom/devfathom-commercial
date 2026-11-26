@@ -45,6 +45,30 @@ import SuppliersPage from './suppliers/page';
 import OrdersPage from './orders/page';
 import ReceivingPage from './receiving/page';
 
+// Keep jsdom's browser APIs available to the shared Select while recording
+// the same workspace redirects this suite asserted before hydration.
+function stubWorkspaceLocation(replace?: Location['replace']) {
+  vi.stubGlobal(
+    'window',
+    new Proxy(window, {
+      get(target, property) {
+        if (property === 'location') return { origin: 'https://workspace.test', replace };
+        return Reflect.get(target, property, target);
+      },
+    })
+  );
+}
+
+async function chooseOption(trigger: HTMLElement, label: string) {
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: 'ArrowDown' });
+  const option = await screen.findByRole('option', { name: label, exact: true });
+  option.focus();
+  fireEvent.keyDown(option, { key: 'Enter' });
+  // jsdom does not synthesize the click a browser sends for Enter.
+  fireEvent.click(option, { detail: 0 });
+}
+
 const actor = {
   session: { expires: '2099-01-01', user: { id: 'user-1', organizationId: 'org-1' } },
   organization: { id: 'org-1', slug: 'acme', status: 'ACTIVE' },
@@ -392,7 +416,7 @@ it('review: submitted order success remains visible after refreshed status remov
       }),
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit for approval' }));
@@ -410,7 +434,7 @@ it('review: refreshed authorization offers the distinct withdrawal action', asyn
   mocks.createCaller.mockReturnValue(
     callerStub({ suppliers: list, setSupplierAuthorization: write })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Authorize this supplier' }));
@@ -428,7 +452,7 @@ it('keeps a sibling supplier draft, caret, focus and selected record through aut
     callerStub({ suppliers: list, setSupplierAuthorization: write })
   );
   const replace = vi.fn();
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test', replace } });
+  stubWorkspaceLocation(replace);
   const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
   const draft = screen.getByLabelText(/Trading name/) as HTMLInputElement;
   fireEvent.change(draft, { target: { value: 'Unfinished supplier' } });
@@ -455,7 +479,7 @@ it('offers the validated new supplier destination without selecting it automatic
   const write = vi.fn().mockResolvedValue({ id: 'new-supplier', name: 'New supplier' });
   mocks.createCaller.mockReturnValue(callerStub({ createSupplier: write }));
   const replace = vi.fn();
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test', replace } });
+  stubWorkspaceLocation(replace);
   render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
   fireEvent.change(screen.getByLabelText(/Trading name/), { target: { value: 'New supplier' } });
   await act(async () => {
@@ -486,7 +510,7 @@ it('does not unlock pending or uncertain supplier writes through operation chang
   mocks.createCaller.mockReturnValue(
     callerStub({ suppliers: list, setSupplierAuthorization: write })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
   fireEvent.click(screen.getByRole('button', { name: 'Authorize this supplier' }));
   list.mockResolvedValue([{ ...licensedSupplier, authorized: true }]);
@@ -517,7 +541,7 @@ it('retains a completed operation lock when refreshed props or selection remount
       setSupplierAuthorization: write,
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Authorize this supplier' }));
@@ -569,7 +593,7 @@ it('delivers the order outcome even when revalidation removes its form before th
       }),
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await OrdersPage({ searchParams: params({ po: 'po-1' }) }));
   fireEvent.click(screen.getByRole('button', { name: 'Submit for approval' }));
   list.mockResolvedValue([{ ...order, status: 'SUBMITTED' }]);
@@ -601,7 +625,7 @@ it('makes Receiving Reverse a distinct operation after a confirmed Post', async 
   mocks.createCaller.mockReturnValue(
     callerStub({ goodsReceipts: list, postGoodsReceipt: post, reverseGoodsReceipt: reverse })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await ReceivingPage({ searchParams: params({ receipt: 'gr-1' }) }));
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Post into stock' }));
@@ -640,7 +664,7 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   mocks.createCaller.mockReturnValue(
     callerStub({ purchaseReturns: list, submitPurchaseReturn: write })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
   const draft = screen.getByLabelText(/Credit note reference/) as HTMLInputElement;
   fireEvent.change(draft, { target: { value: 'Unsaved credit' } });
@@ -770,11 +794,11 @@ it.each([
       })
     );
     render(await ReturnsPage({ searchParams: params({ return: row.id }) }));
-    const select = screen.getByLabelText(/Dispatch witness/);
+    const select = screen.getByRole('combobox', { name: /Dispatch witness/ });
     const secret = screen.getByLabelText(label, { exact: true });
     expect(secret).toHaveAttribute('type', 'password');
     expect(secret).toBeRequired();
-    fireEvent.change(select, { target: { value: 'staff-w' } });
+    await chooseOption(select, 'Witness pharmacist');
     fireEvent.change(secret, { target: { value: '123456' } });
     await act(async () => {
       fireEvent.click(screen.getByRole('button', { name: 'Dispatch to supplier' }));
@@ -926,7 +950,7 @@ it('review: same allocation cannot repeat through the credit and debit-note form
       allocateSupplierCredit: write,
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
   const buttons = screen.getAllByRole('button', { name: 'Allocate' });
   expect(buttons).toHaveLength(2);
@@ -962,7 +986,7 @@ it('review: supplier outcome and same-operation lock survive refreshed read fail
   mocks.createCaller.mockReturnValue(
     callerStub({ suppliers: list, setSupplierAuthorization: write })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
   await act(async () => {
     fireEvent.click(screen.getByRole('button', { name: 'Authorize this supplier' }));
@@ -1021,7 +1045,7 @@ function allocationFixture(write: ReturnType<typeof vi.fn>) {
       allocateSupplierCredit: write,
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
 }
 
 function allocationForm(presentation: 'credit' | 'debit', id: string) {
@@ -1203,7 +1227,7 @@ it('collects a fresh independent witness when reversing a controlled receipt', a
       controlledReversalWitnesses: reversalWitnesses,
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
   // Reversal must not reuse the posting query, which only offers the original qualified person.
   expect(reversalWitnesses).toHaveBeenCalledWith(
@@ -1213,7 +1237,8 @@ it('collects a fresh independent witness when reversing a controlled receipt', a
   fireEvent.change(screen.getByLabelText(/Why is this being reversed/), {
     target: { value: 'Wrong consignment' },
   });
-  fireEvent.change(screen.getByLabelText('Reversal witness'), { target: { value: 'fresh-staff' } });
+  const witnessPicker = screen.getByRole('combobox', { name: 'Reversal witness', exact: true });
+  await chooseOption(witnessPicker, 'Fresh pharmacist');
   fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
   expect(screen.getByLabelText('PIN')).toHaveAttribute('type', 'password');
   await act(async () => {
@@ -1298,7 +1323,7 @@ it('allows a wholly quarantined controlled receipt to reverse without safety wit
       controlledReversalWitnesses: reversalWitnesses,
     })
   );
-  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  stubWorkspaceLocation();
   render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
   expect(reversalWitnesses).not.toHaveBeenCalled();
   expect(screen.queryByLabelText('Reversal witness')).not.toBeInTheDocument();
