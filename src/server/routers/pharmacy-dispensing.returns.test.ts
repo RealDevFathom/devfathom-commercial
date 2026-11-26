@@ -145,11 +145,35 @@ describe('return verification queue branch assignment (DEV-897)', () => {
     expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
   });
 
-  it('lets a session ADMIN of this organization open any of its branches', async () => {
+  it('returns no queue to an unassigned administrator, admits their assigned branch and lets a System Owner cross branches', async () => {
     const f = fixture(true, ['pharmacy:dispense'], { role: 'ADMIN' });
+    const rights = [
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: '*', effect: 'ALLOW' },
+    ];
+    function setRole(key: string, isSystem: boolean) {
+      f.db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRole: { key, isSystem, permissions: rights },
+        permissionOverrides: [],
+      });
+    }
+    setRole('administrator', false);
     f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'This branch is unavailable.',
+    });
+    expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ branchId: 'b' });
     await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).resolves.toHaveLength(2);
-    expect(f.db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    setRole('owner', true);
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(f.caller.returnVerificationQueue({ branchId: 'other' })).resolves.toHaveLength(2);
+    expect(f.db.pharmacyReturnVerificationTask.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org', branchId: 'other' } })
+    );
   });
 
   it('does not treat an ADMIN of another organization as an organization ADMIN', async () => {

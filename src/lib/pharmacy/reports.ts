@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { pharmacyBranchDayWindows, type PharmacyBranchDayEnds } from './business-day';
 import { pharmacyBranchWindowSql, spanOf } from './business-day-sql';
 
-import { actorIsPharmacyOwner } from './procurement-access';
+import { isClinicalOwner } from './clinical-branch-access';
 import { grossMarginQuery } from './finance-reports';
 import {
   hasPharmacyReportDimension,
@@ -350,7 +350,7 @@ async function scopedSafetyQueueQuery(
 ) {
   if (!reader) return null;
   const { organizationId, userId } = reader;
-  const owner = await actorIsPharmacyOwner(db, organizationId, userId);
+  const owner = await isClinicalOwner(db, organizationId, userId);
   const visible = owner
     ? selectedBranches
     : (

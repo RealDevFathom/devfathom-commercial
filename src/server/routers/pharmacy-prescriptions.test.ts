@@ -1649,10 +1649,33 @@ describe('DEV-962 a fill records the branch that dispensed it', () => {
     expect(fillCreate).not.toHaveBeenCalled();
   });
 
-  it('lets an organisation admin record a fill at any branch', async () => {
+  it('records fills only at an administrator’s admitted branch and permits the System Owner at any tenant branch', async () => {
+    const ctx = fillContext('ADMIN');
+    const api = caller(ctx);
+    await expect(api.fill({ ...fillInput, branchId: 'branch-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(fillCreate).not.toHaveBeenCalled();
+    assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
+    await expect(api.fill({ ...fillInput, branchId: 'branch-a' })).resolves.toMatchObject({
+      branchId: 'branch-a',
+    });
+    assignmentFind.mockResolvedValue(null);
+    vi.mocked(ctx.db.user.findUnique).mockResolvedValue({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+      permissionOverrides: [],
+    } as never);
+    branchFind.mockResolvedValue({ id: 'branch-b' });
     await expect(
-      caller(fillContext('ADMIN')).fill({ ...fillInput, branchId: 'branch-a' })
-    ).resolves.toMatchObject({ branchId: 'branch-a' });
-    expect(assignmentFind).not.toHaveBeenCalled();
+      api.fill({
+        ...fillInput,
+        id: 'owner-fill',
+        idempotencyKey: 'owner-key',
+        branchId: 'branch-b',
+      })
+    ).resolves.toMatchObject({ branchId: 'branch-b' });
   });
 });

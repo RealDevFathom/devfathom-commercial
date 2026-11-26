@@ -57,6 +57,7 @@ const X = {
   south: `br938_south_${suffix}`,
   /** Never created. */
   missing: `br938_missing_${suffix}`,
+  admin: `admin_${suffix}`,
   owner: `u938_owner_${suffix}`,
   pharmacist: `u938_pharm_${suffix}`,
 };
@@ -65,6 +66,7 @@ const Y = { org: `org_dev938_other_${suffix}`, branch: `br938_other_${suffix}` }
 const fills: string[] = [];
 
 type Actor = { userId: string; tenantRole: 'ADMIN' | 'EMPLOYEE' };
+const ADMIN: Actor = { userId: X.admin, tenantRole: 'ADMIN' };
 const OWNER: Actor = { userId: X.owner, tenantRole: 'ADMIN' };
 const PHARMACIST: Actor = { userId: X.pharmacist, tenantRole: 'EMPLOYEE' };
 
@@ -165,12 +167,14 @@ beforeAll(async () => {
       await seedDepartments(tx, [X.org], ['LEADERSHIP']);
       for (const [userId, tenantRole] of [
         [X.owner, 'ADMIN'],
+        [X.admin, 'ADMIN'],
         [X.pharmacist, 'EMPLOYEE'],
       ] as const) {
         await tx.organizationRole.create({
           data: {
             id: `role_${userId}`,
-            key: `role_${userId}`,
+            key: userId === X.owner ? 'owner' : `role_${userId}`,
+            isSystem: userId === X.owner,
             name: userId,
             permissions: {
               create: ['pharmacy:dispense', 'pharmacy:prescriptions'].map((capability) => ({
@@ -202,6 +206,7 @@ beforeAll(async () => {
         });
       }
       // The pharmacist works at north only; the owner holds no assignment at all.
+      await tx.pharmacyBranchAssignment.create({ data: { userId: X.admin, branchId: X.north } });
       await tx.pharmacyBranchAssignment.create({
         data: { userId: X.pharmacist, branchId: X.north },
       });
@@ -254,7 +259,7 @@ beforeAll(async () => {
         },
         include: { lines: true },
       });
-      for (let sequence = 1; sequence <= 4; sequence += 1) {
+      for (let sequence = 1; sequence <= 5; sequence += 1) {
         const fill = await tx.prescriptionFill.create({
           data: {
             // DEV-962: dispensed at north, the pharmacist's branch.
@@ -309,8 +314,15 @@ describeIfDatabase('DEV-938 refill reminder branch assignment (runtime role, RLS
     expect(await remindersFor(fillId)).toBe(1);
   });
 
-  it('leaves the owner able to record at a branch they hold no assignment to', async () => {
+  it('records only an admitted administrator’s own branch and allows a System Owner across branches', async () => {
     const fillId = fills[3]!;
+    await expect(
+      settle(as(ADMIN, (api) => api.captureRefillReminder(reminder(X.south, fillId))))
+    ).resolves.toEqual(OUTSIDE_SCOPE);
+    expect(await remindersFor(fillId)).toBe(0);
+    await expect(
+      as(ADMIN, (api) => api.captureRefillReminder(reminder(X.north, fills[4]!)))
+    ).resolves.toMatchObject({ branchId: X.north, capturedByUserId: X.admin });
     await expect(
       as(OWNER, (api) => api.captureRefillReminder(reminder(X.south, fillId)))
     ).resolves.toMatchObject({ branchId: X.south, capturedByUserId: X.owner });

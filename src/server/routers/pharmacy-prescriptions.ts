@@ -16,8 +16,10 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
-import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
-import { clinicalBranchAssignmentDenial } from '@/lib/pharmacy/clinical-branch-access';
+import {
+  clinicalBranchAssignmentDenial,
+  isClinicalOwner,
+} from '@/lib/pharmacy/clinical-branch-access';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
   configuredRxOcrAdapterName,
@@ -694,7 +696,7 @@ export const pharmacyPrescriptionsRouter = router({
       // take it, so another branch cannot use it up. A fill whose dispensing branch is not
       // recorded (older than this rule, branch not provable) is left to an organisation owner.
       // A missing fill is reported by `captureRefillReminder` as before.
-      if (user.role !== 'ADMIN' || !(await actorIsPharmacyOwner(ctx.db, organizationId, user.id))) {
+      if (user.role !== 'ADMIN' || !(await isClinicalOwner(ctx.db, organizationId, user.id))) {
         const fill = await ctx.db.prescriptionFill.findFirst({
           where: { id: input.fillId, organizationId },
           select: { branchId: true },

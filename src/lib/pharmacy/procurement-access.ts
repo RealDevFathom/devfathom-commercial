@@ -106,7 +106,8 @@ export function procurementGrantedForUser(user: {
 export async function actorIsPharmacyOwner(
   db: Pick<ScopedDb, 'user'>,
   organizationId: string,
-  userId: string
+  userId: string,
+  scope?: 'system-owner'
 ) {
   const user = await db.user.findUnique({
     where: { id: userId, organizationId, status: 'ACTIVE' },
@@ -121,6 +122,11 @@ export async function actorIsPharmacyOwner(
     },
   });
   if (!user) return false;
+  if (
+    scope === 'system-owner' &&
+    !(user.organizationRole?.isSystem && user.organizationRole.key === 'owner')
+  )
+    return false;
   if (
     matching([...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])]).some(
       (rule) => rule.effect === 'DENY'

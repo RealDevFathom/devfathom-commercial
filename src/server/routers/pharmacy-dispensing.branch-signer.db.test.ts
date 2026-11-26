@@ -42,6 +42,8 @@ const ids = {
   /** A pharmacist assigned only to another branch of the same organisation. */
   elsewhere: `user_d955_elsewhere_${suffix}`,
   /** An organisation admin holding the dispensing right, assigned to no branch. */
+  owner: `user_d955_owner_${suffix}`,
+  admittedAdmin: `user_d955_admitted_${suffix}`,
   admin: `user_d955_admin_${suffix}`,
   /** A pharmacist assigned here, marked on leave. */
   onLeave: `user_d955_leave_${suffix}`,
@@ -89,6 +91,12 @@ const PEOPLE: Person[] = [
   person(ids.here),
   person(ids.elsewhere, { branchId: ids.otherBranch }),
   person(ids.admin, { role: 'ADMIN', grants: [['pharmacy:dispense', 'ALLOW']], branchId: null }),
+  person(ids.owner, {
+    role: 'ADMIN',
+    grants: [...template('pharmacist'), ['*', 'ALLOW']],
+    branchId: null,
+  }),
+  person(ids.admittedAdmin, { role: 'ADMIN', grants: [['pharmacy:dispense', 'ALLOW']] }),
   person(ids.onLeave, { status: 'ON_LEAVE' }),
   person(ids.inactive, { status: 'INACTIVE' }),
   person(ids.customAllow, { grants: [['pharmacy:dispense', 'ALLOW']] }),
@@ -107,7 +115,13 @@ const byId = (id: string) => PEOPLE.find((entry) => entry.id === id)!;
 /** Everyone the decision rule and the solo rule are compared over: all but the requester. */
 const CANDIDATES = PEOPLE.filter((entry) => entry.id !== ids.seller);
 /** Who may decide this branch's checks (and so who the solo rule counts). */
-const ACCEPTED = [ids.here, ids.admin, ids.customAllow, ids.suspendedProfile].sort();
+const ACCEPTED = [
+  ids.here,
+  ids.owner,
+  ids.admittedAdmin,
+  ids.customAllow,
+  ids.suspendedProfile,
+].sort();
 
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
 const businessDate = new Date(`${workspaceToday('UTC')}T00:00:00.000Z`);
@@ -291,7 +305,8 @@ beforeAll(async () => {
         await tx.organizationRole.create({
           data: {
             id: `role_${entry.id}`,
-            key: `role_${entry.id}`,
+            key: entry.id === ids.owner ? 'owner' : `role_${entry.id}`,
+            isSystem: entry.id === ids.owner,
             name: entry.id,
             permissions: {
               create: entry.grants.map(([capability, effect]) => ({ capability, effect })),
@@ -536,12 +551,18 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     ]);
   });
 
-  it('accepts an organisation admin with the dispensing right at any of its branches', async () => {
+  it('allows an admitted administrator and a System Owner to sign, and refuses an unassigned administrator', async () => {
     const sale = await ringUp();
-    await decide(ids.admin, { reviewItemId: sale.reviewItemId, kind: 'SIGN' });
-    expect(await decisions(sale.reviewItemId)).toEqual([
-      { actorUserId: ids.admin, kind: 'SIGN', signedAt: expect.any(Date) },
-    ]);
+    const decision = { reviewItemId: sale.reviewItemId, kind: 'SIGN' };
+    await expect(decide(ids.admin, decision)).rejects.toMatchObject(BRANCH_REFUSAL);
+    expect(await decisions(sale.reviewItemId)).toEqual([]);
+    for (const userId of [ids.admittedAdmin, ids.owner]) {
+      const check = await ringUp();
+      await decide(userId, { reviewItemId: check.reviewItemId, kind: 'SIGN' });
+      expect(await decisions(check.reviewItemId)).toEqual([
+        { actorUserId: userId, kind: 'SIGN', signedAt: expect.any(Date) },
+      ]);
+    }
   });
 
   it('refuses a pharmacist on leave, although assigned here', async () => {
@@ -586,7 +607,7 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     expect(await decisions(sale.reviewItemId)).toEqual([]);
   });
 
-  it('counts for the solo rule exactly the people who may decide the check', async () => {
+  it('counts admitted administrators and System Owners as signers and excludes an unassigned administrator', async () => {
     const sale = await ringUp();
     const counted = (
       await tenant((db) =>
@@ -605,6 +626,7 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
         await decide(candidate.id, { reviewItemId: sale.reviewItemId, kind: 'COUNSEL' });
         accepted.push(candidate.id);
       } catch (error) {
+        if (candidate.id === ids.admin) expect(error).toMatchObject(BRANCH_REFUSAL);
         expect(error).toMatchObject({
           code: expect.stringMatching(/^(FORBIDDEN|NOT_FOUND|UNAUTHORIZED)$/),
         });
@@ -612,7 +634,7 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     }
     accepted.sort();
     expect(counted).toEqual(accepted);
-    // Own branch, admin, a custom role granting the right and a suspended staff profile (which
+    // Own branch, admitted administrator, system Owner, a custom role granting the right and a suspended staff profile (which
     // governs only the PIN) are in; another branch, on leave, inactive, a custom role or a personal
     // override denying the right, a cashier and another organisation are out.
     expect(accepted).toEqual(ACCEPTED);
@@ -633,15 +655,17 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
       await expect(queue(ids.here, ids.branch)).resolves.toEqual([]);
       await expect(queue(ids.here, ids.otherBranch)).rejects.toMatchObject(missing);
       await expect(queue(ids.admin, ids.branch)).rejects.toMatchObject(missing);
-      await db.organizationRolePermission.create({
-        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+      await db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.owner}` },
       });
       try {
         await expect(queue(ids.admin, ids.otherBranch)).resolves.toEqual([]);
         await expect(queue(ids.admin, ids.foreignBranch)).rejects.toMatchObject(missing);
       } finally {
-        await db.organizationRolePermission.deleteMany({
-          where: { organizationRoleId: `role_${ids.admin}`, capability: '*' },
+        await db.user.update({
+          where: { id: ids.admin },
+          data: { organizationRoleId: `role_${ids.admin}` },
         });
       }
     });
@@ -684,16 +708,22 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
       code: 'FORBIDDEN',
       message: 'One or more branches are outside your report scope.',
     });
-    const grant = await tenant((db) =>
-      db.organizationRolePermission.create({
-        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+    await tenant((db) =>
+      db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.owner}` },
       })
     );
     try {
       expect(await report(ids.admin, ids.branch)).toBe(count);
       expect(await report(ids.admin, ids.otherBranch)).toBe(0);
     } finally {
-      await tenant((db) => db.organizationRolePermission.delete({ where: { id: grant.id } }));
+      await tenant((db) =>
+        db.user.update({
+          where: { id: ids.admin },
+          data: { organizationRoleId: `role_${ids.admin}` },
+        })
+      );
     }
   });
 
@@ -770,8 +800,9 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
 
       // A role change is visible to the same caller. Keep the fixture's
       // dispensing-only admin for the separate decision tests.
-      const ownerGrant = await db.organizationRolePermission.create({
-        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+      await db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.owner}` },
       });
       for (const rows of [
         (await admin.reviewQueue()).items,
@@ -780,7 +811,10 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
         expect(rows.map((row) => row.id)).toEqual(
           expect.arrayContaining([first.reviewItemId, other.id])
         );
-      await db.organizationRolePermission.delete({ where: { id: ownerGrant.id } });
+      await db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.admin}` },
+      });
 
       const safety = await db.userPermissionOverride.create({
         data: {

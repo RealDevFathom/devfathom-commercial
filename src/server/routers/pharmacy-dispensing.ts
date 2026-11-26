@@ -8,8 +8,10 @@ import { annotateAudit } from '@/server/audit';
 import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { readOwnPinState } from '@/lib/pharmacy/own-pin';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
-import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
-import { clinicalBranchAssignmentDenial } from '@/lib/pharmacy/clinical-branch-access';
+import {
+  clinicalBranchAssignmentDenial,
+  isClinicalOwner,
+} from '@/lib/pharmacy/clinical-branch-access';
 import {
   assertRxSelfSignAllowed,
   declaredSoloMetadata,
@@ -69,7 +71,7 @@ async function clinicalReviewScope(ctx: TRPCContext) {
   const organizationId = ctx.entitlements?.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   const userId = ctx.session!.user.id;
-  if (await actorIsPharmacyOwner(ctx.db, organizationId, userId)) return { organizationId };
+  if (await isClinicalOwner(ctx.db, organizationId, userId)) return { organizationId };
 
   const reviews = await ctx.db.$queryRaw<{ id: string }[]>`
     SELECT review.id

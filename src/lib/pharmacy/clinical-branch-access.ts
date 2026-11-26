@@ -1,6 +1,14 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { actorIsPharmacyOwner } from './procurement-access';
 
+export function isClinicalOwner(
+  db: Pick<ScopedDb, 'user'>,
+  organizationId: string,
+  userId: string
+) {
+  return actorIsPharmacyOwner(db, organizationId, userId, 'system-owner');
+}
+
 export async function clinicalBranchAssignmentDenial(
   db: ScopedDb,
   user: { id: string; role: string },
@@ -8,7 +16,7 @@ export async function clinicalBranchAssignmentDenial(
   branchId: string
 ): Promise<'branch_forbidden' | null> {
   async function ownsBranch() {
-    if (!(await actorIsPharmacyOwner(db, organizationId, user.id))) return false;
+    if (!(await isClinicalOwner(db, organizationId, user.id))) return false;
     return Boolean(
       await db.pharmacyBranch.findFirst({
         where: { id: branchId, organizationId },
