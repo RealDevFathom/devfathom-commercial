@@ -14,6 +14,7 @@ import {
   useApprovalEntry,
   UnavailableCounterApprover,
   type ApprovalEntry,
+  type ApprovalMatches,
 } from './counter-approval-entry';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
@@ -77,7 +78,7 @@ const TENDER_TYPES = [
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
 
 export type CounterTenderResult = {
-  matchingStaffProfileIds?: string[];
+  approvalMatches?: ApprovalMatches;
   status: 'accepted' | 'rejected' | 'unknown';
   message: string;
   /** Change from the accepted saved tender, independent of the current bill balance. */
@@ -620,7 +621,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           },
           { amount, cashReceived: type === 'CASH' ? (cashReceived ?? '') : '' }
         );
-        if (result.matchingStaffProfileIds) form.reset(result.matchingStaffProfileIds);
+        if (result.approvalMatches) form.reset(result.approvalMatches);
         setOutcome(result);
         if (result.status === 'accepted') {
           form.reset();

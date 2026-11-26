@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import type { BillDiscountExclusion, BillDiscountRequest } from '@/lib/pharmacy/bill-discount';
-import { submitDialogApproval, type ApprovalEntry } from './counter-approval-entry';
+import { submitDialogApproval, type ApprovalEntry, type ApprovalMatches } from './counter-approval-entry';
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   isCounterApprovalMessage,
@@ -45,7 +45,7 @@ export type CounterBillDiscountInput = {
   branchId: string;
   saleId: string;
   lines: readonly CartLine[];
-  requestApproval: (discount: string, matches?: string[]) => Promise<ApprovalEntry | null>;
+  requestApproval: (discount: string, matches?: ApprovalMatches) => Promise<ApprovalEntry | null>;
   onChanged: (message: string) => void;
   /**
    * DEV-977 phase 3: name each item left out, and why, in the message itself. The discount

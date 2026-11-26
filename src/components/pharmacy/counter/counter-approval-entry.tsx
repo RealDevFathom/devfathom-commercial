@@ -12,17 +12,23 @@ export type ApprovalEntry = {
   pin: string;
   staffProfileId?: string;
   matchingStaffProfileId?: string;
+  choiceProof?: string;
 };
 
-export function matchingProfiles(error: unknown): string[] | undefined {
-  const ids = (error as { data?: { matchingStaffProfileIds?: unknown } } | null)?.data
-    ?.matchingStaffProfileIds;
-  return Array.isArray(ids) && ids.length > 1 && ids.every((id) => typeof id === 'string')
-    ? ids
-    : undefined;
+export type ApprovalMatches = Array<{ id: string; proof: string }>;
+
+export function matchingProfiles(error: unknown): ApprovalMatches | undefined {
+  const data = (error as { data?: { matchingStaffProfileIds?: unknown; choiceProofs?: unknown } } | null)?.data;
+  const ids = data?.matchingStaffProfileIds;
+  const proofs = data?.choiceProofs;
+  if (!Array.isArray(ids) || !Array.isArray(proofs) || ids.length < 2 || ids.length !== proofs.length)
+    return undefined;
+  if (!ids.every((id) => typeof id === 'string') || !proofs.every((proof) => typeof proof === 'string'))
+    return undefined;
+  return ids.map((id, index) => ({ id, proof: proofs[index] }));
 }
 
-export function useApprovalEntry(initialMatches?: string[]) {
+export function useApprovalEntry(initialMatches?: ApprovalMatches) {
   const hasSession = useContext(CounterSessionContext);
   const kind = useContext(ApprovalSecretKindContext);
   const [byName, setByName] = useState(false);
@@ -34,13 +40,14 @@ export function useApprovalEntry(initialMatches?: string[]) {
   if (codeOnly) {
     if (/^\d{6}$/.test(pin)) entry = { pin };
   } else if (matches) {
-    if (hasSession && kind === 'CODE' && matches.includes(profile) && /^\d{6}$/.test(pin))
-      entry = { matchingStaffProfileId: profile, pin };
+    const selected = matches.find((match) => match.id === profile);
+    if (hasSession && kind === 'CODE' && selected && /^\d{6}$/.test(pin))
+      entry = { matchingStaffProfileId: profile, choiceProof: selected.proof, pin };
   } else if (profile && /^\d{4,8}$/.test(pin)) {
     entry = { staffProfileId: profile, pin };
   }
 
-  function reset(nextMatches?: string[]) {
+  function reset(nextMatches?: ApprovalMatches) {
     setMatches(nextMatches);
     setByName(false);
     setProfile('');
@@ -61,7 +68,7 @@ export function useApprovalEntry(initialMatches?: string[]) {
       setByName(true);
     },
     visible<T extends { id: string }>(rows: readonly T[]) {
-      return matches ? rows.filter((row) => matches.includes(row.id)) : rows;
+      return matches ? rows.filter((row) => matches.some((match) => match.id === row.id)) : rows;
     },
   };
 }
@@ -129,7 +136,7 @@ export function ApprovalNames({
 
 /** Dialog-based approvals get one explicit follow-up only for a structured collision. */
 export async function submitDialogApproval<T>(
-  request: (matches?: string[]) => Promise<ApprovalEntry | null>,
+  request: (matches?: ApprovalMatches) => Promise<ApprovalEntry | null>,
   submit: (entry: ApprovalEntry) => Promise<T>
 ): Promise<T | null> {
   const entry = await request();
@@ -141,7 +148,7 @@ export async function submitDialogApproval<T>(
     if (!matches || entry.staffProfileId || entry.matchingStaffProfileId) throw error;
     const choice = await request(matches);
     if (!choice) return null;
-    if (!choice.matchingStaffProfileId || !matches.includes(choice.matchingStaffProfileId))
+    if (!choice.matchingStaffProfileId || !matches.some((match) => match.id === choice.matchingStaffProfileId && match.proof === choice.choiceProof))
       throw error;
     return submit(choice);
   }

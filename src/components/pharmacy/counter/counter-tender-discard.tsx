@@ -80,7 +80,7 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
       const result = await onDiscard({ ...form.entry, reason: reason.trim() });
       // The PIN is one-time evidence: never keep it after a decision.
       setPin('');
-      if (result.matchingStaffProfileIds) form.reset(result.matchingStaffProfileIds);
+      if (result.approvalMatches) form.reset(result.approvalMatches);
       if (result.status === 'unknown') setError(result.message);
       else setOpen(false);
     } catch {

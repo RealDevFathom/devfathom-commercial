@@ -155,7 +155,7 @@ it('offers only the returned names after a collision and requires an explicit ch
     .mockResolvedValueOnce({
       status: 'unknown',
       message: 'Choose the approver',
-      matchingStaffProfileIds: ['a', 'c'],
+      approvalMatches: [{ id: 'a', proof: 'fixture-a' }, { id: 'c', proof: 'fixture-c' }],
     })
     .mockResolvedValueOnce({ status: 'rejected', message: 'Discarded' });
   render(
@@ -178,7 +178,7 @@ it('offers only the returned names after a collision and requires an explicit ch
   fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '654321' } });
   fireEvent.click(submit);
   expect(onDiscard).toHaveBeenLastCalledWith({
-    matchingStaffProfileId: 'c',
+    matchingStaffProfileId: 'c', choiceProof: 'fixture-c',
     pin: '654321',
     reason: 'Fixture reason',
   });
@@ -186,18 +186,18 @@ it('offers only the returned names after a collision and requires an explicit ch
 
 it('continues a line approval only after a matching person is explicitly chosen', async () => {
   const collision = Object.assign(new Error('Choose the approver'), {
-    data: { matchingStaffProfileIds: ['a', 'c'] },
+    data: { matchingStaffProfileIds: ['a', 'c'], choiceProofs: ['fixture-a', 'fixture-c'] },
   });
   const request = vi
     .fn()
     .mockResolvedValueOnce({ pin: '123456' })
-    .mockResolvedValueOnce({ matchingStaffProfileId: 'c', pin: '654321' });
+    .mockResolvedValueOnce({ matchingStaffProfileId: 'c', choiceProof: 'fixture-c', pin: '654321' });
   const send = vi.fn().mockRejectedValueOnce(collision).mockResolvedValueOnce('approved');
   await expect(submitDialogApproval(request, send)).resolves.toBe('approved');
-  expect(request.mock.calls).toEqual([[], [['a', 'c']]]);
+  expect(request.mock.calls).toEqual([[], [[{ id: 'a', proof: 'fixture-a' }, { id: 'c', proof: 'fixture-c' }]]]);
   expect(send.mock.calls).toEqual([
     [{ pin: '123456' }],
-    [{ matchingStaffProfileId: 'c', pin: '654321' }],
+    [{ matchingStaffProfileId: 'c', choiceProof: 'fixture-c', pin: '654321' }],
   ]);
 
   request.mockResolvedValueOnce({ pin: '123456' }).mockResolvedValueOnce(null);

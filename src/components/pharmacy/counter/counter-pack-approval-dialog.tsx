@@ -17,6 +17,7 @@ import {
   useApprovalEntry,
   UnavailableCounterApprover,
   type ApprovalEntry,
+  type ApprovalMatches,
 } from './counter-approval-entry';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 
@@ -38,7 +39,7 @@ export function CounterPackApprovalDialog({
   medicineName: string;
   pharmacist?: boolean;
   copy?: CounterApprovalDialogCopy;
-  matches?: string[];
+  matches?: ApprovalMatches;
   loadApprovers: () => Promise<Approver[]>;
   onCancel: () => void;
   onConfirm: (approval: ApprovalEntry) => void;

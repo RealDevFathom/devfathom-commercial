@@ -74,6 +74,7 @@ import {
   matchingProfiles,
   submitDialogApproval,
   type ApprovalEntry,
+  type ApprovalMatches,
 } from './counter-approval-entry';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -756,7 +757,7 @@ function ScopedPharmacyCounterConsole({
     medicineName: string;
     discount?: string;
     pharmacist?: boolean;
-    matches?: string[];
+    matches?: ApprovalMatches;
   } | null>(null);
   const finishPackApproval = useCallback((approval: ApprovalEntry | null) => {
     const resolve = packApprovalResolver.current;
@@ -1054,7 +1055,7 @@ function ScopedPharmacyCounterConsole({
   const requestLineApproval = useCallback(
     (
       details: { medicineName: string; discount?: string; pharmacist?: boolean },
-      matches?: string[]
+      matches?: ApprovalMatches
     ) =>
       new Promise<ApprovalEntry | null>((resolve) => {
         packApprovalResolver.current?.(null);
@@ -1064,7 +1065,7 @@ function ScopedPharmacyCounterConsole({
     []
   );
   const requestBillDiscountApproval = useCallback(
-    (discount: string, matches?: string[]) =>
+    (discount: string, matches?: ApprovalMatches) =>
       requestLineApproval({ medicineName: 'Whole bill', discount }, matches),
     [requestLineApproval]
   );
@@ -3408,7 +3409,7 @@ function ScopedPharmacyCounterConsole({
             ? {
                 status: 'rejected',
                 message: `Payment was not accepted. ${counterPaymentErrorMessage(error)}`,
-                matchingStaffProfileIds: matchingProfiles(error),
+                approvalMatches: matchingProfiles(error),
               }
             : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       }
@@ -3589,7 +3590,7 @@ function ScopedPharmacyCounterConsole({
         outcome = {
           status: 'unknown',
           message: `The attempt was not discarded. ${messageFrom(error)} The saved attempt is still locked.`,
-          matchingStaffProfileIds: matchingProfiles(error),
+          approvalMatches: matchingProfiles(error),
         };
       }
       setTenderOutcome(outcome);

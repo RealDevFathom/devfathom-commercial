@@ -17,7 +17,8 @@ import {
 import { rateLimit, refundRateLimit, type RateLimitResult } from '@/lib/rate-limit';
 import { counterBranchAssignmentDenial } from './counter-capability';
 import { CounterApprovalChoice } from './counter-approval-choice';
-import { verifyToken } from './counter-terminal-session';
+import { timingSafeEqual } from 'node:crypto';
+import { counterChoiceProof, verifyToken } from './counter-terminal-session';
 import { pharmacyDeviceSecretExpired } from './device-secret-expiry';
 import {
   spendApproverPinGuessTypedByAnother,
@@ -43,6 +44,7 @@ export type CounterApprovalInput =
   | {
       staffProfileId?: string;
       matchingStaffProfileId?: string;
+      choiceProof?: string;
       pin: string;
       counter: CounterSession;
     };
@@ -279,7 +281,9 @@ export async function authorizeCounterApproval(
             scope,
             kind,
             input.pin,
-            'matchingStaffProfileId' in input ? input.matchingStaffProfileId : undefined
+            deviceId!,
+            'matchingStaffProfileId' in input ? input.matchingStaffProfileId : undefined,
+            'choiceProof' in input ? input.choiceProof : undefined
           ),
     { userId: scope.actorId, skipDrain: true }
   );
@@ -459,7 +463,9 @@ async function identifyCounterApprover(
   scope: LedgerScope,
   kind: CounterApprovalKind,
   pin: string,
-  matchingStaffProfileId?: string
+  deviceId: string,
+  matchingStaffProfileId?: string,
+  choiceProof?: string
 ) {
   if (!/^\d{6}$/.test(pin) || (await approvalSecretKindFor(db, scope.organizationId)) !== 'CODE')
     return null;
@@ -546,6 +552,7 @@ async function identifyCounterApprover(
     userId: string;
     staffProfileId: string;
     authenticatorId: string;
+    lastUsedStep: number | null;
     step: number;
   }> = [];
   let used = false;
@@ -557,22 +564,37 @@ async function identifyCounterApprover(
       userId: auth.userId,
       staffProfileId: eligible.get(auth.userId)!,
       authenticatorId: auth.id,
+      lastUsedStep: auth.lastUsedStep,
       step,
     });
   }
   if (used || matches.length === 0) return null;
+  const proofFor = (match: (typeof matches)[number], step: number) =>
+    counterChoiceProof(scope, deviceId, kind, match.authenticatorId, match.staffProfileId, step);
   if (matches.length > 1 && !matchingStaffProfileId) {
     // Permanently retire this step for every match before returning the list. A
     // subsequent named or code-only verification must consume a later step.
     for (const match of matches)
       if (!(await retireApprovalStep(db, match.authenticatorId, match.step))) return null;
     await releaseReservations();
-    return new CounterApprovalChoice(matches.map((match) => match.staffProfileId));
+    return new CounterApprovalChoice(
+      matches.map((match) => match.staffProfileId),
+      matches.map((match) => proofFor(match, match.step))
+    );
   }
   const match = matchingStaffProfileId
     ? matches.find((candidate) => candidate.staffProfileId === matchingStaffProfileId)
     : matches[0];
   if (!match) return null;
+  if (matchingStaffProfileId) {
+    // The previous step was retired by this specific collision. Any later
+    // consumption advances it and invalidates the continuation automatically.
+    if (!choiceProof || !/^[0-9a-f]{64}$/.test(choiceProof) || match.lastUsedStep === null)
+      return null;
+    const expected = proofFor(match, match.lastUsedStep);
+    if (!timingSafeEqual(Buffer.from(choiceProof, 'hex'), Buffer.from(expected, 'hex')))
+      return null;
+  }
   const result = await verifyApproverPin(
     db,
     scope,

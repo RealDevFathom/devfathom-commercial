@@ -319,6 +319,7 @@ const counterLineApproval = z.union([
   z.strictObject({
     pin: z.string().regex(/^\d{6}$/),
     matchingStaffProfileId: z.string().trim().min(1).max(128).optional(),
+    choiceProof: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   }),
 ]);
 type CounterLineApprovalRequest = z.infer<typeof counterLineApproval>;

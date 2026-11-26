@@ -34,6 +34,20 @@ function sessionMac(payload: string) {
     .update(payload)
     .digest('hex');
 }
+/** Opaque evidence that this till retired a matching person's step for this action. */
+export function counterChoiceProof(
+  scope: LedgerScope,
+  deviceId: string,
+  kind: string,
+  authenticatorId: string,
+  staffProfileId: string,
+  step: number
+) {
+  return sessionMac('counter-approval-choice:v1\n' + JSON.stringify([
+    scope.organizationId, scope.branchId, scope.actorId, deviceId, kind, authenticatorId, staffProfileId, step,
+  ]));
+}
+
 export function establishToken(ctx: {
   scope: LedgerScope;
   deviceId: string;
