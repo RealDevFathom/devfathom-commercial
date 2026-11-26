@@ -1,3 +1,5 @@
+import { TRPCError } from '@trpc/server';
+import { can, subjectFromSession } from '@/lib/abac';
 import { z } from 'zod';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { SUPPLIER_LINK_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
@@ -18,6 +20,8 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { uploadPost } from '@/lib/uploads/multipart-request';
 import { categoryForPath, recordAudit } from '@/server/audit';
+import { assertProcurementBranch } from '@/server/pharmacy-procurement-scope';
+import { createTRPCContext } from '@/server/trpc';
 
 export const runtime = 'nodejs';
 
@@ -45,9 +49,32 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     if (!token || token.length > 200) return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
     const userId = actor.session.user.id;
     const organizationId = actor.organization.id;
-    await withTenantDb(organizationId, (db) => assertSupplierDocumentPermission(db, token), {
-      userId,
-    });
+    const branchAudit = await withTenantDb(
+      organizationId,
+      async (db) => {
+        const branchId = await assertSupplierDocumentPermission(db, token);
+        if (
+          !(await can(subjectFromSession(actor.session.user), 'pharmacy:procurement', undefined, {
+            db,
+          }))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Procurement permission is required.',
+          });
+        }
+        const ctx = await createTRPCContext({
+          req: request,
+          db,
+          session: actor.session,
+          organization: actor.organization,
+          support: actor.support,
+        });
+        await assertProcurementBranch(ctx, branchId, db);
+        return ctx.audit.detail.metadata;
+      },
+      { userId }
+    );
 
     let form: FormData;
     try {
@@ -101,6 +128,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
       targetId: document.id,
       outcome: 'SUCCESS',
       metadata: {
+        ...branchAudit,
         branchId: document.branchId,
         ...(user.isSupportSession
           ? {
@@ -115,6 +143,8 @@ export const POST = uploadPost(async (request, readUploadForm) => {
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);
     if (passwordChange) return passwordChange;
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN')
+      return message(403, error.message);
     if (error instanceof SupplierLinkError) {
       switch (error.reason) {
         case 'INVALID_LINK':

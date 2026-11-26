@@ -10,6 +10,10 @@ import { POST } from './route';
 
 const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
+  can: vi.fn(),
+  branch: vi.fn(),
+  assignment: vi.fn(),
+  owner: vi.fn(),
   audit: vi.fn(),
   permission: vi.fn(),
   scope: vi.fn(),
@@ -17,7 +21,23 @@ const mocks = vi.hoisted(() => ({
   release: vi.fn(),
   store: vi.fn(),
 }));
-vi.mock('@/server/audit', () => ({ categoryForPath: () => 'pharmacy', recordAudit: mocks.audit }));
+vi.mock('@/server/audit', () => ({
+  categoryForPath: () => 'pharmacy',
+  recordAudit: mocks.audit,
+  annotateAudit: vi.fn(),
+}));
+vi.mock('@/lib/abac', () => ({
+  subjectFromSession: (user: unknown) => user,
+  can: mocks.can,
+}));
+vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorIsPharmacyOwner: mocks.owner }));
+vi.mock('@/server/trpc', () => ({
+  createTRPCContext: async (opts: object) => ({
+    ...opts,
+    entitlements: { organizationId: 'org' },
+    audit: { detail: {} },
+  }),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.scope }));
 vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.slot }));
@@ -29,7 +49,10 @@ vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => ({
 
 const origin = 'https://tenant.example.test';
 const token = 'synthetic-supplier-token';
-const db = {};
+const db = {
+  pharmacyBranch: { findFirst: mocks.branch },
+  pharmacyBranchAssignment: { findFirst: mocks.assignment },
+};
 function upload(part: File | string) {
   const form = new FormData();
   form.set('file', part);
@@ -51,8 +74,17 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.actor.mockResolvedValue({
     organization: { id: 'org' },
-    session: { user: { id: 'supplier-user' } },
+    session: { user: { id: 'supplier-user', organizationId: 'org' } },
   });
+  mocks.permission.mockResolvedValue('branch');
+  mocks.can.mockResolvedValue(true);
+  mocks.branch.mockResolvedValue({ id: 'branch' });
+  mocks.assignment.mockImplementation(async ({ where }) =>
+    where.branchId === 'branch' && where.userId === 'supplier-user' && where.active
+      ? { id: 'assignment' }
+      : null
+  );
+  mocks.owner.mockResolvedValue(false);
   mocks.scope.mockImplementation(async (_organizationId, run) => run(db));
   mocks.slot.mockResolvedValue(mocks.release);
   mocks.store.mockResolvedValue({ id: 'doc', branchId: 'branch' });
@@ -132,4 +164,42 @@ it.each([
 ])('rejects unsupported or empty multipart entries before writing', async (entry) => {
   expect((await POST(upload(entry))).status).toBe(400);
   expect(mocks.store).not.toHaveBeenCalled();
+});
+
+it.each([
+  [
+    'cashier with no procurement permission',
+    () => mocks.can.mockResolvedValueOnce(false),
+    'Procurement permission is required.',
+  ],
+  [
+    'procurement member assigned elsewhere',
+    () => mocks.assignment.mockResolvedValueOnce(null),
+    'Branch is outside your scope.',
+  ],
+] as const)('rejects a %s before reading the body', async (_label, reject, expected) => {
+  reject();
+  const request = upload(pdf(8));
+  const response = await POST(request);
+  expect(response.status).toBe(403);
+  expect(response.headers.get('content-type')).toMatch(/^text\/plain\b/);
+  expect(await response.text()).toBe(expected);
+  expect(request.bodyUsed).toBe(false);
+  expect(mocks.slot).not.toHaveBeenCalled();
+  expect(mocks.store).not.toHaveBeenCalled();
+});
+
+it('admits a procurement member assigned to the live order branch', async () => {
+  expect((await POST(upload(pdf(8)))).status).toBe(204);
+  expect(mocks.can).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ id: 'supplier-user' }),
+    'pharmacy:procurement',
+    undefined,
+    { db }
+  );
+  expect(mocks.assignment).toHaveBeenCalledExactlyOnceWith({
+    where: { organizationId: 'org', branchId: 'branch', userId: 'supplier-user', active: true },
+    select: { id: true },
+  });
+  expect(mocks.store).toHaveBeenCalledOnce();
 });

@@ -206,7 +206,8 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
 // Use the same live-link permission check before the HTTP transport reads a file.
 // The write checks it again inside the transaction in case it changed mid-upload.
 export async function assertSupplierDocumentPermission(db: ScopedDb, token: string) {
-  await liveLink(db, token);
+  const link = await liveLink(db, token);
+  return link.branchId;
 }
 
 export async function getSupplierActionPage(db: ScopedDb, token: string) {
