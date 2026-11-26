@@ -3,7 +3,6 @@ import {
   establishToken,
   verifyToken,
 } from '@/lib/pharmacy/counter-terminal-session';
-import { randomUUID } from 'node:crypto';
 import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
