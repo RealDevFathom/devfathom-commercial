@@ -1,14 +1,24 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 
-ALTER TABLE restaurant_operator_credentials
-  ADD COLUMN "approvalPinMustChange" boolean NOT NULL DEFAULT false;
+LOCK TABLE restaurant_operator_credentials IN ACCESS EXCLUSIVE MODE;
 
 -- A restricted owner enumerates organizations, then runs each change under its tenant policy.
 SET LOCAL app.is_platform_admin = 'true';
 DO $$
 DECLARE tenant text;
 BEGIN
+  -- The column and backfill commit atomically. Once present, members may have
+  -- changed their PINs; replay must never reclassify them or send another notice.
+  IF EXISTS (
+    SELECT 1 FROM pg_attribute WHERE attrelid = 'restaurant_operator_credentials'::regclass
+      AND attname = 'approvalPinMustChange' AND NOT attisdropped
+  ) THEN
+    RETURN;
+  END IF;
+  ALTER TABLE restaurant_operator_credentials
+    ADD COLUMN IF NOT EXISTS "approvalPinMustChange" boolean NOT NULL DEFAULT false;
+
   FOR tenant IN SELECT id FROM organizations ORDER BY id LOOP
     PERFORM set_config('app.current_organization_id', tenant, true);
     WITH flagged AS (

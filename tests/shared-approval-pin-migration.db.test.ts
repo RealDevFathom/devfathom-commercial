@@ -70,6 +70,21 @@ it.runIf(url)('flags unknown or third-party setters and tells each member once',
         message: expect.stringContaining('Settings, Your PIN'),
       }))
     );
+    // A member has since set a new PIN. Replaying the migration cannot reflag it.
+    await db.query(
+      `UPDATE restaurant_operator_credentials SET "approvalPinMustChange" = false WHERE id = 'delegated'`
+    );
+    await db.query(migration);
+    expect(
+      (
+        await db.query(
+          `SELECT "approvalPinMustChange" FROM restaurant_operator_credentials WHERE id = 'delegated'`
+        )
+      ).rows
+    ).toEqual([{ approvalPinMustChange: false }]);
+    expect((await db.query('SELECT count(*)::int AS count FROM notifications')).rows).toEqual([
+      { count: 2 },
+    ]);
   } finally {
     await db.end();
   }
