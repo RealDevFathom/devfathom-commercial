@@ -6,12 +6,8 @@ import type {
   PharmacyPrintBridge as PharmacyPrintBridgeRow,
   PharmacyPrintJob,
 } from '@/generated/prisma/client';
-import {
-  RawPrintValidationError,
-  validateRawStoredPrintDocument,
-  type PrintDocument,
-} from '@/lib/restaurant/printing/contract';
-import { renderEscPos } from '@/lib/restaurant/printing/esc-pos';
+import { RawPrintValidationError, type PrintDocument } from '@/lib/restaurant/printing/contract';
+import { renderPharmacyThermal } from './receipt-thermal-design';
 import { resolveTransport } from '@/lib/restaurant/printing/target';
 import {
   generateDeviceSecret,
@@ -514,7 +510,7 @@ export type ClaimedPharmacyPrintJob = {
 /** Re-render from the stored server document; the stored byte count must still match. */
 function renderStored(job: Pick<PharmacyPrintJob, 'document' | 'byteCount'>): Uint8Array | null {
   try {
-    const bytes = renderEscPos(validateRawStoredPrintDocument(job.document));
+    const bytes = renderPharmacyThermal(job.document);
     return bytes.length === job.byteCount ? bytes : null;
   } catch (error) {
     if (error instanceof RawPrintValidationError) return null;

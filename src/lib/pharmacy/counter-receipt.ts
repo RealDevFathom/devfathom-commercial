@@ -27,6 +27,7 @@ export type CounterReceiptLocale = 'en' | 'ur';
 
 /** Regulatory identity in force when this receipt's sale completed. */
 export type PharmacyReceiptTaxIdentity = {
+  registeredName?: string;
   address?: string | null;
   phone?: string | null;
   licenceNumber?: string | null;
@@ -90,6 +91,11 @@ export type CounterReceiptTender = {
 };
 
 export type CounterReceipt = {
+  receiptLayout?: import('./receipt-layout').PharmacyReceiptLayout;
+  receiptLogoPng?: string;
+  registeredName?: string;
+  printFacts?: Record<CounterReceiptLocale, import('@/lib/receipts/preview').ReceiptPreviewFacts>;
+
   dispensingLabelSources?: DispensingLabelSource[];
   /** Supplied by settled receipt reads; optional only for legacy in-memory callers. */
   taxIdentity?: PharmacyReceiptTaxIdentity;
@@ -575,7 +581,8 @@ export function formatReceiptIssuedAt(value: string | null): string {
  */
 export function receiptTierLines(
   receipt: Pick<CounterReceipt, 'lines'>,
-  locale: CounterReceiptLocale
+  locale: CounterReceiptLocale,
+  separator = ' · '
 ) {
   const billMinor = receipt.lines.reduce((sum, line) => sum + (line.billDiscountMinor ?? 0), 0);
   const bill =
@@ -590,7 +597,7 @@ export function receiptTierLines(
     ...bill,
     ...[...tiers].map(
       ([name, minor]) =>
-        `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount} · ${name}: -${formatMinor(minor, locale)}`
+        `${COUNTER_RECEIPT_STRINGS[locale].tierDiscount}${separator}${name}: -${formatMinor(minor, locale)}`
     ),
   ];
 }

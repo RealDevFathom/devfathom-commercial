@@ -108,13 +108,19 @@ export function counterLinePricing(
 }
 
 /** Missing status on legacy callers is not evidence of issued identity. */
-export function counterLinePresentation(line: CounterReceiptLine, locale: CounterReceiptLocale) {
+export function counterLinePresentation(
+  line: CounterReceiptLine,
+  locale: CounterReceiptLocale,
+  raw = false
+) {
   const strings = COUNTER_RECEIPT_STRINGS[locale];
   const text = labels[locale];
   const issued = line.identityStatus === 'ISSUED';
   return {
     identity: issued
-      ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' · ')
+      ? [line.medicineName, line.strength, line.presentation]
+          .filter(Boolean)
+          .join(raw ? ' - ' : ' · ')
       : text.unavailable,
     allocations: (line.allocations ?? []).map((allocation) => {
       // DEV-853: an issued line whose lot never recorded a batch or expiry says
@@ -129,7 +135,9 @@ export function counterLinePresentation(line: CounterReceiptLine, locale: Counte
         : allocation.expiresAt === null
           ? strings.expiryNotRecorded
           : `${strings.expiry}: ${formatReceiptExpiry(allocation.expiresAt, locale)}`;
-      return `${batch} · ${expiry} · ${text.units}: ${allocation.canonicalUnits}`;
+      return [batch, expiry, `${text.units}: ${allocation.canonicalUnits}`].join(
+        raw ? ' | ' : ' · '
+      );
     }),
   };
 }
@@ -141,6 +149,22 @@ export function buildCounterReceiptPreview(
   paperWidth: 58 | 80,
   reprint = false
 ): string {
+  return buildReceiptPreview(
+    {
+      ...DEFAULT_RECEIPT_LAYOUT,
+      paperWidth,
+      footerText: reprint ? COUNTER_RECEIPT_STRINGS[locale].reprint : '',
+    },
+    counterReceiptFacts(receipt, locale)
+  );
+}
+
+export function counterReceiptFacts(
+  receipt: CounterReceipt,
+  locale: CounterReceiptLocale,
+  raw = false
+) {
+  const times = raw ? 'x' : '×';
   const amounts = [
     ...Object.values(receipt.totals),
     ...receipt.lines.flatMap((line) => [line.unitPriceMinor, line.lineTotalMinor]),
@@ -152,72 +176,71 @@ export function buildCounterReceiptPreview(
   // #708: a cash memo reprints every identity fact frozen at issuance; other receipts
   // (and older snapshots without the frozen identity) keep the profile read for the sale.
   const identity = receipt.cashMemoIdentity ?? receipt.taxIdentity;
+  const registeredName = receipt.registeredName ?? identity?.registeredName;
   const ntn = identity?.ntn?.trim();
   const strn = identity?.strn?.trim();
   // #708: Sindh branches print the r.18 cash memo; every other branch is unchanged.
   const memo = counterReceiptCashMemo(receipt, identity, locale);
   const offlineReference = receiptOfflineReferenceLine(receipt, locale);
-  return buildReceiptPreview(
-    { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
-    {
-      businessName: receipt.branchName,
-      invoiceNumber:
-        receipt.receiptNumber === null
-          ? receiptTitle(receipt, locale)
-          : String(receipt.receiptNumber),
-      invoiceLabel: memo ? memo.title : strings.invoice,
-      issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
-      lines: receipt.lines.map((line) => {
-        const presentation = counterLinePresentation(line, locale);
-        const promotion = receiptPromotionLabel(line, locale);
-        return [
-          presentation.identity,
-          ...(memo ? [cashMemoManufacturer(line, locale)] : []),
-          memo
-            ? `${strings.quantity} × ${strings.unitPrice}: ${counterLinePricing(line, locale)}`
-            : counterLinePricing(line, locale),
-          ...presentation.allocations,
-          ...(promotion ? [promotion] : []),
-          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
-        ].join('\n');
-      }),
-      taxBreakdown: 'UNAVAILABLE',
-      // Identity is historical receipt data; the model supplies no tax breakdown.
-      taxLines: [
-        ...(identity?.address?.trim() ? [identity.address.trim()] : []),
-        ...(identity?.phone?.trim() ? [`${strings.phone}: ${identity.phone.trim()}`] : []),
-        ...(memo
-          ? []
-          : identity?.licenceNumber?.trim()
-            ? [`${strings.licence}: ${identity.licenceNumber.trim()}`]
-            : []),
-        ...(ntn ? [`NTN: ${ntn}`] : []),
-        ...(strn ? [`STRN: ${strn}`] : []),
-      ],
-      totals: [
-        locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency,
-        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
-        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
-        ...receiptTierLines(receipt, locale),
-        `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
-        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
-        ...(cashReceived !== null
-          ? [`${receiptCashReceivedLabel(locale)}: ${formatMinor(cashReceived, locale)}`]
+  return {
+    businessName: receipt.branchName,
+    invoiceNumber:
+      receipt.receiptNumber === null
+        ? receiptTitle(receipt, locale)
+        : String(receipt.receiptNumber),
+    invoiceLabel: memo ? memo.title : strings.invoice,
+    issuedAt: `${memo ? `${memo.licence.join('\n')}\n${memo.buyer}\n` : ''}${strings.date}: ${formatReceiptIssuedAt(receipt.completedAt)}${receipt.counterLabel ? `\n${receipt.counterLabel}` : ''}${offlineReference ? `\n${offlineReference}` : ''}${receipt.cashierName ? `\n${strings.cashier}: ${receipt.cashierName}` : ''}`,
+    lines: receipt.lines.map((line) => {
+      const presentation = counterLinePresentation(line, locale, raw);
+      const promotion = receiptPromotionLabel(line, locale);
+      return [
+        presentation.identity,
+        ...(memo ? [cashMemoManufacturer(line, locale)] : []),
+        memo
+          ? `${strings.quantity} ${times} ${strings.unitPrice}: ${counterLinePricing(line, locale, times)}`
+          : counterLinePricing(line, locale, times),
+        ...presentation.allocations,
+        ...(promotion ? [promotion] : []),
+        `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
+      ].join('\n');
+    }),
+    taxBreakdown: 'UNAVAILABLE' as const,
+    // Identity is historical receipt data; the model supplies no tax breakdown.
+    taxLines: [
+      ...(registeredName ? [registeredName] : []),
+      ...(identity?.address?.trim() ? [identity.address.trim()] : []),
+      ...(identity?.phone?.trim() ? [`${strings.phone}: ${identity.phone.trim()}`] : []),
+      ...(memo
+        ? []
+        : identity?.licenceNumber?.trim()
+          ? [`${strings.licence}: ${identity.licenceNumber.trim()}`]
           : []),
-        `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
-      ],
-      payments: [
-        ...(receipt.tenders.length
-          ? receipt.tenders.map(
-              (tender) =>
-                `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor, locale)}`
-            )
-          : [labels[locale].payments]),
-        // The qualified person signs the printed memo by hand.
-        ...(memo ? [`\n${memo.signature}`] : []),
-      ],
-    }
-  );
+      ...(ntn ? [`NTN: ${ntn}`] : []),
+      ...(strn ? [`STRN: ${strn}`] : []),
+    ],
+    totals: [
+      locale === 'ur' && receipt.currency === 'PKR' ? 'پاکستانی روپے' : receipt.currency,
+      `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
+      `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+      ...receiptTierLines(receipt, locale, raw ? ' - ' : ' · '),
+      `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
+      `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+      ...(cashReceived !== null
+        ? [`${receiptCashReceivedLabel(locale)}: ${formatMinor(cashReceived, locale)}`]
+        : []),
+      `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
+    ],
+    payments: [
+      ...(receipt.tenders.length
+        ? receipt.tenders.map(
+            (tender) =>
+              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor, locale)}`
+          )
+        : [labels[locale].payments]),
+      // The qualified person signs the printed memo by hand.
+      ...(memo ? [`\n${memo.signature}`] : []),
+    ],
+  };
 }
 
 /** Aggregate-only report: no patient, medicine, or tender identity is exported. */

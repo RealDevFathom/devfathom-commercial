@@ -29,8 +29,13 @@ const lineSchema = z
 const snapshotSchema = z
   .object({
     receiptIdentitySnapshotVersion: z.literal(1),
+    seller: z
+      .object({ branchName: id, registeredName: id.nullable(), counterLabel: id.nullable() })
+      .strict()
+      .optional(),
     cashMemoIdentity: z
       .object({
+        registeredName: z.string().optional(),
         address: z.string().nullable().optional(),
         phone: z.string().nullable().optional(),
         licenceNumber: z.string().nullable().optional(),

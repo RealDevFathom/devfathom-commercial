@@ -89,6 +89,20 @@ describe('PharmacyPrinterSettingsConsole', () => {
     });
   });
 
+  it('explains why an old branding claim prevents saving a paper change', () => {
+    mocks.format = ok({ layout: { ...layout, footerText: 'Government' }, revision: 4 });
+    render(<PharmacyPrinterSettingsConsole canSave />);
+    const paper = selectFieldControl(
+      screen.getByRole('combobox', { name: 'Receipt printer and paper' })
+    );
+    fireEvent.change(paper, { target: { value: 'A4' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save printer settings' }));
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Remove “government” from the receipt text before saving.'
+    );
+    expect(mocks.mutate).not.toHaveBeenCalled();
+  });
+
   it('starts on a saved A4 preference and a saved 58 mm roll', () => {
     mocks.format = ok({ layout: { ...layout, browserPaper: 'A4' }, revision: 1 });
     const { unmount } = render(<PharmacyPrinterSettingsConsole canSave />);

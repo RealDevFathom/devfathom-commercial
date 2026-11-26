@@ -834,6 +834,7 @@ export const pharmacyOnboardingRouter = router({
       });
       if (!activePlaceholder) {
         const placeholderField = [
+          'registeredName',
           'premisesAddressLine',
           'premisesCity',
           'premisesPhone',
@@ -921,6 +922,7 @@ export const pharmacyOnboardingRouter = router({
             provinceCode: input.provinceCode,
             jurisdictionRuleSetId: jurisdiction.id,
             premises: {
+              ...(input.registeredName ? { registeredName: input.registeredName } : {}),
               addressLine: input.premisesAddressLine,
               city: input.premisesCity,
               phone: input.premisesPhone?.trim() || null,

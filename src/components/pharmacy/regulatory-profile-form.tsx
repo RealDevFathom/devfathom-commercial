@@ -45,6 +45,7 @@ import {
   PAKISTAN_PROVINCES,
   PROVISIONAL_LICENCE_CATEGORY,
   provinceName,
+  profileRegisteredName,
   regulatoryVersionStatusLabel,
   rulesNotPublishedMessage,
   sameProvince,
@@ -308,6 +309,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
       branchId,
       effectiveFrom: text('effectiveFrom'),
       provinceCode: text('provinceCode'),
+      registeredName: text('registeredName'),
       premisesAddressLine: text('premisesAddressLine'),
       premisesCity: text('premisesCity'),
       premisesPhone: text('premisesPhone'),
@@ -541,6 +543,26 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                       : ''}
                 </option>
               </StudioSelect>
+            </Field>
+            <Field
+              error={errors.registeredName}
+              htmlFor="registeredName"
+              label="Registered name on the drug-sale licence (optional)"
+            >
+              <Input
+                aria-describedby={errors.registeredName ? 'registeredName-error' : undefined}
+                aria-invalid={errors.registeredName ? true : undefined}
+                className={controlClass}
+                defaultValue={
+                  data.selectedBranchId === branchId
+                    ? (profileRegisteredName(current?.premises) ?? '')
+                    : ''
+                }
+                id="registeredName"
+                key={`registeredName-${branchId}-${current?.id ?? ''}`}
+                maxLength={200}
+                name="registeredName"
+              />
             </Field>
             <Field
               error={errors.premisesAddressLine}

@@ -1,3 +1,4 @@
+import { receiptDesignSample } from '@/lib/pharmacy/receipt-design-sample';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@/generated/prisma/client';
 
@@ -232,6 +233,7 @@ beforeEach(() => {
   vi.mocked(hasModule).mockReturnValue(true);
   vi.mocked(assertStoredPharmacyMayOperate).mockResolvedValue(undefined);
   vi.mocked(readCounterReceipt).mockResolvedValue({
+    ...receiptDesignSample,
     receiptNumber: 7,
     completedAt: '2026-10-01T00:00:00.000Z',
   } as never);
@@ -256,15 +258,20 @@ describe('DEV-52 server-authorized Counter navigation', () => {
   });
 
   it.each([
-    'pharmacy:counter', 'pharmacy.counter', 'pharmacy:receipt', 'pharmacy.receipt',
-    'pharmacy:dispense', 'pharmacy.dispense',
+    'pharmacy:counter',
+    'pharmacy.counter',
+    'pharmacy:receipt',
+    'pharmacy.receipt',
+    'pharmacy:dispense',
+    'pharmacy.dispense',
   ])('preserves assigned counter access through %s', async (capability) => {
     const f = fixture([{ capability, effect: 'ALLOW' }]);
     assign(f, ['branch-a']);
     await expect(access(f)).resolves.toBe(true);
     expect(f.db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
       where: {
-        organizationId: 'org-a', active: true,
+        organizationId: 'org-a',
+        active: true,
         branchAssignments: { some: { organizationId: 'org-a', userId: 'user-a', active: true } },
       },
       select: { id: true },
@@ -272,11 +279,9 @@ describe('DEV-52 server-authorized Counter navigation', () => {
   });
 
   it('honors an explicit DENY on another counter-family alias', async () => {
-    const f = fixture(
-      [{ capability: 'pharmacy:counter', effect: 'ALLOW' }],
-      'EMPLOYEE',
-      [{ capability: 'pharmacy.receipt', effect: 'DENY' }]
-    );
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }], 'EMPLOYEE', [
+      { capability: 'pharmacy.receipt', effect: 'DENY' },
+    ]);
     assign(f, ['branch-a']);
     await expect(access(f)).resolves.toBe(false);
   });
@@ -295,8 +300,10 @@ describe('DEV-52 server-authorized Counter navigation', () => {
     f.db.pharmacyBranch.findFirst.mockResolvedValueOnce(null);
     await expect(access(f)).resolves.toBe(false);
     f.db.user.findUnique.mockResolvedValueOnce({
-      status: 'DISABLED', organizationId: 'org-a',
-      organizationRole: { permissions: dispense }, permissionOverrides: [],
+      status: 'DISABLED',
+      organizationId: 'org-a',
+      organizationRole: { permissions: dispense },
+      permissionOverrides: [],
     });
     await expect(access(f)).resolves.toBe(false);
     f.user.organizationId = 'another-org';
@@ -379,7 +386,11 @@ const paths: {
 
 describe('counter receipt authorization', () => {
   it.each<[string, (caller: Caller) => Promise<unknown>]>([
-    ['create', (caller: Caller) => caller.create({ branchId: 'branch-a', quotation: false, deviceId: 'device-a' })],
+    [
+      'create',
+      (caller: Caller) =>
+        caller.create({ branchId: 'branch-a', quotation: false, deviceId: 'device-a' }),
+    ],
     [
       'settle',
       (caller: Caller) =>
@@ -405,6 +416,36 @@ describe('counter receipt authorization', () => {
       message: 'PROFILE_MISSING',
     });
     expect(f.db.$transaction).toHaveBeenCalled();
+  });
+
+  it('reads the current profile name only for a scoped designer request', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    Object.assign(f.context.organization, { timezone: 'Asia/Karachi' });
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      registeredName: 'Market Pharmacy',
+      ntn: null,
+      strn: null,
+    });
+    const api = f.caller();
+    await api.counterReceiptFormat({ branchId: 'branch-a' });
+    expect(readPharmacyReceiptTaxIdentity).not.toHaveBeenCalled();
+    await expect(
+      api.counterReceiptFormat({ branchId: 'branch-b', includeRegisteredName: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readPharmacyReceiptTaxIdentity).not.toHaveBeenCalled();
+    await expect(
+      api.counterReceiptFormat({ branchId: 'branch-a', includeRegisteredName: true })
+    ).resolves.toMatchObject({
+      registeredName: 'Market Pharmacy',
+      revision: 1,
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      expect.objectContaining({ branchId: 'branch-a' }),
+      expect.any(Date),
+      'Asia/Karachi'
+    );
   });
 
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
@@ -1153,51 +1194,56 @@ describe('counter receipt authorization', () => {
     });
   });
 
-  describe.each([
-    'counterReceiptBrowserPrint',
-    'counterReceiptBrowserPrintDispatched',
-  ] as const)('%s sale ID bounds', (procedure) => {
-    const call = (caller: Caller, saleId: string) => {
-      const input = { branchId: 'branch-a', saleId, locale: 'en' as const };
-      return procedure === 'counterReceiptBrowserPrint'
-        ? caller.counterReceiptBrowserPrint(input)
-        : caller.counterReceiptBrowserPrintDispatched({ ...input, copyNumber: 1 });
-    };
+  describe.each(['counterReceiptBrowserPrint', 'counterReceiptBrowserPrintDispatched'] as const)(
+    '%s sale ID bounds',
+    (procedure) => {
+      const call = (caller: Caller, saleId: string) => {
+        const input = { branchId: 'branch-a', saleId, locale: 'en' as const };
+        return procedure === 'counterReceiptBrowserPrint'
+          ? caller.counterReceiptBrowserPrint(input)
+          : caller.counterReceiptBrowserPrintDispatched({ ...input, copyNumber: 1 });
+      };
 
-    it.each([0, 129])(
-      'rejects a %i-character sale ID in direct tRPC calls before receipt or print-state access',
-      async (length) => {
+      it.each([0, 129])(
+        'rejects a %i-character sale ID in direct tRPC calls before receipt or print-state access',
+        async (length) => {
+          const f = fixture(dispense, 'ADMIN');
+
+          await expect(call(f.caller(), 's'.repeat(length))).rejects.toMatchObject({
+            code: 'BAD_REQUEST',
+          });
+          expect(readCounterReceipt).not.toHaveBeenCalled();
+          expect(f.db.$transaction).not.toHaveBeenCalled();
+          expect(f.db.$queryRaw).not.toHaveBeenCalled();
+          expect(f.db.$executeRaw).not.toHaveBeenCalled();
+        }
+      );
+
+      it('accepts a 128-character sale ID in direct tRPC calls', async () => {
         const f = fixture(dispense, 'ADMIN');
 
-        await expect(call(f.caller(), 's'.repeat(length))).rejects.toMatchObject({
-          code: 'BAD_REQUEST',
-        });
-        expect(readCounterReceipt).not.toHaveBeenCalled();
-        expect(f.db.$transaction).not.toHaveBeenCalled();
-        expect(f.db.$queryRaw).not.toHaveBeenCalled();
-        expect(f.db.$executeRaw).not.toHaveBeenCalled();
-      }
-    );
-
-    it('accepts a 128-character sale ID in direct tRPC calls', async () => {
-      const f = fixture(dispense, 'ADMIN');
-
-      await expect(call(f.caller(), 's'.repeat(128))).resolves.toMatchObject(
-        procedure === 'counterReceiptBrowserPrint'
-          ? { copyNumber: 1, reprint: false }
-          : { recorded: true }
-      );
-      expect(f.db.$executeRaw).toHaveBeenCalledTimes(1);
-    });
-  });
+        await expect(call(f.caller(), 's'.repeat(128))).resolves.toMatchObject(
+          procedure === 'counterReceiptBrowserPrint'
+            ? { copyNumber: 1, reprint: false }
+            : { recorded: true }
+        );
+        expect(f.db.$executeRaw).toHaveBeenCalledTimes(1);
+      });
+    }
+  );
 
   it.each(['counterReceiptPrintJob', 'counterReceiptBrowserPrint'] as const)(
     '%s rejects a caller-controlled marker before receipt or allocation access',
     async (procedure) => {
       const f = fixture(dispense, 'ADMIN');
-      await expect(f.caller()[procedure]({
-        branchId: 'branch-a', saleId: 'sale-a', locale: 'en', reprint: false,
-      } as never)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      await expect(
+        f.caller()[procedure]({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          locale: 'en',
+          reprint: false,
+        } as never)
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       expect(readCounterReceipt).not.toHaveBeenCalled();
       expect(f.db.$transaction).not.toHaveBeenCalled();
       expect(f.db.$queryRaw).not.toHaveBeenCalled();
@@ -1247,18 +1293,24 @@ describe('counter receipt authorization', () => {
   it('durably audits failed browser preflight without consuming the original', async () => {
     const f = fixture(dispense, 'ADMIN');
     const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const };
-    await expect(f.caller().counterReceiptBrowserPrintFailed(input)).resolves.toEqual({ recorded: true });
+    await expect(f.caller().counterReceiptBrowserPrintFailed(input)).resolves.toEqual({
+      recorded: true,
+    });
     expect(f.db.auditLog.create).toHaveBeenCalledExactlyOnceWith({
       data: expect.objectContaining({
-        organizationId: 'org-a', actorId: 'user-a', outcome: 'FAILURE',
-        targetId: 'sale-a', errorCode: 'BROWSER_PRINT_NOT_READY',
+        organizationId: 'org-a',
+        actorId: 'user-a',
+        outcome: 'FAILURE',
+        targetId: 'sale-a',
+        errorCode: 'BROWSER_PRINT_NOT_READY',
         metadata: { branchId: 'branch-a', locale: 'en' },
       }),
     });
     expect(f.db.$queryRaw).not.toHaveBeenCalled();
     expect(f.db.$executeRaw).not.toHaveBeenCalled();
     await expect(f.caller().counterReceiptPrintJob(input)).resolves.toMatchObject({
-      copyNumber: 1, reprint: false,
+      copyNumber: 1,
+      reprint: false,
     });
   });
 
@@ -1280,7 +1332,7 @@ describe('counter receipt authorization', () => {
     );
   });
 
-  it('records a browser dispatch only against the caller\'s own allocation', async () => {
+  it("records a browser dispatch only against the caller's own allocation", async () => {
     const f = fixture(dispense, 'ADMIN');
     const input = { branchId: 'branch-a', saleId: 'sale-a', locale: 'en' as const, copyNumber: 1 };
 
@@ -1420,9 +1472,8 @@ describe('counter receipt authorization', () => {
     }
     type LookupCall = [LookupArgs];
     const searchedBranches = (f: ReturnType<typeof fixture>) =>
-      (f.db.pharmacySale.findMany.mock.calls as unknown as LookupCall[]).flatMap(
-        ([args]) =>
-          typeof args.where.branchId === 'string' ? [args.where.branchId] : args.where.branchId.in
+      (f.db.pharmacySale.findMany.mock.calls as unknown as LookupCall[]).flatMap(([args]) =>
+        typeof args.where.branchId === 'string' ? [args.where.branchId] : args.where.branchId.in
       );
 
     it('finds a receipt in the cashier own active branch', async () => {

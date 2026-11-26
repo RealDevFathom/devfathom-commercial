@@ -18,6 +18,7 @@
  * on a field too.
  */
 import { z, ZodError } from 'zod';
+import { receiptTextSchema } from '@/lib/receipts/configuration';
 
 /**
  * Province display names. Which provinces the form actually offers comes from
@@ -127,6 +128,16 @@ const retentionYears = (subject: string) =>
     .min(1, `${subject} must be kept for at least 1 year.`)
     .max(30, 'Enter 30 years or fewer.');
 
+export function profileRegisteredName(premises: unknown): string | undefined {
+  if (
+    premises &&
+    typeof premises === 'object' &&
+    'registeredName' in premises &&
+    typeof premises.registeredName === 'string'
+  )
+    return premises.registeredName.trim() || undefined;
+}
+
 export const regulatoryProfileInput = z
   .object({
     branchId: required('Choose the branch this profile belongs to.', 128),
@@ -134,6 +145,10 @@ export const regulatoryProfileInput = z
     provinceCode: required('Choose the province this branch operates in.', 16),
     // Matches the branch address limit (300), since the premises address must
     // equal the branch address it belongs to (#660).
+    registeredName: receiptTextSchema(200)
+      .trim()
+      .regex(/^[^<>\n]*$/, 'Use a single line of plain text.')
+      .optional(),
     premisesAddressLine: required('Enter the street address of the premises.', 300),
     premisesCity: required('Enter the city of the premises.', 120),
     premisesPhone: z.string().trim().max(60, 'A phone number is at most 60 characters.').optional(),

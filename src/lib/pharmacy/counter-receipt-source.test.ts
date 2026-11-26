@@ -4,6 +4,7 @@ import { readCounterReceipt } from './counter';
 function fixture(actorId: string | null = 'settling-cashier') {
   const sale = {
     id: 'sale-a',
+    receiptDeviceId: 'till-code-abcd',
     createdByUserId: 'bill-creator',
     receiptNumber: 1,
     completedAt: new Date('2026-11-01T20:12:00Z'),
@@ -31,6 +32,7 @@ function fixture(actorId: string | null = 'settling-cashier') {
     ],
   };
   const db = {
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ name: 'West counter' })) },
     pharmacySale: { findFirst: vi.fn(async () => sale) },
     pharmacySaleEvent: { findMany: vi.fn(async () => [{ payload: {}, actorId }]) },
     user: { findFirst: vi.fn(async (): Promise<{ name: string } | null> => ({ name: 'Ayesha' })) },
@@ -38,12 +40,10 @@ function fixture(actorId: string | null = 'settling-cashier') {
   return {
     db,
     read: () =>
-      readCounterReceipt(
-        db as never,
-        { organizationId: 'org-a', branchId: 'branch-a' },
-        'sale-a',
-        { name: 'Synthetic pharmacy', currency: 'PKR' }
-      ),
+      readCounterReceipt(db as never, { organizationId: 'org-a', branchId: 'branch-a' }, 'sale-a', {
+        name: 'Synthetic pharmacy',
+        currency: 'PKR',
+      }),
   };
 }
 describe('DEV-636 receipt cashier attribution', () => {
@@ -185,5 +185,17 @@ describe('#708 cash memo facts on reprint', () => {
       cashMemoIdentity
     );
     expect((await snapshotFixture({ cashMemoIdentity: null })).cashMemoIdentity).toBeNull();
+  });
+});
+
+it('shows the current branch and registered counter names on a legacy receipt', async () => {
+  const f = fixture();
+  const result = await f.read();
+  expect(result.branchName).toBe('Synthetic pharmacy');
+  expect(result.counterLabel).toBe('West counter');
+  expect(JSON.stringify(result)).not.toContain('branch-a');
+  expect(f.db.pharmacyRegisteredDevice.findFirst).toHaveBeenCalledExactlyOnceWith({
+    where: { id: 'till-code-abcd', organizationId: 'org-a', branchId: 'branch-a' },
+    select: { name: true },
   });
 });

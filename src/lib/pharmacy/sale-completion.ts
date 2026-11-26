@@ -7,6 +7,7 @@ import { assertSaleBatchesSellable } from './sale-batch-safety';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import { assertRxSaleAllowed } from './rx-sale-gate';
 import { readPharmacyReceiptTaxIdentity } from './receipt-print';
+import { counterLabel } from './counter-label';
 import { sindhCashMemoSelected } from './counter-receipt';
 import { allocateBranchReceiptNumbers, branchReceiptNumberTaken } from './branch-receipt-sequence';
 import {
@@ -15,6 +16,7 @@ import {
 } from './rx-prescription-reference';
 
 export const completionSaleInclude = {
+  visibilityAnchor: { select: { name: true } },
   lines: {
     include: {
       medicine: { include: { strengths: { orderBy: { id: 'asc' } } } },
@@ -146,10 +148,30 @@ export async function completePaidPharmacySale(
   const cashMemoIdentity = sindhCashMemoSelected(regulatoryIdentity.provinceCode)
     ? regulatoryIdentity
     : null;
+  const issuingBranch = sale.visibilityAnchor;
+  const issuingDevice = issuingBranch
+    ? await db.pharmacyRegisteredDevice.findFirst({
+        where: {
+          id: input.deviceId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+        select: { name: true },
+      })
+    : null;
   const snapshot = validateReceiptIdentity(
     {
       receiptIdentitySnapshotVersion: 1,
       cashMemoIdentity,
+      ...(issuingBranch
+        ? {
+            seller: {
+              branchName: issuingBranch.name,
+              registeredName: regulatoryIdentity.registeredName ?? null,
+              counterLabel: issuingDevice?.name?.trim() || counterLabel(input.deviceId),
+            },
+          }
+        : {}),
       saleId: sale.id,
       receiptNumber,
       // DEV-637: the number printed offline, when replay had to renumber the sale.
