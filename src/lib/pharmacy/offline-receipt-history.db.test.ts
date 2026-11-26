@@ -68,6 +68,17 @@ it.runIf(url)(
       await setScope(randomUUID(), branch);
       expect((await listed()).rows).toEqual([]);
       await setScope(org, branch);
+      for (const statement of [
+        'DELETE FROM pharmacy_offline_receipt_events WHERE id=$1',
+        'TRUNCATE pharmacy_offline_receipt_events',
+      ]) {
+        await client.query('SAVEPOINT immutable_history');
+        await expect(
+          client.query(statement, statement.includes('$1') ? [device] : [])
+        ).rejects.toMatchObject({ code: statement.startsWith('TRUNCATE') ? '42501' : '55000' });
+        await client.query('ROLLBACK TO SAVEPOINT immutable_history');
+        expect((await listed()).rows).toEqual([{ reason: 'DAY_CLOSED' }]);
+      }
       await expect(
         client.query('UPDATE pharmacy_offline_receipt_events SET reason=$1 WHERE id=$2', [
           'replacement',

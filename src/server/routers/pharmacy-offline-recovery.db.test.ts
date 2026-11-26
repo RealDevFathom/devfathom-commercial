@@ -31,6 +31,7 @@ const suffix = randomBytes(6).toString('hex');
 const ORG_A = `offline_recovery_${suffix}`;
 
 const ACTOR = `user_pharmacist_${suffix}`;
+let webUser = { id: ACTOR, role: 'ADMIN' };
 /** Branches whose sale-gate regulatory profile is seeded, mapped to the rule-set id. */
 const regulatedBranches = new Map<string, string>();
 
@@ -266,8 +267,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({
     organization: { id: ORG_A },
     session: {
       user: {
-        id: ACTOR,
-        role: 'ADMIN',
+        ...webUser,
         status: 'ACTIVE',
         department: 'PHARMACY',
         organizationId: ORG_A,
@@ -455,6 +455,143 @@ async function supervisor<T>(
 }
 
 describeIfDatabase('Offline receipt recovery through the counter routes', () => {
+  it('requires real branch approval rights for retry, quarantine, listing and cash resolution', async () => {
+    const counter = await setup(false);
+    const scope = scopeOf(counter.fixture);
+    const other = tag('other-branch');
+    const cashier = tag('cashier'),
+      manager = tag('manager'),
+      outsider = tag('other-manager');
+    await inOrg(ORG_A, async (db) => {
+      await ensureBranch(db, ORG_A, other);
+      for (const [userId, branchId, isManager] of [
+        [cashier, scope.branchId, false],
+        [manager, scope.branchId, true],
+        [outsider, other, true],
+      ] as const) {
+        const role = await db.organizationRole.create({
+          data: {
+            key: tag('role'),
+            name: userId,
+            permissions: {
+              create: (isManager
+                ? ['admin:access', 'pharmacy:orders', 'pharmacy:counter']
+                : ['pharmacy:orders', 'pharmacy:counter']
+              ).map((capability) => ({ capability, effect: 'ALLOW' })),
+            },
+          },
+        });
+        await db.user.create({
+          data: {
+            id: userId,
+            email: userId + '@example.test',
+            name: userId,
+            title: 'Staff',
+            status: 'ACTIVE',
+            department: 'PHARMACY',
+            role: 'EMPLOYEE',
+            organizationRoleId: role.id,
+          },
+        });
+        await db.pharmacyBranchAssignment.create({ data: { userId, branchId } });
+      }
+    });
+    const sealed = counter.chain.seal(counter.command);
+    expect(await (await counter.replay(sealed)).json()).toEqual({ error: 'DRAWER_NOT_OPEN' });
+    const assigned = await supervisor(
+      (api) => api.refusedReceipts({ branchId: scope.branchId }),
+      manager,
+      'EMPLOYEE'
+    );
+    expect(assigned.rows.map((row) => row.reason)).toEqual(['DRAWER_NOT_OPEN']);
+    await expect(
+      supervisor((api) => api.refusedReceipts({ branchId: scope.branchId }), outsider, 'EMPLOYEE')
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(
+      (await supervisor((api) => api.refusedReceipts({ branchId: other }), outsider, 'EMPLOYEE'))
+        .rows
+    ).toEqual([]);
+    const resolution = {
+      eventId: assigned.rows[0]!.id,
+      branchId: scope.branchId,
+      outcome: 'WRITE_OFF' as const,
+      reason: 'Review fixture',
+      managerPin: '2651',
+    };
+    await expect(
+      supervisor((api) => api.resolveCash(resolution), manager, 'EMPLOYEE')
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Only the owner can write off held cash.',
+    });
+    await expect(
+      supervisor(
+        (api) => api.resolveCash({ ...resolution, outcome: 'REFUND' }),
+        outsider,
+        'EMPLOYEE'
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    try {
+      for (const user of [cashier, outsider]) {
+        webUser = { id: user, role: 'EMPLOYEE' };
+        if (user === cashier) await counter.establish();
+        for (const action of ['retry', 'quarantine'] as const) {
+          const response = await counter.call(
+            action,
+            { command: sealed, reason: 'Review fixture' },
+            { 'idempotency-key': sealed.idempotencyKey }
+          );
+          expect(response.status).toBe(403);
+          expect(await response.json()).toEqual({
+            error: user === cashier ? 'forbidden' : 'branch_forbidden',
+          });
+        }
+      }
+    } finally {
+      webUser = { id: ACTOR, role: 'ADMIN' };
+    }
+    expect(await counter.counts()).toMatchObject({ sales: 0, commands: 0, consumed: 0 });
+  });
+
+  it('requires recorded seal evidence for quarantine and a fixable refusal for retry', async () => {
+    const counter = await setup();
+    const scope = scopeOf(counter.fixture);
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const command = counter.chain.seal(counter.command);
+    const sign = (value: unknown) =>
+      signPharmacyCommand(scope, counter.fixture.deviceId, value, counter.fixture.deviceSecret);
+    const review = {
+      action: 'quarantine',
+      command,
+      reason: 'Check receipt',
+      originalHash: counter.chain.hashOf(1),
+    };
+    const quarantine = await counter.call('quarantine', review, {
+      'idempotency-key': command.idempotencyKey,
+      'x-command-signature': sign(review),
+    });
+    expect(quarantine.status).toBe(409);
+    expect(await quarantine.json()).toEqual({ error: 'quarantine_requires_refused_receipt' });
+    await inOrg(ORG_A, (db) =>
+      db.medicine.update({ where: { id: counter.fixture.medicineId }, data: { highAlert: true } })
+    );
+    expect(await (await counter.replay(command)).json()).toEqual({
+      error: 'medicine_not_offline_otc',
+    });
+    const retry = await counter.call(
+      'retry',
+      { command, reason: 'Reviewed medicine class' },
+      {
+        'idempotency-key': command.idempotencyKey,
+        'x-command-signature': sign(command),
+        'x-receipt-signature': sign(command.leasedReceipt),
+      }
+    );
+    expect(retry.status).toBe(409);
+    expect(await retry.json()).toEqual({ error: 'review_requires_fixable_refusal' });
+    expect(await counter.counts()).toMatchObject({ sales: 0, commands: 0, consumed: 0 });
+  });
+
   it('pages equal-time supervisor receipts without repeating or losing a receipt', async () => {
     const counter = await setup();
     const scope = scopeOf(counter.fixture),
