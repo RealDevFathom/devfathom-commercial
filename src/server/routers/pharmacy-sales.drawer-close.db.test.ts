@@ -219,6 +219,11 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       asAdmin((c) =>
         c.saveCounterDefaultSaleUnit({ branchId: ACTIVE, previous: 'UNIT', unit: 'PACK' })
       );
+    const paymentPolicy = () =>
+      asAdmin((c) =>
+        c.saveCounterPaymentDetails({ branchId: ACTIVE, previous: false, required: true })
+      );
+    await expect(paymentPolicy()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     // The fixture administrator can manage drawers but has no owner grant.
     await expect(change()).rejects.toMatchObject({ code: 'FORBIDDEN' });
     const permission = await withTenantDb(ORG, (db) =>
@@ -232,9 +237,13 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       })
     );
     try {
+      await expect(paymentPolicy()).resolves.toEqual({ required: true });
+      await expect(paymentPolicy()).rejects.toMatchObject({ code: 'CONFLICT' });
       await expect(change()).resolves.toEqual({ unit: 'PACK' });
       await expect(change()).rejects.toMatchObject({ code: 'CONFLICT' });
       const { branches } = await asAdmin((c) => c.counterBranches());
+      expect(branches.find((b) => b.id === ACTIVE)?.requirePaymentDetails).toBe(true);
+      expect(branches.find((b) => b.id === other)?.requirePaymentDetails).toBe(false);
       expect(branches.find((b) => b.id === ACTIVE)?.counterDefaultSaleUnit).toBe('PACK');
       expect(branches.find((b) => b.id === other)?.counterDefaultSaleUnit).toBe('UNIT');
     } finally {

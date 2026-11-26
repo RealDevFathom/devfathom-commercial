@@ -176,10 +176,26 @@ export function paymentDetailLabel(tender: {
   providerRef?: string | null;
   approvalCode?: string | null;
 }) {
-  if (tender.type === 'BANK_TRANSFER') return tender.providerRef || 'No transfer details';
+  if (tender.type === 'BANK_TRANSFER') {
+    if (!tender.providerRef) return 'No transfer details';
+    return bankTransferCaptureSchema.safeParse({ providerRef: tender.providerRef }).success
+      ? tender.providerRef
+      : 'Reference unavailable';
+  }
   if (tender.type === 'CARD' && tender.provider === MANUAL_CARD_PROVIDER)
     return (
-      [tender.providerRef, tender.approvalCode].filter(Boolean).join(' · ') || 'No slip details'
+      [
+        tender.providerRef &&
+        MANUAL_CARD_REFERENCE.test(tender.providerRef) &&
+        !looksLikeCardNumber(tender.providerRef)
+          ? tender.providerRef
+          : null,
+        tender.approvalCode && MANUAL_CARD_APPROVAL_CODE.test(tender.approvalCode)
+          ? tender.approvalCode
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || 'No slip details'
     );
   return null;
 }

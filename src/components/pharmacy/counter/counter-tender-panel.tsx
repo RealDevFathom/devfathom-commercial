@@ -1055,10 +1055,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           {bankTransfer ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
               {lockNote}
-              <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
-              {!requirePaymentDetails && (
-                <span className="text-sm text-text-muted"> (optional)</span>
-              )}
+              <div className="flex flex-wrap items-baseline gap-1">
+                <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
+                {!requirePaymentDetails && (
+                  <span id="bank-transfer-reference-optional" className="text-sm text-text-muted">
+                    (optional)
+                  </span>
+                )}
+              </div>
               <Input
                 id="bank-transfer-reference"
                 ref={providerRefInput}
@@ -1069,7 +1073,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 required={requirePaymentDetails}
                 disabled={!editable}
                 aria-invalid={providerRef !== '' && !transferCapture?.success}
-                aria-describedby="bank-transfer-help"
+                aria-describedby={
+                  requirePaymentDetails
+                    ? 'bank-transfer-help'
+                    : 'bank-transfer-help bank-transfer-reference-optional'
+                }
                 onChange={(event) => setProviderRef(event.target.value)}
               />
               <p id="bank-transfer-help" className="text-sm text-text-muted">
@@ -1087,12 +1095,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 Easypaisa or Raast under Wallet, not Card.
               </p>
               {lockNote}
-              <Label htmlFor="manual-card-reference">
-                Card last 4 digits or terminal reference
-              </Label>
-              {!requirePaymentDetails && (
-                <span className="text-sm text-text-muted"> (optional)</span>
-              )}
+              <div className="flex flex-wrap items-baseline gap-1">
+                <Label htmlFor="manual-card-reference">
+                  Card last 4 digits or terminal reference
+                </Label>
+                {!requirePaymentDetails && (
+                  <span id="manual-card-reference-optional" className="text-sm text-text-muted">
+                    (optional)
+                  </span>
+                )}
+              </div>
               <Input
                 required={requirePaymentDetails}
                 id="manual-card-reference"
@@ -1102,13 +1114,21 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 maxLength={24}
                 disabled={!editable}
                 aria-invalid={providerRef !== '' && !MANUAL_CARD_REFERENCE.test(providerRef.trim())}
-                aria-describedby="manual-card-help"
+                aria-describedby={
+                  requirePaymentDetails
+                    ? 'manual-card-help'
+                    : 'manual-card-help manual-card-reference-optional'
+                }
                 onChange={(event) => setProviderRef(event.target.value)}
               />
-              <Label htmlFor="manual-card-approval">Approval code</Label>
-              {!requirePaymentDetails && (
-                <span className="text-sm text-text-muted"> (optional)</span>
-              )}
+              <div className="flex flex-wrap items-baseline gap-1">
+                <Label htmlFor="manual-card-approval">Approval code</Label>
+                {!requirePaymentDetails && (
+                  <span id="manual-card-approval-optional" className="text-sm text-text-muted">
+                    (optional)
+                  </span>
+                )}
+              </div>
               <Input
                 required={requirePaymentDetails}
                 id="manual-card-approval"
@@ -1120,7 +1140,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 aria-invalid={
                   approvalCode !== '' && !MANUAL_CARD_APPROVAL_CODE.test(approvalCode.trim())
                 }
-                aria-describedby="manual-card-help"
+                aria-describedby={
+                  requirePaymentDetails
+                    ? 'manual-card-help'
+                    : 'manual-card-help manual-card-approval-optional'
+                }
                 onChange={(event) => setApprovalCode(event.target.value)}
               />
               <p id="manual-card-help" className="text-sm text-text-muted">
@@ -1189,12 +1213,19 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setPayerName(event.target.value)}
                   />
-                  <Label htmlFor="manual-provider-reference">
-                    Transaction ID (last 4–6 digits)
-                  </Label>
-                  {!requirePaymentDetails && (
-                    <span className="text-sm text-text-muted"> (optional)</span>
-                  )}
+                  <div className="flex flex-wrap items-baseline gap-1">
+                    <Label htmlFor="manual-provider-reference">
+                      Transaction ID (last 4–6 digits)
+                    </Label>
+                    {!requirePaymentDetails && (
+                      <span
+                        id="manual-provider-reference-optional"
+                        className="text-sm text-text-muted"
+                      >
+                        (optional)
+                      </span>
+                    )}
+                  </div>
                   <Input
                     ref={providerRefInput}
                     id="manual-provider-reference"
@@ -1206,7 +1237,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     aria-invalid={
                       !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
                     }
-                    aria-describedby="manual-reference-help"
+                    aria-describedby={
+                      requirePaymentDetails
+                        ? 'manual-reference-help'
+                        : 'manual-reference-help manual-provider-reference-optional'
+                    }
                     onChange={(event) => setProviderRef(event.target.value)}
                   />
                   <p id="manual-reference-help" className="text-sm text-text-muted">

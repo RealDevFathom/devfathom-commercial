@@ -370,49 +370,79 @@ export async function readSaleKhataAccounts(
   if (!sale?.customerId) return [];
   const term = filter.query?.trim();
   const digits = term?.replace(/[\s()-]/g, '');
-  const accounts = await db.pharmacyFamilyAccount.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      active: true,
-      members: { some: { customerId: sale.customerId } },
-      ...(filter.accountId ? { id: filter.accountId } : {}),
-      ...(term
-        ? {
-            OR: [
-              { displayName: { contains: term, mode: 'insensitive' as const } },
-              { payer: { displayName: { contains: term, mode: 'insensitive' as const } } },
-              ...(digits && /^\+?\d+$/.test(digits)
-                ? [{ payer: { phoneLast4: { contains: digits.slice(-4) } } }]
-                : []),
-            ],
-          }
-        : {}),
-    },
-    select: {
-      id: true,
-      displayName: true,
-      creditLimitMinor: true,
-      payerCustomerId: true,
-      payer: { select: { phoneLast4: true } },
-      members: { where: { customerId: sale.customerId }, select: { id: true } },
-    },
-    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
-    take: 10,
-  });
-  return Promise.all(
-    accounts.map(async (account) => ({
-      id: account.id,
-      displayName: account.displayName,
-      creditLimitMinor: account.creditLimitMinor,
-      memberId: account.members[0]!.id,
-      ...(account.payer?.phoneLast4
-        ? { maskedPhone: `•••• ${account.payer.phoneLast4.slice(-4)}` }
-        : {}),
-      ...(account.payerCustomerId === sale.customerId ? { linkedPayer: true } : {}),
-      balanceMinor: await readKhataBalance(db, scope, account.id),
-    }))
-  );
+  const where = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    active: true,
+    members: { some: { customerId: sale.customerId } },
+    ...(filter.accountId ? { id: filter.accountId } : {}),
+    ...(term
+      ? {
+          OR: [
+            { displayName: { contains: term, mode: 'insensitive' as const } },
+            { payer: { displayName: { contains: term, mode: 'insensitive' as const } } },
+            ...(digits && /^\+?\d+$/.test(digits)
+              ? [{ payer: { phoneLast4: { contains: digits.slice(-4) } } }]
+              : []),
+          ],
+        }
+      : {}),
+  };
+  const select = {
+    id: true,
+    displayName: true,
+    creditLimitMinor: true,
+    payerCustomerId: true,
+    payer: { select: { phoneLast4: true } },
+    members: { where: { customerId: sale.customerId }, select: { id: true } },
+  } as const;
+  const orderBy = [{ displayName: 'asc' as const }, { id: 'asc' as const }];
+  const accounts = await db.pharmacyFamilyAccount.findMany({ where, select, orderBy, take: 10 });
+  if (
+    !term &&
+    !filter.accountId &&
+    accounts.length === 10 &&
+    !accounts.some((account) => account.payerCustomerId === sale.customerId)
+  ) {
+    const payerAccount = await db.pharmacyFamilyAccount.findFirst({
+      where: { ...where, payerCustomerId: sale.customerId },
+      select,
+      orderBy,
+    });
+    if (payerAccount) accounts.splice(9, 1, payerAccount);
+  }
+  // The page needs one aggregate read, even when ten eligible accounts match.
+  const balances = new Map<string, number>();
+  if (accounts.length > 1) {
+    const totals = await db.pharmacyKhataEvent.groupBy({
+      by: ['familyAccountId', 'kind'],
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        familyAccountId: { in: accounts.map((account) => account.id) },
+      },
+      _sum: { amountMinor: true },
+    });
+    for (const total of totals)
+      balances.set(
+        total.familyAccountId,
+        (balances.get(total.familyAccountId) ?? 0) +
+          (total.kind === 'PAYMENT' ? -1 : 1) * (total._sum.amountMinor ?? 0)
+      );
+  } else if (accounts[0]) {
+    balances.set(accounts[0].id, await readKhataBalance(db, scope, accounts[0].id));
+  }
+  return accounts.map((account) => ({
+    id: account.id,
+    displayName: account.displayName,
+    creditLimitMinor: account.creditLimitMinor,
+    memberId: account.members[0]!.id,
+    ...(account.payer?.phoneLast4
+      ? { maskedPhone: `•••• ${account.payer.phoneLast4.slice(-4)}` }
+      : {}),
+    ...(account.payerCustomerId === sale.customerId ? { linkedPayer: true } : {}),
+    balanceMinor: balances.get(account.id) ?? 0,
+  }));
 }
 
 export async function readSaleKhataStatement(
