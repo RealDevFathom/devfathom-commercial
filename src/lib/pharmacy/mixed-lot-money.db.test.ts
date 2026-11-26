@@ -488,3 +488,69 @@ test.each([undefined, '   '])(
     });
   }
 );
+
+test.each([false, true])(
+  'database manual card and transfer policy, requirePaymentDetails=%s',
+  async (required) => {
+    const f = await cart();
+    await tenant((db) =>
+      db.pharmacyBranch.update({
+        where: { id: scope.branchId },
+        data: { requirePaymentDetails: required },
+      })
+    );
+    const base = {
+      ...scope,
+      saleId: f.sale.id,
+      deviceId: randomUUID(),
+      businessDate: day,
+      amountMinor: 1,
+      confirmedById: scope.actorId,
+    };
+    const card = (evidence: { providerRef?: string; approvalCode?: string }) =>
+      tenant((db) =>
+        db.pharmacyTender.create({
+          data: { ...base, type: 'CARD', provider: 'MANUAL_TERMINAL', ...evidence },
+        })
+      );
+    const transfer = (providerRef?: string) =>
+      tenant((db) =>
+        db.pharmacyTender.create({ data: { ...base, type: 'BANK_TRANSFER', providerRef } })
+      );
+    for (const optional of [
+      () => card({}),
+      () => card({ providerRef: '1234' }),
+      () => card({ approvalCode: 'OK12' }),
+      () => transfer(),
+    ]) {
+      if (required) await expect(optional()).rejects.toThrow(/requires payment details/);
+      else await expect(optional()).resolves.toMatchObject({ confirmedById: scope.actorId });
+    }
+    await expect(card({ providerRef: '1234', approvalCode: 'OK12' })).resolves.toMatchObject({
+      providerRef: '1234',
+      approvalCode: 'OK12',
+    });
+    await expect(card({ providerRef: '1234567890123456', approvalCode: 'OK12' })).rejects.toThrow(
+      /pharmacy_manual_card_tender_capture_check/
+    );
+    await expect(card({ providerRef: '1234', approvalCode: '!' })).rejects.toThrow(
+      /pharmacy_manual_card_tender_capture_check/
+    );
+    await expect(transfer('QA-TRANSFER-100')).resolves.toMatchObject({
+      providerRef: 'QA-TRANSFER-100',
+    });
+    // The provider lane carries its own external approval. No standalone slip is required.
+    await expect(
+      tenant((db) =>
+        db.pharmacyTender.create({
+          data: {
+            ...base,
+            type: 'CARD',
+            provider: 'FAKE_TERMINAL',
+            providerRef: 'approved-in-provider',
+          },
+        })
+      )
+    ).resolves.toMatchObject({ provider: 'FAKE_TERMINAL', approvalCode: null });
+  }
+);
