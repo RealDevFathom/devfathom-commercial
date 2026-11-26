@@ -5,7 +5,7 @@ import { expect, it } from 'vitest';
 
 const url = process.env.PHARMACY_DB_TEST_OWNER_URL;
 const migration = readFileSync(
-  'prisma/migrations/20261126010000_shared_approval_pin_provenance/migration.sql',
+  'prisma/migrations/20261126020000_shared_approval_pin_provenance/migration.sql',
   'utf8'
 );
 
