@@ -597,7 +597,7 @@ describe('Quarantine resolution forms', () => {
     await show();
     const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
     expect(
-      selectFieldControl(within(form).getByRole('combobox', { name: 'Co-authorizing witness' }))
+      selectFieldControl(within(form).getByRole('combobox', { name: 'Witness for this write-off' }))
     ).toHaveValue('user');
     expect(within(form).getByText(/Confirm with your own PIN/)).toBeInTheDocument();
   });
@@ -1065,4 +1065,17 @@ describe('near-expiry value at risk (DEV-965)', () => {
     expect(within(card).getByText(/1250 units at risk/)).toBeVisible();
     expect(within(card).queryByText('1,250 units')).toBeNull();
   });
+});
+
+it('DEV-1044 explains the inventory overview in shop language', async () => {
+  ctx.db.pharmacyBranch.findMany.mockResolvedValue([{ ...branch, city: 'Not recorded' }]);
+  await show();
+
+  expect(screen.getByRole('link', { name: 'Past stock imports' })).toBeVisible();
+  expect(screen.getByText('From recorded stock movements')).toBeVisible();
+  expect(screen.getByText('Stock counts waiting for a second person to approve')).toBeVisible();
+  expect(screen.getByText('Stock tasks to do, most urgent first')).toBeVisible();
+  expect(document.body).not.toHaveTextContent(
+    /Organization-scoped|Working branch|Ledger projection|Distinct co-author required|Ranked by due time|Imported stock references|Main · Not recorded/
+  );
 });
