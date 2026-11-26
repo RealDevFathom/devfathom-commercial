@@ -176,6 +176,35 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
       }
     });
   });
+  it('returns only the ten ranked medicines, with opposite margin rankings and full-period exclusions', async () => {
+    await scoped.withTenantDb(org, async (db) => {
+      const id = org + '_ranks';
+      await db.pharmacyBranch.create({
+        data: { id, name: id, code: id, addressLine: 'Test', city: 'Lahore', provinceCode: 'PB' },
+      });
+      const meds: string[] = [];
+      for (let n = 0; n < 12; n++) {
+        const name = 'Rank ' + String(n).padStart(2, '0');
+        const { medicine } = await seedVisualReport(db, id, id + '_' + n, day, 5 + n);
+        await db.medicine.update({ where: { id: medicine }, data: { productName: name } });
+        meds.push(medicine);
+      }
+      for (const [chart, expected] of [
+        ['topMargin', meds.slice(0, 10)],
+        ['bottomMargin', [...meds].reverse().slice(0, 10)],
+        ['returnMedicine', meds.slice(0, 10)],
+      ] as const) {
+        const report = await readVisualChart(db, [{ id }], 'Asia/Karachi', {
+          chart,
+          preset: 'custom',
+          custom,
+        });
+        expect(report.rows.map((row) => row.key)).toEqual(expected);
+        if (chart !== 'returnMedicine')
+          expect(report).toMatchObject({ excludedLines: 12, postedCurrencies: ['PKR'] });
+      }
+    });
+  });
   it('provides tenant, branch and date indexes for the bounded chart reads', async () => {
     await scoped.withTenantDb(org, async (db) => {
       const indexes = await db.$queryRaw<

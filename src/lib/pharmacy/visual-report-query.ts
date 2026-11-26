@@ -24,6 +24,7 @@ type ChartInput = {
 };
 type Row = {
   currencies: string[] | null;
+  periodExcluded?: bigint;
   included: bigint;
   key: string;
   label: string;
@@ -134,16 +135,35 @@ export async function readVisualChart(
     : chartFacts(input.chart, zone);
   const drill = input.bucket !== undefined;
   const groups = drill ? sql`ref,detail` : sql`key,label`;
-  const rows = await db.$queryRaw<Row[]>(sql`WITH bounds AS (
+  const rankMargin = input.chart === 'topMargin' || input.chart === 'bottomMargin';
+  const ranked = !drill && (rankMargin || input.chart === 'returnMedicine');
+  const currencies = profit
+    ? sql`ARRAY_AGG(DISTINCT currency) FILTER(WHERE currency IS NOT NULL)`
+    : sql`NULL::text[]`;
+  const grouped = sql`SELECT ${drill ? sql`ref AS key,detail AS label` : sql`key,label`},
+    ${currencies} AS currencies, COUNT(*) FILTER (WHERE excluded=0) AS included,
+    SUM(amount)::bigint AS amount, SUM(base)::bigint AS base, SUM(excluded)::bigint AS excluded
+    FROM facts ${drill ? sql`WHERE key=${input.bucket}` : Prisma.empty} GROUP BY ${groups}`;
+  // Rank on the displayed percentage (the same rounding as reportRatePercent), then a stable tie-break.
+  const sort = rankMargin
+    ? sql`floor(amount::numeric * 10000 / NULLIF(base,0) + 0.5) ${input.chart === 'bottomMargin' ? sql`ASC` : sql`DESC`}, label, key`
+    : sql`amount DESC, label, key`;
+  const result = ranked
+    ? sql`, ranked AS (
+          SELECT * FROM grouped ${rankMargin ? sql`WHERE included>0 AND base>0` : Prisma.empty}
+          ORDER BY ${sort} LIMIT 10
+        ), metadata AS (
+          SELECT ${currencies} AS currencies, COALESCE(SUM(excluded),0)::bigint AS "periodExcluded" FROM facts
+        )
+        SELECT r.key,r.label,r.amount,r.base,r.included,r.excluded,metadata.*
+        FROM metadata LEFT JOIN ranked r ON TRUE ORDER BY ${sort}`
+    : sql` SELECT * FROM grouped ORDER BY key ${drill ? sql`LIMIT 51 OFFSET ${input.offset ?? 0}` : Prisma.empty}`;
+  const data = await db.$queryRaw<Row[]>(sql`WITH bounds AS (
     SELECT * FROM jsonb_to_recordset(${JSON.stringify(windows)}::jsonb)
     AS b(id text,first date,stop date,start_at timestamp,stop_at timestamp)
-  ), facts AS (${facts})
-  SELECT ${drill ? sql`ref AS key,detail AS label` : sql`key,label`},
-  ${profit ? sql`ARRAY_AGG(DISTINCT currency) FILTER(WHERE currency IS NOT NULL)` : sql`NULL::text[]`} AS currencies,
-  COUNT(*) FILTER (WHERE excluded=0) AS included, SUM(amount)::bigint AS amount,SUM(base)::bigint AS base,SUM(excluded)::bigint AS excluded
-  FROM facts ${drill ? sql`WHERE key=${input.bucket}` : Prisma.empty}
-  GROUP BY ${groups} ORDER BY ${drill ? sql`ref` : sql`key`}
-  ${drill ? sql`LIMIT 51 OFFSET ${input.offset ?? 0}` : Prisma.empty}`);
+  ), facts AS (${facts}), grouped AS (${grouped}) ${result}`);
+  // An empty ranking still has one metadata row to disclose excluded lines and currencies.
+  const rows = ranked ? data.filter((row) => row.key != null) : data;
   const number = (value: bigint) => {
     const n = Number(value);
     if (!Number.isSafeInteger(n)) throw new RangeError('Report total exceeds supported precision.');
@@ -151,7 +171,10 @@ export async function readVisualChart(
   };
   return {
     period,
-    postedCurrencies: [...new Set(rows.flatMap((row) => row.currencies ?? []))].sort(),
+    excludedLines: number(
+      data[0]?.periodExcluded ?? rows.reduce((sum, row) => sum + row.excluded, 0n)
+    ),
+    postedCurrencies: [...new Set(data.flatMap((row) => row.currencies ?? []))].sort(),
     more: drill && rows.length > 50,
     rows: (drill ? rows.slice(0, 50) : rows).map((row) => {
       const amount = number(row.amount),

@@ -177,18 +177,6 @@ function ChartPanel({
   const period = current.data?.period;
   const previousRows = new Map(before.map((row) => [row.key, row]));
   const points: BusinessChartPoint[] = [];
-  const ranked = chart === 'topMargin' || chart === 'bottomMargin' || chart === 'returnMedicine';
-  let chartRows = rows;
-  if (ranked)
-    chartRows = rows
-      .filter((r) => r.value !== null)
-      .slice()
-      .sort(
-        (a, b) =>
-          (chart === 'bottomMargin' ? 1 : -1) * (a.value! - b.value!) ||
-          a.label.localeCompare(b.label)
-      )
-      .slice(0, 10);
   if (main && period && isDaily(chart) && (rows.length || before.length)) {
     const currentRows = new Map(rows.map((r) => [r.key, r]));
     for (let date = period.from, i = 0; date <= period.to; date = shiftPharmacyDay(date, 1), i++) {
@@ -206,9 +194,9 @@ function ChartPanel({
       });
     }
   } else
-    for (const row of chartRows)
+    for (const row of rows)
       points.push({ key: row.key, label: row.label, value: row.value, secondary: row.base });
-  const excluded = rows.reduce((sum, row) => sum + row.excluded, 0);
+  const excluded = current.data?.excludedLines ?? 0;
   return (
     <SectionCard
       title={CHARTS[chart]}
