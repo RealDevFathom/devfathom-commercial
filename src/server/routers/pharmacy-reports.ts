@@ -1105,7 +1105,10 @@ export const pharmacyReportsRouter = router({
           access,
           now
         );
-        return rows.map((row) => ({ ...row, href: link(row.href) }));
+        return rows.map((row) => ({
+          ...row,
+          href: link(row.href, row.href === '/pharmacy/counter' ? 'branchId' : 'branch'),
+        }));
       }
       if (!financial) return [];
       if (input.section === 'suppliers') {
@@ -1245,12 +1248,16 @@ export const pharmacyReportsRouter = router({
       try {
         // Khata's branch context is transaction-local; keep it and all report reads together.
         const result = await ctx.db.$transaction((tx) =>
-          readPharmacyOwnerCommandCentre(tx, {
-            ...input,
-            branchIds,
-            timeZone: ctx.organization?.timezone,
-            ...reportDayEnds(available, branchIds),
-          })
+          readPharmacyOwnerCommandCentre(
+            tx,
+            {
+              ...input,
+              branchIds,
+              timeZone: ctx.organization?.timezone,
+              ...reportDayEnds(available, branchIds),
+            },
+            ...(input.dashboard ? ([new Date()] as const) : [])
+          )
         );
         const financial = await can(
           subjectFromSession(ctx.session!.user),

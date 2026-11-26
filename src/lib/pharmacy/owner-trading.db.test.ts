@@ -131,6 +131,24 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
     ]);
     expect(rows[0]!.value).toBeGreaterThan(0);
   });
+  it('keeps a late-closing branch on its own day in the dashboard report widgets', async () => {
+    const clock = new Date('2026-10-09T21:00:00Z');
+    const current = await scoped.withTenantDb(org, (db) =>
+      readPharmacyOwnerCommandCentre(
+        db,
+        {
+          branchIds: [id],
+          from: '2026-10-10',
+          to: '2026-10-10',
+          timeZone: 'Asia/Karachi',
+          dayEnds: { [id]: [{ from: '2020-01-01', hour: 4 }] },
+        },
+        clock
+      )
+    );
+    expect(current.metrics.salesMinor).toBe((await report()).metrics.salesMinor);
+    expect(current.metrics.salesMinor).toBe(925);
+  });
   it('matches sales, bill count, mean receipt, posted margin and tender totals', async () => {
     const rows = await read('summary');
     const actual = Object.fromEntries(rows.map((p) => [p.label, p.value]));

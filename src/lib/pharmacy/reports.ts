@@ -1,7 +1,11 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pharmacyBranchDayWindows, type PharmacyBranchDayEnds } from './business-day';
+import {
+  pharmacyBusinessDay,
+  pharmacyBranchDayWindows,
+  type PharmacyBranchDayEnds,
+} from './business-day';
 import { pharmacyBranchWindowSql, spanOf } from './business-day-sql';
 
 import { reportSaleLineMinor, reportSaleLineJoin, reportTenderTotal } from './trading-report-sql';
@@ -355,20 +359,44 @@ export function readExpiryBalances(
 
 export async function readPharmacyOwnerCommandCentre(
   db: Prisma.TransactionClient,
-  filters: PharmacyReportFilters
+  filters: PharmacyReportFilters,
+  dashboardAt?: Date
 ) {
   const parsed = validatePharmacyReportFilters(filters);
-  // Business-date columns compare against `parsed`; event and posting timestamps use the
-  // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on (DEV-958A: the
-  // branches' business day, which ends at their "day ends at" hour).
-  const eventWindows = pharmacyBranchDayWindows(
-    filters.from,
-    filters.to,
-    filters.branchIds,
-    filters
+  // An explicit report uses its chosen dates. On the live dashboard, branches
+  // that have not closed yesterday yet must still contribute yesterday's bills.
+  const byDay = new Map<string, string[]>();
+  if (dashboardAt) {
+    for (const branch of filters.branchIds) {
+      const day = pharmacyBusinessDay(
+        { timeZone: filters.timeZone, dayEnd: filters.dayEnds?.[branch] },
+        dashboardAt
+      );
+      const ids = byDay.get(day) ?? [];
+      ids.push(branch);
+      byDay.set(day, ids);
+    }
+  }
+  const ranges = dashboardAt
+    ? [...byDay].map(([day, branchIds]) => ({ from: day, to: day, branchIds }))
+    : [{ from: filters.from, to: filters.to, branchIds: filters.branchIds }];
+  const eventWindows = ranges.flatMap((range) =>
+    pharmacyBranchDayWindows(range.from, range.to, range.branchIds, filters)
   );
+  const dateWindows = dashboardAt
+    ? ranges.map((range) => ({
+        branchIds: range.branchIds,
+        ...validatePharmacyReportFilters(range),
+      }))
+    : [{ branchIds: filters.branchIds, ...parsed }];
+  const dateWindow = (alias: 's' | 't' | 'r' | 'c') =>
+    pharmacyBranchWindowSql(
+      dateWindows,
+      Prisma.raw(`${alias}."branchId"`),
+      Prisma.raw(`${alias}."businessDate"`)
+    );
   const eventWindow = spanOf(eventWindows);
-  const at = new Date();
+  const at = dashboardAt ?? new Date();
   const branches = Prisma.join(filters.branchIds);
   // Supplier, ingredient and batch filters narrow every metric that can be traced to stock;
   // metrics that cannot (cash, refunds, closes, fiscal, Khata, coverage) read unknown instead
@@ -398,7 +426,7 @@ export async function readPharmacyOwnerCommandCentre(
       }`,
     }
   );
-  const saleWindow = Prisma.sql`l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}`;
+  const saleWindow = Prisma.sql`l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND ${dateWindow('s')}`;
   // Batch and supplier live on the lots a line drew from: sum each allocation's charged money.
   // Historical allocations without that snapshot make the filtered total unknown, not guessed.
   // DEV-863: a prepaid tier discount is kept per allocation in the line's own snapshot, since
@@ -408,7 +436,7 @@ export async function readPharmacyOwnerCommandCentre(
     : Prisma.sql`COALESCE((SELECT SUM(${reportSaleLineMinor}) FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON ${reportSaleLineJoin} WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)}),0)::int`;
   const tenderMoney = dimensional
     ? Prisma.sql`NULL::int AS "cashMinor", NULL::int AS "refundsMinor", NULL::int AS "cashVarianceMinor"`
-    : Prisma.sql`COALESCE((SELECT ${reportTenderTotal} FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", (SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence"))::int AS "cashVarianceMinor"`;
+    : Prisma.sql`COALESCE((SELECT ${reportTenderTotal} FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND ${dateWindow('t')}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND ${dateWindow('r')}),0)::int AS "refundsMinor", (SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND ${dateWindow('c')} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence"))::int AS "cashVarianceMinor"`;
   const signalScope = Prisma.sql`${ingredientOf(Prisma.sql`s."organizationId"`, Prisma.sql`s."medicineId"`)} ${
     lotScoped
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" lot WHERE lot."organizationId"=s."organizationId" AND lot."branchId"=s."branchId" AND lot."id"=s."inventoryLotId" ${lotDimension(lot, filters, false)})`
