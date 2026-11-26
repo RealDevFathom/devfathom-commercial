@@ -27,27 +27,8 @@ CREATE POLICY offline_receipt_scope ON pharmacy_offline_receipt_events USING (
  END IF;
 END $policy$;
 
--- Replay historic rejections under the same organization and branch policy as runtime inserts.
-SET LOCAL app.is_platform_admin = 'true';
-DO $backfill$
-DECLARE tenant record;
-BEGIN
-  FOR tenant IN SELECT DISTINCT "organizationId", "branchId" FROM pharmacy_offline_commands
-                 WHERE status='REJECTED' AND "receiptNumber" IS NOT NULL LOOP
-    PERFORM set_config('app.current_organization_id',tenant."organizationId",true);
-    PERFORM set_config('app.current_branch_id',tenant."branchId",true);
-    INSERT INTO pharmacy_offline_receipt_events
-      (id,"organizationId","branchId","deviceId","commandKey",sequence,"receiptNumber",kind,reason,"commandHash",evidence,"createdAt")
-    SELECT id,"organizationId","branchId","deviceId","idempotencyKey",sequence,"receiptNumber",'REJECTED',
-      coalesce("rejectionReason",'Previously rejected'),"payloadHash",jsonb_build_object('command',payload),coalesce("settledAt","receivedAt")
-    FROM pharmacy_offline_commands WHERE "organizationId"=tenant."organizationId" AND "branchId"=tenant."branchId"
-      AND status='REJECTED' AND "receiptNumber" IS NOT NULL
-      AND NOT EXISTS (SELECT FROM pharmacy_offline_receipt_events event WHERE event."deviceId"=pharmacy_offline_commands."deviceId"
-                      AND event."commandKey"=pharmacy_offline_commands."idempotencyKey" AND event.kind='REJECTED')
-    ON CONFLICT (id) DO NOTHING;
-  END LOOP;
-END $backfill$;
-
+-- Offline selling has never been enabled. History begins with the first review;
+-- no historical command rows are read or rewritten during deployment.
 CREATE OR REPLACE FUNCTION pharmacy_offline_receipt_immutable() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   RAISE EXCEPTION 'offline receipt history is append-only' USING ERRCODE='55000';

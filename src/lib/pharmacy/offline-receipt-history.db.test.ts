@@ -1,7 +1,16 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { Client } from 'pg';
 import { expect, it } from 'vitest';
+
+it('installs receipt history without scanning or rewriting pre-feature commands', () => {
+  const sql = readFileSync(
+    'prisma/migrations/20261126050000_offline_receipt_reviews/migration.sql',
+    'utf8'
+  );
+  expect(sql).not.toMatch(/\bpharmacy_offline_commands\b|app\.is_platform_admin/);
+});
 
 const url = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 
