@@ -16,6 +16,7 @@ import {
   SUPPLIER_DOCUMENT_TYPES,
 } from '@/lib/pharmacy/supplier-document-contract';
 import { StorageUnavailableError } from '@/lib/storage';
+import { TenantHostError } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { uploadPost } from '@/lib/uploads/multipart-request';
@@ -37,7 +38,7 @@ function message(status: number, body: string) {
 
 export const POST = uploadPost(async (request, readUploadForm) => {
   try {
-    const actor = await resolveTenantActor({ request });
+    const actor = await resolveTenantActor({ request, throwOnHostError: true });
     if (!actor?.session.user.id) return message(401, 'Sign in to upload a supplier document.');
 
     const origin = request.headers.get('origin');
@@ -143,6 +144,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);
     if (passwordChange) return passwordChange;
+    if (error instanceof TenantHostError) return message(error.status, error.message);
     if (error instanceof TRPCError && error.code === 'FORBIDDEN')
       return message(403, error.message);
     if (error instanceof SupplierLinkError) {

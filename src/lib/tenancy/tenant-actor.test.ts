@@ -76,6 +76,15 @@ describe('resolveTenantActor', () => {
     await expect(resolveTenantActor({ request: request(), session })).resolves.toBeNull();
   });
 
+  it('preserves a host denial when requested by a route', async () => {
+    const denial = new TenantHostError('This session belongs to a different workspace.', 409);
+    mocks.requireOrganizationForRequest.mockRejectedValue(denial);
+
+    await expect(
+      resolveTenantActor({ request: request(), session, throwOnHostError: true })
+    ).rejects.toBe(denial);
+  });
+
   it('does not hide unexpected resolution failures', async () => {
     mocks.requireOrganizationForRequest.mockRejectedValue(new Error('Database unavailable'));
 

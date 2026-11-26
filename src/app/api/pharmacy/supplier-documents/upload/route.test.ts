@@ -6,6 +6,7 @@ import {
   SUPPLIER_DOCUMENT_UPLOAD_URL,
 } from '@/lib/pharmacy/supplier-document-contract';
 import { SupplierLinkError } from '@/lib/pharmacy/supplier-action-links';
+import { TenantHostError } from '@/lib/tenancy/host';
 import { POST } from './route';
 
 const mocks = vi.hoisted(() => ({
@@ -202,4 +203,19 @@ it('admits a procurement member assigned to the live order branch', async () => 
     select: { id: true },
   });
   expect(mocks.store).toHaveBeenCalledOnce();
+});
+
+it('returns the wrong-workspace host error as plain text without reading the body', async () => {
+  mocks.actor.mockRejectedValueOnce(
+    new TenantHostError('This session belongs to a different workspace.', 409)
+  );
+  const request = upload(pdf(8));
+  const response = await POST(request);
+  expect(mocks.actor).toHaveBeenCalledWith(expect.objectContaining({ throwOnHostError: true }));
+  expect(response.status).toBe(409);
+  expect(response.headers.get('content-type')).toMatch(/^text\/plain\b/);
+  expect(await response.text()).toBe('This session belongs to a different workspace.');
+  expect(request.bodyUsed).toBe(false);
+  expect(mocks.permission).not.toHaveBeenCalled();
+  expect(mocks.store).not.toHaveBeenCalled();
 });
