@@ -1,4 +1,9 @@
-import { rollForwardDueDate } from '@/lib/finance/recurring-expense';
+import {
+  recurringIntervalLabel,
+  recurringBillingDay,
+  recurringInterval,
+  rollForwardDueDate,
+} from '@/lib/finance/recurring-expense';
 /**
  * FINANCE tools for the DevFathom assistant — invoices, transactions, recurring
  * expenses and financial summaries.
@@ -454,7 +459,14 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       return expenses
         .map((exp) => ({
           ...exp,
-          nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone),
+          intervalLabel: recurringIntervalLabel(exp.interval),
+          nextDueDate: rollForwardDueDate(
+            exp.nextDueDate,
+            exp.interval,
+            today,
+            zone,
+            exp.billingDay
+          ),
         }))
         .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime())
         .map((exp) => ({
@@ -464,6 +476,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           currency: exp.currency,
           category: exp.category,
           interval: exp.interval,
+          intervalLabel: exp.intervalLabel,
           nextDueDate: exp.nextDueDate,
           vendorName: exp.vendorName,
         }));
@@ -920,7 +933,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       name: z.string().min(1),
       amount: positiveMoney(),
       category: z.enum(EXPENSE_CATEGORIES),
-      interval: z.enum(['monthly', 'quarterly', 'yearly']),
+      interval: recurringInterval,
       nextDueDate: z.string().describe('ISO date of the next charge'),
       currency: z.enum(['USD', 'PKR']).nullish().describe('Default USD'),
       vendorName: z.string().nullish(),
@@ -928,6 +941,8 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
     needsApproval: true,
     execute: async ({ name, amount, category, interval, nextDueDate, currency, vendorName }) => {
       if (!h.isAdmin) return { error: FINANCE_RESTRICTED };
+      const zone = await organizationZone();
+      const due = financeInputInstant(nextDueDate, zone);
       const expense = await db.recurringExpense.create({
         data: {
           name,
@@ -935,7 +950,8 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           currency: currency ?? 'USD',
           category,
           interval,
-          nextDueDate: financeInputInstant(nextDueDate, await organizationZone()),
+          nextDueDate: due,
+          billingDay: recurringBillingDay(due, zone),
           vendorName: vendorName ?? null,
         },
       });
