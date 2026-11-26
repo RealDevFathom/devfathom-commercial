@@ -1,35 +1,47 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import {
   retirePharmacyRegulatoryRules,
   seedPharmacyRegulatoryProfile,
 } from '@/lib/test-support/pharmacy-regulatory';
-import { PHARMACY_E2E as fixture } from '../../../tests/e2e/pharmacy-counter-fixture';
 import { createSale, addSaleLine, readReturnHistory, returnSaleLine } from './sales';
 import { linkCustomerToSale, redeemSalePoints } from './customer-loyalty';
+import { publishLoyaltyProgramVersion, stepRule } from './loyalty-program';
 import { receiveLot } from './stock-ledger';
 import { applyPharmacyTender, openPharmacyDrawer, refundPharmacyTender } from './settlement';
 
-const enabled = process.env.PHARMACY_E2E === '1' && !!process.env.PHARMACY_E2E_DATABASE_URL;
-const scope = {
-  organizationId: fixture.organizationId,
-  branchId: fixture.branchId,
-  actorId: fixture.adminId,
-};
+const databaseUrl = process.env.PHARMACY_E2E_DATABASE_URL;
+const enabled = process.env.PHARMACY_E2E === '1' && !!databaseUrl;
 const day = new Date('2026-09-29');
-const inTenant = <T>(work: Parameters<typeof withTenantDb<T>>[1]) =>
-  withTenantDb(scope.organizationId, work);
 const ruleSetIds: string[] = [];
 
-async function ensureVisibilityParents() {
+async function createReturnsFixture() {
+  // Neither FEFO stock nor loyalty/redemption state may leak across cases or runs.
+  const suffix = randomUUID();
+  const scope = {
+    organizationId: `org_returns_${suffix}`,
+    branchId: `branch_returns_${suffix}`,
+    actorId: `actor_returns_${suffix}`,
+  };
+  const inTenant = <T>(work: Parameters<typeof withTenantDb<T>>[1]) =>
+    withTenantDb(scope.organizationId, work);
+  const fixture = {
+    medicineId: `medicine_returns_${suffix}`,
+    presentationId: `presentation_returns_${suffix}`,
+    stripPackId: `strip_returns_${suffix}`,
+    unitPackId: `unit_returns_${suffix}`,
+    stockLocationId: `stock_returns_${suffix}`,
+    quarantineLocationId: `quarantine_returns_${suffix}`,
+    patientId: `patient_returns_${suffix}`,
+    patientName: 'Settlement returns patient',
+  };
+
   await inTenant(async (db) => {
-    await db.organization.upsert({
-      where: { id: scope.organizationId },
-      update: {},
-      create: {
+    await db.organization.create({
+      data: {
         id: scope.organizationId,
         slug: `returns-${scope.organizationId}`,
         legalName: 'Settlement returns fixture',
@@ -38,64 +50,54 @@ async function ensureVisibilityParents() {
         status: 'ACTIVE',
       },
     });
-    await db.pharmacyBranch.upsert({
-      where: { id: scope.branchId },
-      update: {},
-      create: {
+    await db.pharmacyBranch.create({
+      data: {
         id: scope.branchId,
         organizationId: scope.organizationId,
-        code: fixture.branchCode,
-        name: fixture.branchName,
+        code: 'RETURNS',
+        name: 'Settlement Returns',
         addressLine: 'Synthetic settlement acceptance branch',
         city: 'Lahore',
         provinceCode: 'PB',
       },
     });
-    await db.medicine.upsert({
-      where: { id: fixture.medicines.otc.id },
-      update: {},
-      create: {
-        id: fixture.medicines.otc.id,
+    await db.medicine.create({
+      data: {
+        id: fixture.medicineId,
         organizationId: scope.organizationId,
-        productName: fixture.medicines.otc.name,
+        productName: 'Settlement returns medicine',
         productFamily: 'PHARMACEUTICAL',
         otc: true,
         saleable: true,
       },
     });
-    await db.presentation.upsert({
-      where: { id: fixture.medicines.otc.presentationId },
-      update: {},
-      create: {
-        id: fixture.medicines.otc.presentationId,
+    await db.presentation.create({
+      data: {
+        id: fixture.presentationId,
         organizationId: scope.organizationId,
-        medicineId: fixture.medicines.otc.id,
-        presentation: fixture.medicines.otc.presentation,
+        medicineId: fixture.medicineId,
+        presentation: 'Tablet',
       },
     });
-    await db.packLevel.upsert({
-      where: { id: fixture.medicines.otc.packLevelIds.strip },
-      update: {},
-      create: {
-        id: fixture.medicines.otc.packLevelIds.strip,
+    await db.packLevel.create({
+      data: {
+        id: fixture.stripPackId,
         organizationId: scope.organizationId,
-        presentationId: fixture.medicines.otc.presentationId,
-        versionGroupId: `${fixture.medicines.otc.packLevelIds.strip}-returns`,
+        presentationId: fixture.presentationId,
+        versionGroupId: `${fixture.stripPackId}-returns`,
         version: 1,
         level: 'STRIP',
         unitsPerParent: 10,
         effectiveFrom: new Date('2026-01-01'),
       },
     });
-    await db.packLevel.upsert({
-      where: { id: fixture.medicines.otc.packLevelIds.unit },
-      update: {},
-      create: {
-        id: fixture.medicines.otc.packLevelIds.unit,
+    await db.packLevel.create({
+      data: {
+        id: fixture.unitPackId,
         organizationId: scope.organizationId,
-        presentationId: fixture.medicines.otc.presentationId,
-        parentPackLevelId: fixture.medicines.otc.packLevelIds.strip,
-        versionGroupId: `${fixture.medicines.otc.packLevelIds.unit}-returns`,
+        presentationId: fixture.presentationId,
+        parentPackLevelId: fixture.stripPackId,
+        versionGroupId: `${fixture.unitPackId}-returns`,
         version: 1,
         level: 'UNIT',
         unitsPerParent: 10,
@@ -103,13 +105,11 @@ async function ensureVisibilityParents() {
       },
     });
     for (const [id, code, name, kind] of [
-      [fixture.stockLocationId, fixture.stockLocationCode, 'Store', 'STORE'],
+      [fixture.stockLocationId, 'STORE', 'Store', 'STORE'],
       [fixture.quarantineLocationId, 'QUARANTINE', 'Quarantine', 'QUARANTINE'],
     ] as const) {
-      await db.pharmacyStockLocation.upsert({
-        where: { id },
-        update: {},
-        create: {
+      await db.pharmacyStockLocation.create({
+        data: {
           id,
           organizationId: scope.organizationId,
           branchId: scope.branchId,
@@ -119,43 +119,47 @@ async function ensureVisibilityParents() {
         },
       });
     }
-    await db.pharmacyPatient.upsert({
-      where: { id: fixture.patientId },
-      update: {},
-      create: {
+    await db.pharmacyPatient.create({
+      data: {
         id: fixture.patientId,
         organizationId: scope.organizationId,
         displayName: fixture.patientName,
       },
     });
   });
-  // The fixture branch is shared across runs, so only seed the sale gate's profile once.
-  const profile = await inTenant((db) =>
-    db.branchRegulatoryProfile.findFirst({
-      where: { branchId: scope.branchId, effectiveTo: null },
-    })
-  );
-  if (!profile)
-    ruleSetIds.push(await seedPharmacyRegulatoryProfile(withPlatformDb, inTenant, scope.branchId));
+  ruleSetIds.push(await seedPharmacyRegulatoryProfile(withPlatformDb, inTenant, scope.branchId));
+  return { fixture, scope, inTenant };
 }
 
 describe.skipIf(!enabled)('return/refund disposable database acceptance', () => {
-  afterAll(() => retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds));
-
-  it('restores loyalty, splits refunds, audits cash fallback, and serializes cumulative caps', async () => {
-    const url = new URL(process.env.PHARMACY_E2E_DATABASE_URL!);
-    expect(url.hostname).toBe('127.0.0.1');
-    expect(Number(url.port)).toBeGreaterThanOrEqual(55600);
-    expect(Number(url.port)).toBeLessThanOrEqual(55699);
-    expect(url.pathname).toContain('disposable');
-    const deviceId = `returns-${randomUUID()}`;
-    await ensureVisibilityParents();
-    const key = () => randomUUID();
-    await inTenant(async (db) => {
+  beforeAll(async () => {
+    const url = new URL(databaseUrl!);
+    expect(['postgres:', 'postgresql:']).toContain(url.protocol);
+    expect(['127.0.0.1', 'localhost', '[::1]']).toContain(url.hostname);
+    expect(decodeURIComponent(url.pathname.slice(1))).toMatch(/(^|[_-])disposable([_-]|$)/);
+    const targetOverrides = ['host', 'hostaddr', 'port', 'dbname', 'db', 'database'];
+    expect(
+      [...url.searchParams.keys()].filter((key) => targetOverrides.includes(key.toLowerCase()))
+    ).toEqual([]);
+    // The app pool must connect to the same URL that passed the safety checks.
+    process.env.DATABASE_URL = databaseUrl;
+    await withPlatformDb(async (db) => {
       const roles = await db.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>(
         Prisma.sql`SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user`
       );
       expect(roles[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+    });
+  });
+
+  afterAll(() => retirePharmacyRegulatoryRules(withPlatformDb, ruleSetIds));
+
+  it('restores loyalty, splits refunds, audits cash fallback, and serializes cumulative caps', async () => {
+    const { fixture, scope, inTenant } = await createReturnsFixture();
+    const deviceId = `returns-${randomUUID()}`;
+    const key = () => randomUUID();
+    await inTenant(async (db) => {
+      // A fresh organization has no earn rate. Let the PKR 25 sale earn five points.
+      await publishLoyaltyProgramVersion(db, scope, stepRule(5, 25));
       if (
         !(await db.patientConsent.findFirst({
           where: { patientId: fixture.patientId, purpose: 'LOYALTY' },
@@ -177,7 +181,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
       const batch = await db.pharmacyManufacturingBatch.create({
         data: {
           organizationId: scope.organizationId,
-          medicineId: fixture.medicines.otc.id,
+          medicineId: fixture.medicineId,
           batchNumber: `RETURNS-${key()}`,
           expiresAt: expiry,
           expiryPrecision: 'DAY',
@@ -185,13 +189,13 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
       });
       await receiveLot(db, scope, {
         manufacturingBatchId: batch.id,
-        packLevelId: fixture.medicines.otc.packLevelIds.unit,
+        packLevelId: fixture.stripPackId,
         stockLocationId: fixture.stockLocationId,
-        unitsPerPack: 1,
+        unitsPerPack: 10,
         supplierName: 'Settlement returns fixture',
         supplierInvoiceRef: key(),
         unitCostMinor: 100,
-        printedMrpMinor: 250,
+        printedMrpMinor: 2500,
         receivedExpiresAt: expiry,
         receivedExpiryPrecision: 'DAY',
         quantityUnits: 20,
@@ -209,9 +213,9 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
         const sale = await createSale(db, scope);
         const { line } = await addSaleLine(db, scope, {
           saleId: sale.id,
-          medicineId: fixture.medicines.otc.id,
-          presentationId: fixture.medicines.otc.presentationId,
-          packLevelId: fixture.medicines.otc.packLevelIds.strip,
+          medicineId: fixture.medicineId,
+          presentationId: fixture.presentationId,
+          packLevelId: fixture.stripPackId,
           saleUnit: 'STRIP',
           quantity: 1,
           canonicalUnitsPerSaleUnit: 10,
@@ -364,7 +368,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
   it('isolates partial A/B returns, refuses recalled B, and never credits A for unidentified stock', async () => {
     const key = () => randomUUID();
     const deviceId = `lots-${key()}`;
-    await ensureVisibilityParents();
+    const { fixture, scope, inTenant } = await createReturnsFixture();
     const prepared = await inTenant(async (db) => {
       await openPharmacyDrawer(db, scope, { deviceId, businessDate: day, openingFloatMinor: 5000 });
       const lots = [];
@@ -373,7 +377,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
         const batch = await db.pharmacyManufacturingBatch.create({
           data: {
             organizationId: scope.organizationId,
-            medicineId: fixture.medicines.otc.id,
+            medicineId: fixture.medicineId,
             batchNumber: `${label}-${key()}`,
             expiresAt: expiry,
             expiryPrecision: 'DAY',
@@ -381,7 +385,7 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
         });
         const { lot } = await receiveLot(db, scope, {
           manufacturingBatchId: batch.id,
-          packLevelId: fixture.medicines.otc.packLevelIds.unit,
+          packLevelId: fixture.unitPackId,
           stockLocationId: fixture.stockLocationId,
           unitsPerPack: 1,
           supplierName: 'Test',
@@ -399,9 +403,9 @@ describe.skipIf(!enabled)('return/refund disposable database acceptance', () => 
       const sale = await createSale(db, scope);
       const { line } = await addSaleLine(db, scope, {
         saleId: sale.id,
-        medicineId: fixture.medicines.otc.id,
-        presentationId: fixture.medicines.otc.presentationId,
-        packLevelId: fixture.medicines.otc.packLevelIds.unit,
+        medicineId: fixture.medicineId,
+        presentationId: fixture.presentationId,
+        packLevelId: fixture.unitPackId,
         saleUnit: 'UNIT',
         quantity: 4,
         canonicalUnitsPerSaleUnit: 1,
