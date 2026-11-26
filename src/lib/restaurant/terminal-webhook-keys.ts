@@ -44,14 +44,19 @@ export function verifyProviderSignature(
     // The configuration id is globally unique. JSON framing keeps the source and
     // configuration unambiguous even if a provider slug contains punctuation.
     const prefix = JSON.stringify([timestamp, source, config.id]) + '.';
-    if (matches(decryptSecret(config.encryptedSigningSecret), prefix)) return 'SCOPED';
-    if (
-      config.previousEncryptedSigningSecret &&
-      config.previousSigningSecretExpiresAt &&
-      now < config.previousSigningSecretExpiresAt.getTime() &&
-      matches(decryptSecret(config.previousEncryptedSigningSecret), prefix)
-    )
-      return 'SCOPED';
+    try {
+      if (matches(decryptSecret(config.encryptedSigningSecret), prefix)) return 'SCOPED';
+      if (
+        config.previousEncryptedSigningSecret &&
+        config.previousSigningSecretExpiresAt &&
+        now < config.previousSigningSecretExpiresAt.getTime() &&
+        matches(decryptSecret(config.previousEncryptedSigningSecret), prefix)
+      )
+        return 'SCOPED';
+    } catch {
+      console.warn(config.id);
+      return 'FAILED';
+    }
     return 'FAILED';
   }
 

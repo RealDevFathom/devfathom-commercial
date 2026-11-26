@@ -1,5 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
+import * as crypto from '@/lib/secret-crypto';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { verifyProviderSignature } from './terminal-webhook-keys';
 
@@ -69,3 +70,25 @@ it('takes an absolute environment cutoff and fails closed on invalid configurati
   vi.stubEnv('RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF', 'invalid');
   expect(verify()).toBe('FAILED');
 });
+
+it.each(['current', 'previous'])(
+  'refuses a mocked %s key decryption failure and logs only the configuration id',
+  (slot) => {
+    const a = config();
+    const decrypt = vi.spyOn(crypto, 'decryptSecret');
+    const log = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      if (slot === 'previous') decrypt.mockReturnValueOnce('current');
+      decrypt.mockImplementationOnce(() => {
+        throw new Error('synthetic private detail');
+      });
+      expect(verifyProviderSignature(a, source, body, sign('previous', a.id), timestamp, now)).toBe(
+        'FAILED'
+      );
+      expect(log.mock.calls).toEqual([[a.id]]);
+    } finally {
+      decrypt.mockRestore();
+      log.mockRestore();
+    }
+  }
+);
