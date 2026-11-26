@@ -149,6 +149,20 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
     expect(current.metrics.salesMinor).toBe((await report()).metrics.salesMinor);
     expect(current.metrics.salesMinor).toBe(925);
   });
+  it('starts hourly sales at the day-end in force for the branch and aligns mixed schedules by opening hour', async () => {
+    const late = { id, name: 'Main', businessDayEndsAtHistory: [{ from: '2020-01-01', hour: 4 }] };
+    const forBranches = (branches: Parameters<typeof dashboardPeriods>[0]) =>
+      scoped.withTenantDb(org, (db) =>
+        readOwnerTrading(db, org, dashboardPeriods(branches, 'Asia/Karachi', at), 'hours', true)
+      );
+    const one = await forBranches([late]);
+    expect(one[0]!.label).toBe('04:00');
+    expect(one[23]!.label).toBe('03:00');
+    expect(one[13]).toEqual({ label: '17:00', value: 925 });
+    const mixed = await forBranches([late, { id: id + '_second', name: 'Second' }]);
+    expect(mixed[0]!.label).toBe('Opening hour');
+    expect(mixed[13]).toEqual({ label: '+13 h', value: 925 });
+  });
   it('matches sales, bill count, mean receipt, posted margin and tender totals', async () => {
     const rows = await read('summary');
     const actual = Object.fromEntries(rows.map((p) => [p.label, p.value]));

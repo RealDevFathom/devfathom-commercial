@@ -2,7 +2,12 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import { workspaceTimezone } from '@/lib/timezone';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDay, pharmacyBusinessDayRange, shiftPharmacyDay } from './business-day';
+import {
+  pharmacyBusinessDay,
+  pharmacyBusinessDayRange,
+  pharmacyDayEndHourOn,
+  shiftPharmacyDay,
+} from './business-day';
 import { onHandValueQuery } from './migration/parallel-run';
 import { readExpiryBalances } from './reports';
 import { grossMarginQuery } from './finance-reports';
@@ -46,7 +51,7 @@ export function comparisonDays(rows: Row[]): TradingPoint[] {
 }
 
 function periodsTable(periods: DashboardPeriod[]) {
-  return Prisma.sql`(VALUES ${Prisma.join(periods.map((p) => Prisma.sql`(${p.id}::text, ${p.today}::date)`))}) AS period(id, today)`;
+  return Prisma.sql`(VALUES ${Prisma.join(periods.map((p) => Prisma.sql`(${p.id}::text, ${p.today}::date,${pharmacyDayEndHourOn(p.clock, p.today)}::int)`))}) AS period(id, today, opening_hour)`;
 }
 
 function margin(
@@ -189,7 +194,7 @@ export async function readOwnerTrading(
   }
   const group = {
     days: Prisma.sql`s."businessDate"-period.today`,
-    hours: Prisma.sql`EXTRACT(HOUR FROM (s."completedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${workspaceTimezone(periods[0]!.clock.timeZone)})::int`,
+    hours: Prisma.sql`(24+EXTRACT(HOUR FROM (s."completedAt" AT TIME ZONE 'UTC') AT TIME ZONE ${workspaceTimezone(periods[0]!.clock.timeZone)})::int-period.opening_hour)%24`,
     branches: Prisma.sql`s."branchId"`,
     medicines: Prisma.sql`m.id`,
   }[section];
@@ -203,11 +208,19 @@ export async function readOwnerTrading(
     WHERE s."businessDate" BETWEEN period.today-${back}::int AND period.today
     GROUP BY 1 ORDER BY value DESC, key ${medicines ? Prisma.sql`LIMIT 10` : Prisma.empty}`);
   if (section === 'days') return comparisonDays(rows);
-  if (section === 'hours')
-    return Array.from({ length: 24 }, (_, hour) => ({
-      label: `${hour.toString().padStart(2, '0')}:00`,
-      value: rows.find((r) => r.key === String(hour))?.value ?? 0,
+  if (section === 'hours') {
+    const starts = new Set(periods.map((p) => pharmacyDayEndHourOn(p.clock, p.today)));
+    const openingHour = pharmacyDayEndHourOn(periods[0]!.clock, periods[0]!.today);
+    return Array.from({ length: 24 }, (_, offset) => ({
+      label:
+        starts.size === 1
+          ? `${String((openingHour + offset) % 24).padStart(2, '0')}:00`
+          : offset === 0
+            ? 'Opening hour'
+            : `+${offset} h`,
+      value: rows.find((row) => row.key === String(offset))?.value ?? 0,
     }));
+  }
   if (section === 'branches')
     return periods.map((p) => ({
       label: p.name,
