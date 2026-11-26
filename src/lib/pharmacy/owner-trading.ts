@@ -4,6 +4,7 @@ import { workspaceTimezone } from '@/lib/timezone';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { pharmacyBusinessDay, pharmacyBusinessDayRange, shiftPharmacyDay } from './business-day';
 import { onHandValueQuery } from './migration/parallel-run';
+import { readExpiryBalances } from './reports';
 import { grossMarginQuery } from './finance-reports';
 import { reportSaleLineJoin, reportSaleLineMinor, reportTenderTotal } from './trading-report-sql';
 
@@ -23,7 +24,15 @@ export type TradingPoint = {
   count?: boolean;
 };
 export type TradingSection =
-  'summary' | 'days' | 'hours' | 'payments' | 'branches' | 'medicines' | 'profits' | 'stock';
+  | 'summary'
+  | 'days'
+  | 'hours'
+  | 'payments'
+  | 'branches'
+  | 'medicines'
+  | 'profits'
+  | 'stock'
+  | 'expiry';
 export function comparisonDays(rows: Row[]): TradingPoint[] {
   const totals = new Map(rows.map((row) => [Number(row.key), row.value]));
   return Array.from({ length: 30 }, (_, index) => {
@@ -77,6 +86,16 @@ export async function readOwnerTrading(
 ): Promise<TradingPoint[]> {
   if (!periods.length) return [];
   if (section !== 'summary' && !financial) return [];
+  if (section === 'expiry') {
+    const [row] = await readExpiryBalances(
+      db,
+      periods.map((p) => p.id)
+    );
+    return ([30, 60, 90] as const).map((days) => ({
+      label: `${days} days`,
+      value: row?.[`d${days}`] ?? 0,
+    }));
+  }
   if (section === 'stock') {
     // Anchor on the same on-hand projection as the stock reconciliation report.
     // In one database snapshot subtract subsequent AVAILABLE movements to get each close.

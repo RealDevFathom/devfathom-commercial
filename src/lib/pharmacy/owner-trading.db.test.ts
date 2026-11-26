@@ -122,6 +122,15 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
         timeZone: 'Asia/Karachi',
       })
     );
+  it('reads the cumulative 30-, 60- and 90-day expiry chart directly from the report balances', async () => {
+    const [rows, result] = await Promise.all([read('expiry'), report()]);
+    expect(rows).toEqual([
+      { label: '30 days', value: result.metrics.expiryValueMinor30 },
+      { label: '60 days', value: result.metrics.expiryValueMinor60 },
+      { label: '90 days', value: result.metrics.expiryValueMinor90 },
+    ]);
+    expect(rows[0]!.value).toBeGreaterThan(0);
+  });
   it('matches sales, bill count, mean receipt, posted margin and tender totals', async () => {
     const rows = await read('summary');
     const actual = Object.fromEntries(rows.map((p) => [p.label, p.value]));

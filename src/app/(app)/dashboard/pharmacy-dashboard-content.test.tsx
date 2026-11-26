@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   branches: undefined as unknown,
   catalog: undefined as unknown,
   command: undefined as unknown,
+  expiry: undefined as { label: string; value: number }[] | undefined,
   commandInput: undefined as unknown,
   zone: 'UTC',
   preferences: undefined as unknown,
@@ -41,7 +42,10 @@ vi.mock('@/lib/trpc', () => ({
     useUtils: () => ({ pharmacyReports: { getPreferences: { setData: vi.fn() } } }),
     pharmacyReports: {
       ownerWatch: { useQuery: () => query([]) },
-      ownerTrading: { useQuery: () => query(undefined, { isLoading: true }) },
+      ownerTrading: {
+        useQuery: ({ section }: { section: string }) =>
+          section === 'expiry' ? query(state.expiry) : query(undefined, { isLoading: true }),
+      },
       branches: { useQuery: () => mounted.record('branches', state.branches) },
       catalog: { useQuery: () => mounted.record('catalog', state.catalog) },
       getPreferences: { useQuery: () => mounted.record('getPreferences', state.preferences) },
@@ -99,6 +103,7 @@ const REPORT_HOOKS = [
 ];
 
 beforeEach(() => {
+  state.expiry = undefined;
   state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports'];
   mounted.hooks.length = 0;
   state.branches = query({ branches: [{ id: 'b1', name: 'Main' }] });
@@ -406,6 +411,11 @@ it('plots the report’s cumulative expiry values for the next 30, 60 and 90 day
     currency: 'AED',
     permissions: { operational: true, financial: true },
   });
+  state.expiry = [
+    { label: '30 days', value: 1200 },
+    { label: '60 days', value: 3400 },
+    { label: '90 days', value: 5600 },
+  ];
   state.command = query({
     freshness: { asOf: '2026-09-04T10:00:00Z', source: 'synthetic ledger' },
     permissions: { operational: true, financial: true },

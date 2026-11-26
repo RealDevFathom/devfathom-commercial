@@ -1195,6 +1195,7 @@ export const pharmacyReportsRouter = router({
             'medicines',
             'profits',
             'stock',
+            'expiry',
           ]),
           branchId: z.string().min(1).max(128).optional(),
         })

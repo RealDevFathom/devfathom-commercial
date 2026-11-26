@@ -35,7 +35,7 @@ import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
 import { TradingOverview } from './trading-overview';
-import { BusinessChart, reportMoney } from './business-chart';
+import { reportMoney } from './business-chart';
 
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
 type CommandQuery = {
@@ -623,17 +623,6 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                     }
                   >
                     <p className="mb-4 text-sm text-text-muted">{item.description}</p>
-                    {item.key === 'expiry' && command.data ? (
-                      <BusinessChart
-                        title="Stock expiring from today"
-                        points={[30, 60, 90].map((days) => ({
-                          label: `${days} days`,
-                          value: command.data!.metrics[`expiryValueMinor${days}`] ?? null,
-                        }))}
-                        format={(minor) => reportMoney(minor, catalog.data?.currency)}
-                        empty="No stock expiring in the next 90 days."
-                      />
-                    ) : null}
                     <WidgetState
                       item={item}
                       query={command}
