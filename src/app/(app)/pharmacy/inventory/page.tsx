@@ -50,7 +50,7 @@ export const metadata: Metadata = { title: 'Pharmacy inventory' };
 
 const route = '/pharmacy/inventory';
 const inputClass =
-  'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
+  'mt-1 min-h-11 w-full max-w-full [&>[data-slot=select-value]]:min-w-0 [&>[data-slot=select-value]]:overflow-hidden rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
 type StockStrengths = Parameters<typeof renderStockComposition>[0];
 const field = (data: FormData, key: string) => String(data.get(key) ?? '').trim();
 const number = (data: FormData, key: string) => Number.parseInt(field(data, key), 10);
@@ -689,7 +689,7 @@ export default async function PharmacyInventoryPage({
         <Stat
           label="Held units"
           value={heldUnits.toLocaleString()}
-          sub="Quarantine, damage, transit"
+          sub="Set aside, damaged, or in transit"
         />
         <Stat
           label="Stock counts waiting for a second person to approve"
@@ -865,7 +865,7 @@ export default async function PharmacyInventoryPage({
             ))}
           </div>
           {canControlInventory ? (
-            <form action={perform} className="mt-5 grid gap-3 sm:grid-cols-2">
+            <form action={perform} className="mt-5 grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-location" />
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm">
@@ -911,7 +911,7 @@ export default async function PharmacyInventoryPage({
           <div className="mt-6 border-t border-border-subtle pt-5">
             <h3 className="font-medium text-text-strong">Record a temperature</h3>
             {coldChainLocations.length > 0 ? (
-              <form action={perform} className="mt-3 grid gap-3 sm:grid-cols-2">
+              <form action={perform} className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <input name="action" type="hidden" value="record-temperature" />
                 <input name="branchId" type="hidden" value={branch.id} />
                 <label className="text-sm">
@@ -976,7 +976,7 @@ export default async function PharmacyInventoryPage({
         </SectionCard>
         <SectionCard title="Stock count" eyebrow="Quantities saved when the count started">
           {available.length && locations.length ? (
-            <form action={perform} className="grid gap-3 sm:grid-cols-2">
+            <form action={perform} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-count" />
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
@@ -1198,7 +1198,7 @@ export default async function PharmacyInventoryPage({
       <SectionCard title="Stock corrections and write-offs" eyebrow="Stock corrections">
         {writeOffPositions.length &&
         (writeOffWitnesses.witnesses.length || writeOffWitnesses.soloSelfWitness) ? (
-          <form action={perform} className="grid gap-3 md:grid-cols-3">
+          <form action={perform} className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
@@ -1276,7 +1276,7 @@ export default async function PharmacyInventoryPage({
           </Empty>
         )}
         {releasableQuarantined.length ? (
-          <form action={perform} className="mt-6 grid gap-3 md:grid-cols-3">
+          <form action={perform} className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="release-quarantine" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
@@ -1316,7 +1316,7 @@ export default async function PharmacyInventoryPage({
         eyebrow="Set stock aside, approve, send, then receive"
       >
         {available.length && destinationLocations.length ? (
-          <form action={perform} className="grid gap-3 md:grid-cols-3">
+          <form action={perform} className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="allocate-transfer" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
@@ -1424,7 +1424,7 @@ export default async function PharmacyInventoryPage({
             </Link>
           </p>
           {lots.length ? (
-            <form action={perform} className="grid gap-3 sm:grid-cols-2">
+            <form action={perform} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-recall" />
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
@@ -1517,7 +1517,7 @@ export default async function PharmacyInventoryPage({
             </div>
           }
         >
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {nearExpiry.map((bucket) => (
               <div
                 className="rounded-[var(--radius-sm)] border border-border-subtle p-4"
