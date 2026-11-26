@@ -23,6 +23,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
 import {
+  emptyPharmacyDailyWorkPack,
   readPharmacyDailyWorkPack,
   validateDailyWorkPackInput,
 } from '@/lib/pharmacy/daily-work-pack';
@@ -879,32 +880,50 @@ export const pharmacyReportsRouter = router({
         branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
       )
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
-      // Preserve the existing owner gate on anomaly/expiry financial sources.
-      const financial =
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-          ip: ctx.requestMeta.ip,
-        }));
+      const user = ctx.session.user;
+      const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+      const subject = subjectFromSession(user);
+      const hasFinancialReports = await can(subject, 'reports:financial', undefined, options);
+      let admitted = branchIds;
+      if (
+        user.role !== 'ADMIN' &&
+        (hasFinancialReports || (await can(subject, 'finance:read', undefined, options)))
+      ) {
+        if (
+          available.organizationId !== ctx.organization?.id ||
+          (user.organizationId && user.organizationId !== available.organizationId)
+        )
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Organization is outside your report scope.',
+          });
+        const assigned = await assignedRegisterBranchIds(ctx.db, available.organizationId, user.id);
+        admitted = branchIds.filter((branch) => assigned.includes(branch));
+        if (input.branchId && !admitted.length)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Branch is outside your report scope.',
+          });
+      }
       const resolved = {
         ...input,
-        branchIds,
+        branchIds: admitted,
         organizationId: available.organizationId,
         actorId: ctx.session!.user.id,
-        financial,
+        financial: hasFinancialReports && admitted.length > 0,
         timeZone: ctx.organization?.timezone,
-        ...reportDayEnds(available, branchIds),
+        ...reportDayEnds(available, admitted),
       };
       const readAt = new Date();
       try {
-        validateDailyWorkPackInput(resolved, readAt);
+        validateDailyWorkPackInput(admitted.length ? resolved : { ...resolved, branchIds }, readAt);
       } catch {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Invalid report period or as-of time.',
         });
       }
+      if (!admitted.length) return emptyPharmacyDailyWorkPack(resolved, readAt);
       return readPharmacyDailyWorkPack(ctx.db, resolved, readAt);
     }),
   catalog: branchReports.query(async ({ ctx }) => ({

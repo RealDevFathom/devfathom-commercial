@@ -1904,7 +1904,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.dailyWorkPack': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); anomaly/expiry items only for ADMIN + reports:financial',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); financial sources require reports:financial within admitted branches',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'run-branches/read-reports-centre-replenishment',

@@ -195,6 +195,7 @@ describe('normal Reports daily work pack', () => {
       (_entitlements, module) => module === 'pharmacy-reports'
     );
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.assignmentFindMany.mockResolvedValue([]);
     mocks.stockDashboard.mockResolvedValue([]);
     mocks.stockDigest.mockImplementation(async (_db, scope, actorId) => ({
       branchId: scope.branchId,
@@ -208,6 +209,21 @@ describe('normal Reports daily work pack', () => {
     mocks.expiryRead.mockResolvedValue([]);
     mocks.returnsRead.mockResolvedValue([]);
     mocks.creditsRead.mockResolvedValue([]);
+  });
+
+  it('includes financial work only for the Finance employee’s admitted branches', async () => {
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'other', name: 'Other' },
+    ]);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    const pack = await caller('EMPLOYEE').dailyWorkPack(input);
+    expect(pack.permissions.financial).toBe(true);
+    expect(pack.scope.branchIds).toEqual(['branch_1']);
+    expect(pack.sources.every((source) => source.scope.branchId === 'branch_1')).toBe(true);
+    await expect(
+      caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'other' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
   });
 
   it('works with Ask Fathom disabled and repeated normal caller reads create zero actions', async () => {
