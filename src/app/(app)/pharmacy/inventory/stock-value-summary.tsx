@@ -20,10 +20,10 @@ type Valuation = Awaited<
 
 function amount(minor: bigint | null, currency: string | null) {
   if (minor === null || !currency) return 'Not available';
-  const magnitude = minor < 0n ? -minor : minor;
-  const whole = (magnitude / 100n).toLocaleString('en-PK');
-  const cents = (magnitude % 100n).toString().padStart(2, '0');
-  return `${currency === 'PKR' ? 'Rs' : currency} ${minor < 0n ? '−' : ''}${whole}.${cents}`;
+  const magnitude = minor < BigInt(0) ? -minor : minor;
+  const whole = (magnitude / BigInt(100)).toLocaleString('en-PK');
+  const cents = (magnitude % BigInt(100)).toString().padStart(2, '0');
+  return `${currency === 'PKR' ? 'Rs' : currency} ${minor < BigInt(0) ? '−' : ''}${whole}.${cents}`;
 }
 
 const valueClasses = 'break-words text-xl';
@@ -40,7 +40,7 @@ function CostBreakdown({
   rows: StockValueRow[];
   currency: string;
 }) {
-  const max = rows[0]?.costMinor ?? 0n;
+  const max = rows[0]?.costMinor ?? BigInt(0);
   return (
     <SectionCard title={title}>
       {rows.length ? (
@@ -63,7 +63,7 @@ function CostBreakdown({
                   <div
                     className="h-full bg-text-muted"
                     style={{
-                      width: `${max > 0n && costMinor > 0n ? Number((costMinor * 100n) / max) : 0}%`,
+                      width: `${max > BigInt(0) && costMinor > BigInt(0) ? Number((costMinor * BigInt(100)) / max) : 0}%`,
                     }}
                   />
                 </div>
@@ -238,7 +238,7 @@ export function StockValueSummary({
                   selling price. That stock is not included in the selling-price total.
                 </p>
               ) : null}
-              {showBreakdown && money.unassignedCostMinor !== 0n ? (
+              {showBreakdown && money.unassignedCostMinor !== BigInt(0) ? (
                 <p>
                   {amount(money.unassignedCostMinor, currency)} of the Finance total could not be
                   matched to products in stock.

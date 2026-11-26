@@ -47,7 +47,7 @@ function context(db: ScopedDb, userId: string) {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
-  } as TRPCContext;
+  } as unknown as TRPCContext;
 }
 
 const store = (branch: string) => `${branch}-store`;
@@ -380,17 +380,17 @@ suite('DEV-1044 valuation on PostgreSQL', () => {
     const financeCost = (labels: string[]) =>
       report.rows
         .filter((row) => labels.some((label) => lotIds.get(label) === row.lotId))
-        .reduce((sum, row) => sum + BigInt(row.valueMinor), 0n);
+        .reduce((sum, row) => sum + BigInt(row.valueMinor), BigInt(0));
     expect(values.costMinor).toBe(
       financeCost(['soap', 'cream', 'wrap', 'gauze']) + report.unallocatedValueMinor
     );
-    expect(values.costMinor).toBe(2720n);
-    expect(values.unassignedCostMinor).toBe(20n);
+    expect(values.costMinor).toBe(BigInt(2720));
+    expect(values.unassignedCostMinor).toBe(BigInt(20));
     expect(values.expiringMinor[0]).toBe(financeCost(['soap']));
     expect(values.expiringMinor[1]).toBe(financeCost(['soap', 'cream']));
     expect(values.expiringMinor[2]).toBe(financeCost(['soap', 'cream', 'wrap']));
     expect(values.expiredMinor).toBe(financeCost(['gauze']));
-    expect(values.heldMinor).toBe((financeCost(['soap']) * 2n) / 12n);
+    expect(values.heldMinor).toBe((financeCost(['soap']) * BigInt(2)) / BigInt(12));
     expect(values.categories.map(({ name, costMinor }) => [name, costMinor])).toEqual([
       ['Personal care', financeCost(['soap', 'cream'])],
       ['First aid', financeCost(['wrap', 'gauze'])],
@@ -402,7 +402,7 @@ suite('DEV-1044 valuation on PostgreSQL', () => {
       ['Cream', financeCost(['cream'])],
     ]);
     expect(result.productCount).toBe(5);
-    expect(values.sellingMinor).toBe(6500n);
+    expect(values.sellingMinor).toBe(BigInt(6500));
     expect(values.coveredProductCount).toBe(4);
     expect(values.missingCost).toMatchObject({ count: 1, rows: [{ name: 'No recorded cost' }] });
   });
@@ -419,10 +419,10 @@ suite('DEV-1044 valuation on PostgreSQL', () => {
       productCount: 2,
       businessTotal: false,
       money: {
-        costMinor: 1500n,
-        sellingMinor: 5000n,
-        heldMinor: 500n,
-        expiringMinor: [1500n, 1500n, 1500n],
+        costMinor: BigInt(1500),
+        sellingMinor: BigInt(5000),
+        heldMinor: BigInt(500),
+        expiringMinor: [BigInt(1500), BigInt(1500), BigInt(1500)],
       },
     });
     const report = await scoped.withTenantDb(oid, (db) =>
@@ -436,7 +436,7 @@ suite('DEV-1044 valuation on PostgreSQL', () => {
     expect(business).toMatchObject({
       productCount: 6,
       businessTotal: true,
-      money: { costMinor: 4220n, sellingMinor: 11500n, heldMinor: 800n },
+      money: { costMinor: BigInt(4220), sellingMinor: BigInt(11500), heldMinor: BigInt(800) },
     });
     expect(storekeeper).toEqual({
       productCount: 5,
@@ -449,7 +449,7 @@ suite('DEV-1044 valuation on PostgreSQL', () => {
         productCount: 5,
         businessTotal: false,
         canSeeBusinessTotal: false,
-        money: { costMinor: 2720n, canOpenFinanceReport: false },
+        money: { costMinor: BigInt(2720), canOpenFinanceReport: false },
       });
   });
 });

@@ -60,7 +60,7 @@ export async function countInventoryProducts(db: ScopedDb, scope: Scope, at: Dat
   const [result] = await db.$queryRaw<{ productCount: bigint }[]>(Prisma.sql`
     ${currentPositions(scope, at)}
     SELECT COUNT(DISTINCT "medicineId")::bigint AS "productCount" FROM lots`);
-  return Number(result?.productCount ?? 0n);
+  return Number(result?.productCount ?? BigInt(0));
 }
 
 type Position = {
@@ -157,15 +157,18 @@ export async function currentInventoryValuation(
   ]);
   const posted = new Map<string, { amount: bigint; transit: boolean }>();
   for (const row of rows) {
-    const transit = row.inTransitValueMinor ?? 0n;
+    const transit = row.inTransitValueMinor ?? BigInt(0);
     const values = [
       [false, BigInt(row.valueMinor) - transit],
       [true, transit],
     ] as const;
     for (const [inTransit, value] of values) {
-      if (value === 0n) continue;
+      if (value === BigInt(0)) continue;
       const key = positionKey(row.branchId, row.lotId, inTransit);
-      posted.set(key, { amount: (posted.get(key)?.amount ?? 0n) + value, transit: inTransit });
+      posted.set(key, {
+        amount: (posted.get(key)?.amount ?? BigInt(0)) + value,
+        transit: inTransit,
+      });
     }
   }
 
@@ -175,25 +178,25 @@ export async function currentInventoryValuation(
   const missingPrice = new Set<string>();
   const productValue = new Map<string, StockValueRow>();
   const categoryValue = new Map<string, StockValueRow>();
-  const expiringMinor = [0n, 0n, 0n];
-  let expiredMinor = 0n;
-  let heldMinor = 0n;
-  let sellingMinor = 0n;
-  let mappedMinor = 0n;
+  const expiringMinor = [BigInt(0), BigInt(0), BigInt(0)];
+  let expiredMinor = BigInt(0);
+  let heldMinor = BigInt(0);
+  let sellingMinor = BigInt(0);
+  let mappedMinor = BigInt(0);
 
   for (const position of positions) {
     const { branchId, lotId, medicineId, name, expiresAt, units, held, transit } = position;
     products.add(medicineId);
     const key = positionKey(branchId, lotId, transit);
-    const cost = posted.get(key)?.amount ?? 0n;
+    const cost = posted.get(key)?.amount ?? BigInt(0);
     posted.delete(key);
     if (position.unitCostMinor <= 0) missingCost.set(medicineId, name);
-    else if (cost <= 0n) unposted.add(medicineId);
+    else if (cost <= BigInt(0)) unposted.add(medicineId);
     const selling = sellingValue(position);
     if (selling === null) missingPrice.add(medicineId);
     else sellingMinor += selling;
 
-    if (cost === 0n) continue;
+    if (cost === BigInt(0)) continue;
     const remaining = expiresAt
       ? normalizeExpiryBoundary(expiresAt).getTime() - at.getTime()
       : null;
@@ -214,7 +217,7 @@ export async function currentInventoryValuation(
       [productValue, medicineId, name],
       [categoryValue, category, category],
     ] as const) {
-      map.set(id, { id, name: rowName, costMinor: (map.get(id)?.costMinor ?? 0n) + cost });
+      map.set(id, { id, name: rowName, costMinor: (map.get(id)?.costMinor ?? BigInt(0)) + cost });
     }
   }
 
@@ -232,7 +235,7 @@ export async function currentInventoryValuation(
   return {
     productCount: products.size,
     // The Finance view leaves the headline absent when there are no posted rows.
-    costMinor: rows.length || unallocatedMinor !== 0n ? costMinor : null,
+    costMinor: rows.length || unallocatedMinor !== BigInt(0) ? costMinor : null,
     costCurrency: currencies.length > 1 ? null : (currencies[0] ?? currencySetting ?? null),
     mixedCurrencies: currencies.length > 1,
     sellingMinor: missingPrice.size === products.size && products.size > 0 ? null : sellingMinor,
@@ -253,7 +256,7 @@ export async function currentInventoryValuation(
     categories,
     otherCategoriesMinor: categoryRows
       .slice(STOCK_VALUE_PAGE_SIZE)
-      .reduce((sum, row) => sum + row.costMinor, 0n),
+      .reduce((sum, row) => sum + row.costMinor, BigInt(0)),
     otherCategoryCount: Math.max(0, categoryRows.length - STOCK_VALUE_PAGE_SIZE),
     unassignedCostMinor: costMinor === null ? null : costMinor - mappedMinor,
   };

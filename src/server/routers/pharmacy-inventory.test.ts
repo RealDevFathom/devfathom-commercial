@@ -3607,7 +3607,7 @@ describe('DEV-1044 stock valuation', () => {
   it('returns just product counts for a staff member without financial permissions', async () => {
     sessionRole = 'EMPLOYEE';
     grant([]);
-    const read = vi.fn().mockResolvedValue([{ productCount: 4n }]);
+    const read = vi.fn().mockResolvedValue([{ productCount: BigInt(4) }]);
     Object.assign(db, { $queryRaw: read });
 
     const result = await caller().stockValuation({ branchId: 'branch_a', allBranches: true });
