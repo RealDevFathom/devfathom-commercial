@@ -605,6 +605,6 @@ it('refuses a large upload for the signed-in user when both slots are occupied',
   const response = await POST(multipartUpload('/api/pharmacy/sop/evidence', 9));
   expect(response.status).toBe(429);
   expect((await response.json()).error).toContain('Wait for one to finish');
-  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user_1');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user_1', 'org_1');
   expect(mocks.putUpload).not.toHaveBeenCalled();
 });

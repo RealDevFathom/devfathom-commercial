@@ -10,15 +10,20 @@ export const UPLOAD_SIZE_MESSAGE = 'Choose a file of 25 MB or smaller.';
 const MAX_MULTIPART_BYTES = MAX_ATTACHMENT_BYTES + 64 * 1024;
 
 const LARGE_UPLOAD_BYTES = 8 * 1024 * 1024;
+// A 25 MiB file takes about 210 seconds at 1 Mbit/s. Allow another minute
+// for multipart overhead and normal variation in throughput.
+const UPLOAD_BODY_DEADLINE_MS = 270_000;
 type ReadUploadForm = (
   userId: string,
+  organizationId: string,
   errorFormat?: 'json' | 'text'
 ) => Promise<FormData | Response | null>;
 
 class UploadRefused extends Error {
   constructor(
     message: string,
-    readonly status: number
+    readonly status: number,
+    readonly plain = true
   ) {
     super(message);
   }
@@ -36,40 +41,62 @@ export function uploadPost(
       duplex: 'half',
     } as RequestInit);
     let release: (() => Promise<void>) | undefined;
-    async function reserve(userId: string) {
+    async function reserve(userId: string, organizationId: string) {
+      let slot: Awaited<ReturnType<typeof acquireLargeUploadSlot>>;
       try {
-        release = (await acquireLargeUploadSlot(userId)) ?? undefined;
+        slot = await acquireLargeUploadSlot(userId, organizationId);
       } catch {
         throw new UploadRefused('Uploads are temporarily unavailable. Try again shortly.', 503);
       }
-      if (!release)
+      if (slot === 'organization-capacity')
+        throw new UploadRefused('Large uploads are busy. Try again shortly.', 429);
+      if (!slot)
         throw new UploadRefused(
           'Two large uploads are in progress. Wait for one to finish and try again.',
-          429
+          429,
+          false
         );
+      release = slot;
     }
-    async function readUploadForm(userId: string, errorFormat: 'json' | 'text' = 'json') {
+    async function readUploadForm(
+      userId: string,
+      organizationId: string,
+      errorFormat: 'json' | 'text' = 'json'
+    ) {
       const declared = Number(routed.headers.get('content-length'));
       if (declared > MAX_MULTIPART_BYTES) return null;
       const chunks: Uint8Array[] = [];
+      const deadline = new AbortController();
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        if (declared > LARGE_UPLOAD_BYTES) await reserve(userId);
-        const complete = await consumeBoundedBody(routed, MAX_MULTIPART_BYTES, (chunk, total) => {
-          if (total > LARGE_UPLOAD_BYTES && !release) {
-            return reserve(userId).then(() => {
-              chunks.push(chunk);
-            });
-          }
-          chunks.push(chunk);
-        });
+        if (declared > LARGE_UPLOAD_BYTES) await reserve(userId, organizationId);
+        timer = setTimeout(() => deadline.abort(), UPLOAD_BODY_DEADLINE_MS);
+        const complete = await consumeBoundedBody(
+          routed,
+          MAX_MULTIPART_BYTES,
+          (chunk, total) => {
+            if (total > LARGE_UPLOAD_BYTES && !release) {
+              return reserve(userId, organizationId).then(() => {
+                chunks.push(chunk);
+              });
+            }
+            chunks.push(chunk);
+          },
+          deadline.signal
+        );
         if (!complete) return null;
       } catch (error) {
         if (error instanceof UploadRefused) {
-          return errorFormat === 'text'
+          return error.plain || errorFormat === 'text'
             ? new Response(error.message, { status: error.status })
             : Response.json({ error: error.message }, { status: error.status });
         }
+        if (deadline.signal.aborted) {
+          return new Response('The upload took too long. Try again shortly.', { status: 408 });
+        }
         throw error;
+      } finally {
+        clearTimeout(timer);
       }
       return new Response(Buffer.concat(chunks), { headers: routed.headers }).formData();
     }

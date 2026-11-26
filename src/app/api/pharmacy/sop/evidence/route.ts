@@ -170,7 +170,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     stage = 'file_validation';
     let form: FormData;
     try {
-      const result = await readUploadForm(actor.session.user.id);
+      const result = await readUploadForm(actor.session.user.id, actor.organization.id);
       if (result instanceof Response) return result;
       if (!result) return json(413, { error: UPLOAD_SIZE_MESSAGE });
       form = result;
