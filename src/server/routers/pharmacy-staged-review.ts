@@ -1,4 +1,5 @@
-import { catalogueEditProcedure } from './pharmacy-medicine';
+import { starterHistory } from '@/lib/pharmacy/migration/starter-history';
+import { CATALOGUE_REVIEW_ACTION, catalogueEditProcedure } from './pharmacy-medicine';
 import { annotateAudit } from '../audit';
 import {
   stagingInput,
@@ -18,7 +19,7 @@ import {
 import { applyLegacyControlledClass } from '@/lib/pharmacy/migration/legacy-controlled';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { adminProcedure, contextualCapabilityProcedure, router, type TRPCContext } from '../trpc';
 import {
   assertReviewBranch,
   listStagedMedicines,
@@ -203,6 +204,54 @@ export const pharmacyStagedReviewRouter = router({
       const { controlledMedicineIds, ...summary } = saved;
       return { ...summary, controlledMedicinesFlagged: controlledMedicineIds.length };
     }),
+    catalogueProducts: adminProcedure
+      .input(
+        z.strictObject({
+          query: z.string().trim().max(200),
+          page: z.number().int().min(1).max(10000),
+        })
+      )
+      .query(async ({ ctx, input }) => {
+        const organization = organizationId(ctx);
+        const phrase = { contains: input.query, mode: 'insensitive' as const };
+        const products = await ctx.db.medicine.findMany({
+          where: {
+            organizationId: organization,
+            ...(input.query
+              ? {
+                  OR: [
+                    { productName: phrase },
+                    { manufacturer: phrase },
+                    { aliases: { some: { organizationId: organization, value: phrase } } },
+                  ],
+                }
+              : {}),
+          },
+          select: {
+            id: true,
+            productName: true,
+            manufacturer: true,
+            saleable: true,
+            controlled: true,
+          },
+          orderBy: [{ productName: 'asc' }, { id: 'asc' }],
+          take: 26,
+          skip: (input.page - 1) * 25,
+        });
+        return { products: products.slice(0, 25), more: products.length > 25 };
+      }),
+    starterHistory: contextualCapabilityProcedure((ctx) =>
+      ctx.session?.user.role === 'ADMIN' ? ['admin:access'] : [CATALOGUE_REVIEW_ACTION]
+    )
+      .input(
+        z.strictObject({
+          list: z.enum(['conflicts', 'narcotics']),
+          page: z.number().int().min(1).max(10000),
+        })
+      )
+      .query(({ ctx, input }) =>
+        starterHistory(ctx.db, organizationId(ctx), input.list, input.page)
+      ),
     stagedBranches: adminProcedure.query(({ ctx }) =>
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId: organizationId(ctx), active: true },

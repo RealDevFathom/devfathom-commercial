@@ -2,12 +2,21 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 const mocks = vi.hoisted(() => ({
+  after: vi.fn(),
+  processStarterImports: vi.fn(),
   requirePlatformSession: vi.fn(),
   executePlatformCommand: vi.fn(),
   assertPlatformMutationOrigin: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
+vi.mock('next/server', async (original) => ({
+  ...(await original<typeof import('next/server')>()),
+  after: mocks.after,
+}));
+vi.mock('@/lib/pharmacy/migration/starter-worker', () => ({
+  processStarterImports: mocks.processStarterImports,
+}));
 vi.mock('@/lib/platform/auth', () => ({ requirePlatformSession: mocks.requirePlatformSession }));
 vi.mock('@/lib/platform/commands', () => ({
   executePlatformCommand: mocks.executePlatformCommand,
@@ -63,4 +72,14 @@ describe('POST /api/platform/control validation contract', () => {
     expect(response.status).toBe(403);
     expect(await response.json()).toEqual({ error: 'This action is not permitted.' });
   });
+});
+
+it('wakes the new pharmacy import after the successful setup response', async () => {
+  mocks.after.mockClear();
+  mocks.executePlatformCommand.mockResolvedValue({ id: 'qa-new-pharmacy', vertical: 'PHARMACY' });
+  expect((await POST(request())).status).toBe(200);
+  expect(mocks.processStarterImports).not.toHaveBeenCalled();
+  expect(mocks.after).toHaveBeenCalledTimes(1);
+  await mocks.after.mock.calls[0]![0]();
+  expect(mocks.processStarterImports).toHaveBeenCalledWith('qa-new-pharmacy');
 });

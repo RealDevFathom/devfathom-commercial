@@ -58,6 +58,7 @@ import { regulatoryProfileInForceWhere } from '@/lib/pharmacy/regulatory-start';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { DEFAULT_EMERGENCY_SUPPLY_POLICY } from '@/lib/pharmacy/controlled-register';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
+import { enqueueStarterImport } from '@/lib/pharmacy/migration/starter-queue';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { hasPlatformApproval } from '@/lib/pharmacy/platform-approval';
 import { pharmacyApprovalUnmetChecks } from '@/lib/platform/pharmacy-approval-queue';
@@ -1229,6 +1230,7 @@ async function bootstrapOrganization(
   // gate working, and pre-seeding a profile here would be exactly the "seed data
   // fakes readiness" move PLAT-03 exists to refuse.
   if (input.vertical === 'PHARMACY') {
+    await enqueueStarterImport(db, organization.id);
     const mainBranch = await db.pharmacyBranch.create({
       data: {
         organizationId: organization.id,

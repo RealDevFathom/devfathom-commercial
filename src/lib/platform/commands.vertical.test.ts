@@ -114,6 +114,7 @@ function record() {
 
 const platformDb = {
   $queryRawUnsafe: mocks.organizationExists,
+  $executeRaw: vi.fn(),
   platformPackage: {
     findUnique: mocks.pkgFindUnique,
     create: mocks.pkgCreate,
