@@ -531,6 +531,10 @@ const REST_ROUTES: Readonly<
     exempt:
       'The patient portal: a customer, not a workspace member, acting on their own records; consent changes are stored on the patient record.',
   },
+  'portal/prescription-upload/route.ts': {
+    exempt:
+      'The patient portal: a customer, not a workspace member, submits a prescription for their own record.',
+  },
   'sms/webhook/route.ts': {
     exempt: 'Signed delivery receipts and replies from the SMS provider; no person acts.',
   },

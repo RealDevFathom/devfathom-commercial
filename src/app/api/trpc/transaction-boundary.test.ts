@@ -885,3 +885,32 @@ it('checks the host-routed anonymous throttle before reading the body', async ()
   expect(input.bytesRead()).toBe(0);
   expect(mocks.resolveExplicitOrganizationByHost).not.toHaveBeenCalled();
 });
+
+it('refuses an oversized anonymous POST before a 4 MiB proxy clone could fill', async () => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const input = oversizedRequest(4 * 1024 * 1024, {
+    url: url('pharmacySupplierLinks.submit', '?batch=1'),
+    headers: { 'content-type': 'application/json', 'x-devfathom-request-method': 'GET' },
+  });
+  const response = await POST(input.request);
+  expect(response.status).toBe(413);
+  expect(response.headers.get('content-security-policy')).toContain("'nonce-");
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(256 * 1024 + 16_384);
+  const actorRequest = mocks.resolveTenantActor.mock.calls[0]![0].request as Request;
+  expect(actorRequest.headers.get('x-devfathom-request-method')).toBe('POST');
+  expect(harness.outcomes).toEqual([]);
+});
+
+it('retains the signed-in body capacity past the new shared proxy cap', async () => {
+  const response = await POST(
+    new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ '0': { json: { synthetic: true } } }).padEnd(8 * 1024 * 1024),
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([{ result: { data: { json: { synthetic: true } } } }]);
+  expect(harness.outcomes).toEqual(['COMMIT']);
+});

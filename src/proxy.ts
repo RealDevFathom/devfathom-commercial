@@ -201,9 +201,10 @@ export async function proxy(request: Request) {
   return next();
 }
 
-// These exact route handlers apply the API header policy themselves and bound
-// the multipart stream. All other paths keep Next's 8 MB proxy clone limit.
+// These upload handlers and the single-segment tRPC route apply the API
+// header policy themselves. They enforce their limits while reading the
+// original stream, without Next first buffering it in proxy.
 export const config = {
   matcher:
-    '/((?!api/(?:upload|pharmacy/supplier-documents/upload|(?:restaurant|pharmacy)/sop/evidence)/?$).*)',
+    '/((?!api/(?:upload|trpc/[^/]+|pharmacy/(?:supplier-documents/upload|portal/prescription-upload)|(?:restaurant|pharmacy)/sop/evidence)/?$).*)',
 };

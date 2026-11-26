@@ -16,5 +16,6 @@ it('rejects a chunked overflow before dispatching even a body-independent action
   );
   expect(cancelled()).toBe(true);
   expect(bytesRead()).toBeLessThanOrEqual(7_500_000 + 16_384);
+  expect(bytesRead()).toBe(16 * 1024 + 16_384);
   expect(handle).not.toHaveBeenCalled();
 });
