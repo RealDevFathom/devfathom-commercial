@@ -27,6 +27,7 @@ import {
   TaskRuleError,
   assertAssigneesAreProjectMembers,
   assertReplyTargetInTask,
+  eligibleColumnDefaultAssigneeIds,
 } from '@/lib/projects/task-rules';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM". Mirrors the
@@ -530,12 +531,10 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
         assigneeIds.push(h.ctx.userId);
       }
 
-      // Merge the column's default assignees (additive), mirroring the router.
-      const columnDefaults = await h.db.columnDefaultAssignee.findMany({
-        where: { columnId: column.id },
-        select: { userId: true },
-      });
-      const merged = [...new Set([...assigneeIds, ...columnDefaults.map((d) => d.userId)])];
+      // Merge the column's default assignees (additive), mirroring the router:
+      // only those who may still work on the project (DEV-1055).
+      const columnDefaults = await eligibleColumnDefaultAssigneeIds(h.db, column.id, proj.id);
+      const merged = [...new Set([...assigneeIds, ...columnDefaults])];
 
       const maxOrder = await h.db.task.aggregate({
         _max: { order: true },
@@ -727,13 +726,16 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           data: { columnId: target.id, order: newOrder },
         });
         // Auto-assign the target column's default assignees (additive).
-        const defaults = await tx.columnDefaultAssignee.findMany({
-          where: { columnId: target.id },
-          select: { userId: true },
-        });
+        // DEV-1055: only those who may still work on the project (administrators
+        // or current members), the same shared filter projects.moveTask applies.
+        const defaults = await eligibleColumnDefaultAssigneeIds(
+          tx,
+          target.id,
+          task.column.board.projectId
+        );
         if (defaults.length > 0) {
           await tx.taskAssignee.createMany({
-            data: defaults.map((d) => ({ taskId: task.id, userId: d.userId })),
+            data: defaults.map((userId) => ({ taskId: task.id, userId })),
             skipDuplicates: true,
           });
         }

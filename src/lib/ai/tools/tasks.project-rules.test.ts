@@ -44,9 +44,19 @@ let projectMembers: Set<string>;
 let existingAssignees: string[];
 /** comment id → the task it belongs to. */
 let comments: Record<string, string>;
+/** The destination column's default assignees, eligible or not. */
+let columnDefaults: string[];
+const workspaceAdmins = new Set(['user_admin_default']);
+
+type ColumnDefaultWhere = {
+  columnId: string;
+  user?: { OR: [{ role: 'ADMIN' }, { projectMembers: { some: { projectId: string } } }] };
+};
 
 const db = {
   task: {
+    updateMany: vi.fn(async () => ({ count: 0 })),
+    update: vi.fn(async () => ({})),
     findMany: vi.fn(async () => [resolvedTask]),
     aggregate: vi.fn(async () => ({ _max: { order: 2 } })),
     create: vi.fn(async ({ data }: { data: { title: string } }) => ({
@@ -67,7 +77,30 @@ const db = {
       columns: [{ id: 'column_1', name: 'To Do' }],
     })),
   },
-  columnDefaultAssignee: { findMany: vi.fn(async () => []) },
+  columnDefaultAssignee: {
+    // Honours the filter exactly as the database would: with no `user` filter
+    // every default comes back, removed members included.
+    findMany: vi.fn(async ({ where }: { where: ColumnDefaultWhere }) =>
+      columnDefaults
+        .filter((userId) => {
+          if (!where.user) return true;
+          const projectId = where.user.OR[1].projectMembers.some.projectId;
+          return (
+            workspaceAdmins.has(userId) || (projectId === 'project_1' && projectMembers.has(userId))
+          );
+        })
+        .map((userId) => ({ userId }))
+    ),
+  },
+  column: {
+    findMany: vi.fn(async () => [
+      { id: 'column_1', name: 'To Do' },
+      { id: 'column_2', name: 'Review' },
+    ]),
+  },
+  $transaction: vi.fn(async (work: (tx: unknown) => Promise<unknown>): Promise<unknown> =>
+    work(db)
+  ),
   projectMember: {
     count: vi.fn(async ({ where }: { where: { projectId: string; userId: { in: string[] } } }) =>
       where.projectId === 'project_1'
@@ -121,6 +154,7 @@ function tools(userId = 'user_actor') {
       mode?: 'replace' | 'add' | 'remove';
     }>;
     addTaskComment: Exec<{ taskId: string; content: string; replyToCommentId?: string }>;
+    moveTask: Exec<{ taskId: string; columnName: string }>;
   };
 }
 
@@ -129,6 +163,7 @@ beforeEach(() => {
   projectMembers = new Set(['user_actor', 'user_member']);
   existingAssignees = [];
   comments = { comment_same_task: 'task_1', comment_other_task: 'task_2' };
+  columnDefaults = [];
 });
 
 describe('DEV-1055: assistant createTask assigns project members only', () => {
@@ -252,6 +287,53 @@ describe('DEV-1055: assistant addTaskComment keeps a reply inside its task', () 
     ).resolves.toMatchObject({ success: true });
     expect(db.taskComment.create).toHaveBeenLastCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ parentId: null }) })
+    );
+  });
+});
+
+describe('DEV-1055: column default assignees must still belong to the project', () => {
+  beforeEach(() => {
+    // A current member, someone since removed from the project, and a workspace
+    // administrator who was never a member.
+    columnDefaults = ['user_member', 'user_removed', 'user_admin_default'];
+  });
+
+  it('moveTask adds only administrators and current members from the column defaults', async () => {
+    await expect(
+      tools().moveTask.execute({ taskId: 'task_1', columnName: 'Review' })
+    ).resolves.toMatchObject({ success: true });
+
+    expect(db.columnDefaultAssignee.findMany).toHaveBeenCalledWith({
+      where: {
+        columnId: 'column_2',
+        user: {
+          OR: [{ role: 'ADMIN' }, { projectMembers: { some: { projectId: 'project_1' } } }],
+        },
+      },
+      select: { userId: true },
+    });
+    expect(db.taskAssignee.createMany).toHaveBeenCalledWith({
+      data: [
+        { taskId: 'task_1', userId: 'user_member' },
+        { taskId: 'task_1', userId: 'user_admin_default' },
+      ],
+      skipDuplicates: true,
+    });
+  });
+
+  it('createTask merges only administrators and current members from the column defaults', async () => {
+    await tools().createTask.execute({
+      title: 'Draft copy',
+      projectId: 'project_1',
+      assignees: ['member'],
+    });
+
+    expect(db.task.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          assignees: { create: [{ userId: 'user_member' }, { userId: 'user_admin_default' }] },
+        }),
+      })
     );
   });
 });

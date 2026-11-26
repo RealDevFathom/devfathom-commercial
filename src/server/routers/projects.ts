@@ -10,6 +10,7 @@ import {
   TaskRuleError,
   assertAssigneesAreProjectMembers,
   assertReplyTargetInTask,
+  eligibleColumnDefaultAssigneeIds,
 } from '@/lib/projects/task-rules';
 import {
   assertProjectAccess,
@@ -614,16 +615,16 @@ export const projectsRouter = router({
       // setColumnDefaultAssignees already enforces this, but createTask/
       // updateTaskAssignees did not, so an arbitrary or non-member id could be
       // assigned (and emailed) or trigger a raw FK 500.
+      const col = await ctx.db.column.findUnique({
+        where: { id: input.columnId },
+        select: { board: { select: { projectId: true } } },
+      });
+      if (!col) throw new TRPCError({ code: 'NOT_FOUND' });
+      const projectId = col.board.projectId;
       if (input.assigneeIds.length > 0) {
-        const col = await ctx.db.column.findUnique({
-          where: { id: input.columnId },
-          select: { board: { select: { projectId: true } } },
-        });
         const uniqueAssignees = [...new Set(input.assigneeIds)];
         await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
-        await taskRule(() =>
-          assertAssigneesAreProjectMembers(ctx.db, col!.board.projectId, uniqueAssignees)
-        );
+        await taskRule(() => assertAssigneesAreProjectMembers(ctx.db, projectId, uniqueAssignees));
       }
 
       const maxOrder = await ctx.db.task.aggregate({
@@ -631,14 +632,14 @@ export const projectsRouter = router({
         where: { columnId: input.columnId },
       });
 
-      // Fetch column's default assignees so we can auto-add them to the new task.
-      const columnDefaults = await ctx.db.columnDefaultAssignee.findMany({
-        where: { columnId: input.columnId },
-        select: { userId: true },
-      });
-      const mergedAssignees = [
-        ...new Set([...input.assigneeIds, ...columnDefaults.map((d) => d.userId)]),
-      ];
+      // Auto-add the column's default assignees to the new task. DEV-1055: only
+      // those who may still work on the project, the same filter moveTask applies.
+      const columnDefaults = await eligibleColumnDefaultAssigneeIds(
+        ctx.db,
+        input.columnId,
+        projectId
+      );
+      const mergedAssignees = [...new Set([...input.assigneeIds, ...columnDefaults])];
 
       const task = await ctx.db.task.create({
         data: {
@@ -840,21 +841,14 @@ export const projectsRouter = router({
           }
 
           // Auto-assign the target column's default assignees (additive).
-          const defaults = await tx.columnDefaultAssignee.findMany({
-            where: {
-              columnId: input.targetColumnId,
-              user: {
-                OR: [
-                  { role: 'ADMIN' },
-                  { projectMembers: { some: { projectId: targetColumn.board.projectId } } },
-                ],
-              },
-            },
-            select: { userId: true },
-          });
+          const defaults = await eligibleColumnDefaultAssigneeIds(
+            tx,
+            input.targetColumnId,
+            targetColumn.board.projectId
+          );
           if (defaults.length > 0) {
             await tx.taskAssignee.createMany({
-              data: defaults.map((d) => ({ taskId: input.taskId, userId: d.userId })),
+              data: defaults.map((userId) => ({ taskId: input.taskId, userId })),
               skipDuplicates: true, // already-assigned users become a no-op
             });
           }
@@ -982,23 +976,14 @@ export const projectsRouter = router({
         }
 
         // Auto-assign the target column's default owners (additive), mirroring moveTask.
-        const defaults = await tx.columnDefaultAssignee.findMany({
-          where: {
-            columnId: input.targetColumnId,
-            user: {
-              OR: [
-                { role: 'ADMIN' },
-                { projectMembers: { some: { projectId: targetColumn.board.projectId } } },
-              ],
-            },
-          },
-          select: { userId: true },
-        });
+        const defaults = await eligibleColumnDefaultAssigneeIds(
+          tx,
+          input.targetColumnId,
+          targetColumn.board.projectId
+        );
         if (defaults.length > 0) {
           await tx.taskAssignee.createMany({
-            data: input.taskIds.flatMap((taskId) =>
-              defaults.map((d) => ({ taskId, userId: d.userId }))
-            ),
+            data: input.taskIds.flatMap((taskId) => defaults.map((userId) => ({ taskId, userId }))),
             skipDuplicates: true,
           });
         }

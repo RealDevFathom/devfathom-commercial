@@ -69,3 +69,40 @@ export async function assertReplyTargetInTask(
     throw new TaskRuleError(REPLY_TARGET_NOT_IN_TASK, 'REPLY_TARGET_NOT_IN_TASK');
   }
 }
+
+type ColumnDefaultsDb = {
+  columnDefaultAssignee: {
+    findMany(args: {
+      where: ReturnType<typeof eligibleColumnDefaultAssigneeWhere>;
+      select: { userId: true };
+    }): Promise<{ userId: string }[]>;
+  };
+};
+
+/**
+ * A column's default assignee is added to a task only while they may still work
+ * on the column's project: an administrator, or a current member of the project.
+ * A default set up earlier does not keep someone on new tasks after they have
+ * been removed from the project.
+ */
+export function eligibleColumnDefaultAssigneeWhere(columnId: string, projectId: string) {
+  return {
+    columnId,
+    user: {
+      OR: [{ role: 'ADMIN' as const }, { projectMembers: { some: { projectId } } }],
+    },
+  };
+}
+
+/** The column's default assignees who pass `eligibleColumnDefaultAssigneeWhere`. */
+export async function eligibleColumnDefaultAssigneeIds(
+  db: ColumnDefaultsDb,
+  columnId: string,
+  projectId: string
+): Promise<string[]> {
+  const defaults = await db.columnDefaultAssignee.findMany({
+    where: eligibleColumnDefaultAssigneeWhere(columnId, projectId),
+    select: { userId: true },
+  });
+  return defaults.map((row) => row.userId);
+}
