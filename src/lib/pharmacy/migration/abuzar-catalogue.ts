@@ -56,8 +56,8 @@ export async function catalogueDecision(db: ScopedDb, org: string, data: Prepare
         (value) =>
           value &&
           (amountMinor(value) === null ||
-            amountMinor(value)! < 0n ||
-            amountMinor(value)! > 2147483647n)
+            amountMinor(value)! < BigInt(0) ||
+            amountMinor(value)! > BigInt(2147483647))
       )
     )
       reason = 'invalid catalogue price';

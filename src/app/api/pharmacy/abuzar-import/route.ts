@@ -8,7 +8,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyOwnerImportRouter } from '@/server/routers/pharmacy-owner-import';
 import { AbuzarReviewError, phaseInput, runAbuzarStep } from '@/lib/pharmacy/migration/abuzar-run';
-import { parsePreparedExport } from '../../../../../../tools/abuzar-import/prepared';
+import { parsePreparedExport } from '../../../../../tools/abuzar-import/prepared';
 
 const input = phaseInput.extend({
   branchId: z.string().min(1).max(128),

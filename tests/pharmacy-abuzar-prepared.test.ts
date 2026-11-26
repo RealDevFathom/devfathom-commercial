@@ -40,10 +40,29 @@ it('stages native source identities for review with original catalogue price and
   const profile = profileAbuzarProducts(data.tables.products);
   expect(profile.rows[0]).toMatchObject({
     sourceKey: 'abuzar-item:A',
-    mrpMinor: 4500n,
-    costMinor: 2000n,
-    packFactor: 10n,
+    mrpMinor: BigInt(4500),
+    costMinor: BigInt(2000),
+    packFactor: BigInt(10),
     rawPayload: { Shelf: 'S1', LegacyCode: '10', Class: 'NARCOTICS' },
   });
   expect(profile.rows[1]).toMatchObject({ sourceKey: 'abuzar-item:B', mrpMinor: null });
+});
+
+it('brings agreed credit and debt into a native khata balance without simulating a sale or repayment', async () => {
+  const { readKhataBalance } = await import('@/lib/pharmacy/family-khata');
+  const db = {
+    pharmacyKhataEvent: {
+      groupBy: async () => [
+        { kind: 'OPENING_DEBIT', _sum: { amountMinor: 450 } },
+        { kind: 'OPENING_CREDIT', _sum: { amountMinor: 125 } },
+      ],
+    },
+  };
+  expect(
+    await readKhataBalance(
+      db as never,
+      { organizationId: 'a', branchId: 'b', actorId: 'c' },
+      'family'
+    )
+  ).toBe(325);
 });

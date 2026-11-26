@@ -91,7 +91,7 @@ describe.runIf(process.env.TEST_DATABASE_URL)('prepared party and history operat
         org,
         async (db) =>
           (
-            await db.$queryRaw`SELECT
+            await db.$queryRaw<Record<string, unknown>[]>`SELECT
         (SELECT count(*)::int FROM pharmacy_customers) customers,(SELECT count(*)::int FROM pharmacy_abuzar_history) history,
         (SELECT count(*)::int FROM pharmacy_sales) sales, (SELECT count(*)::int FROM finance_journal_entries) journals,
         (SELECT md5(string_agg(t::text,',' ORDER BY t."sourceId")) FROM pharmacy_abuzar_history t) checksum,

@@ -66,3 +66,4 @@
 20261126010100_recurring_expense_cycles
 20261126020300_pharmacy_starter_catalogue
 20261127030000_pharmacy_abuzar_export
+20261127030100_pharmacy_abuzar_openings

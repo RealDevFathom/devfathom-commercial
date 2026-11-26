@@ -130,7 +130,13 @@ export function packUnits(raw: string) {
 }
 export function unitMinor(raw: string, pack: number | null) {
   const minor = amountMinor(raw);
-  if (!pack || minor === null || minor < 0n || minor > 2147483647n || minor % BigInt(pack) !== 0n)
+  if (
+    !pack ||
+    minor === null ||
+    minor < BigInt(0) ||
+    minor > BigInt(2147483647) ||
+    minor % BigInt(pack) !== BigInt(0)
+  )
     return null;
   return minor / BigInt(pack);
 }
@@ -151,10 +157,10 @@ export function sourceReport({ manifest, tables, checksum }: Prepared) {
   const issues: { table: Table; row: number; reason: string }[] = [];
   const products = new Map(tables.products.map((p) => [p.ICode, p]));
   const parties = new Map(tables.parties.map((p) => [p.RowID, p]));
-  let stockUnits = 0n,
-    stockValueMinor = 0n,
-    customerBalanceMinor = 0n,
-    supplierBalanceMinor = 0n;
+  let stockUnits = BigInt(0),
+    stockValueMinor = BigInt(0),
+    customerBalanceMinor = BigInt(0),
+    supplierBalanceMinor = BigInt(0);
   tables.products.forEach((p, i) => {
     const pack = packUnits(p.PackUnits);
     if (!pack) issues.push({ table: 'products', row: i + 2, reason: 'invalid pack size' });

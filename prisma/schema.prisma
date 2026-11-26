@@ -1487,6 +1487,8 @@ model PharmacyCustomer {
 }
 
 enum PharmacyKhataEventKind {
+  OPENING_DEBIT
+  OPENING_CREDIT
   CHARGE
   PAYMENT
   DISHONOURED_CHEQUE
