@@ -78,7 +78,7 @@ export function CounterPackApprovalDialog({
           <DialogTitle>{copy?.title ?? 'Approve this scanned pack?'}</DialogTitle>
           <DialogDescription>
             {copy?.description ??
-              `${medicineName}: this pack is not from the earliest-expiry batch. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`}
+              `${medicineName}: this pack is not from the earliest-expiry batch. ${approvalCopy.managerInstruction} The approval is recorded in the audit.`}
           </DialogDescription>
           <div className="grid gap-2">
             <Label htmlFor="pack-approver">Approving manager or owner</Label>

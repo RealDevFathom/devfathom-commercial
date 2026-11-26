@@ -2499,7 +2499,7 @@ function ScopedPharmacyCounterConsole({
               setNotice({
                 tone: 'warning',
                 message:
-                  'That PIN did not approve the discount, so the item was not added. A manager or owner must enter their own PIN.',
+                  'That ' + approvalCopy.secretName + ' did not approve the discount, so the item was not added. A manager or owner must enter their own ' + approvalCopy.secretName + '.',
               });
               return null;
             }
@@ -5628,7 +5628,7 @@ function ScopedPharmacyCounterConsole({
                 packApproval.discount
                   ? {
                       title: 'Approve this discount?',
-                      description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
+                      description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. ${approvalCopy.managerInstruction} The approval is recorded in the audit.`,
                       confirm: 'Approve discount',
                     }
                   : undefined

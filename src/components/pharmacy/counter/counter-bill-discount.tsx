@@ -14,6 +14,7 @@ import {
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { percentToBps } from './discount-maximum-panel';
 
 /** DEV-956: why an item took no share of the whole-bill discount, in the cashier's words. */
@@ -68,6 +69,7 @@ export function useCounterBillDiscount({
   onChanged,
   nameLeftOut = false,
 }: CounterBillDiscountInput) {
+  const approvalCopy = useCounterApprovalCopy();
   const setting = trpc.pharmacySales.billDiscountSetting.useQuery({ branchId });
   const maximum = trpc.pharmacySales.discountMaximum.useQuery(
     { branchId },
@@ -126,7 +128,7 @@ export function useCounterBillDiscount({
       return {
         error:
           failure instanceof Error && failure.message === COUNTER_DISCOUNT_APPROVAL_REQUIRED
-            ? 'That PIN did not approve the discount, so it was not given. A manager or owner must enter their own PIN.'
+            ? `That ${approvalCopy.secretName} did not approve the discount, so it was not given. A manager or owner must enter their own ${approvalCopy.secretName}.`
             : counterErrorMessage(failure),
         leftOut: [],
       };

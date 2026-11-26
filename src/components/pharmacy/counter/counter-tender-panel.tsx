@@ -1316,7 +1316,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             disabled={!editable}
                             onChange={() => setApprovalMethod('PIN')}
                           />
-                          Manager or owner PIN at this till
+                          Manager or owner {approvalCopy.secretName} at this till
                         </Label>
                         {reauthenticateOwner ? (
                           <Label className="flex min-h-11 items-center gap-2">

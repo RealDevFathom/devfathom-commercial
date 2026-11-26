@@ -20,6 +20,8 @@ export function approvalSecretKind(required: boolean | null | undefined): Approv
 export type CounterApprovalCopy = {
   /** Label of a field for another person's approval. */
   approverLabel: string;
+  secretName: string;
+  managerInstruction: string;
   /** Label of the signed-in manager's or owner's own re-entry (refunds and returns). */
   ownLabel: string;
   /** Hint under the field. */
@@ -51,6 +53,8 @@ export type CounterApprovalCopy = {
 export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCopy> = {
   CODE: {
     approverLabel: 'Approval code',
+    secretName: 'approval code',
+    managerInstruction: 'A manager or owner enters their current authenticator code. A solo owner can enter their own code.',
     ownLabel: 'Your approval code',
     hint: "Enter the approver's current 6-digit code from their authenticator app. A staff member with no login enters their PIN. Nothing is saved on this device.",
     ownHint:
@@ -70,7 +74,7 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
     discountApprovalBill:
       'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their approval code when you apply it.',
     discountSupervisorHow:
-      'They choose their name and enter the current 6-digit code from their authenticator app on this till (a staff member with no login enters their PIN)',
+      'They enter the current 6-digit code from their authenticator app on this till (a staff member with no login enters their PIN)',
     controlledNeeds:
       'Controlled medicine needs the patient address, the pharmacist’s approval code, and a prescription or an emergency prescriber.',
     controlledSecretNeeded: 'the pharmacist’s approval code',
@@ -80,6 +84,8 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
   },
   PIN: {
     approverLabel: 'Approver PIN',
+    secretName: 'PIN',
+    managerInstruction: 'A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN.',
     ownLabel: 'Your manager or owner PIN',
     hint: "Enter the approver's permanent PIN. The owner has turned the authenticator for approvals off. Nothing is saved on this device.",
     ownHint:

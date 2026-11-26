@@ -16,6 +16,7 @@ import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
+  counterProofRequired,
   fefoOverrideApprovalPolicy,
   isSoleActiveApprover,
   listCounterApprovers,
@@ -330,7 +331,7 @@ function authorizeSaleApproval(
   const counter = ctx.approvalCounter;
   if (counter) return authorizeCounterApproval(db, scope, kind, { ...input, counter });
   if ('staffProfileId' in input) return authorizeCounterApproval(db, scope, kind, input);
-  throw new CounterApprovalDenied(kind);
+  throw counterProofRequired(kind);
 }
 const tenderInput = z
   .object({

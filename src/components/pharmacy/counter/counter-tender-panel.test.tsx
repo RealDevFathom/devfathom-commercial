@@ -735,7 +735,7 @@ describe('family Khata tender', () => {
     const take = screen.getByRole('button', { name: 'Take payment' });
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
     // The till's PIN approval is the default method.
-    expect(screen.getByLabelText('Manager or owner PIN at this till')).toBeChecked();
+    expect(screen.getByLabelText('Manager or owner approval code at this till')).toBeChecked();
     expect(screen.queryByLabelText('Your password (current account)')).not.toBeInTheDocument();
     await screen.findByRole('option', { name: 'Manager Sana' });
     expect(loadKhataApprovers).toHaveBeenCalledOnce();

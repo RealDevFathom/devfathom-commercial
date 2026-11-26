@@ -149,9 +149,13 @@ export function fefoOverrideApprovalPolicy(approval: CounterApproval, actorId: s
 }
 
 export class CounterApprovalDenied extends Error {
-  constructor(readonly kind: CounterApprovalKind) {
-    super(DENIED_MESSAGE[kind]);
+  constructor(readonly kind: CounterApprovalKind, message = DENIED_MESSAGE[kind]) {
+    super(message);
   }
+}
+
+export function counterProofRequired(kind: CounterApprovalKind) {
+  return new CounterApprovalDenied(kind, 'This till could not verify its enrollment. Choose the approver by name to continue.');
 }
 
 type ActiveUser = Subject & { organizationId: string | null };
@@ -230,7 +234,7 @@ export async function authorizeCounterApproval(
   const deviceId = 'counter' in input ? await verifiedCounterId(db, scope, input.counter) : null;
   // Named approvals also work when a browser sends a stale terminal session. Only
   // a verified session may charge a physical till or identify an unnamed approver.
-  if (!input.staffProfileId && !deviceId) throw new CounterApprovalDenied(kind);
+  if (!input.staffProfileId && !deviceId) throw counterProofRequired(kind);
   let counterReservation: { key: string; window: Date } | undefined;
   if (deviceId) {
     const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, deviceId]);
@@ -455,6 +459,7 @@ async function identifyCounterApprover(
                   organizationId: scope.organizationId,
                   branchId: scope.branchId,
                   active: true,
+                  branch: { organizationId: scope.organizationId, active: true },
                 },
               },
             },

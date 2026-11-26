@@ -54,6 +54,7 @@ describe('DEV-961 counter approval fields follow the authenticator setting', () 
       inMode(kind, packDialog);
       const input = await screen.findByLabelText('Approval code');
       expect(input).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
+      expect(screen.getByRole('dialog')).toHaveAccessibleDescription(/current authenticator code/);
       expect(input).toHaveAccessibleDescription(/no login enters their PIN/);
       cleanup();
       inMode(kind, discard);
