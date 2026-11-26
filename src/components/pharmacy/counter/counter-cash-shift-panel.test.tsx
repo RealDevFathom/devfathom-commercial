@@ -41,11 +41,15 @@ const report: CashShiftReport = {
 const mocks = vi.hoisted(() => ({
   closeMutate: vi.fn(),
   openMutate: vi.fn(),
+  requireCode: false,
   approvers: [{ id: 'manager-b', name: 'Bilal', isYou: false }],
 }));
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: {
+      mode: { useQuery: () => ({ data: { required: mocks.requireCode } }) },
+    },
     pharmacySales: {
       shiftReport: {
         useQuery: (_input: unknown, options: { enabled?: boolean }) => ({
@@ -98,7 +102,10 @@ function panel(status: Parameters<typeof CounterCashShiftPanel>[0]['status']) {
   );
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.requireCode = false;
+});
 afterEach(cleanup);
 
 describe('DEV-958B counter cash shift panel', () => {
@@ -148,6 +155,15 @@ describe('DEV-958B counter cash shift panel', () => {
       },
       expect.anything()
     );
+  });
+
+  it('asks for the authenticator code when app approvals are on', () => {
+    mocks.requireCode = true;
+    panel({ openShift, lastClosedShift: null, currency: 'PKR' });
+    fireEvent.click(screen.getByRole('button', { name: 'Close shift' }));
+    fireEvent.change(screen.getByLabelText('Cash counted (PKR)'), { target: { value: '105' } });
+    expect(screen.getByLabelText('Their authenticator code')).toBeVisible();
+    expect(screen.getByText(/approves it with their authenticator code/)).toBeVisible();
   });
 
   it("says who may close another cashier's shift, and offers no close", () => {
@@ -215,6 +231,30 @@ describe('DEV-958B shift report', () => {
       screen.getByText(/approved by Bilal \(their own close, with their PIN\)/)
     ).toBeInTheDocument();
     expect(screen.getByText('No refunds in this shift.')).toBeInTheDocument();
+  });
+
+  it('uses authenticator wording for another approver and a self-approved close', () => {
+    mocks.requireCode = true;
+    const approved = {
+      ...report,
+      closedBy: { id: 'manager-b', name: 'Bilal' },
+      varianceApprovedBy: { id: 'manager-a', name: 'Amir' },
+    };
+    const view = render(
+      <CashShiftReportView report={approved} status="CLOSED" currency="PKR" timeZone="UTC" />
+    );
+    expect(screen.getByText(/approved by Amir with their authenticator code/)).toBeVisible();
+    view.rerender(
+      <CashShiftReportView
+        report={{ ...approved, varianceApprovedBy: approved.closedBy }}
+        status="CLOSED"
+        currency="PKR"
+        timeZone="UTC"
+      />
+    );
+    expect(
+      screen.getByText(/approved by Bilal \(their own close, with their authenticator code\)/)
+    ).toBeVisible();
   });
 
   it('DEV-977B: shows the lines taken off bills in the shift, and nothing for an older report', () => {
