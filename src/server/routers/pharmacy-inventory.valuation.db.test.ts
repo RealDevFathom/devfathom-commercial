@@ -366,7 +366,15 @@ beforeAll(async () => {
   );
 }, 60_000);
 
-afterAll(async () => disconnect?.());
+afterAll(async () => {
+  if (!disconnect) return;
+  const { flushAuditWritesForTest } = await import('../audit');
+  try {
+    await flushAuditWritesForTest();
+  } finally {
+    await disconnect();
+  }
+});
 
 suite('DEV-1044 valuation on PostgreSQL', () => {
   it('uses the same posted valuation as Finance for each cost figure and independently checks price and quantity on the same fixture', async () => {
