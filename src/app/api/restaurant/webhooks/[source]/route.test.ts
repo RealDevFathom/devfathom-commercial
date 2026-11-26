@@ -33,6 +33,10 @@ describe('restaurant inbound webhook demo isolation', () => {
     });
     const request = new Request('https://demo.devfathom.test/api/restaurant/webhooks/terminal', {
       method: 'POST',
+      headers: {
+        'x-webhook-signature': '0'.repeat(64),
+        'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+      },
       body: '{not-json',
     });
 

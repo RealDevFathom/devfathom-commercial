@@ -67,6 +67,16 @@ export async function POST(
     return NextResponse.json({ error: 'Unknown webhook source.' }, { status: 404 });
   }
 
+  const timestamp = request.headers.get(TIMESTAMP_HEADER);
+  const signature = request.headers.get(SIGNATURE_HEADER);
+  if (
+    !freshTerminalTimestamp(timestamp) ||
+    !signature ||
+    !/^(?:sha256=)?[a-f0-9]{64}$/i.test(signature)
+  ) {
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
+  }
+
   // Tenant resolution: explicit host only — never the DEFAULT_ORGANIZATION_ID
   // fallback, and never a client-supplied org. An unknown host is indistinguishable
   // from an absent one: a flat 404.
@@ -82,16 +92,6 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
   }
   if (rawBody === null) return NextResponse.json({ error: 'Body too large.' }, { status: 413 });
-  const timestamp = request.headers.get(TIMESTAMP_HEADER);
-  const signature = request.headers.get(SIGNATURE_HEADER);
-  if (
-    !freshTerminalTimestamp(timestamp) ||
-    !signature ||
-    !/^(?:sha256=)?[a-f0-9]{64}$/i.test(signature)
-  ) {
-    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
-  }
-
   let body: unknown;
   try {
     body = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;

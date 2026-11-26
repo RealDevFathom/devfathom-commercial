@@ -16,6 +16,8 @@ const state = vi.hoisted(() => ({
   seq: 0,
   configured: true,
   scoped: false,
+  queries: [] as string[],
+  retireDuringAdmission: false,
   ambiguous: false,
 }));
 
@@ -88,21 +90,29 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
   function createTenantDb(orgId: string) {
     const db: Record<string, unknown> = {
       restaurantWebhookInbox,
-      $queryRaw: async (_query: TemplateStringsArray, source?: string) =>
-        state.configured && source === 'card-provider'
+      $queryRaw: async (query: TemplateStringsArray, source?: string, ...clauses: unknown[]) => {
+        const sql = query
+          .map(
+            (part, index) =>
+              part + (([source, ...clauses][index] as { sql?: string } | undefined)?.sql ?? '')
+          )
+          .join('');
+        state.queries.push(sql);
+        return state.configured && source === 'card-provider'
           ? [
               ...(state.ambiguous ? [{ id: 'other' }] : []),
               {
                 id: orgId + '-cfg',
                 organizationId: orgId,
-                legacyRetired: false,
+                legacyRetired: state.retireDuringAdmission && sql.includes('FOR SHARE'),
                 encryptedSigningSecret: state.scoped ? encryptSecret(orgId + '-key') : null,
                 previousEncryptedSigningSecret: null,
                 previousSigningSecretExpiresAt: null,
                 webhookKeysDeployedAt: new Date(),
               },
             ]
-          : [],
+          : [];
+      },
       restaurantJob: { count: async () => state.jobs.length },
     };
     db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
@@ -178,6 +188,8 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     state.seq = 0;
     state.configured = true;
     state.scoped = false;
+    state.queries.length = 0;
+    state.retireDuringAdmission = false;
     state.ambiguous = false;
     vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'isolated-test-key');
     mocks.processTerminalEvent.mockReset();
@@ -316,9 +328,55 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     expect(state.jobs).toHaveLength(0);
   });
 
+  it('rejects absent and malformed headers before reading a body or looking up a signer', async () => {
+    for (const signature of ['', 'invalid']) {
+      const { request, bytesRead } = oversizedRequest(256 * 1024, {
+        headers: {
+          'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+          'x-webhook-signature': signature,
+        },
+      });
+      expect((await POST(request, { params: Promise.resolve({ source: SOURCE }) })).status).toBe(
+        401
+      );
+      expect(request.bodyUsed).toBe(false);
+      expect(bytesRead()).toBe(0);
+      expect(state.queries).toEqual([]);
+    }
+  });
+
+  it('checks the signature before locking and rechecks retirement under the lock before admission', async () => {
+    const raw = JSON.stringify({
+      externalEventId: 'ordering',
+      eventType: 'order.created',
+      payload: {},
+    });
+    const response = await post(raw, {
+      'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+      'x-webhook-signature': '0'.repeat(64),
+    });
+    expect(response.status).toBe(401);
+    expect(state.queries).toHaveLength(1);
+    expect(state.queries[0]).not.toMatch(/FOR SHARE|advisory_xact_lock/);
+    state.queries.length = 0;
+    state.retireDuringAdmission = true;
+    expect((await postSignedTerminal()).status).toBe(401);
+    expect(state.queries).toHaveLength(3);
+    expect(state.queries[0]).not.toMatch(/FOR SHARE|advisory_xact_lock/);
+    expect(state.queries[1]).toContain('advisory_xact_lock');
+    expect(state.queries[2]).toContain('FOR SHARE');
+    expect(state.jobs).toHaveLength(0);
+    expect(state.inbox.size).toBe(0);
+  });
+
   it('stops reading a chunked body at the limit', async () => {
     const limit = 256 * 1024;
-    const { request, cancelled, bytesRead } = oversizedRequest(limit);
+    const { request, cancelled, bytesRead } = oversizedRequest(limit, {
+      headers: {
+        'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+        'x-webhook-signature': '0'.repeat(64),
+      },
+    });
     expect((await POST(request, { params: Promise.resolve({ source: SOURCE }) })).status).toBe(413);
     expect(cancelled()).toBe(true);
     expect(bytesRead()).toBeLessThanOrEqual(limit + 16_384);
