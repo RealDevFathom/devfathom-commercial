@@ -886,7 +886,7 @@ it('replays an anonymous supplier submission at exactly 256 KiB for tenant looku
   const response = await POST(
     new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', origin: new URL(ENDPOINT).origin },
       body: JSON.stringify({ '0': { json: payload } }).padEnd(256 * 1024),
     })
   );
@@ -932,7 +932,7 @@ it('retains the signed-in body capacity past the new shared proxy cap', async ()
   const response = await POST(
     new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', origin: new URL(ENDPOINT).origin },
       body: JSON.stringify({ '0': { json: { synthetic: true } } }).padEnd(8 * 1024 * 1024),
     })
   );
@@ -940,3 +940,19 @@ it('retains the signed-in body capacity past the new shared proxy cap', async ()
   expect(await response.json()).toEqual([{ result: { data: { json: { synthetic: true } } } }]);
   expect(harness.outcomes).toEqual(['COMMIT']);
 });
+
+it.each([null, 'http://acme.example.com:3001', 'https://other.example'])(
+  'refuses an outside supplier response from origin %s',
+  async (origin) => {
+    mocks.resolveTenantActor.mockResolvedValue(null);
+    const response = await POST(
+      new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
+        body: JSON.stringify({ '0': { json: { token: 'supplier-link' } } }),
+      })
+    );
+    expect(response.status).toBe(403);
+    expect(organizationForAnonymousToken).not.toHaveBeenCalled();
+  }
+);

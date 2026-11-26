@@ -7,6 +7,7 @@ import {
   SUPPLIER_LINK_LIMITS,
   uploadSupplierDocument,
 } from './supplier-action-links';
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 vi.mock('@/lib/storage', () => ({ putUpload: vi.fn().mockResolvedValue({}) }));
 import { putUpload } from '@/lib/storage';
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
@@ -50,10 +51,20 @@ function fakeDb() {
       findFirst: vi.fn(async ({ where }) => {
         const link = stored.find((row) => row.id === where.id);
         if (!link || where.expiresAt.gt >= (link.expiresAt as Date) || link.revokedAt) return null;
-        return { ...link, relationship, purchaseOrder };
+        return {
+          ...link,
+          relationship,
+          purchaseOrder,
+          _count: {
+            submissions: stored.filter(
+              (row) => row.actionLinkId === link.id && row.source === 'SIGNED_LINK'
+            ).length,
+          },
+        };
       }),
     },
     pharmacySupplierDocument: {
+      count: vi.fn(async () => documents.length),
       findUnique: vi.fn(
         async ({ where }) =>
           documents.find(
@@ -341,4 +352,44 @@ describe('supplier link lifetime budgets', () => {
       })
     ).rejects.toMatchObject({ reason: 'INVALID_UPLOAD' });
   });
+});
+
+it('claims a scanned document as purchase order evidence using a local-store-compatible name', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  const doc = await uploadSupplierDocument(s.db, {
+    token: s.token,
+    idempotencyKey: 'invoice',
+    fileName: 'invoice.pdf',
+    declaredMimeType: 'application/pdf',
+    content: Buffer.from('%PDF-1.7'),
+  });
+  expect(doc.ownerType).toBe('PHARMACY_PURCHASE_ORDER');
+  expect(doc.storageUri).toMatch(/^supplier-po-[a-f0-9-]+$/);
+});
+
+it('refuses a page after the last available response has been used', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  for (let i = 0; i < SUPPLIER_LINK_LIMITS.submissions; i++)
+    s.stored.push({ actionLinkId: s.stored[0].id, source: 'SIGNED_LINK' });
+  await expect(getSupplierActionPage(s.db, s.token)).rejects.toMatchObject({
+    reason: 'INVALID_LINK',
+  });
+});
+
+it('refuses a full order even when the current link still has room', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  s.rawDb.pharmacySupplierDocument.count.mockResolvedValue(SUPPLIER_LINK_LIMITS.documents);
+  await expect(
+    uploadSupplierDocument(s.db, {
+      token: s.token,
+      idempotencyKey: 'later',
+      fileName: 'invoice.pdf',
+      declaredMimeType: 'application/pdf',
+      content: Buffer.from('%PDF-1.7'),
+    })
+  ).rejects.toMatchObject({ reason: 'LINK_LIMIT_EXCEEDED' });
+  expect(s.rawDb.pharmacySupplierDocument.create).not.toHaveBeenCalled();
 });

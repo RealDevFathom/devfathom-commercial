@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
+import { recordAudit } from '@/server/audit';
 import { putUpload } from '@/lib/storage';
 import {
   structuralSupplierFileScanner,
@@ -173,6 +174,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
       relationship: { active: true, revokedAt: null },
     },
     include: {
+      _count: { select: { submissions: { where: { source: 'SIGNED_LINK' } } } },
       relationship: { select: { supplierId: true } },
       purchaseOrder: {
         select: {
@@ -182,10 +184,11 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
           supplierId: true,
           expectedDeliveryAt: true,
           lines: {
+            orderBy: { lineNumber: 'asc' },
             select: {
               id: true,
               lineNumber: true,
-              medicineId: true,
+              medicine: { select: { productName: true } },
               packLevelId: true,
               orderedPacks: true,
             },
@@ -212,6 +215,22 @@ export async function assertSupplierDocumentPermission(db: ScopedDb, token: stri
 
 export async function getSupplierActionPage(db: ScopedDb, token: string) {
   const link = await liveLink(db, token);
+  if (link._count.submissions >= SUPPLIER_LINK_LIMITS.submissions)
+    throw new SupplierLinkError('INVALID_LINK');
+  await recordAudit(
+    {
+      organizationId: link.organizationId,
+      actorType: 'ANONYMOUS',
+      source: 'TRPC',
+      category: 'pharmacy',
+      operation: 'READ',
+      action: 'pharmacySupplierLinks.get',
+      targetType: 'PharmacyPurchaseOrder',
+      targetId: link.purchaseOrderId,
+      metadata: { branchId: link.branchId, actionLinkId: link.id },
+    },
+    db
+  );
   return {
     reference: link.purchaseOrder.reference,
     expectedDeliveryAt: link.purchaseOrder.expectedDeliveryAt,
@@ -308,7 +327,28 @@ export async function submitSupplierEvidence(
 ) {
   // Documents must pass the byte scanner and storage path, never a forged JSON reservation.
   if (input.kind === 'DOCUMENT') throw new SupplierLinkError('INVALID_UPLOAD');
-  return withLinkWrite(db, input.token, (tx) => submitEvidence(tx, input));
+  return withLinkWrite(db, input.token, async (tx) => {
+    const submission = await submitEvidence(tx, input);
+    await recordAudit(
+      {
+        organizationId: submission.organizationId,
+        actorType: 'ANONYMOUS',
+        source: 'TRPC',
+        category: 'pharmacy',
+        operation: 'CREATE',
+        action: 'pharmacySupplierLinks.submit',
+        targetType: 'PharmacySupplierSubmission',
+        targetId: submission.id,
+        metadata: {
+          branchId: submission.branchId,
+          actionLinkId: submission.actionLinkId,
+          kind: submission.kind,
+        },
+      },
+      tx
+    );
+    return submission;
+  });
 }
 
 export async function recordManualSupplierEvidence(
@@ -382,7 +422,7 @@ async function uploadDocument(
     payload,
     now: input.now,
   });
-  const objectName = `supplier-po/${link.id}/${file.sha256}`;
+  const objectName = `supplier-po-${link.id}-${file.sha256}`;
   const existing = await db.pharmacySupplierDocument.findUnique({
     where: {
       organizationId_submissionId_sha256: {
@@ -393,6 +433,15 @@ async function uploadDocument(
     },
   });
   if (existing) return existing;
+  // Links for the same order share this cap, including a replacement supplier.
+  await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders WHERE id=${link.purchaseOrderId} FOR NO KEY UPDATE`;
+  const count = await db.pharmacySupplierDocument.count({
+    where: {
+      organizationId: link.organizationId,
+      submission: { actionLink: { purchaseOrderId: link.purchaseOrderId } },
+    },
+  });
+  if (count >= SUPPLIER_LINK_LIMITS.documents) throw new SupplierLinkError('LINK_LIMIT_EXCEEDED');
   await putUpload(link.organizationId, objectName, input.content, file.mimeType);
   const { mode, ...document } = file;
   return db.pharmacySupplierDocument.create({
@@ -402,6 +451,7 @@ async function uploadDocument(
       submissionId: submission.id,
       fileName: input.fileName,
       ...document,
+      ownerType: 'PHARMACY_PURCHASE_ORDER',
       storageUri: objectName,
       scanMode: mode,
       malwareChecked: mode === 'MALWARE_SCANNED',

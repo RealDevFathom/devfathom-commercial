@@ -32,6 +32,7 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { anonymousToken, classifyAnonymousRequest } from '@/lib/auth/anonymous-access';
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
+import { trustedRequestOrigin } from '@/lib/http-origin';
 import { clientIp } from '@/lib/rate-limit';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { proxyRequestHeaders } from '@/lib/security/proxy-request-headers';
@@ -468,6 +469,20 @@ async function handleAnonymous(req: Request): Promise<Response> {
   const boundedRequest = tokenNeedsBody ? tokenRequest : await boundPost(req, ANONYMOUS_BODY_BYTES);
   if (boundedRequest instanceof Response) return boundedRequest;
 
+  if (
+    routing.procedures.some(
+      (path) => path === 'pharmacySupplierLinks.get' || path === 'pharmacySupplierLinks.submit'
+    )
+  ) {
+    // Each token lookup and rate-limit charge represents one supplier operation.
+    if (routing.procedures.length !== 1)
+      return Response.json({ error: 'Use one supplier link at a time.' }, { status: 400 });
+    if (
+      routing.procedures[0] === 'pharmacySupplierLinks.submit' &&
+      req.headers.get('origin') !== trustedRequestOrigin(req)
+    )
+      return Response.json({ error: 'Forbidden.' }, { status: 403 });
+  }
   if (routing.kind === 'token') {
     const organizationId = await organizationForAnonymousToken(token);
     const organization = organizationId ? await resolveOrganizationById(organizationId) : null;
@@ -517,6 +532,11 @@ async function dispatch(req: Request) {
       req = bounded;
     }
 
+    if (
+      procedurePaths(req).includes('pharmacySupplierLinks.submit') &&
+      req.headers.get('origin') !== trustedRequestOrigin(req)
+    )
+      return Response.json({ error: 'Forbidden.' }, { status: 403 });
     const organization = await requireOrganizationForRequest(
       req,
       actor.session.user.organizationId
