@@ -38,6 +38,7 @@ import type {
   BlockReason,
   StockDisposition,
 } from './inventory';
+import { reconcileQuarantineHolds, recordQuarantineHold } from './quarantine-holds';
 
 export type LedgerScope = {
   organizationId: string;
@@ -422,6 +423,17 @@ export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: Receiv
         reason: input.quarantine.reason,
       })
     : null;
+  // DEV-1052: goods refused at receiving are an inventory hold, placed by the receiver.
+  if (input.quarantine && quarantineMovement)
+    await recordQuarantineHold(db, scope, {
+      inventoryLotId: lot.id,
+      stockLocationId: input.quarantine.stockLocationId,
+      units: input.quarantine.units,
+      authority: 'INVENTORY',
+      origin: 'GOODS_IN',
+      movementId: quarantineMovement.id,
+      reason: input.quarantine.reason,
+    });
 
   return { lot, movement, quarantineMovement };
 }
@@ -533,6 +545,14 @@ export async function reverseMovements(
         },
       })
     );
+    // DEV-1052: a reversed quarantine posting changes what is held; keep its owners true.
+    if (original.disposition === 'QUARANTINE')
+      await reconcileQuarantineHolds(
+        db,
+        scope,
+        { inventoryLotId: original.inventoryLotId, stockLocationId: original.stockLocationId },
+        { movementId: reversals[reversals.length - 1]!.id, reason: input.reason }
+      );
   }
   return reversals;
 }
