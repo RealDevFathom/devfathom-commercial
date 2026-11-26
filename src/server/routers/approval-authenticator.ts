@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import { router, protectedProcedure } from '../trpc';
+import { router, protectedProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import {
@@ -55,6 +55,14 @@ function organizationOf(ctx: Ctx): string {
   const id = ctx.session.user.organizationId;
   if (!id) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   return id;
+}
+
+function refuseSupportCredentialChange(ctx: TRPCContext) {
+  if (ctx.support || ctx.session?.user.isSupportSession)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'A support session cannot change an approval authenticator.',
+    });
 }
 
 async function liveParty(ctx: Ctx, organizationId: string, userId: string) {
@@ -242,6 +250,7 @@ export const approvalAuthenticatorRouter = router({
   beginEnrollment: protectedProcedure
     .input(z.strictObject({ currentPassword: reauthentication.optional() }))
     .mutation(async ({ ctx, input }) => {
+      refuseSupportCredentialChange(ctx);
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
       if (!encryptionConfigured())
@@ -291,6 +300,7 @@ export const approvalAuthenticatorRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      refuseSupportCredentialChange(ctx);
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
       if (!(await rateLimit(`approval-authenticator-confirm:${userId}`, 10, 15 * 60_000)).ok)
@@ -356,6 +366,7 @@ export const approvalAuthenticatorRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      refuseSupportCredentialChange(ctx);
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
       annotateAudit(ctx, { skipInput: true });
@@ -444,6 +455,7 @@ export const approvalAuthenticatorRouter = router({
       z.strictObject({ userId: z.string().min(1), currentPassword: reauthentication.optional() })
     )
     .mutation(async ({ ctx, input }) => {
+      refuseSupportCredentialChange(ctx);
       const organizationId = organizationOf(ctx);
       // DEV-961: a member with no password (single sign-on) proves it is them with a fresh sign-in.
       const confirmedWith = await requireSetupReauthentication(
@@ -459,14 +471,29 @@ export const approvalAuthenticatorRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
       const denial = approvalAuthenticatorResetDenial(actor, target);
       if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
-      const [removed] = await Promise.all([
-        ctx.db.approvalAuthenticator.deleteMany({
+      const removed = await ctx.db.$transaction(async (tx) => {
+        const result = await tx.approvalAuthenticator.deleteMany({
           where: { organizationId, userId: target.id },
-        }),
-        ctx.db.approvalAuthenticatorRecoveryCode.deleteMany({
+        });
+        await tx.approvalAuthenticatorRecoveryCode.deleteMany({
           where: { organizationId, userId: target.id },
-        }),
-      ]);
+        });
+        if (result.count && target.id !== actor.id) {
+          await tx.notification.create({
+            data: {
+              organizationId,
+              userId: target.id,
+              type: 'approval_authenticator_reset',
+              title: 'Your approval authenticator was reset',
+              message:
+                'The owner or an administrator reset your approval authenticator. Set up your authenticator again before approving.',
+              entityType: 'User',
+              entityId: actor.id,
+            },
+          });
+        }
+        return result;
+      });
       annotateAudit(ctx, {
         operation: 'DELETE',
         targetType: 'User',

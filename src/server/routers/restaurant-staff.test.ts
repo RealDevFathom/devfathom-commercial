@@ -96,12 +96,12 @@ function staffParty(
   return { id, role, status: 'ACTIVE', organizationRole, permissionOverrides: [] };
 }
 
-function caller() {
+function caller(enabledModules = ['restaurant-core']) {
   return restaurantStaffRouter.createCaller({
     db,
     entitlements: {
       organizationId: 'org_workspace',
-      enabledModules: ['restaurant-core'],
+      enabledModules,
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
@@ -109,7 +109,13 @@ function caller() {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_gm', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      user: {
+        id: 'user_gm',
+        organizationId: 'org_workspace',
+        role: 'EMPLOYEE',
+        department: 'OPERATIONS',
+        status: 'ACTIVE',
+      },
     },
     organization: { id: 'org_workspace' },
     support: null,
@@ -535,6 +541,54 @@ describe('DEV-974: a manager never sets the PIN of an administrator or the owner
     await expect(
       caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
     ).resolves.toMatchObject({ type: 'PIN' });
+  });
+});
+
+describe('shared pharmacy approval PINs', () => {
+  it.each(['pharmacy-core', 'pharmacy-counter'])(
+    'directs issue, rotation and revocation to the password-protected PIN procedures with %s',
+    async (pharmacyModule) => {
+      const mixed = caller(['restaurant-core', pharmacyModule]);
+      mocks.raw.mockResolvedValue([{ userId: 'user_1', status: 'ACTIVE' }]);
+      mocks.staffFindUnique.mockResolvedValue({
+        id: 'staff_1',
+        status: 'ACTIVE',
+        userId: 'user_1',
+      });
+      mocks.credFindUnique.mockResolvedValue({
+        id: 'cred_1',
+        staffProfileId: 'staff_1',
+        type: 'PIN',
+        deviceId: null,
+        revokedAt: null,
+      });
+      // The test double cannot persist a credential, even if a guard is missing.
+      const unexpectedWrite = new Error('Unexpected credential write');
+      mocks.credCreate.mockRejectedValue(unexpectedWrite);
+      mocks.credUpdate.mockRejectedValue(unexpectedWrite);
+      await expect(
+        mixed.issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        mixed.rotateCredential({ credentialId: 'cred_1', secret: '4821' })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(mixed.revokeCredential({ credentialId: 'cred_1' })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.credCreate).not.toHaveBeenCalled();
+      expect(mocks.credUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses to move an active approval PIN to a different account', async () => {
+    mocks.raw.mockResolvedValue([{ userId: 'user_1' }]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', userId: 'user_1' });
+    mocks.credFindFirst.mockResolvedValue({ id: 'cred_1' });
+    mocks.staffUpdate.mockRejectedValue(new Error('Unexpected profile write'));
+    await expect(
+      caller(['restaurant-core', 'pharmacy-core']).update({ id: 'staff_1', userId: 'user_2' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.staffUpdate).not.toHaveBeenCalled();
   });
 });
 

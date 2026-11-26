@@ -2,16 +2,14 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
-import {
-  currentPasswordInput,
-  requirePasswordReauthentication,
-} from '@/lib/password-reauthentication';
+import { currentPasswordInput } from '@/lib/password-reauthentication';
 import {
   managesStaffPins,
   OwnPinError,
   pinResetDenial,
   readOwnPinState,
   resetMemberPin,
+  requireMemberPinReset,
   setOwnPinWithPassword,
 } from '@/lib/pharmacy/own-pin';
 import { OWN_PIN_MAX_LENGTH } from '@/lib/pharmacy/own-pin-policy';
@@ -181,32 +179,40 @@ export const pharmacyPinRouter = router({
       annotateAudit(ctx, { skipInput: true, targetType: 'User', targetId: input.userId });
       const { organizationId, userId } = actor(ctx);
       if (supportSession(ctx)) throw new TRPCError({ code: 'FORBIDDEN', message: SUPPORT_REFUSED });
-      await requirePasswordReauthentication(ctx.db, {
+      await requireMemberPinReset(ctx.db, {
         organizationId,
-        userId,
-        password: input.currentPassword,
-        purpose: 'pharmacy-pin',
+        actorId: userId,
+        targetId: input.userId,
+        currentPassword: input.currentPassword,
       });
-      const [party, target] = await Promise.all([
-        liveParty(ctx.db, organizationId, userId),
-        liveParty(ctx.db, organizationId, input.userId),
-      ]);
-      if (!party || !target)
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Staff member not found.' });
-      const denial = await pinResetDenial(ctx.db, party, target);
-      if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
-      const revoked = await ctx.db.$transaction((tx) =>
-        resetMemberPin(tx as unknown as ScopedDb, { organizationId, userId: target.id })
-      );
-      if (revoked === 0)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'This person has no PIN to reset.' });
+      const revoked = await ctx.db.$transaction(async (tx) => {
+        const count = await resetMemberPin(tx as unknown as ScopedDb, {
+          organizationId,
+          userId: input.userId,
+        });
+        if (!count)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'This person has no PIN to reset.' });
+        await tx.notification.create({
+          data: {
+            organizationId,
+            userId: input.userId,
+            type: 'approval_pin_reset',
+            title: 'Your approval PIN was reset',
+            message:
+              'A staff manager reset your PIN. Open Your PIN in pharmacy Settings and use your password to set a new one.',
+            entityType: 'User',
+            entityId: userId,
+          },
+        });
+        return count;
+      });
       annotateAudit(ctx, {
         skipInput: true,
         operation: 'UPDATE',
         targetType: 'User',
-        targetId: target.id,
+        targetId: input.userId,
         description: "Reset a staff member's PIN",
-        metadata: { pinAction: 'reset', forUserId: target.id, byUserId: userId, revoked },
+        metadata: { pinAction: 'reset', forUserId: input.userId, byUserId: userId, revoked },
       });
       return { reset: true };
     }),

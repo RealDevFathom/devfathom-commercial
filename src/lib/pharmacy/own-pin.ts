@@ -5,7 +5,10 @@ import { TRPCError } from '@trpc/server';
 import type { AuthzDb } from '@/lib/authz';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
-import type { ApprovalAuthenticatorParty } from '@/lib/approval-authenticator';
+import {
+  approvalAuthenticatorPartySelect,
+  type ApprovalAuthenticatorParty,
+} from '@/lib/approval-authenticator';
 import {
   issueOperatorCredential,
   revokeOperatorCredential,
@@ -145,6 +148,14 @@ export async function saveOwnPin(
   return { action: 'created', credentialId: issued.id, staffProfileId };
 }
 
+type OwnPinInput = {
+  organizationId: string;
+  userId: string;
+  currentPassword: string;
+  pin: string;
+  confirmPin: string;
+};
+
 /**
  * The one way a person sets their own PIN, for every screen that offers it ("Your PIN", the
  * purchasing approval-PIN step): the PIN rules first (format, easy PINs, their own phone
@@ -153,14 +164,16 @@ export async function saveOwnPin(
  */
 export async function setOwnPinWithPassword(
   db: ScopedDb,
-  input: {
-    organizationId: string;
-    userId: string;
-    currentPassword: string;
-    pin: string;
-    confirmPin: string;
-  }
+  input: OwnPinInput
 ): Promise<{ action: 'created' | 'changed'; credentialId: string; staffProfileId: string }> {
+  const { organizationId, userId } = input;
+  await requireOwnPinPassword(db, input);
+  return db.$transaction((tx) =>
+    saveOwnPin(tx as unknown as ScopedDb, { organizationId, userId, pin: input.pin })
+  );
+}
+
+export async function requireOwnPinPassword(db: ScopedDb, input: OwnPinInput) {
   const { organizationId, userId } = input;
   const person = await db.user.findFirst({
     where: { id: userId, organizationId },
@@ -174,9 +187,29 @@ export async function setOwnPinWithPassword(
     password: input.currentPassword,
     purpose: 'pharmacy-pin',
   });
-  return db.$transaction((tx) =>
-    saveOwnPin(tx as unknown as ScopedDb, { organizationId, userId, pin: input.pin })
-  );
+}
+
+export async function requireMemberPinReset(
+  db: ScopedDb,
+  input: { organizationId: string; actorId: string; targetId: string; currentPassword: string }
+) {
+  const { organizationId, actorId, targetId } = input;
+  await requirePasswordReauthentication(db, {
+    organizationId,
+    userId: actorId,
+    password: input.currentPassword,
+    purpose: 'pharmacy-pin',
+  });
+  const readMember = (id: string) =>
+    db.user.findFirst({
+      where: { organizationId, id },
+      select: { ...approvalAuthenticatorPartySelect(), department: true },
+    });
+  const [actor, target] = await Promise.all([readMember(actorId), readMember(targetId)]);
+  if (!actor || !target)
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Staff member not found.' });
+  const denial = await pinResetDenial(db, actor, target);
+  if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
 }
 
 /**

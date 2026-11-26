@@ -117,7 +117,8 @@ function setup(userId: keyof typeof MEMBERS, sessionExtra: Record<string, unknow
         Object.values(MEMBERS).map((member) => ({ id: member.id, name: member.id }))
       ),
     },
-    notification: { createMany: vi.fn() },
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
+    notification: { create: vi.fn(), createMany: vi.fn() },
     organization: {
       findFirst: vi.fn(async () => ({ ...organization })),
       update: vi.fn(async ({ data }: { data: { requireApprovalAuthenticator: boolean } }) => {
@@ -320,7 +321,7 @@ describe('approvalAuthenticator enrolment (DEV-879)', () => {
 
 describe('approvalAuthenticator recovery and the owner setting (DEV-879)', () => {
   it('lets the owner reset a member, with an audit record', async () => {
-    const { caller, rows } = setup('owner');
+    const { caller, rows, db } = setup('owner');
     rows.set('manager', {
       id: 'auth_manager',
       organizationId: 'org',
@@ -332,6 +333,13 @@ describe('approvalAuthenticator recovery and the owner setting (DEV-879)', () =>
     await expect(
       caller.resetForMember({ userId: 'manager', currentPassword: PASSWORD })
     ).resolves.toEqual({ reset: true });
+    expect(db.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: 'org',
+        userId: 'manager',
+        type: 'approval_authenticator_reset',
+      }),
+    });
     expect(rows.has('manager')).toBe(false);
     expect(audit.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
@@ -340,6 +348,25 @@ describe('approvalAuthenticator recovery and the owner setting (DEV-879)', () =>
         metadata: expect.objectContaining({ approvalAuthenticator: 'reset', resetById: 'owner' }),
       })
     );
+  });
+
+  it('refuses recovery through a support session before checking the target', async () => {
+    const { caller, db } = setup('owner', { isSupportSession: true });
+    await expect(caller.beginEnrollment({ currentPassword: PASSWORD })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller.confirmEnrollment({ token: '555555' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller.useRecoveryCode({ code: 'fixture', currentPassword: PASSWORD })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.approvalAuthenticator.upsert).not.toHaveBeenCalled();
+    await expect(
+      caller.resetForMember({ userId: 'manager', currentPassword: PASSWORD })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.approvalAuthenticator.deleteMany).not.toHaveBeenCalled();
+    expect(db.notification.create).not.toHaveBeenCalled();
   });
 
   it('refuses an owner reset without the owner’s current password', async () => {
