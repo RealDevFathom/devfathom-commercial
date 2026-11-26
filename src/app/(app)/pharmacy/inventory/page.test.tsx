@@ -822,7 +822,7 @@ describe('Stock location creation access (issue #976)', () => {
 
   function fillAndSubmit(form: HTMLFormElement) {
     fireEvent.change(within(form).getByLabelText('Name'), { target: { value: 'Front store' } });
-    fireEvent.change(within(form).getByLabelText('Code'), { target: { value: 'FS-1' } });
+    fireEvent.change(within(form).getByLabelText('Location code'), { target: { value: 'FS-1' } });
     fireEvent.submit(form);
   }
 
