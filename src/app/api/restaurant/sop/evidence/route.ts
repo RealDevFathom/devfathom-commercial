@@ -118,7 +118,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
   if (!actor?.session.user?.id) return new Response('Sign in to capture proof.', { status: 401 });
   let form: FormData;
   try {
-    const result = await readUploadForm(actor.session.user.id, 'text');
+    const result = await readUploadForm(actor.session.user.id, actor.organization.id, 'text');
     if (result instanceof Response) return result;
     if (!result) return new Response(UPLOAD_SIZE_MESSAGE, { status: 413 });
     form = result;

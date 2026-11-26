@@ -173,6 +173,15 @@ describe('procedure proof upload', () => {
     expect(screen.getByRole('button', { name: 'Retry upload' })).toBeVisible();
   });
 
+  it.each([408, 429])('offers a retry for temporary HTTP %i refusals', (status) => {
+    renderUpload();
+    choose(photo());
+    act(() => FakeRequest.sent[0].fire('load', status, 'Upload unavailable. Try again shortly.'));
+    expect(screen.getByRole('alert')).toHaveTextContent(/retry in a moment|try again/i);
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/choose a different/i);
+    expect(screen.getByRole('button', { name: 'Retry upload' })).toBeVisible();
+  });
+
   it('without onConflict, shows a moved-on refusal inline', () => {
     renderUpload();
     choose(photo());
