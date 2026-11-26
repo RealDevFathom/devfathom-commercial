@@ -20,6 +20,7 @@ import {
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -160,17 +161,25 @@ export const restaurantCamerasRouter = router({
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
         throw error;
       }
-      const auth = await authenticateOperator(ctx.db, {
-        staffProfileId: input.approvingStaffProfileId,
-        type: input.approvingType,
-        secret: input.approvingSecret,
-        now: new Date(),
-        approval: {
-          action: 'restaurantCameras.revokeGateway',
-          approverRight: 'coauth:approve',
-          requestedByStaffProfileId: input.actingStaffProfileId,
-        },
-      });
+      // DEV-1055: a wrong credential fails this request and rolls its transaction
+      // back, strike included, so the attempts are also counted per approver
+      // outside the transaction (see approver-attempt-budget.ts).
+      const auth = await authenticateApproverWithinBudget(
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId,
+        input.approvingStaffProfileId,
+        () =>
+          authenticateOperator(ctx.db, {
+            staffProfileId: input.approvingStaffProfileId,
+            type: input.approvingType,
+            secret: input.approvingSecret,
+            now: new Date(),
+            approval: {
+              action: 'restaurantCameras.revokeGateway',
+              approverRight: 'coauth:approve',
+              requestedByStaffProfileId: input.actingStaffProfileId,
+            },
+          })
+      );
       if (!auth.ok)
         throw new TRPCError({
           code: auth.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',

@@ -10,6 +10,10 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
 }));
 
 import { authenticateOperator } from './terminal-auth';
+import {
+  applyOperatorAttemptCharge,
+  isOperatorAttemptCharge,
+} from '@/lib/test-support/operator-attempt-charge';
 
 /**
  * DEV-961: with the authenticator required (the default), restaurant terminals keep working
@@ -21,7 +25,21 @@ import { authenticateOperator } from './terminal-auth';
 const now = new Date('2026-11-19T10:00:00.000Z');
 
 function fakeDb(userId: string | null, required = true) {
+  // The durable credential row: the attempt charge and the clear both move it.
+  const credential = {
+    id: 'cred',
+    organizationId: 'org',
+    deviceId: null,
+    credentialHash: 'hash:4821',
+    failedAttempts: 0,
+    lockedUntil: null as Date | null,
+    revokedAt: null,
+  };
   return {
+    credential,
+    $queryRaw: vi.fn(async (query: TemplateStringsArray, ...values: unknown[]) =>
+      isOperatorAttemptCharge(query) ? applyOperatorAttemptCharge(() => credential, values) : []
+    ),
     organization: { findFirst: vi.fn(async () => ({ requireApprovalAuthenticator: required })) },
     approvalAuthenticator: { findFirst: vi.fn(async () => null) },
     auditLog: { create: vi.fn() },
@@ -35,17 +53,11 @@ function fakeDb(userId: string | null, required = true) {
     },
     restaurantBranch: { findUnique: vi.fn() },
     restaurantOperatorCredential: {
-      findMany: vi.fn(async () => [
-        {
-          id: 'cred',
-          organizationId: 'org',
-          deviceId: null,
-          credentialHash: 'hash:4821',
-          failedAttempts: 0,
-          lockedUntil: null,
-        },
-      ]),
-      update: vi.fn(),
+      findMany: vi.fn(async () => [{ ...credential }]),
+      findUnique: vi.fn(async () => ({ ...credential })),
+      update: vi.fn(async ({ data }: { data: Partial<typeof credential> }) =>
+        Object.assign(credential, data)
+      ),
     },
   };
 }
@@ -87,19 +99,17 @@ describe('DEV-961 restaurant terminal approvals with the authenticator on by def
     });
     const db = fakeDb(null);
     await expect(approve(db, '0000')).resolves.toEqual({ ok: false, reason: 'INVALID' });
-    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'cred' },
-      data: expect.objectContaining({ failedAttempts: 1 }),
-    });
+    // DEV-1055: the strike is charged atomically before the check and is kept.
+    expect(db.credential).toMatchObject({ failedAttempts: 1, lockedUntil: null });
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
   });
 
   it('refuses the PIN of a web member who has not set up the app, and strikes the lockout', async () => {
     const db = fakeDb('manager');
     await expect(approve(db)).resolves.toEqual({ ok: false, reason: 'INVALID' });
-    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'cred' },
-      data: expect.objectContaining({ failedAttempts: 1 }),
-    });
+    // DEV-1055: the strike is charged atomically before the check and is kept.
+    expect(db.credential).toMatchObject({ failedAttempts: 1, lockedUntil: null });
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
   });
 
   it('takes the web member’s PIN again once the owner turns the authenticator off', async () => {
@@ -112,10 +122,9 @@ describe('DEV-961 restaurant terminal approvals with the authenticator on by def
   it('refuses the badge of a web member who must use the app, and strikes the lockout', async () => {
     const db = fakeDb('manager');
     await expect(approve(db, '4821', 'BADGE')).resolves.toEqual({ ok: false, reason: 'INVALID' });
-    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'cred' },
-      data: expect.objectContaining({ failedAttempts: 1 }),
-    });
+    // DEV-1055: the strike is charged atomically before the check and is kept.
+    expect(db.credential).toMatchObject({ failedAttempts: 1, lockedUntil: null });
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
     expect(db.auditLog.create).not.toHaveBeenCalled();
   });
 
