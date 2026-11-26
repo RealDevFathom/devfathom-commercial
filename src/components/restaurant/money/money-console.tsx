@@ -492,7 +492,10 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
         </SectionCard>
       ) : (
         <Tabs value={tab} onValueChange={updateTab}>
-          <TabsList aria-label="Restaurant Finance ledgers">
+          <TabsList
+            aria-label="Restaurant Finance ledgers"
+            className="max-w-full flex-wrap group-data-horizontal/tabs:h-auto"
+          >
             <TabsTrigger value="bills">Bills</TabsTrigger>
             <TabsTrigger value="payments">Payments</TabsTrigger>
             <TabsTrigger value="drawers">Drawers</TabsTrigger>
