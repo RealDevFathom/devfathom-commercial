@@ -177,6 +177,7 @@ export function useCounterEnrolment(organizationId: string): CounterEnrolment | 
 
 type Opened = {
   key: string;
+  attempt: number;
   status: CounterOfflineStatus;
   message: string | null;
   state: CounterRuntimeState | null;
@@ -213,7 +214,7 @@ export function useCounterOffline(input: {
   const enrolledHere = enrolment !== null && enrolment.branchId === branchId;
   const [attempt, setAttempt] = useState(0);
   const openKey = enrolledHere
-    ? `${enrolment.deviceId}:${online ? 'online' : 'offline'}:${attempt}`
+    ? JSON.stringify([organizationId, branchId, enrolment.deviceId, online])
     : '';
   const [opened, setOpened] = useState<Opened | null>(null);
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -249,14 +250,15 @@ export function useCounterOffline(input: {
       enrolled: CounterEnrolment,
       isOnline: boolean,
       key: string,
+      openingAttempt: number,
       cancelled: () => boolean
     ) => {
-      const finish = (next: Omit<Opened, 'key'>) => {
+      const finish = (next: Omit<Opened, 'key' | 'attempt'>) => {
         if (cancelled()) return;
         // The readiness clock must not lag the snapshots just installed, or a
         // list signed a moment ago would read as "not valid yet" for a minute.
         setNowMs(Date.now());
-        setOpened({ key, ...next });
+        setOpened({ key, attempt: openingAttempt, ...next });
       };
       let record;
       try {
@@ -400,11 +402,11 @@ export function useCounterOffline(input: {
   useEffect(() => {
     if (!enrolledHere || !enrolment) return;
     let cancelled = false;
-    void open(enrolment, online, openKey, () => cancelled);
+    void open(enrolment, online, openKey, attempt, () => cancelled);
     return () => {
       cancelled = true;
     };
-  }, [enrolledHere, enrolment, online, openKey, open]);
+  }, [enrolledHere, enrolment, online, openKey, attempt, open]);
 
   useEffect(
     () => () => {
@@ -415,7 +417,8 @@ export function useCounterOffline(input: {
     []
   );
 
-  const current = opened && opened.key === openKey && enrolledHere ? opened : null;
+  const sameCounter = opened?.key === openKey && enrolledHere ? opened : null;
+  const current = sameCounter?.attempt === attempt ? sameCounter : null;
   const serverUnreachable = online && current?.unreachable === true;
   // A dropped line behind a working Wi-Fi: try the server again every minute.
   useEffect(() => {
@@ -453,10 +456,13 @@ export function useCounterOffline(input: {
       [...(state?.catalog?.drafts ?? [])].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)),
     [state]
   );
+  // Keep the remaining receipts visible while a review reconnects and sends the next one.
+  // Actions still require the fresh session. Changing branch, device or connection hides the old queue.
+  const visibleQueue = sameCounter?.state?.queue;
   const queued = useMemo(
     () =>
-      state?.queue ? unsettledCommands(state.queue).sort((a, b) => a.sequence - b.sequence) : [],
-    [state]
+      visibleQueue ? unsettledCommands(visibleQueue).sort((a, b) => a.sequence - b.sequence) : [],
+    [visibleQueue]
   );
   const ready = current?.status === 'ready' && state !== null;
   const canResolveConflict = online && !serverUnreachable && current?.hasSession;

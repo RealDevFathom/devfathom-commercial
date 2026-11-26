@@ -401,6 +401,10 @@ describe('DEV-957 replay on reconnect', () => {
     await waitingSales();
     const order: string[] = [];
     let reviewed: Record<string, unknown> | undefined;
+    let acknowledgeNext!: () => void;
+    const nextReceipt = new Promise<void>((resolve) => {
+      acknowledgeNext = resolve;
+    });
     const send = vi.spyOn(globalThis, 'fetch').mockImplementation(async (path, options) => {
       const body = JSON.parse(String(options?.body));
       order.push(String(path));
@@ -408,9 +412,11 @@ describe('DEV-957 replay on reconnect', () => {
         reviewed = body;
         return Response.json({ status: 'QUARANTINED', commandId: 'quarantined-1' });
       }
-      return body.sequence === 2
-        ? Response.json({ saleId: 'booked-2' })
-        : Response.json({ error: 'offline_chain_broken' }, { status: 409 });
+      if (body.sequence === 2) {
+        await nextReceipt;
+        return Response.json({ saleId: 'booked-2' });
+      }
+      return Response.json({ error: 'offline_chain_broken' }, { status: 409 });
     });
     try {
       const back = renderHook(() => useCounterOffline(props(true)));
@@ -423,6 +429,9 @@ describe('DEV-957 replay on reconnect', () => {
           'quarantine'
         )
       );
+      await waitFor(() => expect(order).toHaveLength(3));
+      expect(back.result.current.queued.map((command) => command.sequence)).toEqual([2]);
+      acknowledgeNext();
       await waitFor(() => expect(back.result.current.queued).toHaveLength(0));
       expect(reviewed).toMatchObject({
         action: 'quarantine',
@@ -437,6 +446,7 @@ describe('DEV-957 replay on reconnect', () => {
       ]);
       back.unmount();
     } finally {
+      acknowledgeNext();
       send.mockRestore();
     }
   });
