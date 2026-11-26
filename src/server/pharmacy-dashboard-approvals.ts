@@ -12,8 +12,11 @@ import type { WatchRow } from '@/lib/pharmacy/owner-watch';
 import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
 import { actorIsPharmacyOwner, actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { purchaseOrderScopeWhere } from '@/lib/pharmacy/purchasing-console';
-import { reachableProcurementBranchIds, isSoloOwner } from './pharmacy-procurement-scope';
-import { purchasingOrderScope } from './routers/pharmacy-purchasing';
+import {
+  reachableProcurementBranchIds,
+  isSoloOwner,
+  purchasingOrderScope,
+} from './pharmacy-procurement-scope';
 import { clinicalReviewScope } from './routers/pharmacy-dispensing';
 import { admittedInventoryBranchIds } from './routers/pharmacy-inventory';
 import { approvedReorderBranch, catalogueAccess } from './routers/pharmacy-medicine';

@@ -31,11 +31,11 @@ vi.mock('./routers/pharmacy-medicine', async (load) => ({
   ...(await load<typeof import('./routers/pharmacy-medicine')>()),
   catalogueAccess: m.catalogue,
 }));
-vi.mock('./routers/pharmacy-purchasing', () => ({ purchasingOrderScope: m.orderScope }));
 vi.mock('./routers/pharmacy-dispensing', () => ({ clinicalReviewScope: m.clinical }));
 vi.mock('./routers/pharmacy-inventory', () => ({ admittedInventoryBranchIds: m.inventory }));
 vi.mock('./pharmacy-procurement-scope', () => ({
   reachableProcurementBranchIds: m.procurement,
+  purchasingOrderScope: m.orderScope,
   isSoloOwner: m.solo,
 }));
 vi.mock('@/lib/pharmacy/controlled-register', () => ({ assignedRegisterBranchIds: m.register }));
