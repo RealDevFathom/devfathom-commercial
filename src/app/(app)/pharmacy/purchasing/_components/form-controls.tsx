@@ -1,5 +1,6 @@
 import type * as React from 'react';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { StatusPill } from '@/components/ui/status-pill';
 import { SUPPLIER_NOT_CHECKED_LABEL } from '@/lib/pharmacy/supplier-compliance';
 import { cn } from '@/lib/utils';
@@ -12,7 +13,7 @@ import type { Notice, SupplierPickerOption } from '../_lib/types';
  * the field, says the fix in plain words, and focuses the input — so `Field`
  * takes the notice and decides for itself whether it is the one at fault. Rule
  * 1 and 16: an identifier is never typed, so the only way to name a supplier,
- * branch, medicine, pack or location is a `<select>` of this organization's
+ * branch, medicine, pack or location is a picker of this organization's
  * records.
  */
 
@@ -136,9 +137,6 @@ export type SelectOption = { value: string; label: string; disabled?: boolean };
  * what the missing thing is and where to create it, so `emptyHint` is required
  * rather than optional and is rendered whenever there is nothing to choose.
  */
-// DEV-1001 native exception: this record picker serves unbounded medicine, pack
-// and supplier lists. Keep the phone picker and imperative OCR/validation contract
-// until a shared searchable record picker preserves both interactions.
 export function SelectField({
   name,
   label,
@@ -175,7 +173,7 @@ export function SelectField({
   return (
     <Field className={className} label={label} name={name} notice={notice} hint={hint}>
       {(control) => (
-        <select {...control} defaultValue={defaultValue ?? ''} required={required}>
+        <StudioSelect {...control} defaultValue={defaultValue ?? ''} required={required}>
           <option disabled={required} value="">
             {placeholder ?? 'Choose…'}
           </option>
@@ -184,7 +182,7 @@ export function SelectField({
               {option.label}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       )}
     </Field>
   );

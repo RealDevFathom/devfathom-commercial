@@ -270,6 +270,23 @@ describe('pharmacy procedures workspace', () => {
     expect(screen.getByText('Claimed. It is now in your work.')).toBeVisible();
   });
 
+  it('uses the Studio timezone picker to turn on procedures for the selected zone', async () => {
+    setup({ sopBranchId: null, access: { canComplete: true, canVerify: false, canManage: true } });
+    render(<PharmacySopWorkspace />);
+    fireEvent.click(screen.getByRole('button', { name: 'Set up this branch' }));
+
+    const timezone = screen.getByRole('combobox', { name: /^Branch timezone/ });
+    expect(timezone).toHaveAttribute('data-select-field-trigger');
+    expect(timezone).toHaveTextContent('Asia/Karachi');
+    timezone.focus();
+    fireEvent.keyDown(timezone, { key: 'ArrowDown' });
+    fireEvent.click(await screen.findByRole('option', { name: 'Europe/London' }), { detail: 0 });
+    await waitFor(() => expect(timezone).toHaveTextContent('Europe/London'));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Turn on procedures' }));
+    expect(h.calls.enableSite).toEqual([{ pharmacyBranchId: BRANCH, timezone: 'Europe/London' }]);
+  });
+
   it('shows a claim conflict in plain words', () => {
     setup();
     h.outcomes.claim = () =>

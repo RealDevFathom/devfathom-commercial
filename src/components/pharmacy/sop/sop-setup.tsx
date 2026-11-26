@@ -113,10 +113,9 @@ export function initialSiteTimezone(branchZone: string | null, organizationZone?
   return browserZone();
 }
 
-// DEV-1001 native exception: the full IANA timezone list uses the phone picker.
-// Migrate when a shared searchable picker preserves that long-list interaction.
 function EnableSite({ branch, defaultTimezone, onChanged, onNotice }: SopSetupViewProps) {
   const utils = trpc.useUtils();
+  const timezoneId = useId();
   const zones = useMemo(() => {
     try {
       return ianaTimezoneOptions().map((option) => option.value);
@@ -161,8 +160,11 @@ function EnableSite({ branch, defaultTimezone, onChanged, onNotice }: SopSetupVi
           });
         }}
       >
-        <Field label="Branch timezone" hint="Due times and reports use this timezone.">
-          <select
+        <div className="grid min-w-0 gap-1.5 text-sm font-medium text-text-strong">
+          <label htmlFor={timezoneId}>Branch timezone</label>
+          <StudioSelect
+            id={timezoneId}
+            aria-describedby={`${timezoneId}-hint`}
             className={fieldClass}
             value={timezone}
             disabled={enable.isPending}
@@ -173,8 +175,11 @@ function EnableSite({ branch, defaultTimezone, onChanged, onNotice }: SopSetupVi
                 {zone}
               </option>
             ))}
-          </select>
-        </Field>
+          </StudioSelect>
+          <p id={`${timezoneId}-hint`} className="text-xs font-normal text-text-muted">
+            Due times and reports use this timezone.
+          </p>
+        </div>
         <Field
           label="Business day starts at · optional"
           hint="Work done after midnight but before this time counts toward the previous day."
