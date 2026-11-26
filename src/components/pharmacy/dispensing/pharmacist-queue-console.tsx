@@ -124,7 +124,7 @@ export function PharmacistQueueConsole() {
                     {item.line.medicine.productName}
                   </span>
                   <span className="block text-xs text-text-muted">
-                    {item.line.prescription.patient.displayName}
+                    {item.line.prescription.patient.displayName ?? 'Patient name hidden'}
                   </span>
                 </button>
               ))}
@@ -142,7 +142,9 @@ export function PharmacistQueueConsole() {
             <dl className="mb-5 grid gap-4 border-b border-border-subtle pb-5 sm:grid-cols-3">
               <div>
                 <dt className="font-mono text-xs text-text-muted uppercase">Patient</dt>
-                <dd className="mt-1 font-medium">{active.line.prescription.patient.displayName}</dd>
+                <dd className="mt-1 font-medium">
+                  {active.line.prescription.patient.displayName ?? 'Patient name hidden'}
+                </dd>
               </div>
               <div>
                 <dt className="font-mono text-xs text-text-muted uppercase">Prescriber</dt>
@@ -212,8 +214,8 @@ export function PharmacistQueueConsole() {
             <DialogTitle>Discard this review draft?</DialogTitle>
             <DialogDescription>
               Switching items will discard the unsent review for{' '}
-              {active?.line.prescription.patient.displayName} ({active?.line.medicine.productName}),
-              including its reason and counselling checks.
+              {active?.line.prescription.patient.displayName ?? 'Patient name hidden'} (
+              {active?.line.medicine.productName}), including its reason and counselling checks.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

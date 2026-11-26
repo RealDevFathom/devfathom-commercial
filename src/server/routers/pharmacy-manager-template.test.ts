@@ -207,7 +207,8 @@ describe('DEV-505 Manager template: reports', () => {
     });
     expect(readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ branchIds: [ASSIGNED] })
+      expect.objectContaining({ branchIds: [ASSIGNED] }),
+      undefined
     );
     expect(result.metrics).toMatchObject({ salesMinor: null, marginMinor: null });
     expect(result.metrics.openStockSignals).toBe(2);
@@ -265,7 +266,8 @@ describe('DEV-505 Manager template: reports', () => {
     expect(result.metrics.safetyQueue).toBe(7);
     expect(readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
       expect.anything(),
-      expect.objectContaining({ branchIds: [ASSIGNED, OTHER] })
+      expect.objectContaining({ branchIds: [ASSIGNED, OTHER] }),
+      { organizationId: ORG, userId: 'manager-1' }
     );
   });
 });

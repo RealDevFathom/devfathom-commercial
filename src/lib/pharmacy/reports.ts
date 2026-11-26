@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { pharmacyBranchDayWindows, type PharmacyBranchDayEnds } from './business-day';
 import { pharmacyBranchWindowSql, spanOf } from './business-day-sql';
 
+import { actorIsPharmacyOwner } from './procurement-access';
 import { grossMarginQuery } from './finance-reports';
 import {
   hasPharmacyReportDimension,
@@ -340,9 +341,54 @@ async function readKhataAgingMinor(
   return value;
 }
 
+type ClinicalReader = { organizationId: string; userId: string };
+
+async function readSafetyQueueCount(
+  db: Prisma.TransactionClient,
+  selectedBranches: string[],
+  reader?: ClinicalReader
+) {
+  if (!reader) return null;
+  const { organizationId, userId } = reader;
+  const owner = await actorIsPharmacyOwner(db, organizationId, userId);
+  const visible = owner
+    ? selectedBranches
+    : (
+        await db.pharmacyBranchAssignment.findMany({
+          where: {
+            organizationId,
+            userId,
+            active: true,
+            branchId: { in: selectedBranches },
+            branch: { organizationId, active: true },
+            user: { organizationId, status: 'ACTIVE' },
+          },
+          select: { branchId: true },
+        })
+      ).map((row) => row.branchId);
+  if (!visible.length) return null;
+  const branches = Prisma.join(visible);
+  const [row] = await db.$queryRaw<Array<{ value: number }>>(Prisma.sql`
+    SELECT (
+      SELECT COUNT(*)::int FROM pharmacy_pharmacist_review_items i
+      JOIN pharmacy_sale_lines line ON line."organizationId" = i."organizationId" AND line.id = i."saleLineId"
+      WHERE i."organizationId" = ${organizationId} AND line."branchId" IN (${branches})
+        AND NOT EXISTS (
+          SELECT 1 FROM pharmacy_pharmacist_review_decisions d
+          WHERE d."organizationId" = i."organizationId" AND d."reviewItemId" = i.id AND d.kind = 'SIGN'
+        )
+    ) + (
+      SELECT COUNT(*)::int FROM pharmacy_register_incidents r
+      WHERE r."organizationId" = ${organizationId} AND r."branchId" IN (${branches}) AND r.status = 'OPEN'
+    ) AS value
+  `);
+  return row?.value ?? 0;
+}
+
 export async function readPharmacyOwnerCommandCentre(
   db: Prisma.TransactionClient,
-  filters: PharmacyReportFilters
+  filters: PharmacyReportFilters,
+  clinicalReader?: ClinicalReader
 ) {
   const parsed = validatePharmacyReportFilters(filters);
   // Business-date columns compare against `parsed`; event and posting timestamps use the
@@ -462,9 +508,7 @@ export async function readPharmacyOwnerCommandCentre(
               qualifiedPersonValidTo: { gt: at },
             },
           }),
-      db.$queryRaw<Array<{ value: number }>>(
-        Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
-      ),
+      readSafetyQueueCount(db, filters.branchIds, clinicalReader),
       dimensional
         ? none
         : db.$queryRaw<Array<{ aging: number; rejected: number }>>(
@@ -493,7 +537,7 @@ export async function readPharmacyOwnerCommandCentre(
   return {
     filters,
     metricScopes: {
-      safetyQueue: 'organization' as const,
+      safetyQueue: 'admitted branches' as const,
     },
     freshness: {
       status: 'CURRENT' as const,
@@ -514,7 +558,7 @@ export async function readPharmacyOwnerCommandCentre(
       openClaims: claims,
       openReceivingExceptions: receiving,
       pharmacistCoverage: coverage,
-      safetyQueue: safety[0]?.value ?? 0,
+      safetyQueue: safety,
       agingFiscalDocuments: fiscal ? (fiscal[0]?.aging ?? 0) : null,
       rejectedFiscalDocuments: fiscal ? (fiscal[0]?.rejected ?? 0) : null,
       accountsPayableMinor: null,

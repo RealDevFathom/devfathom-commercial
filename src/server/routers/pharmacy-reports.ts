@@ -1036,12 +1036,18 @@ export const pharmacyReportsRouter = router({
     try {
       // Khata's branch context is transaction-local; keep it and all report reads together.
       const result = await ctx.db.$transaction((tx) =>
-        readPharmacyOwnerCommandCentre(tx, {
-          ...input,
-          branchIds,
-          timeZone: ctx.organization?.timezone,
-          ...reportDayEnds(available, branchIds),
-        })
+        readPharmacyOwnerCommandCentre(
+          tx,
+          {
+            ...input,
+            branchIds,
+            timeZone: ctx.organization?.timezone,
+            ...reportDayEnds(available, branchIds),
+          },
+          ctx.reportBranches === 'ALL'
+            ? { organizationId: available.organizationId, userId: ctx.session!.user.id }
+            : undefined
+        )
       );
       const financial = await can(
         subjectFromSession(ctx.session!.user),
@@ -1065,8 +1071,7 @@ export const pharmacyReportsRouter = router({
       return {
         ...result,
         permissions: { operational: true, financial },
-        // DEV-505: the safety queue is counted across the whole organization, so a
-        // branch-scoped reader (a Manager) is not shown other branches' activity.
+        // Preserve the separate reporting entitlement for the clinical count.
         metrics: ctx.reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
       };
     } catch (error) {

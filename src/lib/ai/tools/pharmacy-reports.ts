@@ -573,7 +573,10 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               selected.map((row) => ({ id: row.id, dayEnd: row.businessDayEndsAtHistory }))
             ),
           };
-          const report = await readPharmacyOwnerCommandCentre(h.db, filters);
+          const report = await readPharmacyOwnerCommandCentre(h.db, filters, {
+            organizationId: h.ctx.organizationId,
+            userId: h.ctx.userId,
+          });
           const values = report.metrics as Record<string, number | null>;
           return {
             kind: 'answer',

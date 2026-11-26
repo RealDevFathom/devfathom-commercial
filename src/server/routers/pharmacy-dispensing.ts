@@ -205,6 +205,7 @@ export const pharmacyDispensingRouter = router({
       orderBy: { requestedAt: 'desc' },
       include: {
         line: {
+          omit: { directions: !canRecord },
           include: {
             medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
             presentation: true,

@@ -250,7 +250,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/see-returns-awaiting-verification'],
   },
   'pharmacyDispensing.reviewQueue': {
-    gate: "capabilityProcedure('pharmacy:dispense')",
+    gate: "capabilityProcedure('pharmacy:dispense') + clinicalReviewScope (active assigned branches or tenant owner); patient names require pharmacy:prescriptions",
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.selfSignReview': {
@@ -258,7 +258,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/sign-own-line-alone'],
   },
   'pharmacyDispensing.substitutionWorkspace': {
-    gate: 'auditedProtectedProcedure + pharmacy:dispense OR pharmacy:safety; patient names only with pharmacy:prescriptions',
+    gate: 'auditedProtectedProcedure + pharmacy:dispense OR pharmacy:safety; clinicalReviewScope; directions only with pharmacy:dispense; patient names only with pharmacy:prescriptions',
     lines: [
       'dispense-prescriptions/open-substitution-workspace',
       'controlled-medicines/open-substitution-workspace-review',

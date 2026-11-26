@@ -647,6 +647,56 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
     });
   });
 
+  it('counts an unsigned review only for report readers admitted to its branch', async () => {
+    const { pharmacyReportsRouter } = await import('./pharmacy-reports');
+    const report = (userId: string, branchId?: string) => {
+      const entry = byId(userId);
+      return withTenantDb(
+        entry.org,
+        async (db) => {
+          const ctx = context(entry);
+          ctx.entitlements.enabledModules.push('pharmacy-reports');
+          const api = pharmacyReportsRouter.createCaller({ ...ctx, db } as never);
+          return (await api.commandCentre({ branchId, from: '2026-11-01', to: '2026-11-01' }))
+            .metrics.safetyQueue;
+        },
+        { userId }
+      );
+    };
+    for (const id of [ids.here, ids.elsewhere, ids.admin, ids.foreign]) {
+      await withTenantDb(byId(id).org, (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            userId: id,
+            capability: 'reports:operational',
+            effect: 'ALLOW',
+            reason: 'Synthetic report reader',
+          },
+        })
+      );
+    }
+    await ringUp();
+    const count = await report(ids.here);
+    expect(count).toBeGreaterThan(0);
+    expect(await report(ids.elsewhere)).toBe(0);
+    expect(await report(ids.admin)).toBeNull();
+    await expect(report(ids.foreign, ids.branch)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'One or more branches are outside your report scope.',
+    });
+    const grant = await tenant((db) =>
+      db.organizationRolePermission.create({
+        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+      })
+    );
+    try {
+      expect(await report(ids.admin, ids.branch)).toBe(count);
+      expect(await report(ids.admin, ids.otherBranch)).toBe(0);
+    } finally {
+      await tenant((db) => db.organizationRolePermission.delete({ where: { id: grant.id } }));
+    }
+  });
+
   it('filters both reads by the reviewed sale line and protects the safety-only projection', async () => {
     const first = await ringUp();
     await tenant(async (db) => {
@@ -744,6 +794,8 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
       expect(workspace.canRecord).toBe(false);
       expect(workspace.canViewPatients).toBe(false);
       const item = workspace.lines.find((row) => row.id === first.reviewItemId);
+      expect(item?.line).not.toHaveProperty('directions');
+      expect(JSON.stringify(workspace)).not.toContain('One capsule three times a day');
       expect(item?.line.prescription).toEqual({ id: expect.any(String), patient: null });
       expect(JSON.stringify(workspace)).not.toContain(patientId);
       expect(JSON.stringify(workspace)).not.toContain(`paper:${suffix}`);
