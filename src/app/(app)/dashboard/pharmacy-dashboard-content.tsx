@@ -327,8 +327,9 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
 function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const { enabledModules, timeZone } = useEntitlements();
   const utils = trpc.useUtils();
-  const branches = trpc.pharmacyReports.branches.useQuery({ dashboard: true }, { retry: false });
-  const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
+  const independent = { retry: false, trpc: { context: { independentSection: true } } };
+  const branches = trpc.pharmacyReports.branches.useQuery({ dashboard: true }, independent);
+  const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, independent);
   const preferences = trpc.pharmacyReports.getPreferences.useQuery(undefined, { retry: false });
   const update = trpc.pharmacyReports.updatePreferences.useMutation();
   const [branchId, setBranchId] = useState('');
@@ -402,50 +403,47 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
         description="Today’s trading, stock and outstanding work across your pharmacy."
+        className="mb-0 gap-3 pb-4"
         actions={
-          canEdit ? (
-            <Button variant="outline" onClick={begin}>
-              <Pencil aria-hidden />
-              Edit dashboard
-            </Button>
-          ) : null
+          <>
+            <label className="flex min-w-0 items-center gap-2">
+              <span className="eyebrow">Branch</span>
+              <StudioSelect
+                aria-label="Dashboard branch"
+                value={branchId}
+                onChange={(event) => setBranchId(event.target.value)}
+                disabled={branches.isLoading || Boolean(branches.error)}
+                className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">All available</option>
+                {branches.data?.branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </option>
+                ))}
+              </StudioSelect>
+            </label>
+            {canEdit && (
+              <Button variant="outline" onClick={begin}>
+                <Pencil aria-hidden />
+                Edit dashboard
+              </Button>
+            )}
+          </>
         }
       />
-      <SectionCard
-        eyebrow="Scope"
-        title="Today at a glance"
-        titleLevel={2}
-        actions={command.data ? <StatusPill status="Current" tone="success" /> : null}
-      >
-        <label className="block max-w-sm space-y-1.5">
-          <span className="eyebrow">Branch</span>
-          <StudioSelect
-            aria-label="Dashboard branch"
-            value={branchId}
-            onChange={(event) => setBranchId(event.target.value)}
-            disabled={branches.isLoading || Boolean(branches.error)}
-            className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">All available</option>
-            {branches.data?.branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.name}
-              </option>
-            ))}
-          </StudioSelect>
-        </label>
-        <p className="mt-3 font-mono text-xs text-text-muted">
-          {command.data
-            ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
-            : branchesDenied
-              ? 'Branch reports are outside your access.'
-              : branches.error
-                ? 'Branches could not be loaded.'
-                : branches.data?.branches.length === 0
-                  ? 'Waiting for a reportable branch.'
-                  : 'Loading today’s figures…'}
-        </p>
-      </SectionCard>
+      <p className="font-mono text-xs text-text-muted">
+        {command.data
+          ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
+          : branchesDenied
+            ? 'Branch reports are outside your access.'
+            : branches.error
+              ? 'Branches could not be loaded.'
+              : branches.data?.branches.length === 0
+                ? 'Waiting for a reportable branch.'
+                : 'Loading today’s figures…'}
+      </p>
+
       {branches.data?.branches.length && catalog.data && !branches.error ? (
         <TradingOverview
           branchId={branchId || undefined}
@@ -575,10 +573,24 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         </SectionCard>
       ) : (
         <div data-testid="pharmacy-dashboard-grid" className="grid min-w-0 gap-5 lg:grid-cols-2">
+          {command.data?.permissions.financial === false && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-2 text-sm text-text-muted lg:col-span-2"
+            >
+              <StatusPill status="Restricted" tone="neutral" />
+              <span>Financial reports</span>
+              <span>Financial reports access is required to see monetary figures.</span>
+            </div>
+          )}
           {layout.widgets
             .filter(
               (item) =>
                 item.visible &&
+                !(
+                  definition.get(item.key)?.permission === 'reports:financial' &&
+                  command.data?.permissions.financial === false
+                ) &&
                 (item.key !== 'expiry' || command.data?.permissions.financial === true)
             )
             .map((preference) => {

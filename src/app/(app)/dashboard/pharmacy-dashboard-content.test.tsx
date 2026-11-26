@@ -124,6 +124,13 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
   });
 
+  it('omits the money and cost tiles when only operational reports are granted', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.queryByRole('heading', { name: "Today's trade" })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Expiry exposure' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Trading today' })).toBeVisible();
+  });
+
   it('shows loading, not a financial restriction, while the command query is still pending', () => {
     // The command query is disabled until branches load: no data, no error. That
     // is loading, not a denial — the owner must never be told they lack

@@ -38,7 +38,7 @@ function TradingPanel({
     <SectionCard
       title={title}
       eyebrow={period}
-      className={section === 'summary' || section === 'days' ? 'lg:col-span-2' : undefined}
+      className={section === 'summary' ? 'lg:col-span-2' : undefined}
     >
       {actions}
       {query.error ? (
@@ -57,7 +57,7 @@ function TradingPanel({
           {query.data.find((p) => p.label === 'Bills')?.value === 0 && (
             <p className="mb-4 text-sm text-text-muted">No sales yet today.</p>
           )}
-          <div className="grid gap-5 sm:grid-cols-3 xl:grid-cols-4">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             {query.data.map((p) => {
               const format = p.count ? (v: number) => v.toLocaleString() : money;
               const delta = p.previous != null && p.value != null ? p.value - p.previous : null;
@@ -181,10 +181,10 @@ export function TradingOverview({ branchId, financial, currency, branches }: Pro
   return (
     <div className="grid min-w-0 gap-4 lg:grid-cols-2">
       <TradingPanel {...props} section="summary" />
+      {financial && <TradingPanel {...props} section="days" />}
       <PositionPanels branchId={branchId} financial={financial} />
       {financial && (
         <>
-          <TradingPanel {...props} section="days" />
           <TradingPanel {...props} section="hours" />
           <TradingPanel {...props} section="payments" />
           <TradingPanel {...props} section="stock" />

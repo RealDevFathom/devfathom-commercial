@@ -52,7 +52,11 @@ export function BusinessChart({
     <figure aria-label={title} className="min-w-0">
       <div className="h-56 w-full min-w-0" aria-hidden="true">
         <ResponsiveContainer width="100%" height="100%" minWidth={0}>
-          <Chart data={points} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <Chart
+            accessibilityLayer={false}
+            data={points}
+            margin={{ top: 8, right: 12, bottom: 0, left: 0 }}
+          >
             <CartesianGrid vertical={false} stroke="var(--border-subtle)" />
             <XAxis
               dataKey="label"
@@ -72,6 +76,8 @@ export function BusinessChart({
             />
             <Tooltip
               formatter={(value) => format(Number(value))}
+              itemStyle={{ color: 'var(--text-strong)' }}
+              cursor={{ stroke: 'var(--border-default)', fill: 'var(--surface-sunken)' }}
               contentStyle={{
                 background: 'var(--surface-card)',
                 borderColor: 'var(--border-subtle)',
@@ -119,8 +125,8 @@ export function BusinessChart({
           </tr>
         </thead>
         <tbody>
-          {points.map((point) => (
-            <tr key={point.label}>
+          {points.map((point, index) => (
+            <tr key={point.label + index}>
               <th scope="row">{point.label}</th>
               <td>{point.value == null ? 'No recorded value' : format(point.value)}</td>
               {comparison && (
