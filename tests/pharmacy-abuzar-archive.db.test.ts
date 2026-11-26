@@ -56,3 +56,80 @@ describe.runIf(process.env.TEST_DATABASE_URL)('Abuzar import storage in PostgreS
     ).toBe(0);
   });
 });
+
+describe.runIf(process.env.TEST_DATABASE_URL)('prepared party and history operations', () => {
+  it('previews, confirms and replays with identical persisted rows, without posting history', async () => {
+    const { runAbuzarStep } = await import('@/lib/pharmacy/migration/abuzar-run');
+    const { withPlatformDb, withTenantDb } = await import('@/lib/tenancy/scoped-db');
+    const { seedDepartments } = await import('@/lib/test-support/departments');
+    const org = randomUUID();
+    await withPlatformDb((db) =>
+      db.organization.create({
+        data: { id: org, slug: org, displayName: org, legalName: org, vertical: 'PHARMACY' },
+      })
+    );
+    const scope = await withTenantDb(org, async (db) => {
+      await seedDepartments(db, [org], ['QA']);
+      const user = await db.user.create({
+        data: {
+          name: 'Synthetic owner',
+          email: org + '@example.test',
+          department: 'QA',
+          title: 'QA',
+        },
+      });
+      const branch = await db.pharmacyBranch.create({
+        data: { name: 'QA', code: 'QA', addressLine: 'QA', city: 'QA', provinceCode: 'PB' },
+      });
+      return { organizationId: org, branchId: branch.id, actorId: user.id };
+    });
+    const { readPreparedExport } = await import('../tools/abuzar-import/prepared');
+    const { syntheticExport } = await import('./fixtures/abuzar-prepared');
+    const data = await readPreparedExport(await syntheticExport());
+    const snapshot = () =>
+      withTenantDb(
+        org,
+        async (db) =>
+          (
+            await db.$queryRaw`SELECT
+        (SELECT count(*)::int FROM pharmacy_customers) customers,(SELECT count(*)::int FROM pharmacy_abuzar_history) history,
+        (SELECT count(*)::int FROM pharmacy_sales) sales, (SELECT count(*)::int FROM finance_journal_entries) journals,
+        (SELECT md5(string_agg(t::text,',' ORDER BY t."sourceId")) FROM pharmacy_abuzar_history t) checksum,
+        (SELECT count(*)::int FROM audit_logs WHERE action LIKE 'pharmacy.abuzar.%') audit`
+          )[0]
+      );
+    expect(await snapshot()).toMatchObject({
+      customers: 0,
+      history: 0,
+      sales: 0,
+      journals: 0,
+      audit: 0,
+    });
+    for (const step of ['parties', 'history'] as const) {
+      const options = { step, sourceBranch: 'B1', addToExisting: false };
+      const run = (confirmation?: string) =>
+        withTenantDb(org, (db) => runAbuzarStep(db, scope, data, options, confirmation));
+      const before = await snapshot();
+      const dry = await run();
+      expect(dry.create).toBe(1);
+      expect(await snapshot()).toEqual(before);
+      await expect(run('0'.repeat(64))).rejects.toThrow(/dry run/i);
+      const real = await run(dry.confirmation);
+      expect(real.applied).toBe(1);
+      const after = await snapshot();
+      expect((await run(dry.confirmation)).applied).toBe(0);
+      expect(await snapshot()).toEqual(after);
+    }
+    expect(await snapshot()).toMatchObject({
+      customers: 1,
+      history: 1,
+      sales: 0,
+      journals: 0,
+      audit: 2,
+      checksum: expect.stringMatching(/^[a-f0-9]{32}$/),
+    });
+    expect(
+      await withTenantDb(org, (db) => db.pharmacyPatient.findFirst({ select: { phone: true } }))
+    ).toEqual({ phone: '+923001234567' });
+  });
+});

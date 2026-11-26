@@ -83,13 +83,17 @@ async function bytes(dir: string, name: string, max: number) {
 const decode = (buf: Buffer) => new TextDecoder('utf-8', { fatal: true }).decode(buf);
 
 export async function readPreparedExport(dir: string): Promise<Prepared> {
-  const manifest = manifestSchema.parse(
-    JSON.parse(decode(await bytes(dir, 'manifest.json', 16384)))
-  );
+  return parsePreparedExport((name, limit) => bytes(dir, name, limit));
+}
+
+export async function parsePreparedExport(
+  read: (name: string, limit: number) => Promise<Buffer>
+): Promise<Prepared> {
+  const manifest = manifestSchema.parse(JSON.parse(decode(await read('manifest.json', 16384))));
   const tables = {} as Tables;
   let budget = 96 * 1024 * 1024;
   for (const name of tableNames) {
-    const file = await bytes(dir, name + '.csv', Math.min(budget, 64 * 1024 * 1024));
+    const file = await read(name + '.csv', Math.min(budget, 64 * 1024 * 1024));
     budget -= file.length;
     if (sha256(file) !== manifest.tables[name].sha256)
       throw new Error('Checksum mismatch for ' + name);
