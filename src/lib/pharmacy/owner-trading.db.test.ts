@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { dashboardPeriods, readOwnerTrading, type TradingSection } from './owner-trading';
 import { aggregateTenderTotals } from './manual-payments';
 import { readKhataAgingMinor, readPharmacyOwnerCommandCentre } from './reports';
-import { receiveLot } from './stock-ledger';
+import { allocateForSale, receiveLot } from './stock-ledger';
 import { grossMargin } from './finance-reports';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -563,6 +563,35 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
           provinceCode: 'PB',
         },
       });
+      const location = await db.pharmacyStockLocation.create({
+        data: { organizationId: org, branchId: second, code: 'Main', name: 'Store', kind: 'STORE' },
+      });
+      const batch = await db.pharmacyManufacturingBatch.findUniqueOrThrow({ where: { id: org } });
+      await receiveLot(
+        db,
+        { organizationId: org, branchId: second, actorId: 'fixture' },
+        {
+          manufacturingBatchId: org,
+          packLevelId: org,
+          stockLocationId: location.id,
+          unitsPerPack: 1,
+          supplierName: 'Synthetic',
+          supplierInvoiceRef: second,
+          unitCostMinor: 50,
+          printedMrpMinor: 500,
+          receivedExpiresAt: batch.expiresAt!,
+          receivedExpiryPrecision: 'DAY',
+          quantityUnits: 2,
+          idempotencyKey: second,
+          receivedAt: at,
+        }
+      );
+      const allocationKey = randomUUID();
+      const outbound = await allocateForSale(
+        db,
+        { organizationId: org, branchId: second, actorId: 'synthetic' },
+        { medicineId: org, requiredUnits: 2, at, idempotencyKeyPrefix: allocationKey }
+      );
       const day = new Date(periods[0]!.today);
       const sale = await db.pharmacySale.create({
         data: {
@@ -575,7 +604,7 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
           receiptNumber: 2,
         },
       });
-      await db.pharmacySaleLine.create({
+      const line = await db.pharmacySaleLine.create({
         data: {
           organizationId: org,
           branchId: second,
@@ -593,10 +622,25 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
           unitCostMinor: 100,
           discountMinor: 120,
           billDiscountMinor: 100,
+          billAllocationDiscounts: { [allocationKey]: 100 },
           discountKind: 'DISCOUNT',
           approvalPolicy: 'synthetic',
           approvedByUserId: 'synthetic',
           idempotencyKey: second,
+        },
+      });
+      await db.pharmacySaleLineAllocation.create({
+        data: {
+          id: allocationKey,
+          organizationId: org,
+          branchId: second,
+          saleLineId: line.id,
+          inventoryLotId: outbound.allocations[0]!.inventoryLotId,
+          stockLocationId: location.id,
+          canonicalUnits: 2,
+          stockMovementId: outbound.movementIds[0]!,
+          grossMinor: 1000,
+          discountMinor: 20,
         },
       });
       const tender = await db.pharmacyTender.create({
