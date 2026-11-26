@@ -38,6 +38,8 @@ import {
   seedPharmacyRegulatoryProfile,
 } from '@/lib/test-support/pharmacy-regulatory';
 
+import { overlappingStockTransactions } from '@/lib/test-support/overlapping-stock-transactions';
+
 import { PharmacyInventoryError } from './inventory';
 
 const TEST_DATABASE_URL = process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -2103,31 +2105,32 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       });
       return lot.id;
     });
-    let releaseClaim: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      releaseClaim = resolve;
-    });
-    const claim = inOrg(ORG_A, async (db) => {
-      const result = await deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
-        inventoryLotId: lotId,
-        reservedUnits: 10,
-        returnBy: LATER,
-      });
-      await held;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const sale = inOrg(ORG_A, (db) =>
-      deps.ledger.allocateForSale(db, scopeOf(fixture), {
-        medicineId: fixture.medicineId,
-        requiredUnits: 10,
-        at: NOW,
-        idempotencyKeyPrefix: `claim-first-${suffix}-sale`,
-      })
+    const {
+      outcomes: [claimOutcome, saleOutcome],
+      blockedMs,
+    } = await overlappingStockTransactions(
+      (hold) =>
+        inOrg(ORG_A, async (db) => {
+          const result = await deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
+            inventoryLotId: lotId,
+            reservedUnits: 10,
+            returnBy: LATER,
+          });
+          await hold(db);
+          return result;
+        }),
+      (announce) =>
+        inOrg(ORG_A, async (db) => {
+          await announce(db);
+          return deps.ledger.allocateForSale(db, scopeOf(fixture), {
+            medicineId: fixture.medicineId,
+            requiredUnits: 10,
+            at: NOW,
+            idempotencyKeyPrefix: `claim-first-${suffix}-sale`,
+          });
+        })
     );
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    releaseClaim();
-    const [claimOutcome, saleOutcome] = await Promise.allSettled([claim, sale]);
+    expect(blockedMs).toBeGreaterThanOrEqual(200);
     expect(claimOutcome.status).toBe('fulfilled');
     expect(saleOutcome.status).toBe('rejected');
     const claims = await inOrg(ORG_A, (db) =>
@@ -2146,33 +2149,31 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
       });
       return lot.id;
     });
-    let releaseSale: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      releaseSale = resolve;
-    });
-    const sale = inOrg(ORG_A, async (db) => {
-      const result = await deps.ledger.allocateForSale(db, scopeOf(fixture), {
-        medicineId: fixture.medicineId,
-        requiredUnits: 10,
-        at: NOW,
-        idempotencyKeyPrefix: `claim-race-${suffix}-sale`,
-      });
-      await held;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const startedClaim = Date.now();
-    const claim = inOrg(ORG_A, (db) =>
-      deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
-        inventoryLotId: lotId,
-        reservedUnits: 10,
-        returnBy: LATER,
-      })
+    const {
+      outcomes: [saleOutcome, claimOutcome],
+      blockedMs: waitedMs,
+    } = await overlappingStockTransactions(
+      (hold) =>
+        inOrg(ORG_A, async (db) => {
+          const result = await deps.ledger.allocateForSale(db, scopeOf(fixture), {
+            medicineId: fixture.medicineId,
+            requiredUnits: 10,
+            at: NOW,
+            idempotencyKeyPrefix: `claim-race-${suffix}-sale`,
+          });
+          await hold(db);
+          return result;
+        }),
+      (announce) =>
+        inOrg(ORG_A, async (db) => {
+          await announce(db);
+          return deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
+            inventoryLotId: lotId,
+            reservedUnits: 10,
+            returnBy: LATER,
+          });
+        })
     );
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    releaseSale();
-    const [saleOutcome, claimOutcome] = await Promise.allSettled([sale, claim]);
-    const waitedMs = Date.now() - startedClaim;
     expect(saleOutcome.status).toBe('fulfilled');
     expect(claimOutcome.status).toBe('rejected');
     // The claim was blocked on the balance-row lock the sale held, not run on a stale read.
@@ -2448,11 +2449,6 @@ describeIfDatabase('PH-INV allocation — INV-02 FEFO', () => {
      * SALE, and fail later on the non-negative CHECK with a raw database error
      * instead of the domain refusal asserted below.
      */
-    let releaseFirst: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
-
     const allocate = (db: ScopedDb, label: string) =>
       deps.ledger.allocateForSale(db, scopeOf(fixture), {
         medicineId: fixture.medicineId,
@@ -2461,21 +2457,22 @@ describeIfDatabase('PH-INV allocation — INV-02 FEFO', () => {
         idempotencyKeyPrefix: `race-${suffix}-${label}`,
       });
 
-    const first = inOrg(ORG_A, async (db) => {
-      const result = await allocate(db, 'a');
-      await held;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-
-    const startedSecond = Date.now();
-    const second = inOrg(ORG_A, (db) => allocate(db, 'b'));
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    releaseFirst();
-
-    const [firstOutcome, secondOutcome] = await Promise.allSettled([first, second]);
-    const waitedMs = Date.now() - startedSecond;
-
+    const {
+      outcomes: [firstOutcome, secondOutcome],
+      blockedMs: waitedMs,
+    } = await overlappingStockTransactions(
+      (hold) =>
+        inOrg(ORG_A, async (db) => {
+          const result = await allocate(db, 'a');
+          await hold(db);
+          return result;
+        }),
+      (announce) =>
+        inOrg(ORG_A, async (db) => {
+          await announce(db);
+          return allocate(db, 'b');
+        })
+    );
     expect(firstOutcome.status).toBe('fulfilled');
     expect(secondOutcome.status).toBe('rejected');
     // The second counter was genuinely blocked for the rest of the first's
