@@ -16,6 +16,7 @@ import {
 import type { CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import {
   layoutWithPaper,
+  receiptClaimIssues,
   type PharmacyReceiptLayout as ReceiptLayout,
 } from '@/lib/pharmacy/receipt-layout';
 import { trpc } from '@/lib/trpc';
@@ -74,6 +75,11 @@ function BranchPrinterForm({
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canSave || save.isPending) return;
+    const [claim] = receiptClaimIssues(layout);
+    if (claim) {
+      setNotice({ tone: 'alert', text: claim.message + ' Open Receipt design to edit the text.' });
+      return;
+    }
     setNotice(null);
     save.mutate({ branchId, revision, layout: layoutWithPaper(layout, paper) });
   }
