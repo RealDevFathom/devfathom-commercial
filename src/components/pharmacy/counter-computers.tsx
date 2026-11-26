@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { counterConflictMessage } from '@/lib/pharmacy/counter-replay-transport';
 import { unsettledCommands } from '@/lib/pharmacy/counter-command-queue';
 import {
   forgetCounterEnrolment,
@@ -771,7 +772,7 @@ function BranchCounters({
       <NoticeLine notice={notice} />
       <OfflineCashSellingSwitch branchId={branchId} />
       <ReconnectLimit key={branchId} branchId={branchId} />
-      <RefusedReceipts branchId={branchId} />
+      <RefusedReceipts key={branchId} branchId={branchId} />
       <ReceiptNumberGaps branchId={branchId} />
     </div>
   );
@@ -990,7 +991,18 @@ function ResolveOfflineCashForm({
 }
 
 function RefusedReceipts({ branchId }: { branchId: string }) {
-  const history = trpc.pharmacyOffline.refusedReceipts.useQuery({ branchId }, { retry: false });
+  const [pages, setPages] = useState<{ at: string; id: string }[]>([]);
+  const history = trpc.pharmacyOffline.refusedReceipts.useQuery(
+    { branchId, after: pages.at(-1) },
+    { retry: false }
+  );
+  const next = history.data?.nextCursor;
+  const statuses: Record<string, { label: string; tone: 'warning' | 'success' | 'danger' }> = {
+    REFUSED: { label: 'Needs review', tone: 'warning' },
+    REJECTED: { label: 'Rejected', tone: 'danger' },
+    RETRIED: { label: 'Booked after review', tone: 'success' },
+    QUARANTINED: { label: 'Quarantined', tone: 'warning' },
+  };
   return (
     <section className="space-y-2 border-t border-border-subtle pt-4">
       <h3 className="text-sm font-semibold text-text-strong">Offline receipt reviews</h3>
@@ -1003,21 +1015,25 @@ function RefusedReceipts({ branchId }: { branchId: string }) {
             Reload
           </Button>
         </p>
-      ) : !history.data?.length ? (
+      ) : !history.data?.rows.length ? (
         <p className="text-sm text-text-muted">
           No offline receipts have been refused in this branch.
         </p>
       ) : (
         <ul className="divide-y divide-border-subtle text-sm">
-          {history.data.map((row) => (
+          {history.data.rows.map((row) => (
             <li key={row.id} className="space-y-1 py-2">
               <strong>
                 Receipt {row.receiptNumber} · {row.device.name}
               </strong>
               <p>
-                {row.kind} · {when(row.createdAt, 'Unknown time')}
+                <StatusPill
+                  status={row.kind}
+                  {...(statuses[row.kind] ?? { label: 'Reviewed', tone: 'warning' })}
+                />{' '}
+                · {when(row.createdAt, 'Unknown time')}
               </p>
-              <p>{row.reason}</p>
+              <p>{row.kind === 'REFUSED' ? counterConflictMessage(row.reason) : row.reason}</p>
               {row.cashState === 'held' && (
                 <ResolveOfflineCashForm
                   branchId={branchId}
@@ -1029,6 +1045,28 @@ function RefusedReceipts({ branchId }: { branchId: string }) {
             </li>
           ))}
         </ul>
+      )}
+      {(pages.length > 0 || next) && (
+        <nav aria-label="Receipt history pages" className="flex flex-wrap gap-2">
+          <Button
+            className="min-h-11"
+            variant="outline"
+            disabled={!pages.length || history.isFetching}
+            onClick={() => setPages((p) => p.slice(0, -1))}
+          >
+            Previous
+          </Button>
+          <Button
+            className="min-h-11"
+            variant="outline"
+            disabled={!next || history.isFetching}
+            onClick={() => {
+              if (next) setPages((p) => [...p, next]);
+            }}
+          >
+            Next
+          </Button>
+        </nav>
       )}
     </section>
   );

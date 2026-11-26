@@ -241,85 +241,111 @@ export const pharmacyOfflineRouter = router({
         return resolveOfflineCash(db, scope, input);
       })
     ),
-  refusedReceipts: adminProcedure.input(branchInput).query(({ ctx, input }) =>
-    ctx.db.$transaction(async (tx) => {
-      const db = tx as ScopedDb;
-      const organizationId = ctx.entitlements.organizationId;
-      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
-      await scopeReceiptHistory(db, input.branchId);
-      const rows = await db.pharmacyOfflineReceiptEvent.findMany({
-        where: { organizationId, branchId: input.branchId },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        select: {
-          id: true,
-          receiptNumber: true,
-          kind: true,
-          reason: true,
-          createdAt: true,
-          deviceId: true,
-          commandKey: true,
-          device: { select: { name: true } },
-        },
-      });
-      const closed = rows.filter((row) => row.kind === 'REJECTED' || row.kind === 'QUARANTINED');
-      const resolved = closed.length
-        ? await db.auditLog.findMany({
-            where: {
-              organizationId,
-              id: {
-                in: closed.map((row) =>
-                  resolutionAuditId(organizationId, row.deviceId, row.commandKey)
-                ),
+  refusedReceipts: adminProcedure
+    .input(branchInput.extend({ after: z.object({ at: z.iso.datetime(), id }).optional() }))
+    .query(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        await scopeReceiptHistory(db, input.branchId);
+        const pageSize = 25;
+        const after = input.after;
+        const found = await db.pharmacyOfflineReceiptEvent.findMany({
+          where: {
+            organizationId,
+            branchId: input.branchId,
+            ...(after
+              ? {
+                  OR: [
+                    { createdAt: { lt: new Date(after.at) } },
+                    { createdAt: new Date(after.at), id: { lt: after.id } },
+                  ],
+                }
+              : {}),
+          },
+          take: pageSize + 1,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: {
+            id: true,
+            receiptNumber: true,
+            kind: true,
+            reason: true,
+            createdAt: true,
+            deviceId: true,
+            commandKey: true,
+            device: { select: { name: true } },
+          },
+        });
+        const rows = found.slice(0, pageSize);
+        const last = rows.at(-1);
+        const nextCursor =
+          found.length > pageSize && last
+            ? { at: last.createdAt.toISOString(), id: last.id }
+            : null;
+        const closed = rows.filter((row) => row.kind === 'REJECTED' || row.kind === 'QUARANTINED');
+        const resolved = closed.length
+          ? await db.auditLog.findMany({
+              where: {
+                organizationId,
+                id: {
+                  in: closed.map((row) =>
+                    resolutionAuditId(organizationId, row.deviceId, row.commandKey)
+                  ),
+                },
               },
-            },
-            select: { id: true },
-          })
-        : [];
-      const done = new Set(resolved.map((row) => row.id));
-      const heldCommands = closed.length
-        ? await db.pharmacyOfflineCommand.findMany({
-            where: {
-              organizationId,
-              branchId: input.branchId,
-              action: 'CASH_OTC_SALE',
-              OR: closed.map((row) => ({ deviceId: row.deviceId, idempotencyKey: row.commandKey })),
-            },
-            select: { deviceId: true, idempotencyKey: true, id: true },
-          })
-        : [];
-      const entries = heldCommands.length
-        ? await db.financeJournalEntry.findMany({
-            where: {
-              organizationId,
-              branchId: input.branchId,
-              sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH',
-              sourceId: { in: heldCommands.map((row) => row.id) },
-            },
-            select: { sourceId: true },
-          })
-        : [];
-      const held = new Set(entries.map((row) => row.sourceId));
-      const cash = new Set(
-        heldCommands
-          .filter((row) => held.has(row.id))
-          .map((row) => resolutionAuditId(organizationId, row.deviceId, row.idempotencyKey))
-      );
-      return rows.map(({ deviceId, commandKey, ...row }) => {
-        const auditId = resolutionAuditId(organizationId, deviceId, commandKey);
-        return {
-          ...row,
-          cashState:
-            row.kind === 'REJECTED' || row.kind === 'QUARANTINED'
-              ? done.has(auditId)
-                ? 'resolved'
-                : cash.has(auditId)
-                  ? 'held'
-                  : null
-              : null,
-        };
-      });
-    })
-  ),
+              select: { id: true },
+            })
+          : [];
+        const done = new Set(resolved.map((row) => row.id));
+        const heldCommands = closed.length
+          ? await db.pharmacyOfflineCommand.findMany({
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                action: 'CASH_OTC_SALE',
+                OR: closed.map((row) => ({
+                  deviceId: row.deviceId,
+                  idempotencyKey: row.commandKey,
+                })),
+              },
+              select: { deviceId: true, idempotencyKey: true, id: true },
+            })
+          : [];
+        const entries = heldCommands.length
+          ? await db.financeJournalEntry.findMany({
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH',
+                sourceId: { in: heldCommands.map((row) => row.id) },
+              },
+              select: { sourceId: true },
+            })
+          : [];
+        const held = new Set(entries.map((row) => row.sourceId));
+        const cash = new Set(
+          heldCommands
+            .filter((row) => held.has(row.id))
+            .map((row) => resolutionAuditId(organizationId, row.deviceId, row.idempotencyKey))
+        );
+        const page = rows.map(({ deviceId, commandKey, ...row }) => {
+          const auditId = resolutionAuditId(organizationId, deviceId, commandKey);
+          return {
+            ...row,
+            cashState:
+              row.kind === 'REJECTED' || row.kind === 'QUARANTINED'
+                ? done.has(auditId)
+                  ? 'resolved'
+                  : cash.has(auditId)
+                    ? 'held'
+                    : null
+                : null,
+          };
+        });
+        return { rows: page, nextCursor };
+      })
+    ),
   counters: adminProcedure.input(branchInput).query(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const db = tx as ScopedDb;

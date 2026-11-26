@@ -28,7 +28,7 @@ export function canRetryOfflineReceipt(code?: string): boolean {
   }
 }
 
-function counterConflictMessage(code?: string): string {
+export function counterConflictMessage(code?: string): string {
   switch (code) {
     case 'DAY_CLOSED':
       return 'The shop day for this sale is closed. Ask a manager to check the receipt and cash.';

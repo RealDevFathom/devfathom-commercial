@@ -455,6 +455,39 @@ async function supervisor<T>(
 }
 
 describeIfDatabase('Offline receipt recovery through the counter routes', () => {
+  it('pages equal-time supervisor receipts without repeating or losing a receipt', async () => {
+    const counter = await setup();
+    const scope = scopeOf(counter.fixture),
+      at = new Date();
+    await inOrg(ORG_A, async (db) => {
+      await db.$queryRaw`SELECT set_config('app.current_branch_id',${scope.branchId},true)`;
+      await db.pharmacyOfflineReceiptEvent.createMany({
+        data: Array.from({ length: 28 }, (_, i) => ({
+          id: tag('review'),
+          organizationId: ORG_A,
+          branchId: scope.branchId,
+          deviceId: counter.fixture.deviceId,
+          commandKey: tag('sale'),
+          sequence: i + 1,
+          receiptNumber: i + 1,
+          kind: 'REFUSED',
+          reason: 'DRAWER_NOT_OPEN',
+          commandHash: 'fixture',
+          evidence: {},
+          createdAt: at,
+        })),
+      });
+    });
+    const first = await supervisor((api) => api.refusedReceipts({ branchId: scope.branchId }));
+    expect(first.rows).toHaveLength(25);
+    expect(first.nextCursor).toBeTruthy();
+    const second = await supervisor((api) =>
+      api.refusedReceipts({ branchId: scope.branchId, after: first.nextCursor! })
+    );
+    expect(second.rows).toHaveLength(3);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.rows, ...second.rows].map((row) => row.id)).size).toBe(28);
+  });
   it('signs each price list for the branch reconnect limit, including the 72 hour default', async () => {
     const counter = await setup();
     for (const hours of [72, 24]) {
@@ -594,7 +627,9 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
           return sale.id;
         });
       }
-      const [event] = await supervisor((api) => api.refusedReceipts({ branchId: scope.branchId }));
+      const {
+        rows: [event],
+      } = await supervisor((api) => api.refusedReceipts({ branchId: scope.branchId }));
       expect(event?.cashState).toBe('held');
       const input = {
         branchId: scope.branchId,
