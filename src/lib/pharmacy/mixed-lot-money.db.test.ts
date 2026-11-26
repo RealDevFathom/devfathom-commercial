@@ -547,7 +547,7 @@ test.each([false, true])(
             ...base,
             type: 'CARD',
             provider: 'FAKE_TERMINAL',
-            providerRef: 'approved-in-provider',
+            providerRef: randomUUID(),
           },
         })
       )

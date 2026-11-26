@@ -623,6 +623,33 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
       (await history(item)).filter((m) => m.reason === 'Counter pack opening reversed')
     ).toHaveLength(1);
   });
+  it('retains a shared pack when the other cashier has already collected payment', async () => {
+    const item = await stock(10);
+    const unpaid = await bill(ids.cashierB, [(id) => loose(item, id, 1)]);
+    const paid = await bill(ids.cashier, [(id) => loose(item, id, 1)]);
+    const total = (await cartOf(paid.saleId)).totals.netMinor;
+    await pay(ids.cashier, paid.saleId, total);
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove({ saleId: unpaid.saleId, saleLineId: unpaid.lineIds[0]! }))
+    );
+    expect(await balance(item)).toMatchObject({ sealedPacks: 0, looseUnits: 9, onHandUnits: 9 });
+    expect(
+      (await history(item)).filter((m) => m.reason === 'Counter pack opening reversed')
+    ).toHaveLength(0);
+  });
+  it('replays a 23-tablet line without opening extra packs or posting another debit', async () => {
+    const item = await stock(40);
+    const { saleId } = await bill(ids.cashier, []);
+    const input = loose(item, saleId, 23);
+    const add = () => act(ids.cashier, (api) => api.addLine(input));
+    const initial = await add();
+    const original = await history(item);
+    expect(original.filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(3);
+    expect(original.filter((m) => m.kind === 'SALE')).toHaveLength(1);
+    expect((await add()).line.id).toBe(initial.line.id);
+    expect(await history(item)).toEqual(original);
+    expect(await balance(item)).toMatchObject({ sealedPacks: 1, looseUnits: 7, onHandUnits: 17 });
+  });
   it('dispenses a ten-tablet strip from a sealed box, leaving the other two strips open', async () => {
     const item = await stockedItem(
       'Synthetic three-strip box',
