@@ -25,8 +25,6 @@ if (url) process.env.DATABASE_URL = url;
 const client = url ? db : null;
 const describeDatabase = url ? describe : describe.skip;
 const org = `org_${randomUUID()}`;
-const branch = `branch_${randomUUID()}`;
-const scope = { organizationId: org, branchId: branch, actorId: 'receipt-test-actor' };
 const businessDate = new Date('2026-09-05T13:14:00.000Z');
 function transaction<T>(work: (db: ScopedDb) => Promise<T>, organizationId = org) {
   if (!client) throw new Error('Isolated receipt database required');
@@ -65,6 +63,16 @@ beforeAll(async () => {
       org
     );
   });
+});
+afterAll(async () => {
+  if (client) await retirePharmacyRegulatoryRules(platformTransaction, ruleSetIds);
+  await client?.$disconnect();
+});
+
+async function fixture() {
+  // Receipt numbering is branch-wide. Each case starts its own sequence.
+  const branch = `branch_${randomUUID()}`;
+  const scope = { organizationId: org, branchId: branch, actorId: 'receipt-test-actor' };
   await transaction((db) =>
     db.pharmacyBranch.create({
       data: {
@@ -81,13 +89,6 @@ beforeAll(async () => {
   ruleSetIds.push(
     await seedPharmacyRegulatoryProfile(platformTransaction, (work) => transaction(work), branch)
   );
-});
-afterAll(async () => {
-  if (client) await retirePharmacyRegulatoryRules(platformTransaction, ruleSetIds);
-  await client?.$disconnect();
-});
-
-async function fixture() {
   return transaction(async (db) => {
     const medicine = await db.medicine.create({
       data: {
@@ -177,6 +178,7 @@ async function fixture() {
       idempotencyKey: randomUUID(),
     });
     return {
+      scope,
       sale,
       medicine,
       presentation,
@@ -193,7 +195,7 @@ async function fixture() {
     };
   });
 }
-const read = (saleId: string) =>
+const read = (scope: Awaited<ReturnType<typeof fixture>>['scope'], saleId: string) =>
   transaction((db) => readCounterReceipt(db, scope, saleId, { name: 'Test', currency: 'PKR' }));
 async function counts(saleId: string) {
   return transaction(async (db) => ({
@@ -206,8 +208,9 @@ async function counts(saleId: string) {
 describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   it('keeps issued labels and both batch quantities after catalog edits, with original sale money after refund', async () => {
     const f = await fixture();
+    const { scope } = f;
     const result = await transaction((db) => applyPharmacyTender(db, scope, f.input));
-    const before = await read(f.sale.id);
+    const before = await read(scope, f.sale.id);
     await transaction(async (db) => {
       await db.medicine.update({ where: { id: f.medicine.id }, data: { productName: 'Renamed' } });
       await db.medicineStrengthComponent.updateMany({
@@ -247,7 +250,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
         idempotencyKey: randomUUID(),
       });
     });
-    expect(await read(f.sale.id)).toEqual(before);
+    expect(await read(scope, f.sale.id)).toEqual(before);
     expect(before.lines).toHaveLength(1);
     expect(before.lines[0]).toMatchObject({
       identityStatus: 'ISSUED',
@@ -279,8 +282,9 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('returns all allocated lots as descriptive subrows of one financial line', async () => {
     const f = await fixture();
+    const { scope } = f;
     await transaction((db) => applyPharmacyTender(db, scope, f.input));
-    const receipt = await read(f.sale.id);
+    const receipt = await read(scope, f.sale.id);
     expect(receipt.lines).toHaveLength(1);
     expect(
       receipt.lines[0]!.allocations?.map((a) => [a.batchNumber, a.canonicalUnits]).sort()
@@ -293,6 +297,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('same-key competing final tenders and replay issue one snapshot and one tender', async () => {
     const f = await fixture();
+    const { scope } = f;
     const results = await Promise.all([
       transaction((db) => applyPharmacyTender(db, scope, f.input)),
       transaction((db) => applyPharmacyTender(db, scope, f.input)),
@@ -307,6 +312,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('different-key competing final tenders issue exactly once', async () => {
     const f = await fixture();
+    const { scope } = f;
     const results = await Promise.allSettled([
       transaction((db) => applyPharmacyTender(db, scope, f.input)),
       transaction((db) =>
@@ -322,6 +328,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('partial tender issues no snapshot; final tender captures one', async () => {
     const f = await fixture();
+    const { scope } = f;
     await transaction((db) => applyPharmacyTender(db, scope, { ...f.input, amountMinor: 400 }));
     expect((await counts(f.sale.id)).events).toHaveLength(0);
     await transaction((db) =>
@@ -330,10 +337,11 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
     const state = await counts(f.sale.id);
     expect(state.events).toHaveLength(1);
     expect(state.tenders).toBe(2);
-    expect((await read(f.sale.id)).totals.tenderedMinor).toBe(950);
+    expect((await read(scope, f.sale.id)).totals.tenderedMinor).toBe(950);
   });
   it('invalid snapshot rolls back sale, tender, receipt sequence and idempotency; retry succeeds', async () => {
     const f = await fixture();
+    const { scope } = f;
     await transaction((db) =>
       db.medicine.update({ where: { id: f.medicine.id }, data: { productName: '' } })
     );
@@ -359,6 +367,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('event write failure aborts issuance rather than committing without evidence', async () => {
     const f = await fixture();
+    const { scope } = f;
     await expect(
       transaction((db) => {
         const failing = new Proxy(db, {
@@ -382,6 +391,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('legacy/status-only completion reports unavailable history without live catalog backfill', async () => {
     const f = await fixture();
+    const { scope } = f;
     await transaction((db) =>
       db.pharmacySale.update({
         where: { id: f.sale.id },
@@ -394,7 +404,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
         },
       })
     );
-    const receipt = await read(f.sale.id);
+    const receipt = await read(scope, f.sale.id);
     expect(receipt.receiptNumber).toBeGreaterThan(0);
     expect(receipt.lines[0]).toMatchObject({
       identityStatus: 'UNAVAILABLE',
@@ -414,14 +424,14 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
         })
       )
     ).rejects.toThrow('ISSUED_RECEIPT_IMMUTABLE');
-    const numberedLegacy = await read(f.sale.id);
+    const numberedLegacy = await read(scope, f.sale.id);
     expect(numberedLegacy.receiptNumber).toBe(1);
     expect(numberedLegacy.lines[0]!.identityStatus).toBe('UNAVAILABLE');
     await transaction((db) =>
       db.pharmacySaleEvent.create({
         data: {
           organizationId: org,
-          branchId: branch,
+          branchId: scope.branchId,
           saleId: f.sale.id,
           kind: 'COMPLETED',
           actorId: scope.actorId,
@@ -429,10 +439,11 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
         },
       })
     );
-    await expect(read(f.sale.id)).rejects.toThrow('INVALID_RECEIPT_IDENTITY');
+    await expect(read(scope, f.sale.id)).rejects.toThrow('INVALID_RECEIPT_IDENTITY');
   });
   it('reader refuses duplicate snapshots and remains tenant/requested-branch scoped', async () => {
     const f = await fixture();
+    const { scope } = f;
     await transaction((db) => applyPharmacyTender(db, scope, f.input));
     await expect(
       transaction((db) =>
@@ -459,7 +470,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
       await db.pharmacySaleEvent.create({
         data: {
           organizationId: org,
-          branchId: branch,
+          branchId: scope.branchId,
           saleId: f.sale.id,
           kind: 'COMPLETED',
           actorId: scope.actorId,
@@ -467,6 +478,6 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
         },
       });
     });
-    await expect(read(f.sale.id)).rejects.toThrow('INVALID_RECEIPT_IDENTITY');
+    await expect(read(scope, f.sale.id)).rejects.toThrow('INVALID_RECEIPT_IDENTITY');
   });
 });

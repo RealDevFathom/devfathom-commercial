@@ -113,6 +113,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',
   },
+  'pharmacyBranchAssignments.cashModes': {
+    gate: 'adminProcedure + pharmacy-core + live pharmacy owner, no support session',
+    none: 'owner only',
+  },
+  'pharmacyBranchAssignments.setCashMode': {
+    gate: 'adminProcedure + pharmacy-core + live pharmacy owner, no support session',
+    none: 'owner only',
+  },
   'pharmacyBranchAssignments.list': {
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',

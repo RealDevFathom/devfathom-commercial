@@ -2,6 +2,8 @@
 
 import { useState } from 'react';
 
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
+
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -185,6 +187,7 @@ function CloseShift({
   mayClose: boolean;
   onClosed: () => void;
 }) {
+  const secret = useApprovalSecretKind() === 'CODE' ? 'authenticator code' : 'PIN';
   const [expanded, setExpanded] = useState(false);
   const [counted, setCounted] = useState('');
   const [note, setNote] = useState('');
@@ -344,7 +347,7 @@ function CloseShift({
               </legend>
               <p className="text-sm text-text-body">
                 The difference is above the owner&apos;s limit of {currency}{' '}
-                {formatMinor(tolerance)}. A manager or owner approves it with their PIN.
+                {formatMinor(tolerance)}. A manager or owner approves it with their {secret}.
               </p>
               {approvers.isLoading ? (
                 <p role="status" className="text-sm text-text-muted">
@@ -373,7 +376,7 @@ function CloseShift({
                     </select>
                   </div>
                   <div className="space-y-1.5">
-                    <Label htmlFor={`shift-approver-pin-${shift.id}`}>Their PIN</Label>
+                    <Label htmlFor={`shift-approver-pin-${shift.id}`}>Their {secret}</Label>
                     <Input
                       id={`shift-approver-pin-${shift.id}`}
                       className="min-h-11"
@@ -391,8 +394,7 @@ function CloseShift({
               ) : (
                 <p role="alert" className="text-sm text-text-body">
                   No one else at this branch can approve this shift, and you cannot approve your
-                  own. Ask a manager or owner with a PIN to approve it, or the owner to set a PIN
-                  up.
+                  own. Ask a manager or owner who has set up their {secret} to approve it.
                 </p>
               )}
             </fieldset>
