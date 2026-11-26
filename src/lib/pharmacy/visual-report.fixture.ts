@@ -119,7 +119,7 @@ export async function seedVisualReport(db: ScopedDb, branch: string, prefix: str
       createdAt: at,
     },
   });
-  await db.pharmacySaleReturnLine.create({
+  const returnedLine = await db.pharmacySaleReturnLine.create({
     data: {
       branchId: branch,
       returnId: returned.id,
@@ -145,7 +145,7 @@ export async function seedVisualReport(db: ScopedDb, branch: string, prefix: str
       data: {
         branchId: branch,
         sourceKind: reversal ? 'PHARMACY_SALE_RETURN_LINE' : 'PHARMACY_SALE_LINE',
-        sourceId: reversal ? returned.id : line.id,
+        sourceId: reversal ? returnedLine.id : line.id,
         description: reversal ? 'Sample return' : 'Sample sale',
         actorId: 'sample-cashier',
         occurredAt: at,

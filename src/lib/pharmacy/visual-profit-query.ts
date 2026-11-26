@@ -1,4 +1,5 @@
 import { Prisma } from '@/generated/prisma/client';
+import { physicalReturnLines } from './visual-report-returns';
 import { grossMarginQuery } from './finance-reports';
 import { pharmacyBusinessDayRange, shiftPharmacyDay } from './business-day';
 import type { ChartId } from './visual-chart';
@@ -77,6 +78,12 @@ export function profitFacts(
       JOIN pharmacy_sale_lines l ON l."organizationId"=s."organizationId" AND l."branchId"=s."branchId" AND l."saleId"=s.id
       WHERE NOT EXISTS (SELECT 1 FROM finance_journal_entries e WHERE e."organizationId"=${org} AND e."branchId"=b.id
         AND e."sourceKind"='PHARMACY_SALE_LINE' AND e."sourceId"=l.id)
+      UNION ALL
+      SELECT ${daily ? sql`d.day` : sql`NULL::text`},r."medicineId",r.id,'No return posting',NULL::text,0,0,1
+      FROM (${physicalReturnLines}) r
+      ${daily ? sql`JOIN days d ON d.id=r."branchId" AND r.at>=d.start_at AND r.at<d.stop_at` : Prisma.empty}
+      WHERE NOT EXISTS (SELECT 1 FROM finance_journal_entries e WHERE e."organizationId"=${org} AND e."branchId"=r."branchId"
+        AND e."sourceKind"=r.source AND e."sourceId"=r.id)
     )
     SELECT ${group} AS key,${label} AS label,ref,
       concat(COALESCE(m."productName",'Unknown medicine'),' · ',description,CASE WHEN excluded>0 THEN ' · Cost unverified — excluded' END) AS detail,

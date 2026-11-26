@@ -14,13 +14,14 @@ export const CHARTS = {
   returnsDay: 'Refunds and sales by day',
   returnRate: 'Return rate',
   returnMedicine: 'Top returned medicines',
+  physicalReason: 'Reasons for returns',
   returnReason: 'Reasons for refunds',
 } as const;
 export type ChartId = keyof typeof CHARTS;
 export const REPORT_CHARTS = {
   Sales: ['salesDay', 'salesHour', 'salesWeekday', 'salesPayment', 'salesCashier', 'salesCategory'],
   Profit: ['profitDay', 'marginDay', 'profitCategory', 'topMargin', 'bottomMargin'],
-  Returns: ['returnsDay', 'returnRate', 'returnMedicine', 'returnReason'],
+  Returns: ['returnsDay', 'returnRate', 'returnMedicine', 'physicalReason', 'returnReason'],
 } as const satisfies Record<string, readonly ChartId[]>;
 export type ChartRow = {
   key: string;

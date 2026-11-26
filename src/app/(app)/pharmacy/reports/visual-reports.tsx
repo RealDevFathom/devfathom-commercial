@@ -34,10 +34,11 @@ type Drill = { chart: ChartId; key: string; label: string; previous?: boolean };
 const isProfit = (chart: ChartId) => REPORT_CHARTS.Profit.some((id) => id === chart);
 const percent = (chart: ChartId) =>
   ['returnRate', 'topMargin', 'bottomMargin', 'marginDay'].includes(chart);
+const unitCount = (chart: ChartId) => chart === 'returnMedicine' || chart === 'physicalReason';
 const formatter = (chart: ChartId, currency: string | null) => (v: number) =>
   percent(chart)
     ? v.toLocaleString('en', { maximumFractionDigits: 2 }) + '%'
-    : chart === 'returnMedicine'
+    : unitCount(chart)
       ? v.toLocaleString('en') + ' units'
       : reportMoney(v, currency);
 const isDaily = (chart: ChartId) =>
@@ -52,6 +53,7 @@ const caption: Record<ChartId, string> = {
   returnsDay: 'Refunds paid alongside completed sales',
   returnRate: 'Refunds as a share of sales',
   returnMedicine: 'Medicines with the most units returned',
+  physicalReason: 'Units returned by the recorded reason',
   returnReason: 'Refund amounts by recorded reason',
   profitDay: 'Gross profit from verified ledger costs',
   marginDay: 'Verified gross profit as a share of net revenue',
@@ -289,7 +291,7 @@ function ChartPanel({
             line={isDaily(chart)}
             comparison={compare && main && !!comparisonData}
             secondaryLabel={chart === 'returnsDay' ? 'Completed sales' : undefined}
-            unitScale={percent(chart) || chart === 'returnMedicine' ? 1 : 100}
+            unitScale={percent(chart) || unitCount(chart) ? 1 : 100}
             onSelectPrevious={
               compare && main
                 ? (p) => {
@@ -339,7 +341,7 @@ function DetailPanel({
   );
   const postedCurrency = q.data?.postedCurrencies?.[0] ?? currency;
   const amount = (v: number) =>
-    selection.chart === 'returnMedicine' ? v + ' units' : reportMoney(v, postedCurrency);
+    unitCount(selection.chart) ? v + ' units' : reportMoney(v, postedCurrency);
   return (
     <SectionCard
       title={CHARTS[selection.chart] + ' · ' + selection.label}
@@ -415,7 +417,7 @@ function Figures({
   return (
     <VisualReportTable
       rows={q.data.rows}
-      unit={percent(chart) ? 'percent' : chart === 'returnMedicine' ? 'units' : 'money'}
+      unit={percent(chart) ? 'percent' : unitCount(chart) ? 'units' : 'money'}
       currency={postedCurrency}
       title={CHARTS[chart]}
       scope={branchLabel + ' · ' + rangeLabel(q.data.period)}

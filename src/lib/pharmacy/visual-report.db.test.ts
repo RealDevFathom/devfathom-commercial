@@ -64,6 +64,51 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
       });
     });
   });
+  it('counts a physical return with no refund and discloses its missing cost at the branch cutoff', async () => {
+    await scoped.withTenantDb(org, async (db) => {
+      const at = new Date('2026-11-27T23:30:00Z'); // 04:30 on the 28th in Karachi, still the 27th at this branch.
+      const ret = await db.pharmacySaleReturn.create({
+        data: {
+          originalSaleId: branch + '_sale',
+          branchId: branch,
+          actorId: 'sample',
+          reason: 'Damaged pack',
+          createdAt: at,
+        },
+      });
+      const location = await db.pharmacyStockLocation.create({
+        data: { branchId: branch, code: 'QUAR', name: 'Quarantine', kind: 'QUARANTINE' },
+      });
+      await db.pharmacyUnidentifiedReturnHold.create({
+        data: {
+          returnId: ret.id,
+          branchId: branch,
+          saleLineId: branch + '_line',
+          quarantineLocationId: location.id,
+          canonicalUnits: 2,
+          actorId: 'sample',
+          integrityDecision: 'QUARANTINE',
+          createdAt: at,
+        },
+      });
+      const input = { preset: 'custom' as const, custom: { from: '2026-11-27', to: '2026-11-27' } };
+      const units = await readVisualChart(db, branches, 'Asia/Karachi', {
+        ...input,
+        chart: 'returnMedicine',
+      });
+      expect(units.rows).toMatchObject([{ key: medicine, value: 2 }]);
+      const reasons = await readVisualChart(db, branches, 'Asia/Karachi', {
+        ...input,
+        chart: 'physicalReason',
+      });
+      expect(reasons.rows).toMatchObject([{ label: 'Damaged pack', value: 2 }]);
+      const profit = await readVisualChart(db, branches, 'Asia/Karachi', {
+        ...input,
+        chart: 'profitDay',
+      });
+      expect(profit.rows).toMatchObject([{ key: '2026-11-27', excluded: 1, value: null }]);
+    });
+  });
   it.each([...REPORT_CHARTS.Sales, ...REPORT_CHARTS.Returns, ...REPORT_CHARTS.Profit])(
     '%s reconciles and drills into only its branch and business day',
     async (chart) => {
@@ -115,6 +160,12 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
             _sum: { canonicalUnits: true },
           });
           expect(row).toMatchObject({ key: medicine, value: returned._sum.canonicalUnits });
+        } else if (chart === 'physicalReason') {
+          const units = await db.pharmacySaleReturnLine.aggregate({
+            where: { branchId: branch, saleReturn: { reason: 'Wrong pack' } },
+            _sum: { canonicalUnits: true },
+          });
+          expect(row).toMatchObject({ key: 'Wrong pack', value: units._sum.canonicalUnits });
         } else if (chart === 'salesPayment') {
           const tenders = await db.pharmacyTender.findMany({
             where: { branchId: branch, businessDate: new Date(day) },

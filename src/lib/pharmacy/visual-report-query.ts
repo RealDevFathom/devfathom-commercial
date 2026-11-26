@@ -8,6 +8,7 @@ import {
   type ReportPeriod,
   type ReportPreset,
 } from './visual-report-period';
+import { physicalReturnLines } from './visual-report-returns';
 import { profitFacts } from './visual-profit-query';
 import { REPORT_CHARTS, chartValue, type ChartId } from './visual-chart';
 import { completedLineRevenue } from './visual-report-sales-basis';
@@ -74,14 +75,13 @@ function chartFacts(chart: ChartId, zone: string) {
     t.id AS ref,concat('Payment · ',t."saleId") AS detail,t."amountMinor"::bigint AS amount,0::bigint AS base,0 AS excluded
     FROM bounds b JOIN pharmacy_tenders t ON t."organizationId"=${org} AND t."branchId"=b.id
     AND t."businessDate">=b.first AND t."businessDate"<b.stop`;
-  if (chart === 'returnMedicine')
-    return sql`SELECT l."medicineId" AS key,m."productName" AS label,r.id AS ref,
-    concat(m."productName",' · ',sr.reason) AS detail,r."canonicalUnits"::bigint AS amount,0::bigint AS base,0 AS excluded
-    FROM bounds b JOIN pharmacy_sale_returns sr ON sr."organizationId"=${org} AND sr."branchId"=b.id
-    AND sr."createdAt">=b.start_at AND sr."createdAt"<b.stop_at
-    JOIN pharmacy_sale_return_lines r ON r."organizationId"=sr."organizationId" AND r."branchId"=sr."branchId" AND r."returnId"=sr.id
-    JOIN pharmacy_sale_lines l ON l."organizationId"=r."organizationId" AND l."branchId"=r."branchId" AND l.id=r."saleLineId"
-    JOIN pharmacy_medicines m ON m."organizationId"=l."organizationId" AND m.id=l."medicineId"`;
+  if (chart === 'returnMedicine' || chart === 'physicalReason') {
+    const reason = sql`COALESCE(NULLIF(trim(reason),''),'No reason recorded')`;
+    return sql`SELECT ${chart === 'returnMedicine' ? sql`"medicineId"` : reason} AS key,
+      ${chart === 'returnMedicine' ? sql`"productName"` : reason} AS label,id AS ref,
+      concat("productName",' · ',reason) AS detail,units::bigint AS amount,0::bigint AS base,0 AS excluded
+      FROM (${physicalReturnLines}) physical`;
+  }
   if (chart === 'returnReason' || chart === 'returnsDay' || chart === 'returnRate') {
     const group =
       chart === 'returnReason'
