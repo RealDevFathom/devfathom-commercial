@@ -228,6 +228,7 @@ export class PharmacySaleError extends Error {
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
       | 'INVALID_SALE_UNIT'
+      | 'INVALID_PRICE'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'DISCOUNT_ABOVE_MAXIMUM'

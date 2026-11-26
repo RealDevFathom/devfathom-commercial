@@ -152,7 +152,7 @@ function unsealedCommand(multiplier: number, cashierId?: string) {
   };
 }
 
-function db() {
+function db(priorRefusal?: string) {
   const packLevel = {
     // One sealed pack counted directly in ten canonical tablets.
     findMany: vi.fn(async () => [
@@ -161,7 +161,13 @@ function db() {
     findFirst: vi.fn(async () => ({ id: 'pack_1' })),
   };
   return {
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (query: unknown) =>
+      priorRefusal &&
+      Array.isArray(query) &&
+      query.join('').includes('SELECT reason FROM pharmacy_offline_receipt_events')
+        ? [{ reason: priorRefusal }]
+        : []
+    ),
     // The sale's business day is read on the organisation's stored clock.
     organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
     // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
@@ -238,13 +244,7 @@ describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
   );
 
   it('requires supervisor review of the same receipt after a drawer refusal', async () => {
-    const target = db();
-    vi.mocked(target.$queryRaw).mockImplementation(async (query) =>
-      Array.isArray(query) &&
-      query.join('').includes('SELECT reason FROM pharmacy_offline_receipt_events')
-        ? [{ reason: 'DRAWER_NOT_OPEN' }]
-        : []
-    );
+    const target = db('DRAWER_NOT_OPEN');
     await expect(replay(target, command(10))).rejects.toMatchObject({
       code: 'DRAWER_NOT_OPEN',
       status: 409,
