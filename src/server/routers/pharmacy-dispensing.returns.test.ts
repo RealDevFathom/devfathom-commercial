@@ -103,6 +103,7 @@ describe('return verification queue branch assignment (DEV-897)', () => {
           branchId: 'b',
           active: true,
           branch: { organizationId: 'org', active: true },
+          user: { organizationId: 'org', status: 'ACTIVE' },
         },
       })
     );
@@ -128,6 +129,18 @@ describe('return verification queue branch assignment (DEV-897)', () => {
     f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ branchId: 'other' });
     await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).rejects.toMatchObject({
       code: 'NOT_FOUND',
+    });
+    expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
+  });
+
+  it('reads only the admitted branch for a dispensing administrator', async () => {
+    const f = fixture(true, ['pharmacy:dispense'], { role: 'ADMIN' });
+    await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).resolves.toHaveLength(2);
+    f.db.pharmacyReturnVerificationTask.findMany.mockClear();
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(f.caller.returnVerificationQueue({ branchId: 'other' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'This branch is unavailable.',
     });
     expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
   });

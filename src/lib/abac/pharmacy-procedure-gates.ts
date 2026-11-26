@@ -246,7 +246,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.returnVerificationQueue': {
-    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (or session ADMIN)",
+    gate: "capabilityProcedure('pharmacy:dispense') + active branch assignment or live tenant ownership",
     lines: ['dispense-prescriptions/see-returns-awaiting-verification'],
   },
   'pharmacyDispensing.reviewQueue': {

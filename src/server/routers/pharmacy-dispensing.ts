@@ -112,9 +112,7 @@ export const RX_SELF_SIGN_PIN_LOCKED =
 export const pharmacyDispensingRouter = router({
   // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
   // a verification task never grants permission to credit AVAILABLE inventory.
-  // DEV-897: the queue stays inside the caller's active branch assignment; only a
-  // session ADMIN of this organization may open any of its branches. A branch the
-  // caller may not open gets the same refusal as one that does not exist.
+  // A missing branch and one the caller cannot open have the same response.
   returnVerificationQueue: dispense
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
@@ -123,21 +121,13 @@ export const pharmacyDispensingRouter = router({
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { id: input.branchId, organizationId },
       });
-      if (!branch) throw new TRPCError({ code: 'NOT_FOUND' });
       const user = ctx.session!.user;
-      if (!(user.role === 'ADMIN' && user.organizationId === organizationId)) {
-        const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
-          where: {
-            organizationId,
-            userId: user.id,
-            branchId: input.branchId,
-            active: true,
-            branch: { organizationId, active: true },
-          },
-          select: { branchId: true },
-        });
-        if (assignment?.branchId !== input.branchId) throw new TRPCError({ code: 'NOT_FOUND' });
-      }
+      if (
+        !branch ||
+        user.organizationId !== organizationId ||
+        (await counterBranchAssignmentDenial(ctx.db, user, organizationId, input.branchId))
+      )
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'This branch is unavailable.' });
       return ctx.db.pharmacyReturnVerificationTask.findMany({
         where: { organizationId, branchId: input.branchId },
         orderBy: { requestedAt: 'asc' },

@@ -623,6 +623,30 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
 });
 
 describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
+  it('checks admission and tenant ownership before opening a return queue', async () => {
+    await tenant(async (db) => {
+      const queue = (who: string, branchId: string) =>
+        pharmacyDispensingRouter
+          .createCaller({ db, ...context(byId(who)) } as never)
+          .returnVerificationQueue({ branchId });
+      const missing = { code: 'NOT_FOUND', message: 'This branch is unavailable.' };
+      await expect(queue(ids.here, ids.branch)).resolves.toEqual([]);
+      await expect(queue(ids.here, ids.otherBranch)).rejects.toMatchObject(missing);
+      await expect(queue(ids.admin, ids.branch)).rejects.toMatchObject(missing);
+      await db.organizationRolePermission.create({
+        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+      });
+      try {
+        await expect(queue(ids.admin, ids.otherBranch)).resolves.toEqual([]);
+        await expect(queue(ids.admin, ids.foreignBranch)).rejects.toMatchObject(missing);
+      } finally {
+        await db.organizationRolePermission.deleteMany({
+          where: { organizationRoleId: `role_${ids.admin}`, capability: '*' },
+        });
+      }
+    });
+  });
+
   it('filters both reads by the reviewed sale line and protects the safety-only projection', async () => {
     const first = await ringUp();
     await tenant(async (db) => {
