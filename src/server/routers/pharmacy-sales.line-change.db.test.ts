@@ -248,7 +248,12 @@ let itemCount = 0;
 async function stockedItem(
   name: string,
   lots: Array<{ expiresAt: string; units: number; mrp: number }>,
-  flags: { rx?: boolean; openedUnits?: number; unitsPerPack?: number } = {}
+  flags: {
+    rx?: boolean;
+    openedUnits?: number;
+    unitsPerPack?: number;
+    boxOfThreeStrips?: boolean;
+  } = {}
 ): Promise<StockedItem> {
   itemCount += 1;
   const tag = `${itemCount}-${suffix}`;
@@ -261,7 +266,11 @@ async function stockedItem(
         rx: flags.rx ?? false,
         otc: !flags.rx,
         saleable: true,
-        presentations: { create: { presentation: 'Tablet, 10 per strip' } },
+        presentations: {
+          create: flags.boxOfThreeStrips
+            ? { dosageForm: 'Tablet', presentation: '3 x 10 tablets' }
+            : { presentation: 'Tablet, 10 per strip' },
+        },
       },
       include: { presentations: true },
     });
@@ -270,7 +279,7 @@ async function stockedItem(
         presentationId: medicine.presentations[0]!.id,
         versionGroupId: `strip-${tag}`,
         version: 1,
-        level: 'STRIP',
+        level: flags.boxOfThreeStrips ? 'BOX' : 'STRIP',
         unitsPerParent: flags.unitsPerPack ?? 10,
         effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
       },
@@ -584,6 +593,29 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
       'Returned as open units'
     );
   });
+  it('dispenses a ten-tablet strip from a sealed box, leaving the other two strips open', async () => {
+    const item = await stockedItem(
+      'Synthetic three-strip box',
+      [{ expiresAt: '2032-01-01', units: 60, mrp: 3000 }],
+      { openedUnits: 0, unitsPerPack: 30, boxOfThreeStrips: true }
+    );
+    const { saleId } = await bill(ids.cashier, [(id) => strip(item, id, 1)]);
+    expect((await cartOf(saleId)).lines[0]).toMatchObject({
+      saleUnit: 'STRIP',
+      canonicalUnits: 10,
+      lineTotalMinor: 1000,
+    });
+    expect(await balance(item)).toMatchObject({ onHandUnits: 50, sealedPacks: 1, looseUnits: 20 });
+    expect((await history(item)).filter((m) => m.kind === 'BREAK_PACK')).toEqual([
+      expect.objectContaining({
+        counterSaleId: saleId,
+        reason: 'Pack opened at the counter',
+        sealedPackDelta: -1,
+        looseUnitDelta: 30,
+        quantityUnits: 0,
+      }),
+    ]);
+  });
   it('reports the available units on shortage without writing movements', async () => {
     const item = await stock(10);
     const before = await history(item);
@@ -615,7 +647,24 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
     await withTenantDb(ids.org, (db) =>
       db.medicine.update({ where: { id: whole.medicineId }, data: { wholePackOnly: true } })
     );
-    await expect(bill(ids.cashier, [(id) => loose(whole, id, 1)])).rejects.toThrow();
+    const { searchCounterCatalog } = await import('@/lib/pharmacy/counter');
+    const catalogue = await withTenantDb(ids.org, async (db) => {
+      const medicine = await db.medicine.findFirstOrThrow({
+        where: { id: whole.medicineId },
+        select: { productName: true },
+      });
+      return searchCounterCatalog(
+        db,
+        { organizationId: ids.org, branchId: ids.branch },
+        { query: medicine.productName }
+      );
+    });
+    expect(catalogue.rows.find((row) => row.medicineId === whole.medicineId)?.saleUnits).toEqual([
+      expect.objectContaining({ kind: 'PACK', canonicalUnitsPerSaleUnit: 10 }),
+    ]);
+    await expect(bill(ids.cashier, [(id) => loose(whole, id, 1)])).rejects.toThrow(
+      'This item is sold only as a whole pack.'
+    );
     await bill(ids.cashier, [(id) => ({ ...strip(whole, id, 1), saleUnit: 'PACK' })]);
     expect(await balance(whole)).toMatchObject({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
     expect((await history(whole)).filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(0);

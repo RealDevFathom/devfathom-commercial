@@ -912,6 +912,19 @@ it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
   }
 );
 
+it('DEV-1046 preselects the linked payer when the bill has multiple eligible accounts', async () => {
+  const common = { creditLimitMinor: 100000, balanceMinor: 0 };
+  const loadKhataAccounts = vi.fn().mockResolvedValue([
+    { ...common, id: 'other', displayName: 'Other family' },
+    { ...common, id: 'linked', displayName: 'Linked payer', linkedPayer: true },
+  ]);
+  setup({ loadKhataAccounts });
+  chooseTender('KHATA');
+  expect(await screen.findByRole('option', { name: 'Linked payer' })).toHaveTextContent('Selected');
+  expect(screen.getByRole('option', { name: 'Other family' })).not.toHaveTextContent('Selected');
+  expect(screen.getByRole('combobox', { name: 'Family Khata account' })).toHaveFocus();
+});
+
 it('DEV-1046 searches by name, offers masked matches and selects with the keyboard without taking payment', async () => {
   const row = {
     id: 'eligible',
