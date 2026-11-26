@@ -309,6 +309,8 @@ it.runIf(url)(
             [tenant + '_issue', tenant === tenants[0] ? manager : member, tenant + '_pin']
           );
         }
+        // Validate the fixture's deferred constraints before the migration takes its DDL lock.
+        await db.query('SET CONSTRAINTS ALL IMMEDIATE');
         await db.query(body);
         await db.query("SET LOCAL app.is_platform_admin = 'false'");
         for (const tenant of tenants) {
