@@ -66,3 +66,28 @@ it('brings agreed credit and debt into a native khata balance without simulating
     )
   ).toBe(325);
 });
+
+it('reconciles each source row against persisted opening quantities, values and party balances', async () => {
+  const { reconciliation } = await import('@/lib/pharmacy/migration/abuzar-reconciliation');
+  const data = await readPreparedExport(await syntheticExport());
+  const result = reconciliation(data, 'B1', {
+    products: new Set(['A', 'B']),
+    stock: new Map([['S1', { units: 22, value: '4400' }]]),
+    balances: new Map([['K1', '1250']]),
+  });
+  expect(result.actual).toEqual({
+    products: 2,
+    stockUnits: '22',
+    stockValueMinor: '4400',
+    customerBalanceMinor: '1250',
+    supplierBalanceMinor: '0',
+  });
+  expect(result.differences).toContainEqual({
+    table: 'stock',
+    row: 2,
+    expectedUnits: '23',
+    actualUnits: '22',
+    expectedValueMinor: '4600',
+    actualValueMinor: '4400',
+  });
+});

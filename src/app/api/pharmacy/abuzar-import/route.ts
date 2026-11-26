@@ -1,4 +1,5 @@
 import { can, subjectFromSession } from '@/lib/abac';
+import { readReconciliation } from '@/lib/pharmacy/migration/abuzar-reconciliation';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { trustedRequestOrigin } from '@/lib/http-origin';
@@ -11,6 +12,7 @@ import { AbuzarReviewError, phaseInput, runAbuzarStep } from '@/lib/pharmacy/mig
 import { parsePreparedExport } from '../../../../../tools/abuzar-import/prepared';
 
 const input = phaseInput.extend({
+  step: z.enum([...phaseInput.shape.step.options, 'reconcile']),
   branchId: z.string().min(1).max(128),
   confirmed: z
     .string()
@@ -57,7 +59,7 @@ export async function POST(request: Request) {
     if (!branches.some((b) => b.id === branchId))
       return message(403, 'Choose an active branch in this workspace.');
     if (
-      options.step === 'catalogue' &&
+      (options.step === 'catalogue' || options.step === 'prices') &&
       !(await can(subjectFromSession(session.user), 'pharmacy:catalogue-edit', undefined, {
         db: ctx.db,
         source: 'REST',
@@ -76,13 +78,28 @@ export async function POST(request: Request) {
     } catch {
       return message(400, 'Check the export manifest, files, headers, row counts and checksums.');
     }
+    if (options.step === 'reconcile') {
+      const report = await ctx.db.$transaction(
+        (db) =>
+          readReconciliation(
+            db as typeof ctx.db,
+            organization.id,
+            branchId,
+            options.sourceBranch,
+            data
+          ),
+        { isolationLevel: 'RepeatableRead', timeout: 60000 }
+      );
+      return Response.json(report, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    const selected = phaseInput.parse(options);
     const report = await ctx.db.$transaction(
       (db) =>
         runAbuzarStep(
           db as typeof ctx.db,
           { organizationId: organization.id, branchId, actorId: session.user.id },
           data,
-          options,
+          selected,
           confirmed
         ),
       { isolationLevel: 'Serializable', timeout: 180000 }
