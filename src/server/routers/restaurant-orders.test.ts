@@ -31,6 +31,9 @@ const mocks = vi.hoisted(() => ({
   authenticateOperator: vi.fn(),
   operatorHasCapability: vi.fn(),
   withTenantDb: vi.fn(),
+  deviceFindFirst: vi.fn(),
+  addItem: vi.fn(),
+  moveTable: vi.fn(),
 }));
 
 // DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
@@ -82,6 +85,8 @@ vi.mock('@/lib/restaurant/orders', async () => {
     sendOrder: mocks.sendOrder,
     voidItem: mocks.voidItem,
     cancelOrder: mocks.cancelOrder,
+    addItem: mocks.addItem,
+    moveTable: mocks.moveTable,
   };
 });
 
@@ -98,6 +103,7 @@ const db = {
   restaurantKitchenTicket: { findMany: mocks.ticketFindMany },
   restaurantStaffProfile: { findMany: mocks.staffFindMany, findFirst: mocks.staffFindFirst },
   restaurantBranchAssignment: { findFirst: mocks.assignmentFindFirst },
+  restaurantRegisteredDevice: { findFirst: mocks.deviceFindFirst },
   $queryRawUnsafe: mocks.queryRawUnsafe,
   restaurantBranch: {
     findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
@@ -147,6 +153,10 @@ beforeEach(() => {
   mocks.authenticateOperator.mockResolvedValue({ ok: true, staffProfileId: 'mgr_1' });
   mocks.operatorHasCapability.mockResolvedValue(true);
   mocks.orderFindUnique.mockResolvedValue({ branchId: 'branch_1' });
+  // `dev_1` is an ACTIVE terminal of the order's branch unless a test says otherwise.
+  mocks.deviceFindFirst.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+    id: where.id,
+  }));
 });
 
 describe('read model (C10)', () => {
@@ -999,5 +1009,126 @@ describe('void/cancel approver authentication (H5)', () => {
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(mocks.voidItem).not.toHaveBeenCalled();
     });
+  });
+});
+
+// ── DEV-1055: who acted comes from the session, never from the request ───────
+
+describe('DEV-1055: manage commands take the actor from the signed-in session', () => {
+  beforeEach(() => {
+    mocks.closeOrder.mockResolvedValue({ orderId: 'o1', replayed: false });
+    mocks.addItem.mockResolvedValue({ itemId: 'i1', replayed: false });
+    mocks.moveTable.mockResolvedValue({ orderId: 'o1', replayed: false });
+    mocks.sendOrder.mockResolvedValue({
+      orderId: 'o1',
+      itemIds: [],
+      tickets: [],
+      replayed: false,
+    });
+    mocks.openOrder.mockResolvedValue({
+      orderId: 'o9',
+      orderNumber: 3,
+      businessDate: new Date('2026-08-19T00:00:00.000Z'),
+      replayed: false,
+    });
+  });
+
+  it('ignores a forged staff profile id and records the session staff profile', async () => {
+    const forged = { staffProfileId: 'staff_victim', deviceId: 'dev_1', idempotencyKey: 'k1' };
+
+    await caller().close({ orderId: 'o1', actor: forged });
+    await caller().send({ orderId: 'o1', actor: forged });
+    await caller().addItem({ orderId: 'o1', menuItemId: 'p1', quantity: 1, actor: forged });
+    await caller().moveTable({ orderId: 'o1', fromTableId: 't1', toTableId: 't2', actor: forged });
+    await caller().open({ branchId: 'branch_1', channel: 'DINE_IN', actor: forged });
+
+    const session = { staffProfileId: 'staff_1', deviceId: 'dev_1', idempotencyKey: 'k1' };
+    for (const command of [
+      mocks.closeOrder,
+      mocks.sendOrder,
+      mocks.addItem,
+      mocks.moveTable,
+      mocks.openOrder,
+    ]) {
+      expect(command).toHaveBeenCalledWith(db, expect.objectContaining({ actor: session }));
+    }
+    // The profile is resolved for the signed-in user at the order's own branch.
+    expect(mocks.staffFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: 'user_gm', organizationId: 'org_1', status: 'ACTIVE' },
+      })
+    );
+  });
+
+  it('accepts the envelope without any client-supplied staff id', async () => {
+    await caller().close({ orderId: 'o1', actor: { deviceId: 'dev_1', idempotencyKey: 'k1' } });
+    expect(mocks.closeOrder).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        actor: { staffProfileId: 'staff_1', deviceId: 'dev_1', idempotencyKey: 'k1' },
+      })
+    );
+  });
+
+  it('fails closed without an active session staff profile', async () => {
+    mocks.staffFindMany.mockResolvedValue([]);
+    await expect(caller().close({ orderId: 'o1', actor: ACTOR })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.closeOrder).not.toHaveBeenCalled();
+  });
+
+  it("refuses a branch-bound manager acting on another branch's order", async () => {
+    // orders:manage but neither a profile/assignment at the order branch nor
+    // the org-wide restaurant:configure.
+    mocks.can.mockImplementation(async (_subject, action) => action === 'orders:manage');
+
+    await expect(caller().close({ orderId: 'o1', actor: ACTOR })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You are not authorized for this restaurant branch.',
+    });
+    await expect(
+      caller().open({ branchId: 'branch_2', channel: 'DINE_IN', actor: ACTOR })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.closeOrder).not.toHaveBeenCalled();
+    expect(mocks.openOrder).not.toHaveBeenCalled();
+
+    // The same manager is allowed at an explicitly assigned branch.
+    mocks.assignmentFindFirst.mockResolvedValue({ id: 'assign_1' });
+    await expect(caller().close({ orderId: 'o1', actor: ACTOR })).resolves.toMatchObject({
+      orderId: 'o1',
+    });
+  });
+
+  it("refuses a terminal that is not an active device of the order's branch", async () => {
+    mocks.deviceFindFirst.mockResolvedValue(null);
+
+    await expect(
+      caller().close({
+        orderId: 'o1',
+        actor: { deviceId: 'dev_other_branch', idempotencyKey: 'k1' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().cancel({
+        orderId: 'o1',
+        reason: 'Walkout',
+        actor: { deviceId: 'dev_other_branch', idempotencyKey: 'k1' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.deviceFindFirst).toHaveBeenCalledWith({
+      where: { id: 'dev_other_branch', branchId: 'branch_1', status: 'ACTIVE', revokedAt: null },
+      select: { id: true },
+    });
+    expect(mocks.closeOrder).not.toHaveBeenCalled();
+    expect(mocks.cancelOrder).not.toHaveBeenCalled();
+  });
+
+  it('reports a missing order before resolving any actor', async () => {
+    mocks.orderFindUnique.mockResolvedValue(null);
+    await expect(caller().close({ orderId: 'nope', actor: ACTOR })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+    });
+    expect(mocks.closeOrder).not.toHaveBeenCalled();
   });
 });
