@@ -1,5 +1,6 @@
 'use client';
 
+import { LateOfflineCashLines } from './cash-shift-report-view';
 import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -814,6 +815,13 @@ function DayCloseForm({
         )}
       </SectionCard>
       {/* DEV-958B: shift close, then day close. The day's shifts, and what they add up to. */}
+      {data.lateOfflineCash?.length ? (
+        <LateOfflineCashLines
+          rows={data.lateOfflineCash}
+          currency={currency}
+          timeZone={data.timezone}
+        />
+      ) : null}
       {data.shifts?.length && data.shiftTotals ? (
         <SectionCard title="Shifts on this day" titleLevel={2}>
           <div className="space-y-4">

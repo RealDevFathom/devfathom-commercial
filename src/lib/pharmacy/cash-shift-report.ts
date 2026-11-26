@@ -132,6 +132,7 @@ export function computeCashShiftFigures(source: CashShiftSource): CashShiftFigur
 
 /** The shift report frozen on the shift row at its close, and shown again from there. */
 export type CashShiftReport = CashShiftFigures & {
+  lateOfflineCash?: import('./late-offline-cash').LateOfflineCash[];
   shiftId: string;
   sequence: number;
   drawerSessionId: string;

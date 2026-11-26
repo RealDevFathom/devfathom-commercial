@@ -1478,8 +1478,9 @@ export async function lockOpenPharmacyDrawer(db: ScopedDb, scope: LedgerScope, d
   return drawer;
 }
 
-/** The manager accounts for the cash physically in this counter's drawer during review.
- * The shift trigger locks and attributes the movement; journal and rejection commit together.
+/**
+ * Locate the drawer and shift that covered the sealed sale time under the same day lock
+ * used by shift/day close. Closed counts are immutable; late cash is a separate entry.
  */
 export async function recordRejectedOfflineCash(
   db: ScopedDb,
@@ -1489,33 +1490,60 @@ export async function recordRejectedOfflineCash(
     commandId: string;
     receiptNumber: number;
     amountMinor: number;
+    soldAt: Date;
   }
 ) {
   assertPositiveMinor(input.amountMinor);
-  const drawer = await lockOpenPharmacyDrawer(db, scope, input.deviceId);
-  await requirePharmacyDayOpen(db, scope, drawer.businessDate);
-  const movement = await withCashShiftRefusal(
-    db.pharmacyDrawerMovement.create({
-      data: {
-        organizationId: scope.organizationId,
-        drawerSessionId: drawer.id,
-        kind: 'REJECTED_OFFLINE_CASH',
-        amountMinor: input.amountMinor,
-        reason: `Offline receipt ${input.receiptNumber}`,
-        actorId: scope.actorId,
-      },
-    })
-  );
+  const clock = await readPharmacyDayClock(db, scope);
+  const soldDay = pharmacyBusinessDate(clock, input.soldAt);
+  await lockPharmacyDay(db, scope, soldDay);
+  const [drawer] = await db.$queryRaw<
+    { id: string; cashShifts: boolean; status: string; businessDate: Date }[]
+  >`SELECT id,"cashShifts",status,"businessDate" FROM pharmacy_drawer_sessions
+    WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "deviceId"=${input.deviceId}
+    AND "openedAt"<=${input.soldAt} AND ("closedAt" IS NULL OR "closedAt">=${input.soldAt}) ORDER BY "openedAt" DESC,id LIMIT 1 FOR UPDATE`;
+  const [shift] = drawer?.cashShifts
+    ? await db.$queryRaw<
+        { id: string; status: string }[]
+      >`SELECT id,status FROM pharmacy_cash_shifts
+    WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "drawerSessionId"=${drawer.id}
+    AND "openedAt"<=${input.soldAt} AND ("closedAt" IS NULL OR "closedAt">=${input.soldAt}) ORDER BY sequence DESC LIMIT 1 FOR UPDATE`
+    : [];
+  const recordedAt = new Date();
+  let sourceLineId = input.commandId;
+  if (
+    drawer?.status === 'OPEN' &&
+    (!drawer.cashShifts || shift?.status === 'OPEN') &&
+    !(await pharmacyDayClosedForTrading(db, scope, drawer.businessDate))
+  ) {
+    const movement = await withCashShiftRefusal(
+      db.pharmacyDrawerMovement.create({
+        data: {
+          organizationId: scope.organizationId,
+          drawerSessionId: drawer.id,
+          kind: 'REJECTED_OFFLINE_CASH',
+          amountMinor: input.amountMinor,
+          actorId: scope.actorId,
+          reason: `Offline receipt ${input.receiptNumber}`,
+        },
+      })
+    );
+    sourceLineId = movement.id;
+  } else {
+    await db.$queryRaw`SELECT set_config('app.current_branch_id',${scope.branchId},true)`;
+    await db.$executeRaw`INSERT INTO pharmacy_late_offline_cash ("commandId","organizationId","branchId","deviceId","shiftId","receiptNumber","amountMinor","soldAt","recordedAt","recordedDay")
+      VALUES (${input.commandId},${scope.organizationId},${scope.branchId},${input.deviceId},${shift?.id ?? null},${input.receiptNumber},${input.amountMinor},${input.soldAt},${recordedAt},${pharmacyBusinessDate(clock, recordedAt)})`;
+  }
   const leg = {
     amountMinor: input.amountMinor,
     branchId: scope.branchId,
-    sourceLineId: movement.id,
+    sourceLineId,
   };
   await postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH',
     sourceId: input.commandId,
     branchId: scope.branchId,
-    occurredAt: movement.createdAt,
+    occurredAt: recordedAt,
     description: 'Cash from a rejected offline sale',
     idempotencyKey: `rejected-offline-cash:${input.commandId}`,
     lines: [

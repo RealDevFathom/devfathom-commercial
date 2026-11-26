@@ -79,6 +79,36 @@ function TypeTable({
  * cash expected and counted, the over or short, and who opened and closed it, when. The figures
  * come from the server (frozen on the shift at its close); nothing is worked out here.
  */
+export function LateOfflineCashLines({
+  rows,
+  currency,
+  timeZone,
+}: {
+  rows: NonNullable<CashShiftReport['lateOfflineCash']>;
+  currency: string;
+  timeZone: string;
+}) {
+  return (
+    <section className="space-y-1">
+      <h4 className="font-semibold text-text-strong">Late cash from rejected offline sales</h4>
+      <ul>
+        {rows.map((row) => (
+          <li key={row.commandId} className="text-sm text-text-body">
+            Receipt {row.receiptNumber} · {currency} {formatMinor(row.amountMinor)} · Sold{' '}
+            {new Date(row.soldAt).toLocaleString('en-GB', {
+              timeZone: workspaceTimezone(timeZone),
+            })}{' '}
+            · Recorded{' '}
+            {new Date(row.recordedAt).toLocaleString('en-GB', {
+              timeZone: workspaceTimezone(timeZone),
+            })}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function CashShiftReportView({
   report,
   status,
@@ -115,6 +145,13 @@ export function CashShiftReportView({
       aria-labelledby={`shift-report-${report.shiftId}`}
       className="space-y-3 rounded-[var(--radius-sm)] border border-border-subtle bg-surface-card p-4"
     >
+      {report.lateOfflineCash?.length ? (
+        <LateOfflineCashLines
+          rows={report.lateOfflineCash}
+          currency={currency}
+          timeZone={timeZone}
+        />
+      ) : null}
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 space-y-0.5">
           <Heading

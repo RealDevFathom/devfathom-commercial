@@ -617,6 +617,65 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
       });
     }
   );
+  it('shows rejected cash as a dated late receipt on its closed shift and recording day', async () => {
+    const counter = await setup();
+    const scope = scopeOf(counter.fixture);
+    const { closePharmacyCashShift, readPharmacyCashShiftReport } =
+      await import('@/lib/pharmacy/cash-shifts');
+    const { readPharmacyClose, closePharmacyDay } = await import('@/lib/pharmacy/day-close');
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const command = counter.chain.seal(counter.command);
+    const shift = await inOrg(ORG_A, (db) =>
+      db.pharmacyCashShift.findFirstOrThrow({ where: { deviceId: counter.fixture.deviceId } })
+    );
+    const frozen = await inOrg(ORG_A, async (db) => {
+      const result = await closePharmacyCashShift(
+        db,
+        scope,
+        { shiftId: shift.id, countedCashMinor: 0 },
+        { actorIsManager: true }
+      );
+      const preview = await readPharmacyClose(db, scope, shift.businessDate);
+      await closePharmacyDay(db, scope, {
+        businessDate: shift.businessDate,
+        sourceHash: preview.totals.sourceHash,
+        counts: [{ drawerSessionId: shift.drawerSessionId, countedCashMinor: 0 }],
+        varianceNote: '',
+      });
+      return result.report;
+    });
+    const response = await counter.call(
+      'reject',
+      { command, reason: 'Late cash after close' },
+      {
+        'idempotency-key': command.idempotencyKey,
+        'x-command-signature': signPharmacyCommand(
+          scope,
+          counter.fixture.deviceId,
+          command,
+          counter.fixture.deviceSecret
+        ),
+      }
+    );
+    expect(response.status, JSON.stringify(await response.json())).toBe(200);
+    await inOrg(ORG_A, async (db) => {
+      const report = await readPharmacyCashShiftReport(db, scope, shift.id, {
+        actorIsManager: true,
+      });
+      expect(report.cash).toEqual(frozen.cash);
+      expect(report.lateOfflineCash).toMatchObject([
+        {
+          receiptNumber: command.leasedReceipt.receiptNumber,
+          amountMinor: command.amountMinor,
+          shiftId: shift.id,
+          soldAt: command.leasedReceipt.originalSaleAt,
+        },
+      ]);
+      const day = await readPharmacyClose(db, scope, shift.businessDate);
+      expect(day.lateOfflineCash).toEqual(report.lateOfflineCash);
+      expect(day.close?.reopen).toBeNull();
+    });
+  });
   it('audits a synthetic failed seal, quarantines only its position, and books its signed successor', async () => {
     const counter = await setup();
     const sealed = counter.chain.seal(counter.command);

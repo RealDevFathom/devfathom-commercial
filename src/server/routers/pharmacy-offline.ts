@@ -1770,6 +1770,7 @@ async function quarantineReceipt(
   });
   if (command.action === 'CASH_OTC_SALE') {
     await recordRejectedOfflineCash(db, scope, {
+      soldAt: new Date(command.leasedReceipt.originalSaleAt),
       deviceId,
       commandId: stored.id,
       receiptNumber: command.leasedReceipt.receiptNumber,
@@ -2269,6 +2270,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           );
           if (command.action === 'CASH_OTC_SALE') {
             await recordRejectedOfflineCash(db, ctx.scope, {
+              soldAt: new Date(command.leasedReceipt.originalSaleAt),
               deviceId: device.id,
               commandId: recorded.command.id,
               receiptNumber: command.leasedReceipt.receiptNumber,

@@ -66,3 +66,4 @@
 20261126051000_rejected_offline_cash
 20261126051001_offline_reconnect_limit
 20261126060000_offline_cash_resolution
+20261126061000_offline_cash_late_entries

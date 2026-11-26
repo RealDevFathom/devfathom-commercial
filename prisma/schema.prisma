@@ -1947,6 +1947,7 @@ enum PharmacyCashShiftStatus {
 /// float, closed with a counted amount; the report is frozen at the close and the row never
 /// changes again (database guard). One open shift per drawer.
 model PharmacyCashShift {
+  lateOfflineCash PharmacyLateOfflineCash[]
   id                     String                   @id @default(cuid())
   organizationId         String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId               String
@@ -15341,6 +15342,7 @@ enum PharmacyOfflineCommandStatus {
 /// device in one indexed lookup before it knows the tenant. Revocation is a
 /// state, never a deletion.
 model PharmacyRegisteredDevice {
+  lateOfflineCash PharmacyLateOfflineCash[]
   id                         String               @id @default(cuid())
   organizationId             String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                   String
@@ -15404,6 +15406,26 @@ model PharmacyOfflineSnapshot {
 /// and reused on every attempt, so a lost response resolves to one server-side
 /// effect. The identity columns are immutable and no row is ever deleted; only
 /// the replay bookkeeping advances, and only away from PENDING.
+model PharmacyLateOfflineCash {
+  commandId String @id
+  organizationId String
+  branchId String
+  deviceId String
+  shiftId String?
+  receiptNumber Int
+  amountMinor Int
+  soldAt DateTime
+  recordedAt DateTime
+  recordedDay DateTime @db.Date
+  command PharmacyOfflineCommand @relation(fields:[organizationId,commandId],references:[organizationId,id],onDelete:NoAction,onUpdate:NoAction)
+  shift PharmacyCashShift? @relation(fields:[organizationId,shiftId],references:[organizationId,id],onDelete:NoAction,onUpdate:NoAction)
+  device PharmacyRegisteredDevice @relation(fields:[organizationId,branchId,deviceId],references:[organizationId,branchId,id],onDelete:NoAction,onUpdate:NoAction)
+  @@unique([organizationId,commandId],map:"late_offline_cash_org_command")
+  @@index([organizationId,branchId,recordedDay],map:"pharmacy_late_cash_day")
+  @@index([organizationId,shiftId],map:"pharmacy_late_cash_shift")
+  @@map("pharmacy_late_offline_cash")
+}
+
 model PharmacyOfflineReceiptEvent {
   id String @id
   organizationId String
@@ -15424,6 +15446,7 @@ model PharmacyOfflineReceiptEvent {
 }
 
 model PharmacyOfflineCommand {
+  lateCash PharmacyLateOfflineCash?
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId        String

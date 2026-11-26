@@ -453,6 +453,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         commandId,
         deviceId: device,
         receiptNumber: 12,
+        soldAt: new Date(),
         amountMinor: 130,
       })
     );
