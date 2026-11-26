@@ -1,7 +1,6 @@
 import { can, subjectFromSession } from '@/lib/abac';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
-import { actorIsPharmacyOwner } from './procurement-access';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // DEV-295: accept canonical colon-delimited grants beside legacy dotted grants so migrated
@@ -51,7 +50,7 @@ type CounterOperator = Parameters<typeof subjectFromSession>[0];
  * DEV-831: the offline counter's operator gate is the online counter's. The
  * actor needs the canonical `pharmacy:counter` grant, an active membership of
  * this organization with a deny-wins ALLOW in the counter family, and an
- * active assignment to the counter's branch (or live tenant ownership).
+ * active assignment to the counter's branch (or the session ADMIN exception).
  * It is evaluated live on every request, so a revoked grant or assignment
  * stops an enrolled terminal at once. Returns null when allowed, else a reason.
  */
@@ -91,7 +90,7 @@ export async function counterOperatorDenial(
 }
 
 /**
- * Branch-assignment gate alone: an active tenant owner may act in any branch of
+ * Branch-assignment gate alone: an organization ADMIN may act in any branch of
  * their organization, everyone else needs an active assignment to an active
  * branch. Managers who lease receipt blocks, grant lot quota or reject offline
  * commands pass `admin:access` instead of the counter grant, so they use this
@@ -103,17 +102,7 @@ export async function counterBranchAssignmentDenial(
   organizationId: string,
   branchId: string
 ): Promise<'branch_forbidden' | null> {
-  async function ownsBranch() {
-    if (!(await actorIsPharmacyOwner(db, organizationId, user.id))) return false;
-    return Boolean(
-      await db.pharmacyBranch.findFirst({
-        where: { id: branchId, organizationId },
-        select: { id: true },
-      })
-    );
-  }
-  // Check the usual admission path first. A session role only orders the live checks.
-  if (user.role === 'ADMIN' && (await ownsBranch())) return null;
+  if (user.role === 'ADMIN') return null;
   const assignment = await db.pharmacyBranchAssignment.findFirst({
     where: {
       organizationId,
@@ -121,13 +110,10 @@ export async function counterBranchAssignmentDenial(
       branchId,
       active: true,
       branch: { organizationId, active: true },
-      user: { organizationId, status: 'ACTIVE' },
     },
     select: { branchId: true },
   });
-  if (assignment?.branchId === branchId) return null;
-  if (user.role !== 'ADMIN' && (await ownsBranch())) return null;
-  return 'branch_forbidden';
+  return assignment ? null : 'branch_forbidden';
 }
 
 const DRAWER_MANAGER_CAPABILITIES = ['pharmacy:manage', 'pharmacy.manage'] as const;

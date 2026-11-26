@@ -9,7 +9,7 @@ import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { readOwnPinState } from '@/lib/pharmacy/own-pin';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
-import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
+import { clinicalBranchAssignmentDenial } from '@/lib/pharmacy/clinical-branch-access';
 import {
   assertRxSelfSignAllowed,
   declaredSoloMetadata,
@@ -40,7 +40,7 @@ async function assertSaleLineBranch(ctx: TRPCContext, saleLineId: string) {
   annotateAuditBranch(ctx, line?.branchId);
   if (!line) throw new TRPCError({ code: 'NOT_FOUND', message: 'This sale line was not found.' });
   if (
-    await counterBranchAssignmentDenial(
+    await clinicalBranchAssignmentDenial(
       ctx.db as unknown as ScopedDb,
       ctx.session!.user,
       organizationId,
@@ -125,7 +125,7 @@ export const pharmacyDispensingRouter = router({
       if (
         !branch ||
         user.organizationId !== organizationId ||
-        (await counterBranchAssignmentDenial(ctx.db, user, organizationId, input.branchId))
+        (await clinicalBranchAssignmentDenial(ctx.db, user, organizationId, input.branchId))
       )
         throw new TRPCError({ code: 'NOT_FOUND', message: 'This branch is unavailable.' });
       return ctx.db.pharmacyReturnVerificationTask.findMany({
@@ -295,7 +295,7 @@ export const pharmacyDispensingRouter = router({
       if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const user = ctx.session!.user;
       const db = ctx.db as unknown as ScopedDb;
-      if (await counterBranchAssignmentDenial(db, user, organizationId, input.branchId))
+      if (await clinicalBranchAssignmentDenial(db, user, organizationId, input.branchId))
         return { lines: [], pin: null };
       const saleLines = await ctx.db.pharmacySaleLine.findMany({
         where: { organizationId, branchId: input.branchId, saleId: input.saleId },

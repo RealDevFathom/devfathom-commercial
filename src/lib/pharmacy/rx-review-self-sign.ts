@@ -3,7 +3,7 @@ import 'server-only';
 import { can, subjectFromSession } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { counterBranchAssignmentDenial } from './counter-capability';
+import { clinicalBranchAssignmentDenial } from './clinical-branch-access';
 import { RX_ON_DUTY_DECLARATION, type RxDeclaredSoloSignOff } from './rx-solo-shift';
 import { readRxSoloShiftPolicy } from './rx-solo-shift-policy';
 
@@ -59,7 +59,7 @@ export type RxSelfSignScope = { organizationId: string; branchId: string; actorI
  *     on leave neither signs nor counts as someone else who could sign;
  *   - holds `pharmacy:dispense` (deny wins);
  *   - may act at the branch: an active assignment to it, or a tenant owner of the organization
- *     (`counterBranchAssignmentDenial`, the counter's branch rule).
+ *     (`clinicalBranchAssignmentDenial`, the counter's branch rule).
  * A suspended staff profile does not change it: that profile carries the PIN, and a review is
  * decided from the pharmacist queue without one.
  */
@@ -112,7 +112,7 @@ export async function rxReviewSignerRowDenial(
     }))
   )
     return 'NO_RIGHT';
-  if (await counterBranchAssignmentDenial(db, row, scope.organizationId, scope.branchId))
+  if (await clinicalBranchAssignmentDenial(db, row, scope.organizationId, scope.branchId))
     return 'BRANCH';
   return null;
 }
