@@ -17,28 +17,31 @@ it('sends the in-memory till proof only for pharmacy sale mutations and clears i
   const proof = { sessionToken: token, device: { id: 'till' } };
   vi.stubGlobal(
     'fetch',
-    vi.fn(async () => Response.json(proof))
+    vi.fn(async (path) =>
+      Response.json(path.endsWith('/approval-proof') ? { proof: 'test-attestation' } : proof)
+    )
   );
-  expect(counterApprovalHeaders(mutation)).toEqual({});
+  expect(await counterApprovalHeaders(mutation)).toEqual({});
   const session = await establishCounterSession();
-  expect(counterApprovalHeaders(mutation)).toEqual({});
+  expect(await counterApprovalHeaders(mutation)).toEqual({});
   activateCounterApprovalSession(enrolled, session.sessionToken);
-  expect(counterApprovalHeaders(mutation)).toEqual({
+  expect(await counterApprovalHeaders(mutation)).toEqual({
     'x-pharmacy-approval-device': proof.device.id,
     'x-terminal-session': proof.sessionToken,
+    'x-pharmacy-approval-proof': 'test-attestation',
   });
-  expect(counterApprovalHeaders([{ type: 'query', path: 'pharmacySales.tenderOutcome' }])).toEqual(
-    {}
-  );
-  expect(counterApprovalHeaders([{ type: 'mutation', path: 'profile.update' }])).toEqual({});
+  expect(
+    await counterApprovalHeaders([{ type: 'query', path: 'pharmacySales.tenderOutcome' }])
+  ).toEqual({});
+  expect(await counterApprovalHeaders([{ type: 'mutation', path: 'profile.update' }])).toEqual({});
   vi.spyOn(Date, 'now').mockReturnValueOnce(expiresAt);
-  expect(counterApprovalHeaders(mutation)).toEqual({});
+  expect(await counterApprovalHeaders(mutation)).toEqual({});
   activateCounterApprovalSession(enrolled, token);
   clearCounterApprovalSession();
-  expect(counterApprovalHeaders(mutation)).toEqual({});
+  expect(await counterApprovalHeaders(mutation)).toEqual({});
   activateCounterApprovalSession({ ...enrolled, branchId: 'another' }, token);
-  expect(counterApprovalHeaders(mutation)).toEqual({});
+  expect(await counterApprovalHeaders(mutation)).toEqual({});
   activateCounterApprovalSession(enrolled, token);
   await unbindCounterBrowser();
-  expect(counterApprovalHeaders(mutation)).toEqual({});
+  expect(await counterApprovalHeaders(mutation)).toEqual({});
 });

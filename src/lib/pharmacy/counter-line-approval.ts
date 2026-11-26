@@ -18,7 +18,11 @@ import { rateLimit, refundRateLimit, type RateLimitResult } from '@/lib/rate-lim
 import { counterBranchAssignmentDenial } from './counter-capability';
 import { CounterApprovalChoice } from './counter-approval-choice';
 import { timingSafeEqual } from 'node:crypto';
-import { counterChoiceProof, verifyToken } from './counter-terminal-session';
+import {
+  counterChoiceProof,
+  validApprovalDeviceProof,
+  verifyToken,
+} from './counter-terminal-session';
 import { pharmacyDeviceSecretExpired } from './device-secret-expiry';
 import {
   spendApproverPinGuessTypedByAnother,
@@ -38,7 +42,7 @@ import {
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
-type CounterSession = { deviceId: string; sessionToken: string };
+type CounterSession = { deviceId: string; sessionToken: string; deviceProof?: string };
 export type CounterApprovalInput =
   | CounterApprovalPin
   | {
@@ -187,6 +191,7 @@ async function admittedToApprovalBranch(db: ScopedDb, user: Subject, scope: Ledg
 }
 
 async function verifiedCounterId(db: ScopedDb, scope: LedgerScope, counter: CounterSession) {
+  if (!validApprovalDeviceProof(counter.sessionToken, counter.deviceProof)) return null;
   const device = await db.pharmacyRegisteredDevice.findFirst({
     where: {
       id: counter.deviceId,

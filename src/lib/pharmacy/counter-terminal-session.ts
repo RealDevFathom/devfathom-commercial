@@ -58,6 +58,22 @@ export function counterChoiceProof(
   );
 }
 
+// Issued only after the counter API authenticates the device secret and verifies
+// this session. Its MAC covers the complete actor/device/credential-bound token.
+export function issueApprovalDeviceProof(sessionToken: string) {
+  const expiresAt = Date.now() + 60_000;
+  return `${expiresAt}.${sessionMac(JSON.stringify(['approval-possession', sessionToken, expiresAt]))}`;
+}
+
+export function validApprovalDeviceProof(sessionToken: string, proof?: string) {
+  const parts = /^(\d{13})\.([a-f0-9]{64})$/.exec(proof ?? '');
+  if (!parts || Number(parts[1]) <= Date.now()) return false;
+  const expected = sessionMac(
+    JSON.stringify(['approval-possession', sessionToken, Number(parts[1])])
+  );
+  return timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(parts[2]!, 'hex'));
+}
+
 export function establishToken(ctx: {
   scope: LedgerScope;
   deviceId: string;

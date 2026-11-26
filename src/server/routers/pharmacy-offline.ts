@@ -1,6 +1,7 @@
 import {
   CounterTransportError,
   establishToken,
+  issueApprovalDeviceProof,
   verifyToken,
 } from '@/lib/pharmacy/counter-terminal-session';
 import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
@@ -1139,11 +1140,12 @@ export async function replayCounterCommand(
 }
 
 export type CounterOperation =
-  'establish' | 'snapshot' | 'replay' | 'lease' | 'quota' | 'reject' | 'renew';
+  'establish' | 'approval-proof' | 'snapshot' | 'replay' | 'lease' | 'quota' | 'reject' | 'renew';
 
 /** DEV-957 phase 2: what an expired device secret may no longer be used for. */
 const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set([
   'snapshot',
+  'approval-proof',
   'lease',
   'quota',
 ]);
@@ -1206,6 +1208,8 @@ export function counterAuditEntry(
   outcome: unknown
 ): CounterAuditEntry | null {
   switch (operation) {
+    case 'approval-proof':
+      return null;
     case 'establish':
       return {
         action: 'openCounterSession',
@@ -1467,10 +1471,15 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             },
           };
         }
-        verifyToken(request.headers.get('x-terminal-session') ?? '', {
+        const sessionToken = request.headers.get('x-terminal-session') ?? '';
+        verifyToken(sessionToken, {
           ...ctx,
           credentialHash: hashDeviceSecret(ctx.deviceSecret),
         });
+        if (operation === 'approval-proof') {
+          z.object({}).strict().parse(body);
+          return { proof: issueApprovalDeviceProof(sessionToken) };
+        }
         if (operation === 'renew') {
           // DEV-957 phase 2: the counter rotates its own secret while it is still valid.
           // The new secret goes back once, for this browser's non-extractable signing key

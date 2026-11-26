@@ -109,19 +109,48 @@ export function counterApprovalSessionActive() {
   return Boolean(approvalSession && approvalSession.expiresAt > Date.now());
 }
 
-export function counterApprovalHeaders(
+const approvalMutations = new Set([
+  'pharmacySales.addLine',
+  'pharmacySales.applyBillDiscount',
+  'pharmacySales.discountBillLine',
+  'pharmacySales.tender',
+  'pharmacySales.discardTenderAttempt',
+]);
+
+export async function counterApprovalHeaders(
   operations: readonly { type: string; path: string }[]
-): Record<string, string> {
+): Promise<Record<string, string>> {
   if (!counterApprovalSessionActive()) clearCounterApprovalSession();
   if (
     !approvalSession ||
-    !operations.some((op) => op.type === 'mutation' && op.path.startsWith('pharmacySales.'))
+    !operations.some((op) => op.type === 'mutation' && approvalMutations.has(op.path))
   )
     return {};
-  return {
-    'x-pharmacy-approval-device': approvalSession.deviceId,
-    'x-terminal-session': approvalSession.sessionToken,
-  };
+  const session = approvalSession;
+  try {
+    const result = await counterPost(
+      '/api/pharmacy/counter/approval-proof',
+      {},
+      session.sessionToken
+    );
+    if (
+      session !== approvalSession ||
+      !counterApprovalSessionActive() ||
+      !result ||
+      typeof result !== 'object' ||
+      !('proof' in result) ||
+      typeof result.proof !== 'string'
+    )
+      return {};
+    return {
+      'x-pharmacy-approval-device': session.deviceId,
+      'x-terminal-session': session.sessionToken,
+      'x-pharmacy-approval-proof': result.proof,
+    };
+  } catch {
+    // The mutation may still use a named approval or the operator's own permission.
+    return {};
+  }
 }
 
 /** Sets the httpOnly device cookie for the secret enrol/rotate just returned. */

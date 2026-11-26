@@ -1974,7 +1974,8 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
             })
           )
         ).resolves.toMatchObject({ approvedByUserId: s.manager });
-      const { establishToken } = await import('./counter-terminal-session');
+      const { establishToken, issueApprovalDeviceProof } =
+        await import('./counter-terminal-session');
       const { device, secret } = await tenant(s.owner, (db) =>
         devices.enrollPharmacyCounter(db, s.owner, { name: 'Named proof fixture' })
       );
@@ -1984,6 +1985,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         deviceSecret: secret,
       });
       for (const token of [
+        establishToken({ scope, deviceId: device.id, deviceSecret: secret }),
         otherBranchToken,
         (() => {
           vi.useFakeTimers({ toFake: ['Date'] });
@@ -2000,7 +2002,12 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
             authorizeCounterApproval(db, scope, 'DISCOUNT', {
               staffProfileId: profile.id,
               pin: MANAGER_PIN,
-              counter: { deviceId: device.id, sessionToken: token },
+              counter: {
+                deviceId: device.id,
+                sessionToken: token,
+                deviceProof:
+                  token === otherBranchToken ? issueApprovalDeviceProof(token) : undefined,
+              },
             })
           )
         ).resolves.toMatchObject({ approvedByUserId: s.manager });
@@ -2030,7 +2037,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     const { authorizeCounterApproval, CounterApprovalDenied } =
       await import('./counter-line-approval');
     const { CounterApprovalChoice } = await import('./counter-approval-choice');
-    const { establishToken } = await import('./counter-terminal-session');
+    const { establishToken, issueApprovalDeviceProof } = await import('./counter-terminal-session');
     const { encryptSecret } = await import('@/lib/secret-crypto');
     const { generateTotpSecret } = await import('@/lib/totp');
     const scope = s.as(s.cashier);
@@ -2045,10 +2052,14 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         })
       );
     await enroll(s.manager);
-    const sessionFor = (actor: Scope) => ({
-      deviceId: device.id,
-      sessionToken: establishToken({ scope: actor, deviceId: device.id, deviceSecret }),
-    });
+    const sessionFor = (actor: Scope) => {
+      const sessionToken = establishToken({ scope: actor, deviceId: device.id, deviceSecret });
+      return {
+        deviceId: device.id,
+        sessionToken,
+        deviceProof: issueApprovalDeviceProof(sessionToken),
+      };
+    };
     const counter = sessionFor(scope);
     const at = new Date();
     vi.useFakeTimers({ toFake: ['Date'] });
@@ -2080,7 +2091,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         tenant(scope, (db) =>
           authorizeCounterApproval(db, scope, 'DISCOUNT', {
             pin: codeAt(secret, at),
-            counter: { ...counter, sessionToken: 'invalid-fixture' },
+            counter: { ...counter, deviceProof: undefined },
           })
         )
       ).rejects.toThrow(/Choose the approver by name/);
