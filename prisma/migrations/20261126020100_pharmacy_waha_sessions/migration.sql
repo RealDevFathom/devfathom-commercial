@@ -2,7 +2,7 @@ BEGIN;
 SET LOCAL lock_timeout = '5s';
 
 CREATE TABLE IF NOT EXISTS pharmacy_waha_sessions (
-  "organizationId" text PRIMARY KEY REFERENCES organizations(id),
+  "organizationId" text PRIMARY KEY REFERENCES organizations(id) ON DELETE CASCADE,
   "sessionName" text NOT NULL UNIQUE,
   selector text NOT NULL UNIQUE,
   "encryptedApiKey" text NOT NULL,

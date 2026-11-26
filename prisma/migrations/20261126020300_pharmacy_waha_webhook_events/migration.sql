@@ -1,7 +1,7 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 CREATE TABLE IF NOT EXISTS pharmacy_waha_events (
-  "organizationId" text NOT NULL REFERENCES pharmacy_waha_sessions("organizationId"),
+  "organizationId" text NOT NULL REFERENCES pharmacy_waha_sessions("organizationId") ON DELETE CASCADE,
   "eventKey" text NOT NULL,
   "requestKey" text NOT NULL,
   "semanticKey" text NOT NULL,
