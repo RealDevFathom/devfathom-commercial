@@ -546,18 +546,20 @@ async function qaShots(
     focus,
     widths = QA_KEYBOARD_WIDTHS,
     dir = QA_DIR,
+    reducedMotion = 'reduce',
   }: {
     /** A control inside the panel: it takes the keyboard focus for the shot. */
     focus: Locator;
     widths?: readonly number[];
     dir?: string;
+    reducedMotion?: 'reduce' | 'no-preference';
   }
 ) {
   const original = page.viewportSize();
   for (const width of widths) {
     await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
     for (const theme of ['light', 'dark'] as const) {
-      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await page.emulateMedia({ colorScheme: theme, reducedMotion });
       await page.evaluate(
         (value) => document.documentElement.setAttribute('data-theme', value),
         theme
@@ -2125,6 +2127,13 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   const restore = page.getByRole('dialog', { name: 'Confirm this controlled stock restoration' });
   await restore.getByLabel('Approving pharmacist').selectOption(PHARMACY_E2E.adminStaffProfileId);
   await restore.locator('input[type=password]').fill(PHARMACY_E2E.adminPin);
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    await qaShots(page, 'controlled-void-' + reducedMotion, {
+      focus: restore.getByLabel('Approving pharmacist'),
+      widths: QA_STATE_WIDTHS,
+      reducedMotion,
+    });
+  }
   await pressControl(restore.getByRole('button', { name: 'Confirm void' }));
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
@@ -2865,7 +2874,13 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
           )
         ).rows[0].failedAttempts
       );
-    await qaShots(page, 'controlled-own-confirmation', { focus: pin, widths: QA_STATE_WIDTHS });
+    for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+      await qaShots(page, 'controlled-own-confirmation-' + reducedMotion, {
+        focus: pin,
+        widths: QA_STATE_WIDTHS,
+        reducedMotion,
+      });
+    }
     const before = await strikes();
     await pin.fill('0000');
     await pressControl(submit);
@@ -2914,6 +2929,32 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
     });
     expect(records.rows[0].quantityCanonicalUnits).toBeGreaterThan(0);
     expect(records.rows[0].runningBalance).toBeGreaterThanOrEqual(0);
+
+    const guard = await db.query(
+      `SELECT tgdeferrable, tginitdeferred FROM pg_trigger WHERE tgname='pharmacy_require_controlled_sale_register'
+       AND tgrelid='pharmacy_sale_lines'::regclass AND tgenabled='O'`
+    );
+    expect(guard.rows).toEqual([{ tgdeferrable: true, tginitdeferred: true }]);
+
+    // Verify the deferred line rule independently of the register-insert guard.
+    await db.query('BEGIN');
+    try {
+      await db.query(
+        `INSERT INTO pharmacy_sale_lines
+           SELECT (jsonb_populate_record(NULL::pharmacy_sale_lines, to_jsonb(l) ||
+             jsonb_build_object('id',$2::text,'idempotencyKey',$2::text))).*
+           FROM pharmacy_sale_lines l WHERE l.id=$1`,
+        [records.rows[0].metadata.saleLineId, randomUUID()]
+      );
+      await expect(
+        db.query('SET CONSTRAINTS pharmacy_require_controlled_sale_register IMMEDIATE')
+      ).rejects.toMatchObject({
+        code: '23514',
+        message: 'controlled sale line requires its approved register entries',
+      });
+    } finally {
+      await db.query('ROLLBACK');
+    }
 
     // Reuse the synthetic row's otherwise valid clinical and stock details. The database
     // must refuse a new solo row specifically for a missing or reused approval.
