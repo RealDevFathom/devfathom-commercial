@@ -1,3 +1,4 @@
+import { authorizeSupplierPayment } from './accounts/supplier-payment-approval';
 import { pharmacyCalendarDayRange } from './business-day';
 import type {
   Currency,
@@ -142,7 +143,8 @@ export async function postBookkeepingTransaction(
   db: ScopedDb,
   scope: BookkeepingScope,
   input: PostBookkeepingInput,
-  options: NativeApSettlementCapability & OperationalPostingOption = {}
+  options: NativeApSettlementCapability &
+    OperationalPostingOption & { saveSupplierDraft?: true } = {}
 ) {
   if (isNativeApSettlementTransaction(input) && !options.nativeApSettlement)
     throw new PharmacyBookkeepingError('NATIVE_AP_SETTLEMENT');
@@ -165,7 +167,43 @@ export async function postBookkeepingTransaction(
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
     include: { allocations: true },
   });
-  if (replay) return replay;
+  if (replay) {
+    if (
+      replay.branchId !== scope.branchId ||
+      (options.saveSupplierDraft &&
+        (replay.kind !== 'SUPPLIER_PAYMENT' ||
+          replay.createdByUserId !== scope.actorId ||
+          replay.amountMinor !== input.amountMinor ||
+          replay.reference !== input.reference ||
+          replay.occurredAt.getTime() !== input.occurredAt.getTime() ||
+          replay.supplierDraftFunding !== (input.fundingAccount ?? 'BANK') ||
+          replay.counterpartyName !== (input.counterpartyName ?? null) ||
+          replay.memo !== (input.memo ?? null) ||
+          replay.bankReference !== (input.bankReference ?? null) ||
+          JSON.stringify(
+            replay.allocations
+              .map(({ sourceKind, sourceId, sourceReference, amountMinor }) => [
+                sourceKind,
+                sourceId,
+                sourceReference,
+                amountMinor,
+              ])
+              .sort()
+          ) !==
+            JSON.stringify(
+              allocations
+                .map(({ sourceKind, sourceId, sourceReference, amountMinor }) => [
+                  sourceKind,
+                  sourceId,
+                  sourceReference,
+                  amountMinor,
+                ])
+                .sort()
+            )))
+    )
+      throw new PharmacyBookkeepingError('INVALID_STATE');
+    return replay;
+  }
 
   const transaction = await db.pharmacyBookkeepingTransaction.create({
     data: {
@@ -183,6 +221,9 @@ export async function postBookkeepingTransaction(
       chequeNumber: input.chequeNumber,
       chequeDueAt: input.chequeDueAt,
       chequeStatus: input.kind === 'CHEQUE' ? (input.chequeStatus ?? 'PDC') : 'NONE',
+      ...(options.saveSupplierDraft
+        ? { supplierDraftFunding: input.fundingAccount ?? 'BANK' }
+        : {}),
       createdByUserId: scope.actorId,
       allocations: {
         create: allocations,
@@ -190,9 +231,19 @@ export async function postBookkeepingTransaction(
     },
     include: { allocations: true },
   });
+  if (options.saveSupplierDraft) return transaction;
+  return postRecordedTransaction(db, scope, input, transaction.id);
+}
+
+async function postRecordedTransaction(
+  db: ScopedDb,
+  scope: BookkeepingScope,
+  input: PostBookkeepingInput,
+  transactionId: string
+) {
   const entry = await postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_BOOKKEEPING_TRANSACTION',
-    sourceId: transaction.id,
+    sourceId: transactionId,
     description: `${input.kind.replaceAll('_', ' ').toLowerCase()} ${input.reference}`,
     occurredAt: input.occurredAt,
     idempotencyKey: `bookkeeping:${input.idempotencyKey}`,
@@ -201,10 +252,55 @@ export async function postBookkeepingTransaction(
     lines: bookkeepingJournalLines(input).map((line) => ({ ...line, branchId: scope.branchId })),
   });
   return db.pharmacyBookkeepingTransaction.update({
-    where: { id: transaction.id },
+    where: { id: transactionId },
     data: { status: 'POSTED', postedAt: new Date(), journalEntryId: entry.id },
     include: { allocations: true },
   });
+}
+
+export async function postSupplierPaymentDraft(
+  db: ScopedDb,
+  scope: BookkeepingScope,
+  draftId: string,
+  approval: { pin?: string; approverEmail?: string }
+) {
+  await lockPharmacyLedgerScope(db, scope);
+  const draft = await db.pharmacyBookkeepingTransaction.findFirst({
+    where: {
+      id: draftId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      kind: 'SUPPLIER_PAYMENT',
+    },
+    include: { allocations: true },
+  });
+  if (
+    !draft ||
+    (draft.supplierDraftFunding !== 'BANK' && draft.supplierDraftFunding !== 'CASH') ||
+    isNativeApSettlementTransaction(draft)
+  )
+    throw new PharmacyBookkeepingError('NOT_FOUND');
+  if (draft.status === 'POSTED' && draft.journalEntryId) return draft;
+  if (draft.status !== 'PENDING' || draft.journalEntryId)
+    throw new PharmacyBookkeepingError('INVALID_STATE');
+  await assertPeriodOpen(db, scope, draft.occurredAt);
+  await authorizeSupplierPayment(
+    db,
+    scope,
+    {
+      recordedBy: draft.createdByUserId,
+      amountMinor: draft.amountMinor,
+      reference: draft.reference,
+      action: 'pharmacyFinance.postSupplierPaymentDraft',
+    },
+    approval
+  );
+  return postRecordedTransaction(
+    db,
+    scope,
+    { ...draft, fundingAccount: draft.supplierDraftFunding },
+    draft.id
+  );
 }
 
 /**

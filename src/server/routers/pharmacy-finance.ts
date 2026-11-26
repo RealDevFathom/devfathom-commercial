@@ -26,6 +26,7 @@ import {
   createSettlementBatch,
   PharmacyBookkeepingError,
   postBookkeepingTransaction,
+  postSupplierPaymentDraft,
   reconcileBankLine,
   reconcileSettlementBankLine,
   reopenAccountingPeriod,
@@ -541,7 +542,36 @@ export const pharmacyFinanceRouter = router({
       try {
         const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          postBookkeepingTransaction(txDb(tx), scoped, input)
+          postBookkeepingTransaction(
+            txDb(tx),
+            scoped,
+            input,
+            input.kind === 'SUPPLIER_PAYMENT' ? { saveSupplierDraft: true } : {}
+          )
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  postSupplierPaymentDraft: bookkeepingMutation
+    .input(
+      z
+        .object({
+          branchId: id,
+          draftId: id,
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scoped = await scope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          postSupplierPaymentDraft(txDb(tx), scoped, input.draftId, { pin: input.pin })
         );
       } catch (error) {
         fail(error);

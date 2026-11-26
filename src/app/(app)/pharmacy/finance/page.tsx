@@ -193,6 +193,21 @@ export default async function PharmacyFinancePage({
           fundingAccount: field(data, 'fundingAccount') === 'CASH' ? 'CASH' : 'BANK',
           allocations: [],
         });
+        redirect(
+          destination(
+            branchId,
+            kind === 'SUPPLIER_PAYMENT'
+              ? 'Supplier payment draft saved for approval.'
+              : 'Transaction posted and journal balanced.'
+          )
+        );
+      }
+      if (action === 'postSupplierDraft') {
+        await actionCaller.postSupplierPaymentDraft({
+          branchId,
+          draftId: field(data, 'draftId'),
+          pin: field(data, 'pin') || undefined,
+        });
         redirect(destination(branchId, 'Transaction posted and journal balanced.'));
       }
       if (action === 'reverse') {
@@ -293,9 +308,13 @@ export default async function PharmacyFinancePage({
       redirect(
         destination(
           branchId || branch.id,
-          isPharmacyActionForbidden(error)
-            ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
-            : pharmacyActionErrorMessage('finance'),
+          error instanceof Error &&
+            (error.message === 'Someone else must pay an invoice you recorded.' ||
+              error.message === 'Enter the approving administrator’s PIN or authenticator code.')
+            ? error.message
+            : isPharmacyActionForbidden(error)
+              ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
+              : pharmacyActionErrorMessage('finance'),
           'error'
         )
       );
@@ -749,7 +768,28 @@ export default async function PharmacyFinancePage({
                       />
                     </TableCell>
                     <TableCell>
-                      {item.status === 'POSTED' && isCounterKhataRepayment(item) ? (
+                      {item.status === 'PENDING' &&
+                      item.kind === 'SUPPLIER_PAYMENT' &&
+                      item.supplierDraftFunding ? (
+                        <form action={perform} className="grid gap-2">
+                          <input type="hidden" name="action" value="postSupplierDraft" />
+                          <input type="hidden" name="branchId" value={branch.id} />
+                          <input type="hidden" name="draftId" value={item.id} />
+                          <label className="text-sm">
+                            Administrator approval PIN or code (when required)
+                            <Input
+                              name="pin"
+                              type="password"
+                              autoComplete="off"
+                              inputMode="numeric"
+                              maxLength={8}
+                            />
+                          </label>
+                          <Button type="submit" disabled={!workspace.mayManageAccounts}>
+                            Post supplier payment
+                          </Button>
+                        </form>
+                      ) : item.status === 'POSTED' && isCounterKhataRepayment(item) ? (
                         <span className="text-sm text-text-muted">
                           Counter khata receipt: also settled the khata and drawer, so it is not
                           reversed here.

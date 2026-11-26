@@ -4920,6 +4920,7 @@ model PharmacyBookkeepingTransaction {
   chequeStatus     PharmacyChequeStatus      @default(NONE)
   bankReference    String?
   idempotencyKey   String
+  supplierDraftFunding String?
   createdByUserId  String
   postedAt         DateTime?
   reversedAt       DateTime?

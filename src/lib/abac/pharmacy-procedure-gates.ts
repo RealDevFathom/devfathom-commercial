@@ -333,6 +333,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: `${bookkeepingGate} + finance:manage`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
+  'pharmacyFinance.postSupplierPaymentDraft': {
+    gate: `${bookkeepingGate} + finance:manage + independent payer or administrator self-approval`,
+    lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
+  },
   'pharmacyFinance.publishTaxProfile': {
     gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],

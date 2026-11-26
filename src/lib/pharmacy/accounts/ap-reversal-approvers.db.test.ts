@@ -959,7 +959,7 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
       await checked('read', (api) =>
         api.financialStatements({ branchId, from: from.toISOString(), to: at.toISOString() })
       );
-      const txn = await checked('manage', (api) =>
+      const draft = await checked('manage', (api) =>
         api.post({
           branchId,
           reference: id('bpay'),
@@ -969,6 +969,25 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
           idempotencyKey: id('bpost'),
         })
       );
+      expect(draft.status).toBe('PENDING');
+      const command = { branchId, draftId: draft.id };
+      const makerApi = router.createCaller(contextFor(maker));
+      if (maker.role !== 'ADMIN')
+        await expect(makerApi.postSupplierPaymentDraft(command)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Someone else must pay an invoice you recorded.',
+        });
+      const payer = maker.role === 'ADMIN' ? maker : employeeJobPayer;
+      const pay = () =>
+        router
+          .createCaller(contextFor(payer))
+          .postSupplierPaymentDraft({
+            ...command,
+            ...(payer.role === 'ADMIN' ? { pin: PIN } : {}),
+          });
+      const txn = await pay();
+      expect(txn.status).toBe('POSTED');
+      expect((await pay()).journalEntryId).toBe(txn.journalEntryId);
       const { journalEntryLookupRouter } = await import('./journal-entry-lookup');
       const entry = await checkFinance(
         (ctx) =>
