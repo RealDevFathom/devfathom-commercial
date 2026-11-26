@@ -1155,36 +1155,36 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyOffline.counters': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch)',
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.enroll': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch)',
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch)',
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.preparationPlan': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only, the quota grant itself is the manager-only counter route',
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch); read only, the quota grant itself is the manager-only counter route',
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.offlineCashSelling': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only (the switch is off and not available until sending offline sales is ready)',
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch); read only (the switch is off and not available until sending offline sales is ready)',
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.receiptNumberGaps': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only',
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch); read only',
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.recordUnsentOfflineSale': {
-    gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); records a manager's account of one unsent offline sale a revoked counter kept, audited; books nothing",
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch); records a manager's account of one unsent offline sale a revoked counter kept, audited; books nothing",
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.revoke': {
-    gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); releases the counter's open stock quotas in the same transaction, audited",
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch); releases the counter's open stock quotas in the same transaction, audited",
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.rotate': {
-    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); moves the credential expiry 30 days on; a counter ever issued a receipt lease also requires its current device session, bound to the same actor and branch',
-    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+    gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (tenant ownership or an active assignment to the branch); moves the credential expiry 30 days on; a counter ever issued a receipt lease also requires its current device session, bound to the same actor and branch',
+    none: 'admin:access and branch admission required',
   },
   'pharmacyOffline.setOfflineCashSelling': {
     gate: 'adminProcedure (admin:access) + managedBranch + isPharmacistCheckPolicyOwner (owner only); switching offline cash selling on is refused in this phase (PRECONDITION_FAILED) for everyone',
@@ -1444,7 +1444,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyPrescriptions.captureRefillReminder': {
-    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial) + the fill's dispensing branch (DEV-962; ADMIN excepted)",
+    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial) + the fill's dispensing branch (DEV-962; only a tenant-owner ADMIN is excepted)",
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.counterPatientPanel': {
@@ -1886,7 +1886,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.commandCentre': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue hidden for branch-scoped Managers',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue limited to admitted branches and hidden for branch-scoped Managers',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'operational-reports/see-stock-alert-lost',
