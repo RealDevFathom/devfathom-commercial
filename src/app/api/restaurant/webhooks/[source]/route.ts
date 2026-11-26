@@ -8,6 +8,7 @@ import {
   recordInboundWebhook,
   WebhookAdmissionError,
   webhookEnvelopeSchema,
+  verifyWebhookProvider,
 } from '@/lib/restaurant/webhook-inbox';
 import { terminalEventSchema } from '@/lib/restaurant/terminal-payments';
 import { freshTerminalTimestamp } from '@/lib/restaurant/terminal-webhook-keys';
@@ -78,7 +79,7 @@ export async function POST(
   try {
     rawBody = await readBoundedBody(request, 256 * 1024);
   } catch {
-    return NextResponse.json({ error: 'Invalid request body.' }, { status: 400 });
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
   }
   if (rawBody === null) return NextResponse.json({ error: 'Body too large.' }, { status: 413 });
   const timestamp = request.headers.get(TIMESTAMP_HEADER);
@@ -95,8 +96,32 @@ export async function POST(
   try {
     body = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+    // An explicit config header can authenticate even malformed JSON.
+    body = undefined;
   }
+  const selector = z
+    .object({ eventType: z.string(), payload: z.object({ terminalId: z.string() }) })
+    .safeParse(body);
+  const providerSignature = {
+    rawBody,
+    timestamp,
+    signature,
+    configId: request.headers.get('x-webhook-config-id'),
+    terminalId:
+      selector.success && selector.data.eventType.startsWith('terminal.')
+        ? selector.data.payload.terminalId
+        : null,
+  };
+  const db = createTenantDb(organization.id);
+  try {
+    await verifyWebhookProvider(db, source.data, providerSignature);
+  } catch (error) {
+    if (error instanceof WebhookAdmissionError)
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
+  if (body === undefined)
+    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
   const parsed = webhookEnvelopeSchema.safeParse(body);
   if (!parsed.success) {
@@ -114,19 +139,13 @@ export async function POST(
   }
   let result;
   try {
-    result = await recordInboundWebhook(createTenantDb(organization.id), {
+    result = await recordInboundWebhook(db, {
       source: source.data,
       externalEventId: parsed.data.externalEventId,
       eventType: parsed.data.eventType ?? null,
       payload: parsed.data.payload as unknown as Prisma.InputJsonValue,
       verificationStatus: 'VERIFIED',
-      providerSignature: {
-        rawBody,
-        timestamp,
-        signature,
-        configId: request.headers.get('x-webhook-config-id'),
-        terminalId: terminalEvent?.data.terminalId ?? null,
-      },
+      providerSignature,
     });
   } catch (error) {
     if (error instanceof WebhookAdmissionError) {

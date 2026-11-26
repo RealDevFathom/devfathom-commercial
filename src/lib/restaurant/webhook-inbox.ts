@@ -171,8 +171,12 @@ type WebhookSignature = {
   rawBody: Uint8Array;
 };
 
-async function lockAndVerifyProvider(tx: ScopedDb, input: RecordInboundWebhookInput) {
-  const signed = input.providerSignature;
+async function resolveWebhookProvider(
+  tx: ScopedDb,
+  source: string,
+  signed: WebhookSignature | undefined,
+  lock: boolean
+) {
   // The tenant id comes only from the host-bound RLS transaction. A terminal
   // payload and an explicit config header must resolve to the same row.
   const rows = await tx.$queryRaw<(SigningConfig & { organizationId: string })[]>`
@@ -180,23 +184,41 @@ async function lockAndVerifyProvider(tx: ScopedDb, input: RecordInboundWebhookIn
            "previousSigningSecretExpiresAt", "legacySigningCutoff"
     FROM restaurant_terminal_provider_configs
     WHERE "organizationId" = current_setting('app.current_organization_id')
-      AND source = ${input.source} AND mode = 'WEBHOOK'
+      AND source = ${source} AND mode = 'WEBHOOK'
       ${signed?.configId != null ? Prisma.sql`AND id = ${signed.configId}` : Prisma.empty}
       ${signed?.terminalId != null ? Prisma.sql`AND "externalTerminalId" = ${signed.terminalId}` : Prisma.empty}
-    LIMIT ${signed ? 2 : 1} FOR SHARE
+    LIMIT ${signed ? 2 : 1} ${lock ? Prisma.sql`FOR SHARE` : Prisma.empty}
   `;
   const [config] = rows;
-  if (!config) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
-  if (!signed) return; // Internal callers supply their previously verified admission result.
-  if (rows.length !== 1) throw new WebhookAdmissionError(401, 'Ambiguous webhook configuration.');
+  if (!signed) {
+    if (!config) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
+    return;
+  }
+  if (!config || rows.length !== 1)
+    throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
   const verification = verifyProviderSignature(
     config,
-    input.source,
+    source,
     signed.rawBody,
     signed.signature,
     signed.timestamp
   );
   if (verification === 'FAILED') throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
+  return { config, verification };
+}
+
+export async function verifyWebhookProvider(
+  db: ScopedDb,
+  source: string,
+  signed: WebhookSignature
+) {
+  await resolveWebhookProvider(db, source, signed, false);
+}
+
+async function lockAndVerifyProvider(tx: ScopedDb, input: RecordInboundWebhookInput) {
+  const result = await resolveWebhookProvider(tx, input.source, input.providerSignature, true);
+  if (!result) return;
+  const { config, verification } = result;
   if (verification === 'LEGACY') {
     // Explicit tx means audit failure rolls back admission. Duplicates are acceptances too.
     await recordAudit(

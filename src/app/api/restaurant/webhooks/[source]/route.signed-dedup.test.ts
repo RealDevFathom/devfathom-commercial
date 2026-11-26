@@ -16,6 +16,7 @@ const state = vi.hoisted(() => ({
   seq: 0,
   configured: true,
   scoped: false,
+  ambiguous: false,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -90,6 +91,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       $queryRaw: async (_query: TemplateStringsArray, source?: string) =>
         state.configured && source === 'card-provider'
           ? [
+              ...(state.ambiguous ? [{ id: 'other' }] : []),
               {
                 id: orgId + '-cfg',
                 organizationId: orgId,
@@ -175,6 +177,7 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     state.seq = 0;
     state.configured = true;
     state.scoped = false;
+    state.ambiguous = false;
     vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'isolated-test-key');
     mocks.processTerminalEvent.mockReset();
   });
@@ -224,6 +227,28 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
       ]);
     }
   );
+
+  it('returns byte-identical refusals for missing, ambiguous and mismatched signers before envelope validation', async () => {
+    const headers = {
+      'x-webhook-signature': '0'.repeat(64),
+      'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+    };
+    for (const [configured, ambiguous] of [
+      [false, false],
+      [true, true],
+      [true, false],
+    ] as const) {
+      state.configured = configured;
+      state.ambiguous = ambiguous;
+      const response = await post('{"invalid":true}', headers);
+      expect(response.status).toBe(401);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        Buffer.from('{"error":"Invalid webhook signature."}')
+      );
+    }
+    expect(state.inbox.size).toBe(0);
+    expect(state.jobs).toHaveLength(0);
+  });
 
   it('accepts a scoped receipt on its own host and refuses the same receipt on a second host', async () => {
     state.scoped = true;
@@ -285,7 +310,7 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
 
   it('refuses even a correctly signed terminal envelope for an unconfigured provider', async () => {
     state.configured = false;
-    expect((await postSignedTerminal()).status).toBe(404);
+    expect((await postSignedTerminal()).status).toBe(401);
     expect(state.inbox.size).toBe(0);
     expect(state.jobs).toHaveLength(0);
   });
