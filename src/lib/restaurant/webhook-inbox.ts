@@ -191,6 +191,7 @@ async function resolveWebhookProvider(
       AND source = ${source} AND mode = 'WEBHOOK'
       ${signed?.configId != null ? Prisma.sql`AND id = ${signed.configId}` : Prisma.empty}
       ${signed?.terminalId != null ? Prisma.sql`AND "externalTerminalId" = ${signed.terminalId}` : Prisma.empty}
+    ORDER BY id
     LIMIT ${signed ? 2 : 1} ${lock ? Prisma.sql`FOR SHARE` : Prisma.empty}
   `;
   const [config] = rows;
@@ -198,9 +199,16 @@ async function resolveWebhookProvider(
     if (!config) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
     return;
   }
+  // Pre-migration non-terminal senders did not send a configuration id. Multiple
+  // eligible rows represent one shared signer until this business/source retires it.
+  const sharedSource =
+    rows.length > 1 &&
+    signed.configId === null &&
+    signed.terminalId === null &&
+    rows.every((row) => row.encryptedSigningSecret === null && row.legacyRetired === false);
   if (
     !config ||
-    rows.length !== 1 ||
+    (rows.length !== 1 && !sharedSource) ||
     (config.encryptedSigningSecret === null && config.legacyRetired !== false)
   )
     throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
@@ -212,7 +220,7 @@ async function resolveWebhookProvider(
     signed.timestamp
   );
   if (verification === 'FAILED') throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
-  return { config, verification };
+  return { config, verification, sharedSource };
 }
 
 export async function verifyWebhookProvider(
@@ -226,7 +234,7 @@ export async function verifyWebhookProvider(
 async function lockAndVerifyProvider(tx: ScopedDb, input: RecordInboundWebhookInput) {
   const result = await resolveWebhookProvider(tx, input.source, input.providerSignature, true);
   if (!result) return;
-  const { config, verification } = result;
+  const { config, verification, sharedSource } = result;
   if (verification === 'LEGACY') {
     // Explicit tx means audit failure rolls back admission. Duplicates are acceptances too.
     await recordAudit(
@@ -237,8 +245,8 @@ async function lockAndVerifyProvider(tx: ScopedDb, input: RecordInboundWebhookIn
         category: 'TERMINAL',
         operation: 'EXECUTE',
         action: 'restaurant.webhook.legacy_key_accepted',
-        targetType: 'RestaurantTerminalProviderConfig',
-        targetId: config.id,
+        targetType: sharedSource ? 'Organization' : 'RestaurantTerminalProviderConfig',
+        targetId: sharedSource ? config.organizationId : config.id,
         metadata: { source: input.source, externalEventId: input.externalEventId },
       },
       tx

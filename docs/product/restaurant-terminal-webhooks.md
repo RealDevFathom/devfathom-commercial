@@ -17,8 +17,12 @@ A new verified event returns 202 and queues one job. A duplicate returns 200. Ke
 
 ## Shared-key changeover
 
-Until a configuration gets its first key, a sender may use the existing `RESTAURANT_TERMINAL_WEBHOOK_SECRET` and the original UTF-8 prefix `timestamp + '.' + source + '.'` followed by the exact raw bytes. Each successful legacy acceptance, including a duplicate, writes a `restaurant.webhook.legacy_key_accepted` audit entry with the business, configuration and event ID.
+Until the first configuration for this business and source gets a key, a sender may use the existing `RESTAURANT_TERMINAL_WEBHOOK_SECRET` and the original UTF-8 prefix `timestamp + '.' + source + '.'` followed by the exact raw bytes. Each successful legacy acceptance, including a duplicate, writes a `restaurant.webhook.legacy_key_accepted` audit entry with the business, source and event ID. If one configuration identifies the signer, the entry also identifies that configuration.
 
 Set `RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF` to an absolute ISO 8601 timestamp with a timezone on every receiver, then restart or redeploy those instances. At that instant shared signatures expire. An invalid value refuses shared signatures. When unset, the window ends 30 days after this migration was deployed. Restarting or adding a provider does not extend the window.
 
 Provisioning any key immediately and permanently retires shared-key signing for the entire business and source, including sibling terminals.
+
+## Non-terminal senders
+
+A non-terminal sender can omit `x-webhook-config-id` if the business and source have one enabled webhook configuration. Existing non-terminal senders using the shared key can also omit it when several enabled configurations still share that signer. After the first key is provisioned, a non-terminal sender with multiple enabled configurations must send its own configuration ID in `x-webhook-config-id` and sign with that configuration’s key and ID. An ambiguous scoped delivery receives HTTP 401.

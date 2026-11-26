@@ -476,17 +476,19 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
       .update(timestamp + '.' + distinctSource + '.')
       .update(rawBody)
       .digest('hex');
-    const verify = () =>
+    const verify = (configId: string | null = sibling.id) =>
       verifyWebhookProvider(db, distinctSource, {
-        configId: sibling.id,
+        configId,
         terminalId: null,
         timestamp,
         rawBody,
         signature,
       });
     await expect(verify()).resolves.toBeUndefined();
+    await expect(verify(null)).resolves.toBeUndefined();
     await rotateTerminalWebhookKey(db, orgA, first.branchId, first.id);
     await expect(verify()).rejects.toMatchObject({ status: 401 });
+    await expect(verify(null)).rejects.toMatchObject({ status: 401 });
     await db.restaurantTerminalProviderConfig.delete({ where: { id: first.id } });
     await expect(verify()).rejects.toMatchObject({ status: 401 });
   });
