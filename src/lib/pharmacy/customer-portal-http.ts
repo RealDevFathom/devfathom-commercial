@@ -4,6 +4,7 @@ import { after } from 'next/server';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { trustedRequestOrigin } from '@/lib/http-origin';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -126,7 +127,7 @@ function readCookie(request: Request, name: string): string | null {
 }
 
 function sessionCookie(request: Request, value: string, expires: Date) {
-  const secure = new URL(request.url).protocol === 'https:' ? '; Secure' : '';
+  const secure = trustedRequestOrigin(request).startsWith('https:') ? '; Secure' : '';
   return `${PORTAL_SESSION_COOKIE}=${value}; Path=/; HttpOnly; SameSite=Lax; Expires=${expires.toUTCString()}${secure}`;
 }
 

@@ -60,6 +60,30 @@ describe('customer portal tenant and browser origin', () => {
     expect(await portalContext(new Request('http://app:3000', { headers }))).toBeTruthy();
   });
 
+  it('marks the session cookie Secure after verification through the TLS proxy', async () => {
+    const { verifyPortalSignIn } = await import('./customer-portal');
+    vi.mocked(verifyPortalSignIn).mockResolvedValueOnce({
+      ok: true,
+      sessionToken: 'fixture-session',
+      expiresAt: new Date(Date.now() + 60_000),
+    });
+    const request = new Request('http://app:3000/api/pharmacy/portal/verify', {
+      headers: {
+        host: 'app:3000',
+        'x-forwarded-host': 'tenant.example:8443',
+        'x-forwarded-proto': 'https',
+        origin: 'https://tenant.example:8443',
+      },
+    });
+    const context = await portalContext(request);
+    const response = await context!.handle('verify', {
+      token: 'pcl_' + '3'.repeat(26),
+      otp: '000001',
+    });
+    expect(response.status).toBe(200);
+    expect(response.headers.get('Set-Cookie')).toMatch(/; Secure(?:;|$)/);
+  });
+
   it('refuses an unrelated forwarded authority on a direct public request', async () => {
     const headers = {
       host: 'tenant.example',
