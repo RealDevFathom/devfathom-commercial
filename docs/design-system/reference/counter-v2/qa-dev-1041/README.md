@@ -11,17 +11,17 @@ Each contact sheet contains five rows (375 × 812, 768 × 900, 1024 × 900, 1366
 | Payment sheet, cash received focused            | [Payment](before-payment.webp) | [Payment](after-payment.webp) |
 | Enter on an unmatched name with focus in search | [Search](before-search.webp)   | [Search](after-search.webp)   |
 
-At 1366 × 768 and 375 × 812 the search field, cart, bill total and mobile payment control kept their bounding rectangles when the prompt appeared. Typing a partial term and abandoning the prompt sent zero demand writes. Escape returned focus to search after the payment sheet. The patched cashier flow showed Rs 2.50 for one scanned tablet and Rs 3.00 for a searched loose unit, totaling Rs 5.50.
+At 1366 × 768 and 375 × 812 the search field, cart, bill total and mobile payment control kept their bounding rectangles when the prompt appeared. Typing alone sent zero demand writes. After Enter, each viewport sent one marked automatic UNKNOWN capture. Escape and a repeat of the same term sent no additional writes. In the after screenshots the scanned box is Rs 250.00 and the searched bottle is Rs 180.00. A separate bill with that barcode and a typed tablet totaled Rs 252.50.
 
 | State at 1366 × 768                                           | Evidence                                                |
 | ------------------------------------------------------------- | ------------------------------------------------------- |
 | Khata sign-up ready on a verified balance                     | [Customer name, phone and consent](khata-verified.webp) |
-| One outstanding balance read, locked fields                   | [Checking](checking.webp)                               |
+| Manual balance retry in progress, locked fields               | [Checking](checking.webp)                               |
 | Read failed, retry available and fields locked                | [Read failure](read-failed.webp)                        |
 | Retry returns a different amount                              | [Announced Rs 5.00](changed.webp)                       |
 | Void confirmation reached by Shift+F4 and dismissed by Escape | [Confirmation](void-confirmation.webp)                  |
 
-The recovery exercise held a read in the browser transport, returned a synthetic read error, then supplied a changed cart on manual retry. Chromium observed one automatic and one manual read, zero tender requests and an empty console-error list. The before/after counter matrix used live responses from the disposable database. Permission gates remain covered separately by the restricted-runtime database and component tests.
+With the cash field focused, Chromium crossed the real 30-second freshness interval. The input stayed enabled with the same value and bounding rectangle, and the sheet kept its height. Take payment made an uncached read. A changed response announced Rs 5.00 and sent zero tender requests. In the recovery captures, the payment-time read failed, the cashier requested a retry, and the new balance was announced. Chromium counted two reads and zero tender requests. The before/after counter matrix used live responses from the disposable database. Permission gates remain covered separately by the restricted-runtime database and component tests.
 
 ## Manual payments and Khata account search
 
