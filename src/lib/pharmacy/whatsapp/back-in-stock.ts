@@ -20,6 +20,7 @@ import { linkRestockRecoveries } from '../sales';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
+  hasWhatsAppSender,
   createWhatsAppProvider,
   readWhatsAppConfig,
   type WhatsAppConfig,
@@ -82,7 +83,7 @@ export async function processBackInStockNotices(
   const provider = options.provider ?? createWhatsAppProvider(config);
   const policy = options.policy ?? readBackInStockPolicy();
   const result: BackInStockRunResult = {
-    configured: Boolean(config.templates.backInStock && config.phoneNumberId),
+    configured: Boolean(config.templates.backInStock && hasWhatsAppSender(config)),
     scanned: 0,
     sent: 0,
     prepared: 0,

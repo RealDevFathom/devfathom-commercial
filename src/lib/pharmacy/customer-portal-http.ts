@@ -29,7 +29,11 @@ import {
   type PortalSession,
 } from './customer-portal';
 import { persistPrescriptionFile } from './prescription-files';
-import { createWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
+import {
+  bindWhatsAppTenant,
+  createWhatsAppProvider,
+  readWhatsAppConfig,
+} from './whatsapp/provider';
 
 const MAX_BODY_BYTES = 7_500_000;
 const TEN_MINUTES = 10 * 60_000;
@@ -163,7 +167,7 @@ export async function portalContext(request: Request) {
           [`start:${fingerprint}`, 5],
         ]);
         if (blocked) return portalResponse.limited(blocked);
-        const config = readWhatsAppConfig();
+        const config = bindWhatsAppTenant(readWhatsAppConfig(), organizationId);
         const send = portalCodeSender(config, createWhatsAppProvider(config), organizationId);
         const sent = await inTenant((db) =>
           startPortalSignIn(db, organizationId, parsed.data.token, send)

@@ -1,3 +1,4 @@
+import { runSenderJob } from '@/lib/pharmacy/whatsapp/waha-jobs';
 import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
@@ -26,5 +27,5 @@ export async function POST(request: Request) {
   }
   const input = (await request.json().catch(() => ({}))) as { limit?: unknown };
   const limit = typeof input.limit === 'number' && Number.isFinite(input.limit) ? input.limit : 100;
-  return NextResponse.json(await processDueWhatsAppKhataReminders({ limit }));
+  return NextResponse.json(await runSenderJob(limit, processDueWhatsAppKhataReminders));
 }

@@ -23,6 +23,8 @@ import { medicineNameSet, readTenantMedicineNames } from './medicine-names';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './whatsapp/message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './whatsapp/messages';
 import {
+  bindWhatsAppTenant,
+  hasWhatsAppSender,
   createWhatsAppProvider,
   readWhatsAppConfig,
   type WhatsAppConfig,
@@ -59,7 +61,7 @@ function senderReady(
 ): boolean {
   return Boolean(
     config.organizationId === organizationId &&
-    config.phoneNumberId &&
+    hasWhatsAppSender(config) &&
     config.templates[template] &&
     (config.provider !== 'meta' || (config.accessToken && config.liveSendApproved))
   );
@@ -94,7 +96,7 @@ export async function sendWhatsAppReceiptLink(input: {
 }): Promise<{ outcome: HostedReceiptSendOutcome; expiresAt: string | null; rxProtected: boolean }> {
   const { db, scope } = input;
   const now = input.now ?? new Date();
-  const config = input.config ?? readWhatsAppConfig();
+  const config = bindWhatsAppTenant(input.config ?? readWhatsAppConfig(), scope.organizationId);
   if (!senderReady(config, scope.organizationId, 'receiptLink'))
     throw new HostedReceiptError('NOT_CONFIGURED');
 

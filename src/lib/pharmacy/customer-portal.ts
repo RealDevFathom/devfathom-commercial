@@ -223,7 +223,7 @@ export function portalCodeSender(
   organizationId: string
 ) {
   return async (input: { to: string; otp: string; body: string }) => {
-    if (config.provider !== 'meta') return provider.sendText({ to: input.to, body: input.body });
+    if (config.provider === 'mock') return provider.sendText({ to: input.to, body: input.body });
     if (config.organizationId !== organizationId || !config.templates.portalSignInCode)
       throw new PharmacyPortalError('SEND_FAILED');
     return provider.sendTemplate({
