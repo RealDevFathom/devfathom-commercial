@@ -202,6 +202,11 @@ const financeEmployee: Candidate = {
   pin: false,
   assignedTo: branchId,
 };
+const readOnlyEmployee: Candidate = {
+  ...financeEmployee,
+  key: 'finance_read_only',
+  deny: 'finance:manage',
+};
 const employeeJobBranch = id('employee_jobs_branch');
 const employeeJobMaker = {
   ...financeEmployee,
@@ -393,6 +398,7 @@ beforeAll(async () => {
       ...candidates,
       financeEmployee,
       employeeJobMaker,
+      readOnlyEmployee,
       ...excludedEmployees,
       rolelessAdministrator,
       readOnlyAdministrator,
@@ -1094,6 +1100,62 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       code: 'FORBIDDEN',
       message: 'Administrator access is required to reopen a locked period.',
     });
+  });
+  it('reserves all five AP approval and reversal commands and refuses payment to a read-only employee', async () => {
+    const api = callerFor(financeEmployee);
+    expect((await api.reversalAccess({ branchId })).mayReverse).toBe(false);
+    const denied = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
+    const target = { branchId, setOffId: id('credit'), reason: 'Duplicate', pin: PIN };
+    await expect(
+      api.approveCreditSetOff({
+        branchId,
+        setOffId: target.setOffId,
+        decisionKey: id('approve'),
+        pin: PIN,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.rejectCreditSetOff({
+        branchId,
+        setOffId: target.setOffId,
+        decisionKey: id('reject'),
+        reason: target.reason,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.reverseCreditSetOff({ ...target, commandKey: id('reverse-credit') })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.reverseSettlement({
+        branchId,
+        settlementId: id('settlement'),
+        commandKey: id('reverse-pay'),
+        reason: target.reason,
+        pin: PIN,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.reverseInvoice({
+        branchId,
+        invoiceId: id('invoice'),
+        commandKey: id('reverse-invoice'),
+        reason: target.reason,
+        pin: PIN,
+      })
+    ).rejects.toMatchObject(denied);
+    const reader = callerFor(readOnlyEmployee);
+    await expect(reader.list({ branchId })).resolves.toBeDefined();
+    await expect(
+      reader.pay({
+        branchId,
+        invoiceId: id('invoice'),
+        commandKey: id('readonly-pay'),
+        reference: 'Payment',
+        amountMinor: 100,
+        paidAt: new Date().toISOString(),
+        fundingAccount: 'BANK',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Finance permission is required.' });
   });
   it('refuses staff, settings, catalogue, stock and counter actions to the Finance employee', async () => {
     const ctx = contextFor(financeEmployee);
