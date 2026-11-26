@@ -5,13 +5,15 @@ SET LOCAL lock_timeout = '5s';
 -- event for the medicine with no later successful one, whether the failed line is still on the
 -- bill or already moved to its void record. Only a successful check on the new line clears it.
 --
--- "Later" is the order of (occurredAt, id), not of occurredAt alone: occurredAt is the start of
--- the writing transaction, so two checks can share it or commit in the other order. A successful
--- check counts only when it is strictly later in that order. Checks with the same occurredAt are
+-- "Later" is the order of ("occurredAt", id). pharmacy_record_pack_check below stamps
+-- "occurredAt" while the bill is locked and never at or before the bill's previous check, so
+-- that order is the order the checks ran in, whatever order their transactions began in. A
+-- successful check counts only when it is strictly later than the failed one. Two checks with
+-- the same "occurredAt" (possible only for rows written before that trigger existed) are
 -- ordered by event id, and a successful check that is not strictly later (a tie) keeps the block.
 --
 -- Only the function is replaced. The BEFORE INSERT trigger on pharmacy_sale_lines from
--- 20261121231900_counter_line_pack_check already calls it by name, so it is not re-created
+-- 20261121231900_counter_line_pack_check keeps calling it by name, so it is not re-created
 -- (that would lock a busy table for nothing).
 CREATE OR REPLACE FUNCTION pharmacy_recheck_readded_pack() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
@@ -43,6 +45,25 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION pharmacy_recheck_readded_pack() FROM PUBLIC;
 
+-- Every PACK_CHECK event, whoever writes it: lock the bill and stamp the event with the time it
+-- is written under that lock (not the transaction's start and not a caller's clock), at least
+-- one millisecond (the column's precision) after the bill's previous check.
+CREATE OR REPLACE FUNCTION pharmacy_record_pack_check() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE
+  previous timestamp;
+BEGIN
+  PERFORM 1 FROM public.pharmacy_sales WHERE id = NEW."saleId"
+    AND "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId" FOR UPDATE;
+  SELECT max("occurredAt") INTO previous FROM public.pharmacy_sale_events
+    WHERE "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId"
+      AND "saleId" = NEW."saleId" AND kind::text = 'PACK_CHECK';
+  NEW."occurredAt" := GREATEST(
+    clock_timestamp() AT TIME ZONE 'UTC', previous + interval '1 millisecond');
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION pharmacy_record_pack_check() FROM PUBLIC;
+
 -- A failed check blocks EVERY line of that medicine on that bill, including lines that were on
 -- the bill before the check, so removing the checked line leaves nothing payable. It runs on the
 -- event insert itself, so no caller that records a failed check can skip it. A successful check
@@ -61,9 +82,18 @@ BEGIN
   RETURN NULL;
 END $$;
 REVOKE ALL ON FUNCTION pharmacy_block_medicine_on_failed_pack_check() FROM PUBLIC;
--- Created once: a re-run leaves the existing trigger (and the table lock) alone.
+
+-- Each trigger is created once: a re-run leaves an existing trigger (and the table) alone.
 DO $$
 BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_catalog.pg_trigger WHERE tgname = 'pharmacy_record_pack_check'
+      AND tgrelid = 'public.pharmacy_sale_events'::regclass AND NOT tgisinternal
+  ) THEN
+    CREATE TRIGGER pharmacy_record_pack_check BEFORE INSERT ON public.pharmacy_sale_events
+      FOR EACH ROW WHEN (NEW.kind::text = 'PACK_CHECK')
+      EXECUTE FUNCTION pharmacy_record_pack_check();
+  END IF;
   IF NOT EXISTS (
     SELECT 1 FROM pg_catalog.pg_trigger
     WHERE tgname = 'pharmacy_block_medicine_on_failed_pack_check'
