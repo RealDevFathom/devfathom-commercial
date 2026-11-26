@@ -409,10 +409,17 @@ test('DEV-1045 recovers an accepted wallet tender with an omitted optional refer
     idempotencyKey: randomUUID(),
   };
   const result = await tenant((db) => applyPharmacyTender(db, scope, input));
-  expect(result).toMatchObject({ settled: true });
-  expect(await tenant((db) => readPharmacyTenderOutcome(db, scope, input))).toMatchObject({
+  expect(result).toMatchObject({ settled: true, replayed: false });
+  if (!('tenderId' in result)) throw new Error('Expected a new wallet tender');
+  expect(await tenant((db) => readPharmacyTenderOutcome(db, scope, input))).toEqual({
     status: 'ACCEPTED',
-    result,
+    replayUnsafe: true,
+    result: {
+      tenderId: result.tenderId,
+      remainingMinor: 0,
+      settled: true,
+      receiptNumber: result.receiptNumber,
+    },
   });
   expect(
     await tenant((db) =>
