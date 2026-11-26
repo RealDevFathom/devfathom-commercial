@@ -104,7 +104,7 @@ function command(multiplier: number) {
   );
 }
 
-function unsealedCommand(multiplier: number) {
+function unsealedCommand(multiplier: number, cashierId?: string) {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' });
   return {
     sequence: 1,
@@ -119,7 +119,14 @@ function unsealedCommand(multiplier: number) {
     },
     snapshots: KINDS.map((kind) => {
       // Offline cash selling forced ON in the signed RULES (it is off in the product).
-      const payload = kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind };
+      const payload =
+        kind === 'RULES'
+          ? {
+              kind,
+              offlineCashSelling: true,
+              ...(cashierId ? { operator: { userId: cashierId } } : {}),
+            }
+          : { kind };
       const signed = envelope(kind, payload);
       return { envelope: signed, signature: signing.signSnapshotEnvelope(signed), payload };
     }),
@@ -189,6 +196,32 @@ beforeEach(() => {
 });
 
 describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
+  it('books the signed cashier on the sale and line when a different operator reconnects', async () => {
+    const target = db();
+    const cashier = 'cashier_at_sale';
+    const body = router.counterReplaySchema.parse(
+      offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(10, cashier), {
+        previousHash: null,
+      })
+    );
+    await expect(replay(target, body)).rejects.toThrow('REACHED_LINE');
+    expect(mocks.createSale).toHaveBeenCalledWith(target, { ...SCOPE, actorId: cashier });
+    expect(mocks.addSaleLine.mock.calls[0]?.[1]).toEqual({ ...SCOPE, actorId: cashier });
+  });
+
+  it.each(['controlled', 'rx', 'restricted', 'highAlert', 'lasa'])(
+    'refuses a %s medicine during replay before consuming stock',
+    async (flag) => {
+      const target = db();
+      vi.mocked(target.medicine.findFirst).mockResolvedValueOnce({ [flag]: true } as never);
+      await expect(replay(target, command(10))).rejects.toMatchObject({
+        code: 'medicine_not_offline_otc',
+      });
+      expect(mocks.consumeDeviceLotQuota).not.toHaveBeenCalled();
+      expect(mocks.addSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
   it('requires supervisor review of the same receipt after a drawer refusal', async () => {
     const target = db();
     vi.mocked(target.$queryRaw).mockImplementation(async (query) =>

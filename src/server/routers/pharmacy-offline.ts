@@ -1033,8 +1033,9 @@ export async function replayCounterCommand(
   // Review round 2: the switch is enforced here, not only at the counter. A sale is
   // accepted only when the RULES it carries (verified above) say offline cash selling
   // was on when the counter was handed them.
+  const signedRules = verifiedRulesPayload(command, scope, deviceId);
   if (
-    !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, scope, deviceId)) ||
+    !signedRulesAllowOfflineSelling(signedRules) ||
     !(await readOfflineCashSelling(db, scope.organizationId)).enabled
   )
     throw new CounterTransportError('offline_selling_off', 409);
@@ -1104,7 +1105,16 @@ export async function replayCounterCommand(
   // Hold every line key up front so a concurrent online retry cannot invert that order.
   for (let index = 0; index < command.lines.length; index += 1)
     await lockSaleLineKey(db, scope, `${command.idempotencyKey}:${index}`);
-  const sale = await createSale(db, scope);
+  const signedCashier = field(field(signedRules, 'operator'), 'userId');
+  if (reviewed && (typeof signedCashier !== 'string' || !signedCashier))
+    throw new CounterTransportError('offline_cashier_unknown', 409);
+  // Authorization and the review log use the connected actor. The sale records
+  // the operator in the verified sale-time envelope, including on a reviewed retry.
+  const saleScope =
+    typeof signedCashier === 'string' && signedCashier
+      ? { ...scope, actorId: signedCashier }
+      : scope;
+  const sale = await createSale(db, saleScope);
   // DEV-825: one transaction adds every line and then tenders, so take the stock
   // locks for all of them up front in the global order (stock-lock-order.ts):
   // the batches the tender's safety check shares, then every candidate balance.
@@ -1167,7 +1177,7 @@ export async function replayCounterCommand(
     await consumeDeviceLotQuota(db, scope, { ...line, deviceId, units });
     const created = await addSaleLine(
       db,
-      scope,
+      saleScope,
       { ...line, saleId: sale.id, idempotencyKey: `${command.idempotencyKey}:${index}` },
       {
         saleUnitAt,
@@ -1193,7 +1203,7 @@ export async function replayCounterCommand(
   }
   const result = await applyPharmacyTender(
     db,
-    scope,
+    saleScope,
     {
       saleId: sale.id,
       deviceId,
