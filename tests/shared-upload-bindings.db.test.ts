@@ -39,7 +39,7 @@ it.skipIf(!owner)(
       const migration = (name: string) =>
         readFile('prisma/migrations/' + name + '/migration.sql', 'utf8');
       await db.query(await migration('20261117090100_uploaded_file_registry'));
-      const update = await migration('20261126010000_claim_shared_uploads');
+      const update = await migration('20261126010200_claim_shared_uploads');
       await db.query(update);
       await db.query("SET app.current_organization_id = 'org'");
       const snapshot = async () =>
