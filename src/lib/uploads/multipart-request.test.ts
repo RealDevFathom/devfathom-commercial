@@ -211,8 +211,6 @@ describe('upload rate limit', () => {
       UPLOADS_PER_BUSINESS_PER_WINDOW,
       UPLOAD_RATE_WINDOW_MS
     );
-    expect(next.remaining).toBe(
-      UPLOADS_PER_BUSINESS_PER_WINDOW - UPLOADS_PER_USER_PER_WINDOW - 1
-    );
+    expect(next.remaining).toBe(UPLOADS_PER_BUSINESS_PER_WINDOW - UPLOADS_PER_USER_PER_WINDOW - 1);
   });
 });
