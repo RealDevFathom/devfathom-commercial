@@ -1,5 +1,6 @@
 import 'server-only';
 import { can, subjectFromSession } from '@/lib/abac';
+import { canOpenPharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
@@ -17,7 +18,8 @@ export async function reviewContext(request?: Request) {
 
 export async function canReview(ctx: TRPCContext) {
   if (
-    ctx.session?.user?.role !== 'ADMIN' ||
+    !ctx.session?.user ||
+    !(await canOpenPharmacyFinance(ctx)) ||
     !ctx.organization?.id ||
     ctx.entitlements.organizationId !== ctx.organization.id ||
     !hasModule(ctx.entitlements, 'pharmacy-finance') ||

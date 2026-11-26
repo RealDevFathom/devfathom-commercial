@@ -4,8 +4,12 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
-import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
-import { adminProcedure, router } from '@/server/trpc';
+import {
+  requirePharmacyFinance,
+  requireFinanceBranchAssignment,
+} from '@/lib/pharmacy/finance-access';
+import { pharmacyFinanceMemberProcedure } from '@/server/pharmacy-finance-gate';
+import { router } from '@/server/trpc';
 
 const opaqueId = z.string().trim().min(1).max(128);
 const instant = z.iso.datetime({ offset: true });
@@ -51,8 +55,8 @@ const boundedText = (value: unknown, max = 128): value is string =>
   typeof value === 'string' && value.trim().length > 0 && value.length <= max;
 
 export const journalEntryLookupRouter = router({
-  lookup: adminProcedure.input(lookupInput).query(async ({ ctx, input }) => {
-    if (ctx.session.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
+  lookup: pharmacyFinanceMemberProcedure.input(lookupInput).query(async ({ ctx, input }) => {
+    if (!hasModule(ctx.entitlements, 'pharmacy-reports')) {
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Owner financial reports access is required.',
@@ -82,6 +86,7 @@ export const journalEntryLookupRouter = router({
       });
     }
     await requirePharmacyFinance(ctx);
+    await requireFinanceBranchAssignment(ctx, input.branchId);
     const branch = await ctx.db.pharmacyBranch.findFirst({
       where: { id: input.branchId, organizationId, active: true },
       select: { id: true },

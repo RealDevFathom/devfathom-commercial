@@ -254,6 +254,12 @@ async function recordApAudit(
   );
 }
 
+const apApprovalMutation = pharmacyAccountMutation.use(({ ctx, next }) => {
+  if (ctx.session.user.role !== 'ADMIN')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
+  return next();
+});
+
 export const pharmacyApInvoicesRouter = router({
   list: pharmacyFinanceMemberProcedure.input(listApInvoicesSchema).query(async ({ ctx, input }) => {
     const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -465,12 +471,7 @@ export const pharmacyApInvoicesRouter = router({
    * strike); a different person must have requested the set-off, unless the
    * approver is the organization's only owner-level user.
    */
-  approveCreditSetOff: pharmacyAccountMutation
-    .use(({ ctx, next }) => {
-      if (ctx.session.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
-      return next();
-    })
+  approveCreditSetOff: apApprovalMutation
     .input(approveApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -525,12 +526,7 @@ export const pharmacyApInvoicesRouter = router({
     }),
 
   /** DEV-694: a manager or owner closes a request without touching money. */
-  rejectCreditSetOff: pharmacyAccountMutation
-    .use(({ ctx, next }) => {
-      if (ctx.session.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
-      return next();
-    })
+  rejectCreditSetOff: apApprovalMutation
     .input(rejectApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -562,12 +558,7 @@ export const pharmacyApInvoicesRouter = router({
    * approval: a manager or owner, their own fresh PIN, and not the requester
    * unless they are the only owner-level user.
    */
-  reverseCreditSetOff: pharmacyAccountMutation
-    .use(({ ctx, next }) => {
-      if (ctx.session.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
-      return next();
-    })
+  reverseCreditSetOff: apApprovalMutation
     .input(reverseApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -683,12 +674,7 @@ export const pharmacyApInvoicesRouter = router({
    * through the canonical bookkeeping reversal; the payment row stays, marked REVERSED, and the
    * invoice owes that amount again from the reversal instant.
    */
-  reverseSettlement: pharmacyAccountMutation
-    .use(({ ctx, next }) => {
-      if (ctx.session.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
-      return next();
-    })
+  reverseSettlement: apApprovalMutation
     .input(reverseApSettlementSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -753,12 +739,7 @@ export const pharmacyApInvoicesRouter = router({
    * stays, marked REVERSED. Every payment and approved credit set-off against it must be
    * reversed first, so the payable can never go negative.
    */
-  reverseInvoice: pharmacyAccountMutation
-    .use(({ ctx, next }) => {
-      if (ctx.session.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
-      return next();
-    })
+  reverseInvoice: apApprovalMutation
     .input(reverseApInvoiceSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);

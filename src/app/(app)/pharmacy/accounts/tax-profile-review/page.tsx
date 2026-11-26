@@ -1,3 +1,4 @@
+import { financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import {
   isPharmacyActionForbidden,
   PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
@@ -27,10 +28,10 @@ export default async function TaxProfileReviewPage({
 }) {
   const query = await searchParams;
   const ctx = await reviewContext();
-  if (!ctx || !(await canReview(ctx))) return <Denied />;
+  if (!ctx?.session?.user || !(await canReview(ctx))) return <Denied />;
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
+    where: financeBranchWhere(organizationId, ctx.session.user),
     orderBy: { name: 'asc' },
     select: { id: true, name: true },
   });

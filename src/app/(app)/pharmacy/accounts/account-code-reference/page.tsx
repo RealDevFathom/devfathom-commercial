@@ -1,3 +1,4 @@
+import { financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import type { Metadata } from 'next';
 
 import { PageHeader } from '@/components/ui/page-header';
@@ -94,7 +95,7 @@ export default async function AccountCodeReferencePage({
   }
 
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId: ctx.entitlements.organizationId, active: true },
+    where: financeBranchWhere(ctx.entitlements.organizationId, user),
     orderBy: [{ name: 'asc' }, { id: 'asc' }],
     select: { id: true, name: true },
   });

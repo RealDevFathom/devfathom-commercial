@@ -743,7 +743,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['receive-stock/open-purchasing-screens-read'],
   },
   'pharmacyJournalEntryLookup.lookup': {
-    gate: 'adminProcedure + ADMIN role + Pharmacy Reports module + reports:operational AND reports:financial + finance:read (a live grant or the system Owner, subject to deny), within an active branch',
+    gate: 'Pharmacy Reports module + reports:operational AND reports:financial + finance:read, within an admitted active branch (administrators also require admin:access)',
     lines: [
       'financial-reports/workspace-administrator-use-operational-3',
       'operational-reports/workspace-administrator-use-financial-2',

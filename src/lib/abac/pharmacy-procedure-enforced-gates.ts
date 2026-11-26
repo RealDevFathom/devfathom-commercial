@@ -152,7 +152,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyInventory.transferBoard': ['pharmacy:inventory'],
   'pharmacyInventory.writeOff': ['pharmacy:inventory'],
   'pharmacyInvoiceCapture.read': ['signed-in'],
-  'pharmacyJournalEntryLookup.lookup': ['admin:access'],
+  'pharmacyJournalEntryLookup.lookup': ['contextual'],
   'pharmacyKhata.branches': ['admin:access'],
   'pharmacyKhata.ledger': ['admin:access'],
   'pharmacyKhata.sendReminder': ['admin:access'],

@@ -313,6 +313,7 @@ describe('normal Reports daily work pack', () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.branchFindFirst.mockReset();
+  mocks.assignmentFindMany.mockReset().mockResolvedValue([]);
   mocks.transaction.mockImplementation((run) => run(mocks.comparisonTx));
 });
 

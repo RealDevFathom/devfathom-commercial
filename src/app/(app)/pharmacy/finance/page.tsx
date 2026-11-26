@@ -101,6 +101,7 @@ export default async function PharmacyFinancePage({
       </div>
     );
   }
+  const isAdmin = ctx.session.user.role === 'ADMIN';
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: financeBranchWhere(organizationId, ctx.session.user),
@@ -446,7 +447,7 @@ export default async function PharmacyFinancePage({
           </Button>
         </form>
       </SectionCard>
-      {ctx.session.user.role === 'ADMIN' && (
+      {isAdmin && (
         <>
           <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
           <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
@@ -679,7 +680,7 @@ export default async function PharmacyFinancePage({
                     />
                   </div>
                   {period.status === 'CLOSED' ? (
-                    ctx.session.user.role === 'ADMIN' && (
+                    isAdmin && (
                       <form action={perform} className="mt-3 flex flex-wrap gap-2">
                         <input type="hidden" name="action" value="reopen" />
                         <input type="hidden" name="branchId" value={branch.id} />

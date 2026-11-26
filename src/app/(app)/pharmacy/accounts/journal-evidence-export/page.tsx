@@ -81,9 +81,13 @@ export default async function JournalEvidenceExportPage({
     hasModule(ctx.entitlements, 'pharmacy-reports') &&
     (
       await Promise.all(
-        (['admin:access', 'reports:operational', 'reports:financial'] as const).map((action) =>
-          can(subject, action, undefined, authzOptions)
-        )
+        (
+          [
+            subject.role === 'ADMIN' ? 'admin:access' : 'finance:read',
+            'reports:operational',
+            'reports:financial',
+          ] as const
+        ).map((action) => can(subject, action, undefined, authzOptions))
       )
     ).every(Boolean);
   if (!allowed || !ctx) {
