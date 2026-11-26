@@ -2780,85 +2780,6 @@ test('DEV-1049 cashier sells a unit from sealed stock and takes exact cash', asy
   await expect(receipt).toContainText('1.00');
 });
 
-test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
-  await openCounter(page);
-  await openDrawer(page);
-  const otc = PHARMACY_E2E.medicines.otc;
-  await search(page, otc.brandName);
-  await stageFirstResult(page, otc.name);
-  await page.keyboard.press('F4');
-  await setQuantity(page, 2);
-  await page.keyboard.press('F6');
-  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(otc.name);
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
-  await expect(
-    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
-  ).toBeVisible();
-  await page.goto('/pharmacy/counter/close');
-  await expect(page.getByRole('heading', { name: 'Day close', exact: true })).toBeVisible();
-  const inputs = page.getByLabel(/Counted cash for drawer/);
-  await expect(inputs.first()).toBeVisible();
-  let shortageAssigned = false;
-  for (let i = 0; i < (await inputs.count()); i++) {
-    const field = inputs.nth(i);
-    const row = field.locator('..').locator('..');
-    const text = await row.innerText();
-    const expected = Number(text.match(/Expected: PKR ([\d,.]+)/)![1].replaceAll(',', ''));
-    const shortage = !shortageAssigned && expected >= 1 ? 1 : 0;
-    if (shortage) shortageAssigned = true;
-    await field.fill((expected - shortage).toFixed(2));
-  }
-  expect(shortageAssigned).toBe(true);
-  await expect(page.getByTestId('Variance')).toHaveText('-1.00');
-  await page.getByLabel('Variance note').fill('One rupee short at nightly count');
-  await page.getByRole('checkbox').focus();
-  await page.getByRole('checkbox').press('Space');
-  await pressControl(page.getByRole('button', { name: 'Close and lock day' }));
-  await expect(
-    page.getByText('Day closed. New tenders and drawer changes for this business date are blocked.')
-  ).toBeVisible();
-  await page.reload();
-  await expect(page.getByText('Variance note: One rupee short at nightly count')).toBeVisible();
-  for (const width of [375, 768, 1024, 1440]) {
-    await page.setViewportSize({ width, height: 900 });
-    for (const theme of ['light', 'dark']) {
-      await page.evaluate(
-        (theme) => document.documentElement.setAttribute('data-theme', theme),
-        theme
-      );
-      await page.emulateMedia({ reducedMotion: theme === 'dark' ? 'reduce' : 'no-preference' });
-      expect(
-        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
-      ).toBe(true);
-      await page.screenshot({
-        path: test.info().outputPath(`day-close-${width}-${theme}.png`),
-        fullPage: true,
-      });
-    }
-  }
-  await context.addInitScript(() => {
-    window.print = () => {};
-  });
-  const popupPromise = page.waitForEvent('popup');
-  await pressControl(page.getByRole('button', { name: 'Print Z-report' }));
-  const popup = await popupPromise;
-  await expect(popup.locator('body')).toContainText('Z-report');
-  await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
-  await popup.close();
-  await page.goto('/pharmacy/counter');
-  // DEV-631: the counter says the day is closed before a bill is built; no drawer
-  // step or scan/search is offered, so nothing is added that payment would refuse.
-  await expect(page.getByRole('status', { name: 'Business day closed' })).toContainText(
-    'The owner or a manager can reopen today for trading on Day close'
-  );
-  await expect(page.getByLabel('Opening cash', { exact: true })).toHaveCount(0);
-  await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
-  // The owner's reopen for trading needs their own staff PIN, which this fixture does
-  // not seed; it is covered by the day-close console and router tests.
-  await page.goto('/pharmacy/counter/close');
-  await expect(page.getByRole('form', { name: 'Reopen today for trading' })).toBeVisible();
-});
-
 test('DEV-1041: scan and search each sell one unit at the server price', async ({ page }) => {
   await openCounter(page);
   await openDrawer(page);
@@ -2976,6 +2897,85 @@ test('DEV-1046 returns keyboard focus to a prefilled Khata sign-up on an unmatch
     await expect(sheet.getByLabel(label, { exact: true })).toHaveValue(query);
     await box.focus();
   }
+});
+
+test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const otc = PHARMACY_E2E.medicines.otc;
+  await search(page, otc.brandName);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 2);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('table', { name: 'Cart lines' })).toContainText(otc.name);
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  await expect(
+    page.getByRole('region', { name: /^Receipt \d+ · Counter [A-Z0-9]{4}$/ })
+  ).toBeVisible();
+  await page.goto('/pharmacy/counter/close');
+  await expect(page.getByRole('heading', { name: 'Day close', exact: true })).toBeVisible();
+  const inputs = page.getByLabel(/Counted cash for drawer/);
+  await expect(inputs.first()).toBeVisible();
+  let shortageAssigned = false;
+  for (let i = 0; i < (await inputs.count()); i++) {
+    const field = inputs.nth(i);
+    const row = field.locator('..').locator('..');
+    const text = await row.innerText();
+    const expected = Number(text.match(/Expected: PKR ([\d,.]+)/)![1].replaceAll(',', ''));
+    const shortage = !shortageAssigned && expected >= 1 ? 1 : 0;
+    if (shortage) shortageAssigned = true;
+    await field.fill((expected - shortage).toFixed(2));
+  }
+  expect(shortageAssigned).toBe(true);
+  await expect(page.getByTestId('Variance')).toHaveText('-1.00');
+  await page.getByLabel('Variance note').fill('One rupee short at nightly count');
+  await page.getByRole('checkbox').focus();
+  await page.getByRole('checkbox').press('Space');
+  await pressControl(page.getByRole('button', { name: 'Close and lock day' }));
+  await expect(
+    page.getByText('Day closed. New tenders and drawer changes for this business date are blocked.')
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('Variance note: One rupee short at nightly count')).toBeVisible();
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(
+        (theme) => document.documentElement.setAttribute('data-theme', theme),
+        theme
+      );
+      await page.emulateMedia({ reducedMotion: theme === 'dark' ? 'reduce' : 'no-preference' });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+      ).toBe(true);
+      await page.screenshot({
+        path: test.info().outputPath(`day-close-${width}-${theme}.png`),
+        fullPage: true,
+      });
+    }
+  }
+  await context.addInitScript(() => {
+    window.print = () => {};
+  });
+  const popupPromise = page.waitForEvent('popup');
+  await pressControl(page.getByRole('button', { name: 'Print Z-report' }));
+  const popup = await popupPromise;
+  await expect(popup.locator('body')).toContainText('Z-report');
+  await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
+  await popup.close();
+  await page.goto('/pharmacy/counter');
+  // DEV-631: the counter says the day is closed before a bill is built; no drawer
+  // step or scan/search is offered, so nothing is added that payment would refuse.
+  await expect(page.getByRole('status', { name: 'Business day closed' })).toContainText(
+    'The owner or a manager can reopen today for trading on Day close'
+  );
+  await expect(page.getByLabel('Opening cash', { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel('Scan or search', { exact: true })).toHaveCount(0);
+  // The owner's reopen for trading needs their own staff PIN, which this fixture does
+  // not seed; it is covered by the day-close console and router tests.
+  await page.goto('/pharmacy/counter/close');
+  await expect(page.getByRole('form', { name: 'Reopen today for trading' })).toBeVisible();
 });
 
 test('this spec drives the counter without a pointer', async () => {

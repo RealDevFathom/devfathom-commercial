@@ -1,4 +1,4 @@
-# Counter QA for DEV-1041, DEV-1040 and DEV-1042
+# Pharmacy counter QA
 
 Chromium used the live counter with a disposable pharmacy, a synthetic cashier session and local PostgreSQL 16. The baseline was develop at `b05d29fcd510dd9780ac07fd67890ece47f8c93f`. The counter uses its existing Studio Button, Input, Label, Switch, SelectField and payment dialog, with the existing surface, border, text and focus tokens.
 
@@ -22,3 +22,15 @@ At 1366 × 768 and 375 × 812 the search field, cart, bill total and mobile paym
 | Void confirmation reached by Shift+F4 and dismissed by Escape | [Confirmation](void-confirmation.webp)                  |
 
 The recovery exercise held a read in the browser transport, returned a synthetic read error, then supplied a changed cart on manual retry. Chromium observed one automatic and one manual read, zero tender requests and an empty console-error list. The before/after counter matrix used live responses from the disposable database. Permission gates remain covered separately by the restricted-runtime database and component tests.
+
+## Manual payments and Khata account search
+
+Each sheet below contains the 375, 768, 1024 and 1440 pixel widths in light and dark themes with both motion preferences. The captures used seeded customers and local cashier transactions. Chromium reported no console errors or horizontal document overflow. Keyboard input moved from the bill into payment, selected the tender and reached its input.
+
+| Cashier state                        | Before                                     | After                                     |
+| ------------------------------------ | ------------------------------------------ | ----------------------------------------- |
+| Card, blank slip and approval fields | [Card](before-Card.webp)                   | [Card](after-Card.webp)                   |
+| Bank transfer, blank reference       | [Bank transfer](before-Bank-transfer.webp) | [Bank transfer](after-Bank-transfer.webp) |
+| Khata account picker                 | [Khata](before-Khata.webp)                 | [Khata](after-Khata.webp)                 |
+
+The cashier completed separate Rs 2.50 card and transfer sales with blank details and saw “No slip details” and “No transfer details” on the receipts. Selecting Khata focused the search field. An unmatched name or phone number carried over into sign-up. A separate sealed-stock fixture sold one tablet at Rs 1.00 and completed a cash sale without a pack-breaking prompt.
