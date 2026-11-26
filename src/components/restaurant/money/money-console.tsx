@@ -10,6 +10,7 @@ import type { inferRouterOutputs } from '@trpc/server';
 
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button, buttonVariants } from '@/components/ui/button';
+import { TerminalWebhookKeyControl } from './terminal-webhook-key-control';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -491,7 +492,10 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
         </SectionCard>
       ) : (
         <Tabs value={tab} onValueChange={updateTab}>
-          <TabsList aria-label="Restaurant Finance ledgers">
+          <TabsList
+            aria-label="Restaurant Finance ledgers"
+            className="max-w-full flex-wrap group-data-horizontal/tabs:h-auto"
+          >
             <TabsTrigger value="bills">Bills</TabsTrigger>
             <TabsTrigger value="payments">Payments</TabsTrigger>
             <TabsTrigger value="drawers">Drawers</TabsTrigger>
@@ -696,6 +700,13 @@ function AuthorizedMoneyConsole({ initialTab }: { initialTab: MoneyTab }) {
                               : 'neutral'
                         }
                       />
+                      {config.canManageWebhookKey && (
+                        <TerminalWebhookKeyControl
+                          branchId={config.branchId}
+                          configId={config.id}
+                          terminal={config.externalTerminalId}
+                        />
+                      )}
                     </div>
                   ))}
                 </SectionCard>

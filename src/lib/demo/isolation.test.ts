@@ -17,6 +17,7 @@ describe('demo isolation policy', () => {
     ['organizationAdmin.updateEmail', 'mutation'],
     ['restaurantDevices.initiateEnrollment', 'mutation'],
     ['restaurantPayments.saveTerminalConfig', 'mutation'],
+    ['restaurantPayments.rotateTerminalWebhookSecret', 'mutation'],
     ['restaurantStaff.issueCredential', 'mutation'],
     ['team.inviteMember', 'mutation'],
     ['team.updateProfile', 'mutation'],

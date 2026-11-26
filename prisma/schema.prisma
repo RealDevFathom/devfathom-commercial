@@ -6260,6 +6260,7 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
+  restaurantRetiredWebhookSources String[] @default([])
   pharmacyChurnScoringRuns      PharmacyChurnScoringRun[]
   pharmacyDrapRecallFeedRuns    PharmacyDrapRecallFeedRun[]
   pharmacyMigrationSources      PharmacyMigrationSource[]
@@ -6713,15 +6714,20 @@ model RestaurantTaxRefundAllocation {
 }
 
 model RestaurantTerminalProviderConfig {
-  id                 String                         @id @default(cuid())
-  organizationId     String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId           String
-  source             String
-  externalTerminalId String
-  deviceId           String
-  mode               RestaurantTerminalProviderMode @default(DISABLED)
-  createdAt          DateTime                       @default(now())
-  updatedAt          DateTime                       @updatedAt
+  id                             String                         @id @default(cuid())
+  organizationId                 String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                       String
+  source                         String
+  externalTerminalId             String
+  deviceId                       String
+  mode                           RestaurantTerminalProviderMode @default(DISABLED)
+  encryptedSigningSecret         String?
+  previousEncryptedSigningSecret String?
+  previousSigningSecretExpiresAt DateTime?                      @db.Timestamptz(3)
+  /// Deployment anchor for the default shared-key changeover window.
+  webhookKeysDeployedAt            DateTime                       @default(dbgenerated()) @db.Timestamptz(3)
+  createdAt                      DateTime                       @default(now())
+  updatedAt                      DateTime                       @updatedAt
 
   branch          RestaurantBranch                   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
   device          RestaurantRegisteredDevice         @relation(fields: [organizationId, deviceId], references: [organizationId, id], onDelete: Restrict)

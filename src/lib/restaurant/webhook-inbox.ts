@@ -9,6 +9,7 @@ import {
 } from '@/generated/prisma/client';
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import { enqueue, SchedulerError } from '@/lib/restaurant/scheduler';
+import { verifyProviderSignature, type SigningConfig } from './terminal-webhook-keys';
 import { recordAudit } from '@/server/audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/terminal-payments';
@@ -21,8 +22,8 @@ import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/term
  * it inside the tenant's RLS context — the receiver never processes provider
  * events on the request path.
  *
- * The route authenticates the raw body. Admission checks tenant provider mode
- * and job capacity inside the same transaction as the inbox and queue writes.
+ * Public admission authenticates the raw body with the locked provider config
+ * and checks job capacity inside the same transaction as the inbox and queue writes.
  *   - Dedup is idempotent at two layers: a check-then-create fast path plus the
  *     `(organization, source, externalEventId)` unique index as the authoritative
  *     guard (a concurrent duplicate loses the race and is returned as
@@ -70,8 +71,8 @@ export type RecordInboundWebhookInput = {
   eventType?: string | null;
   payload: Prisma.InputJsonValue;
   verificationStatus: RestaurantWebhookVerificationStatus | 'UNVERIFIED';
-  /** Set only after the provider HMAC verifier authenticates the original body. */
-  signatureMethod?: 'HMAC_SHA256';
+  /** The public receiver supplies the original bytes for verification under the provider row lock. */
+  providerSignature?: WebhookSignature;
 };
 
 export type RecordInboundWebhookResult = {
@@ -162,6 +163,97 @@ function duplicateOf(existing: ExistingInbox): RecordInboundWebhookResult {
   };
 }
 
+type WebhookSignature = {
+  configId: string | null;
+  terminalId: string | null;
+  timestamp: string;
+  signature: string;
+  rawBody: Uint8Array;
+};
+
+async function resolveWebhookProvider(
+  tx: ScopedDb,
+  source: string,
+  signed: WebhookSignature | undefined,
+  lock: boolean
+) {
+  // The tenant id comes only from the host-bound RLS transaction. A terminal
+  // payload and an explicit config header must resolve to the same row.
+  const rows = await tx.$queryRaw<
+    (SigningConfig & { organizationId: string; legacyRetired: boolean })[]
+  >`
+    SELECT id, "organizationId", "encryptedSigningSecret", "previousEncryptedSigningSecret",
+           "previousSigningSecretExpiresAt", "webhookKeysDeployedAt",
+           (SELECT provider.source = ANY(org."restaurantRetiredWebhookSources")
+              FROM organizations org WHERE org.id = provider."organizationId") AS "legacyRetired"
+    FROM restaurant_terminal_provider_configs provider
+    WHERE "organizationId" = current_setting('app.current_organization_id')
+      AND source = ${source} AND mode = 'WEBHOOK'
+      ${signed?.configId != null ? Prisma.sql`AND id = ${signed.configId}` : Prisma.empty}
+      ${signed?.terminalId != null ? Prisma.sql`AND "externalTerminalId" = ${signed.terminalId}` : Prisma.empty}
+    ORDER BY id
+    LIMIT ${signed ? 2 : 1} ${lock ? Prisma.sql`FOR SHARE` : Prisma.empty}
+  `;
+  const [config] = rows;
+  if (!signed) {
+    if (!config) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
+    return;
+  }
+  // Pre-migration non-terminal senders did not send a configuration id. Multiple
+  // eligible rows represent one shared signer until this business/source retires it.
+  const sharedSource =
+    rows.length > 1 &&
+    signed.configId === null &&
+    signed.terminalId === null &&
+    rows.every((row) => row.encryptedSigningSecret === null && row.legacyRetired === false);
+  if (
+    !config ||
+    (rows.length !== 1 && !sharedSource) ||
+    (config.encryptedSigningSecret === null && config.legacyRetired !== false)
+  )
+    throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
+  const verification = verifyProviderSignature(
+    config,
+    source,
+    signed.rawBody,
+    signed.signature,
+    signed.timestamp
+  );
+  if (verification === 'FAILED') throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
+  return { config, verification, sharedSource };
+}
+
+export async function verifyWebhookProvider(
+  db: ScopedDb,
+  source: string,
+  signed: WebhookSignature
+) {
+  await resolveWebhookProvider(db, source, signed, false);
+}
+
+async function lockAndVerifyProvider(tx: ScopedDb, input: RecordInboundWebhookInput) {
+  const result = await resolveWebhookProvider(tx, input.source, input.providerSignature, true);
+  if (!result) return;
+  const { config, verification, sharedSource } = result;
+  if (verification === 'LEGACY') {
+    // Explicit tx means audit failure rolls back admission. Duplicates are acceptances too.
+    await recordAudit(
+      {
+        organizationId: config.organizationId,
+        actorType: 'SYSTEM',
+        source: 'SYSTEM',
+        category: 'TERMINAL',
+        operation: 'EXECUTE',
+        action: 'restaurant.webhook.legacy_key_accepted',
+        targetType: sharedSource ? 'Organization' : 'RestaurantTerminalProviderConfig',
+        targetId: sharedSource ? config.organizationId : config.id,
+        metadata: { source: input.source, externalEventId: input.externalEventId },
+      },
+      tx
+    );
+  }
+}
+
 /**
  * Record an inbound webhook and enqueue its processing job atomically. `db` must
  * be bound to the target organization's RLS scope (the route resolves the org
@@ -193,14 +285,7 @@ export async function recordInboundWebhook(
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(
           'restaurant:webhook:' || current_setting('app.current_organization_id'), 0
         ))::text`;
-        // Hold one enabled configuration through commit if it is being disabled concurrently.
-        const providers = await tx.$queryRaw<{ id: string }[]>`
-          SELECT id FROM restaurant_terminal_provider_configs
-          WHERE "organizationId" = current_setting('app.current_organization_id')
-            AND source = ${input.source} AND mode = 'WEBHOOK'
-          LIMIT 1 FOR SHARE
-        `;
-        if (!providers.length) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
+        await lockAndVerifyProvider(tx, input);
         const existing = await findExistingInbox(tx, input.source, input.externalEventId);
         if (existing && isDuplicate(existing)) return duplicateOf(existing);
         const pending = await tx.restaurantJob.count({
@@ -244,7 +329,7 @@ export async function recordInboundWebhook(
             eventType: input.eventType ?? null,
             payload: input.payload,
             verificationStatus,
-            providerHmacVerified: input.signatureMethod === 'HMAC_SHA256',
+            providerHmacVerified: input.providerSignature !== undefined,
             status: 'PENDING',
           },
           select: INBOX_SELECT,
@@ -272,13 +357,7 @@ export async function recordInboundWebhook(
       if (error instanceof SchedulerError && error.reason === 'WEBHOOK_CAPACITY') {
         throw new WebhookAdmissionError(429, error.message);
       }
-      if (isUniqueViolation(error)) {
-        const existing = await runInboxTransaction(db, (tx) =>
-          findExistingInbox(tx, input.source, input.externalEventId)
-        );
-        if (existing && isDuplicate(existing)) return duplicateOf(existing);
-        if (existing && attempt < 2) continue;
-      }
+      if (isUniqueViolation(error) && attempt < 2) continue;
       throw error;
     }
   }

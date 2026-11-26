@@ -8,8 +8,10 @@ import {
   recordInboundWebhook,
   WebhookAdmissionError,
   webhookEnvelopeSchema,
+  verifyWebhookProvider,
 } from '@/lib/restaurant/webhook-inbox';
-import { terminalEventSchema, verifyTerminalSignature } from '@/lib/restaurant/terminal-payments';
+import { terminalEventSchema } from '@/lib/restaurant/terminal-payments';
+import { freshTerminalTimestamp } from '@/lib/restaurant/terminal-webhook-keys';
 import { requestHost, resolveExplicitOrganizationByHost } from '@/lib/tenancy/host';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -29,7 +31,8 @@ import { createTenantDb } from '@/lib/tenancy/scoped-db';
  * so it is IP rate-limited and never trusts a client-supplied organization — the
  * host is the only tenant signal, and an unknown host is a flat 404 (no tenant
  * enumeration). All accepted sources require `x-webhook-timestamp` and an HMAC over
- * that timestamp, the source, and the raw body, and are rejected outside ±5
+ * the timestamp, source, configuration id and raw body (legacy format during
+ * changeover), and are rejected outside ±5
  * minutes. Only providers configured for webhooks on this tenant are admitted.
  */
 
@@ -64,6 +67,16 @@ export async function POST(
     return NextResponse.json({ error: 'Unknown webhook source.' }, { status: 404 });
   }
 
+  const timestamp = request.headers.get(TIMESTAMP_HEADER);
+  const signature = request.headers.get(SIGNATURE_HEADER);
+  if (
+    !freshTerminalTimestamp(timestamp) ||
+    !signature ||
+    !/^(?:sha256=)?[a-f0-9]{64}$/i.test(signature)
+  ) {
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
+  }
+
   // Tenant resolution: explicit host only — never the DEFAULT_ORGANIZATION_ID
   // fallback, and never a client-supplied org. An unknown host is indistinguishable
   // from an absent one: a flat 404.
@@ -72,23 +85,43 @@ export async function POST(
     return NextResponse.json({ error: 'Unknown tenant.' }, { status: 404 });
   }
 
+  let rawBody;
+  try {
+    rawBody = await readBoundedBody(request, 256 * 1024);
+  } catch {
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
+  }
+  if (rawBody === null) return NextResponse.json({ error: 'Body too large.' }, { status: 413 });
   let body: unknown;
   try {
-    const rawBody = await readBoundedBody(request, 256 * 1024);
-    if (rawBody === null) return NextResponse.json({ error: 'Body too large.' }, { status: 413 });
-    const verification = verifyTerminalSignature(
-      source.data,
-      rawBody,
-      request.headers.get(SIGNATURE_HEADER),
-      request.headers.get(TIMESTAMP_HEADER)
-    );
-    if (verification !== 'VERIFIED') {
-      return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
-    }
     body = JSON.parse(new TextDecoder().decode(rawBody)) as unknown;
   } catch {
-    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
+    // An explicit config header can authenticate even malformed JSON.
+    body = undefined;
   }
+  const selector = z
+    .object({ eventType: z.string(), payload: z.object({ terminalId: z.string() }) })
+    .safeParse(body);
+  const providerSignature = {
+    rawBody,
+    timestamp,
+    signature,
+    configId: request.headers.get('x-webhook-config-id'),
+    terminalId:
+      selector.success && selector.data.eventType.startsWith('terminal.')
+        ? selector.data.payload.terminalId
+        : null,
+  };
+  const db = createTenantDb(organization.id);
+  try {
+    await verifyWebhookProvider(db, source.data, providerSignature);
+  } catch (error) {
+    if (error instanceof WebhookAdmissionError)
+      return NextResponse.json({ error: error.message }, { status: error.status });
+    throw error;
+  }
+  if (body === undefined)
+    return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 });
 
   const parsed = webhookEnvelopeSchema.safeParse(body);
   if (!parsed.success) {
@@ -98,19 +131,21 @@ export async function POST(
     );
   }
 
-  const terminalEvent = parsed.data.eventType?.startsWith('terminal.') ?? false;
-  if (terminalEvent && !terminalEventSchema.safeParse(parsed.data.payload).success) {
+  const terminalEvent = parsed.data.eventType?.startsWith('terminal.')
+    ? terminalEventSchema.safeParse(parsed.data.payload)
+    : null;
+  if (terminalEvent && !terminalEvent.success) {
     return NextResponse.json({ error: 'Invalid terminal event.' }, { status: 400 });
   }
   let result;
   try {
-    result = await recordInboundWebhook(createTenantDb(organization.id), {
+    result = await recordInboundWebhook(db, {
       source: source.data,
       externalEventId: parsed.data.externalEventId,
       eventType: parsed.data.eventType ?? null,
       payload: parsed.data.payload as unknown as Prisma.InputJsonValue,
       verificationStatus: 'VERIFIED',
-      signatureMethod: 'HMAC_SHA256',
+      providerSignature,
     });
   } catch (error) {
     if (error instanceof WebhookAdmissionError) {

@@ -222,6 +222,8 @@ const mocks = vi.hoisted(() => {
       close: [] as Array<{ input: unknown; enabled: boolean }>,
     },
     saveTerminalConfig: vi.fn(),
+    rotate: vi.fn(),
+    configs: vi.fn((): unknown[] => []),
   };
 });
 
@@ -271,6 +273,7 @@ vi.mock('@/lib/trpc', () => ({
     },
     // WHA-238's terminal-provider form invalidates its own query on success.
     useUtils: () => ({
+      client: { restaurantPayments: { rotateTerminalWebhookSecret: { mutate: mocks.rotate } } },
       restaurantPayments: { getTerminalConfig: { invalidate: vi.fn() } },
     }),
     restaurantBills: {
@@ -303,7 +306,12 @@ vi.mock('@/lib/trpc', () => ({
       // WHA-238 terminal payments. The terminal tab is not exercised by these
       // read-model assertions, so an empty provider config is enough to render.
       getTerminalConfig: {
-        useQuery: () => ({ data: [], error: null, isLoading: false, refetch: vi.fn() }),
+        useQuery: () => ({
+          data: mocks.configs(),
+          error: null,
+          isLoading: false,
+          refetch: vi.fn(),
+        }),
       },
       listTerminalReconciliations: {
         useQuery: () => ({
@@ -486,6 +494,36 @@ describe('MoneyConsole', () => {
     expect(
       screen.queryByRole('tablist', { name: 'Restaurant Finance ledgers' })
     ).not.toBeInTheDocument();
+  });
+
+  it('confirms issuance, reveals the key once and clears it on dismissal', async () => {
+    mocks.configs.mockReturnValue([
+      {
+        id: 'cfg',
+        branchId: 'branch_1',
+        mode: 'WEBHOOK',
+        source: 'provider',
+        externalTerminalId: 'Dining room',
+        canManageWebhookKey: true,
+      },
+    ]);
+    mocks.rotate.mockResolvedValue({ secret: 'synthetic-display-key' });
+    try {
+      renderConsole(true, 'terminal');
+      setBranchAndDate();
+      fireEvent.click(screen.getByRole('button', { name: 'Set signing key' }));
+      expect(mocks.rotate).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Create new key' }));
+      expect(await screen.findByDisplayValue('synthetic-display-key')).toBeTruthy();
+      expect(mocks.rotate).toHaveBeenCalledWith({ branchId: 'branch_1', configId: 'cfg' });
+      expect(screen.getByText(/cannot be shown again/)).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Set signing key' }));
+      expect(screen.queryByDisplayValue('synthetic-display-key')).toBeNull();
+      expect(mocks.rotate).toHaveBeenCalledTimes(1);
+    } finally {
+      mocks.configs.mockReturnValue([]);
+    }
   });
 
   it('creates the first provider terminal configuration when the branch has none', () => {

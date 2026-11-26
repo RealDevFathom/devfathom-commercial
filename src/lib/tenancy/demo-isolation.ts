@@ -35,6 +35,7 @@ const BLOCKED_MUTATIONS = new Set([
   'restaurantNotifications.configureWebhook',
   'restaurantNotifications.retryWebhook',
   'restaurantNotifications.testWebhook',
+  'restaurantPayments.rotateTerminalWebhookSecret',
   'restaurantPayments.saveTerminalConfig',
   'restaurantStaff.clearStaffCapabilityOverride',
   'restaurantStaff.create',

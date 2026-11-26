@@ -2,6 +2,7 @@ import { oversizedRequest } from '../../../../../../tests/fixtures/bounded-reque
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { encryptSecret } from '@/lib/secret-crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ClaimedJob } from '@/lib/restaurant/scheduler';
 
@@ -14,6 +15,10 @@ const state = vi.hoisted(() => ({
   jobs: [] as Array<{ inboxId: string }>,
   seq: 0,
   configured: true,
+  scoped: false,
+  queries: [] as string[],
+  retireDuringAdmission: false,
+  ambiguous: false,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -26,8 +31,11 @@ vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true, remaining: 1, retryAfter: 0 }),
 }));
 vi.mock('@/lib/tenancy/host', () => ({
-  requestHost: () => 'acme.devfathom.test',
-  resolveExplicitOrganizationByHost: async () => ({ id: 'org_acme', isDemo: false }),
+  requestHost: (request: Request) => new URL(request.url).hostname,
+  resolveExplicitOrganizationByHost: async (host: string) => ({
+    id: host === 'acme.devfathom.test' ? 'org_acme' : 'org_other',
+    isDemo: false,
+  }),
 }));
 vi.mock('@/lib/restaurant/scheduler', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/restaurant/scheduler')>()),
@@ -79,14 +87,38 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       count: state.inbox.delete(where.id) ? 1 : 0,
     }),
   };
-  const db: Record<string, unknown> = {
-    restaurantWebhookInbox,
-    $queryRaw: async (_query: TemplateStringsArray, source?: string) =>
-      state.configured && source === 'card-provider' ? [{ id: 'cfg_1' }] : [],
-    restaurantJob: { count: async () => state.jobs.length },
-  };
-  db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
-  return { createTenantDb: () => db };
+  function createTenantDb(orgId: string) {
+    const db: Record<string, unknown> = {
+      restaurantWebhookInbox,
+      $queryRaw: async (query: TemplateStringsArray, source?: string, ...clauses: unknown[]) => {
+        const sql = query
+          .map(
+            (part, index) =>
+              part + (([source, ...clauses][index] as { sql?: string } | undefined)?.sql ?? '')
+          )
+          .join('');
+        state.queries.push(sql);
+        return state.configured && source === 'card-provider'
+          ? [
+              ...(state.ambiguous ? [{ id: 'other' }] : []),
+              {
+                id: orgId + '-cfg',
+                organizationId: orgId,
+                legacyRetired: state.retireDuringAdmission && sql.includes('FOR SHARE'),
+                encryptedSigningSecret: state.scoped ? encryptSecret(orgId + '-key') : null,
+                previousEncryptedSigningSecret: null,
+                previousSigningSecretExpiresAt: null,
+                webhookKeysDeployedAt: new Date(),
+              },
+            ]
+          : [];
+      },
+      restaurantJob: { count: async () => state.jobs.length },
+    };
+    db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
+    return db;
+  }
+  return { createTenantDb };
 });
 
 import { processInboundWebhookHandler } from '@/lib/restaurant/webhook-inbox';
@@ -106,9 +138,9 @@ const TERMINAL_PAYLOAD = {
   providerReference: 'provider-ref-1',
 };
 
-function post(rawBody: string, headers: Record<string, string> = {}) {
+function post(rawBody: string, headers: Record<string, string> = {}, host = 'acme.devfathom.test') {
   return POST(
-    new Request(`https://acme.devfathom.test/api/restaurant/webhooks/${SOURCE}`, {
+    new Request(`https://${host}/api/restaurant/webhooks/${SOURCE}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: rawBody,
@@ -155,10 +187,16 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     state.jobs.length = 0;
     state.seq = 0;
     state.configured = true;
+    state.scoped = false;
+    state.queries.length = 0;
+    state.retireDuringAdmission = false;
+    state.ambiguous = false;
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'isolated-test-key');
     mocks.processTerminalEvent.mockReset();
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     delete process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
   });
 
@@ -203,6 +241,67 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     }
   );
 
+  it('returns byte-identical refusals for missing, ambiguous and mismatched signers before envelope validation', async () => {
+    const headers = {
+      'x-webhook-signature': '0'.repeat(64),
+      'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+    };
+    for (const [configured, ambiguous] of [
+      [false, false],
+      [true, true],
+      [true, false],
+    ] as const) {
+      state.configured = configured;
+      state.ambiguous = ambiguous;
+      const response = await post('{"invalid":true}', headers);
+      expect(response.status).toBe(401);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(
+        Buffer.from('{"error":"Invalid webhook signature."}')
+      );
+    }
+    expect(state.inbox.size).toBe(0);
+    expect(state.jobs).toHaveLength(0);
+  });
+
+  it('accepts a scoped receipt on its own host and refuses the same receipt on a second host', async () => {
+    state.scoped = true;
+    const raw = JSON.stringify({
+      externalEventId: 'scoped-fixture',
+      eventType: 'order.created',
+      payload: {},
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const headers = {
+      'x-webhook-timestamp': timestamp,
+      'x-webhook-signature': createHmac('sha256', 'org_acme-key')
+        .update(JSON.stringify([timestamp, SOURCE, 'org_acme-cfg']) + '.')
+        .update(raw)
+        .digest('hex'),
+    };
+    expect((await post(raw, headers)).status).toBe(202);
+    expect((await post(raw, headers, 'other.devfathom.test')).status).toBe(401);
+    expect((await post(raw, headers)).status).toBe(200);
+    expect(state.jobs).toHaveLength(1);
+  });
+
+  it('audits every legacy acceptance, including duplicates, and fails closed on an audit error', async () => {
+    const { recordAudit } = await import('@/server/audit');
+    vi.mocked(recordAudit).mockClear();
+    expect((await postSignedTerminal()).status).toBe(202);
+    expect((await postSignedTerminal()).status).toBe(200);
+    expect(recordAudit).toHaveBeenCalledTimes(2);
+    expect(recordAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_acme',
+        action: 'restaurant.webhook.legacy_key_accepted',
+        targetId: 'org_acme-cfg',
+      }),
+      expect.anything()
+    );
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(postSignedTerminal()).rejects.toThrow('audit unavailable');
+  });
+
   it('ignores an unsigned envelope that reuses an already-signed event id', async () => {
     expect((await postSignedTerminal()).status).toBe(202);
 
@@ -224,14 +323,60 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
 
   it('refuses even a correctly signed terminal envelope for an unconfigured provider', async () => {
     state.configured = false;
-    expect((await postSignedTerminal()).status).toBe(404);
+    expect((await postSignedTerminal()).status).toBe(401);
     expect(state.inbox.size).toBe(0);
     expect(state.jobs).toHaveLength(0);
   });
 
+  it('rejects absent and malformed headers before reading a body or looking up a signer', async () => {
+    for (const signature of ['', 'invalid']) {
+      const { request, bytesRead } = oversizedRequest(256 * 1024, {
+        headers: {
+          'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+          'x-webhook-signature': signature,
+        },
+      });
+      expect((await POST(request, { params: Promise.resolve({ source: SOURCE }) })).status).toBe(
+        401
+      );
+      expect(request.bodyUsed).toBe(false);
+      expect(bytesRead()).toBe(0);
+      expect(state.queries).toEqual([]);
+    }
+  });
+
+  it('checks the signature before locking and rechecks retirement under the lock before admission', async () => {
+    const raw = JSON.stringify({
+      externalEventId: 'ordering',
+      eventType: 'order.created',
+      payload: {},
+    });
+    const response = await post(raw, {
+      'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+      'x-webhook-signature': '0'.repeat(64),
+    });
+    expect(response.status).toBe(401);
+    expect(state.queries).toHaveLength(1);
+    expect(state.queries[0]).not.toMatch(/FOR SHARE|advisory_xact_lock/);
+    state.queries.length = 0;
+    state.retireDuringAdmission = true;
+    expect((await postSignedTerminal()).status).toBe(401);
+    expect(state.queries).toHaveLength(3);
+    expect(state.queries[0]).not.toMatch(/FOR SHARE|advisory_xact_lock/);
+    expect(state.queries[1]).toContain('advisory_xact_lock');
+    expect(state.queries[2]).toContain('FOR SHARE');
+    expect(state.jobs).toHaveLength(0);
+    expect(state.inbox.size).toBe(0);
+  });
+
   it('stops reading a chunked body at the limit', async () => {
     const limit = 256 * 1024;
-    const { request, cancelled, bytesRead } = oversizedRequest(limit);
+    const { request, cancelled, bytesRead } = oversizedRequest(limit, {
+      headers: {
+        'x-webhook-timestamp': String(Math.floor(Date.now() / 1000)),
+        'x-webhook-signature': '0'.repeat(64),
+      },
+    });
     expect((await POST(request, { params: Promise.resolve({ source: SOURCE }) })).status).toBe(413);
     expect(cancelled()).toBe(true);
     expect(bytesRead()).toBeLessThanOrEqual(limit + 16_384);

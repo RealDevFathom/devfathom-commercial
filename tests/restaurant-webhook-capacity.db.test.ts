@@ -1,14 +1,18 @@
 /** Opt in with an isolated *_webhook_quota_test database. Only the test owner
  * seeds aggregate counts. All queue and inbox operations use the runtime role. */
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 import { Client } from 'pg';
-import { expect, it } from 'vitest';
+import { encryptSecret } from '@/lib/secret-crypto';
+import { afterEach, expect, it, vi } from 'vitest';
+
+afterEach(() => vi.unstubAllEnvs());
 
 const runtimeUrl = process.env.RESTAURANT_WEBHOOK_QUOTA_TEST_DATABASE_URL;
 
 it.skipIf(!runtimeUrl)(
   'serializes cross-business admissions at both deployment thresholds',
   async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', randomUUID());
     const runtime = new URL(runtimeUrl!);
     const owner = new URL(process.env.MIGRATION_DATABASE_URL!);
     expect(runtime.pathname).toMatch(/_webhook_quota_test$/);
@@ -48,6 +52,7 @@ it.skipIf(!runtimeUrl)(
         )
       ).toEqual([{ rolsuper: false, rolbypassrls: false, access: false }]);
       const ids = [randomUUID(), randomUUID()];
+      const keys = new Map<string, { configId: string; secret: string }>();
       for (const id of ids) {
         await withPlatformDb((db) =>
           db.organization.create({
@@ -69,8 +74,10 @@ it.skipIf(!runtimeUrl)(
               deviceSecretHash: randomUUID(),
             },
           });
-          await db.restaurantTerminalProviderConfig.create({
+          const secret = randomUUID();
+          const config = await db.restaurantTerminalProviderConfig.create({
             data: {
+              encryptedSigningSecret: encryptSecret(secret),
               source: 'fixture',
               externalTerminalId: 'fixture-terminal',
               mode: 'WEBHOOK',
@@ -78,12 +85,12 @@ it.skipIf(!runtimeUrl)(
               branchId: branch.id,
             },
           });
+          keys.set(id, { configId: config.id, secret });
         });
       }
       const ordinary = {
         source: 'fixture',
         verificationStatus: 'VERIFIED' as const,
-        signatureMethod: 'HMAC_SHA256' as const,
         externalEventId: 'ordinary',
         eventType: 'restaurant.event',
         payload: {},
@@ -103,11 +110,31 @@ it.skipIf(!runtimeUrl)(
       };
       // Each pair runs on two independent runtime transactions with distinct
       // tenant advisory locks. Only the deployment counter is shared.
+      function deliver(id: string, input: typeof ordinary) {
+        const { source, externalEventId, eventType, payload } = input;
+        const { configId, secret } = keys.get(id)!;
+        const timestamp = String(Math.floor(Date.now() / 1000));
+        const rawBody = Buffer.from(JSON.stringify({ externalEventId, eventType, payload }));
+        const signature = createHmac('sha256', secret)
+          .update(JSON.stringify([timestamp, source, configId]) + '.')
+          .update(rawBody)
+          .digest('hex');
+        return recordInboundWebhook(createTenantDb(id), {
+          ...input,
+          providerSignature: {
+            configId,
+            // Select the signer by config id here. The DB trigger must independently
+            // check the stored terminal id before granting reserved capacity.
+            terminalId: null,
+            timestamp,
+            rawBody,
+            signature,
+          },
+        });
+      }
       async function race(input: typeof ordinary, before: number) {
         await seedCount(before);
-        const outcomes = await Promise.allSettled(
-          ids.map((id) => recordInboundWebhook(createTenantDb(id), input))
-        );
+        const outcomes = await Promise.allSettled(ids.map((id) => deliver(id, input)));
         expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
         expect(outcomes).toContainEqual({
           status: 'rejected',
@@ -123,17 +150,17 @@ it.skipIf(!runtimeUrl)(
         );
         expect(inboxCounts.toSorted()).toEqual([0, 1]);
         const winner = ids[inboxCounts.indexOf(1)]!;
-        const duplicate = await recordInboundWebhook(createTenantDb(winner), input);
+        const duplicate = await deliver(winner, input);
         expect(duplicate.deduplicated).toBe(true);
         expect(await count()).toBe(before + 1);
-        return { db: createTenantDb(winner), inboxId: duplicate.inbox.id };
+        return { db: createTenantDb(winner), id: winner, inboxId: duplicate.inbox.id };
       }
       const generic = await race(ordinary, 39_999);
       await expect(
         enqueue(generic.db, { type: 'webhook.process', payload: { inboxId: generic.inboxId } })
       ).rejects.toMatchObject({ reason: 'WEBHOOK_CAPACITY' });
       await expect(
-        recordInboundWebhook(generic.db, {
+        deliver(generic.id, {
           ...payment,
           externalEventId: 'unknown-terminal',
           payload: { ...payment.payload, terminalId: 'unconfigured' },
