@@ -524,6 +524,6 @@ it('refuses a large upload for the signed-in user when both slots are occupied',
   const response = await POST(multipartUpload('/api/restaurant/sop/evidence', 9));
   expect(response.status).toBe(429);
   expect(await response.text()).toContain('Wait for one to finish');
-  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-1');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-1', 'org-1');
   expect(mocks.putUpload).not.toHaveBeenCalled();
 });

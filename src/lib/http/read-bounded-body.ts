@@ -2,30 +2,43 @@
 export async function consumeBoundedBody(
   request: Request,
   limit: number,
-  acceptChunk?: (chunk: Uint8Array, total: number) => void | Promise<void>
+  acceptChunk?: (chunk: Uint8Array, total: number) => void | Promise<void>,
+  signal?: AbortSignal
 ): Promise<boolean> {
+  signal?.throwIfAborted();
   if (Number(request.headers.get('content-length')) > limit) return false;
   if (!request.body) return true;
   const reader = request.body.getReader();
+  function cancel() {
+    const canceled = reader.cancel().catch(() => undefined);
+    // A caller with a deadline must not wait for the producer's cleanup.
+    if (!signal) return canceled;
+  }
+  signal?.addEventListener('abort', cancel, { once: true });
   let total = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
+      signal?.throwIfAborted();
       if (done) return true;
       total += value.byteLength;
       if (total > limit) {
-        await reader.cancel().catch(() => undefined);
+        await cancel();
         return false;
       }
       if (value.byteLength) {
         const accepted = acceptChunk?.(value, total);
-        if (accepted) await accepted;
+        if (accepted) {
+          await accepted;
+          signal?.throwIfAborted();
+        }
       }
     }
   } catch (error) {
-    await reader.cancel().catch(() => undefined);
+    if (!signal?.aborted) await cancel();
     throw error;
   } finally {
+    signal?.removeEventListener('abort', cancel);
     reader.releaseLock();
   }
 }
