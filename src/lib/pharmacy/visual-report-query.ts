@@ -22,6 +22,7 @@ type ChartInput = {
   offset?: number;
 };
 type Row = {
+  currencies: string[] | null;
   included: bigint;
   key: string;
   label: string;
@@ -135,6 +136,7 @@ export async function readVisualChart(
     AS b(id text,first date,stop date,start_at timestamp,stop_at timestamp)
   ), facts AS (${facts})
   SELECT ${drill ? sql`ref AS key,detail AS label` : sql`key,label`},
+  ${profit ? sql`ARRAY_AGG(DISTINCT currency) FILTER(WHERE currency IS NOT NULL)` : sql`NULL::text[]`} AS currencies,
   COUNT(*) FILTER (WHERE excluded=0) AS included, SUM(amount)::bigint AS amount,SUM(base)::bigint AS base,SUM(excluded)::bigint AS excluded
   FROM facts ${drill ? sql`WHERE key=${input.bucket}` : Prisma.empty}
   GROUP BY ${groups} ORDER BY ${drill ? sql`ref` : sql`key`}
@@ -146,6 +148,7 @@ export async function readVisualChart(
   };
   return {
     period,
+    postedCurrencies: [...new Set(rows.flatMap((row) => row.currencies ?? []))].sort(),
     more: drill && rows.length > 50,
     rows: (drill ? rows.slice(0, 50) : rows).map((row) => {
       const amount = number(row.amount),

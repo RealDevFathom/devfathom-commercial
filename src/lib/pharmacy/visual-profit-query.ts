@@ -64,14 +64,14 @@ export function profitFacts(
       FROM postings GROUP BY 1,2,3,4
     ), evidence AS (
       SELECT ${daily ? sql`d.day` : sql`NULL::text`} AS day, p.product,
-        concat(p.entry,'/',p.source) AS ref, e.description AS description,
+        concat(p.entry,'/',p.source) AS ref, e.description AS description,e.currency::text AS currency,
         CASE WHEN p.verified THEN p.profit ELSE 0 END AS profit,
         CASE WHEN p.verified THEN p.net ELSE 0 END AS net,
         CASE WHEN p.verified THEN 0 ELSE 1 END AS excluded
       FROM lines p JOIN finance_journal_entries e ON e."organizationId"=${org} AND e.id=p.entry
       ${daily ? sql`JOIN days d ON d.id=p.branch AND e."occurredAt">=d.start_at AND e."occurredAt"<d.stop_at` : Prisma.empty}
       UNION ALL
-      SELECT s."businessDate"::text,l."medicineId",l.id,'No sale posting',0,0,1
+      SELECT s."businessDate"::text,l."medicineId",l.id,'No sale posting',NULL::text,0,0,1
       FROM bounds b JOIN pharmacy_sales s ON s."organizationId"=${org} AND s."branchId"=b.id AND s.status='COMPLETED'
         AND s."businessDate">=b.first AND s."businessDate"<b.stop
       JOIN pharmacy_sale_lines l ON l."organizationId"=s."organizationId" AND l."branchId"=s."branchId" AND l."saleId"=s.id
@@ -80,6 +80,6 @@ export function profitFacts(
     )
     SELECT ${group} AS key,${label} AS label,ref,
       concat(COALESCE(m."productName",'Unknown medicine'),' · ',description,CASE WHEN excluded>0 THEN ' · Cost unverified — excluded' END) AS detail,
-      profit AS amount,net AS base,excluded
+      profit AS amount,net AS base,excluded,currency
     FROM evidence LEFT JOIN pharmacy_medicines m ON m."organizationId"=${org} AND m.id=product`;
 }

@@ -1884,4 +1884,12 @@ describe('visual chart read boundary', () => {
       code: 'FORBIDDEN',
     });
   });
+  it('rejects a mismatched workspace before reading report evidence', async () => {
+    const ctx = context();
+    ctx.organization = { ...ctx.organization!, id: 'other' };
+    mocks.can.mockResolvedValue(true);
+    await expect(pharmacyReportsRouter.createCaller(ctx).visualChart(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
 });

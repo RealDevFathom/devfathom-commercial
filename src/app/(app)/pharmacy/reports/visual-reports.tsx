@@ -152,9 +152,26 @@ function ChartPanel({
 }) {
   const current = useChart(chart, filters),
     prior = useChart(chart, filters, true, compare && main);
-  const format = formatter(chart, currency),
+  const currencies = current.data?.postedCurrencies ?? [];
+  const priorCurrencies = prior.data?.postedCurrencies ?? [];
+  const differentCurrency =
+    priorCurrencies.length > 1 ||
+    (currencies.length === 1 &&
+      priorCurrencies.length === 1 &&
+      currencies[0] !== priorCurrencies[0]);
+  const comparisonData = differentCurrency ? undefined : prior.data;
+  if (currencies.length > 1)
+    return (
+      <SectionCard title={CHARTS[chart]}>
+        <p role="status">
+          This period contains postings in {currencies.join(' and ')}. Choose a branch or period
+          with one currency to see profit.
+        </p>
+      </SectionCard>
+    );
+  const format = formatter(chart, currencies[0] ?? currency),
     rows = current.data?.rows ?? [],
-    before = prior.data?.rows ?? [];
+    before = comparisonData?.rows ?? [];
   const period = current.data?.period;
   const previousRows = new Map(before.map((row) => [row.key, row]));
   const points: BusinessChartPoint[] = [];
@@ -174,15 +191,15 @@ function ChartPanel({
     const currentRows = new Map(rows.map((r) => [r.key, r]));
     for (let date = period.from, i = 0; date <= period.to; date = shiftPharmacyDay(date, 1), i++) {
       const row = currentRows.get(date);
-      const previous = prior.data
-        ? previousRows.get(shiftPharmacyDay(prior.data.period.from, i))
+      const previous = comparisonData
+        ? previousRows.get(shiftPharmacyDay(comparisonData.period.from, i))
         : null;
       points.push({
         key: date,
         label: date,
         value: row?.value ?? (isProfit(chart) ? null : 0),
-        previous: previous?.value ?? (prior.data && !isProfit(chart) ? 0 : null),
-        previousKey: prior.data ? shiftPharmacyDay(prior.data.period.from, i) : undefined,
+        previous: previous?.value ?? (comparisonData && !isProfit(chart) ? 0 : null),
+        previousKey: comparisonData ? shiftPharmacyDay(comparisonData.period.from, i) : undefined,
         secondary: row?.base ?? 0,
       });
     }
@@ -223,7 +240,7 @@ function ChartPanel({
                       : 'Gross profit'
                 }
                 value={total(rows, chart)}
-                prior={total(prior.data?.rows, chart)}
+                prior={total(comparisonData?.rows, chart)}
                 compare={compare}
                 format={format}
               />
@@ -235,7 +252,7 @@ function ChartPanel({
                   label={chart === 'returnsDay' ? 'Return rate' : 'Gross margin'}
                   value={total(rows, chart === 'returnsDay' ? 'returnRate' : 'marginDay')}
                   prior={total(
-                    prior.data?.rows,
+                    comparisonData?.rows,
                     chart === 'returnsDay' ? 'returnRate' : 'marginDay'
                   )}
                   compare={compare}
@@ -248,6 +265,12 @@ function ChartPanel({
             <p role="note" className="mb-3 text-sm text-text-muted">
               {excluded} {excluded === 1 ? 'line' : 'lines'} excluded for missing or unverified
               cost.
+            </p>
+          )}
+          {compare && main && differentCurrency && (
+            <p className="text-sm text-text-muted">
+              The two periods have different posted currencies. A monetary comparison is
+              unavailable.
             </p>
           )}
           {compare && main && prior.isError && (
@@ -264,7 +287,7 @@ function ChartPanel({
             empty="No matching activity. Try a different branch or a wider period."
             format={format}
             line={isDaily(chart)}
-            comparison={compare && main && !!prior.data}
+            comparison={compare && main && !!comparisonData}
             secondaryLabel={chart === 'returnsDay' ? 'Completed sales' : undefined}
             unitScale={percent(chart) || chart === 'returnMedicine' ? 1 : 100}
             onSelectPrevious={
@@ -282,9 +305,9 @@ function ChartPanel({
             }
             onSelect={(p) => select({ chart, key: p.key!, label: p.label })}
           />
-          {main && compare && prior.data && (
+          {main && compare && comparisonData && (
             <p className="mt-2 text-xs text-text-muted">
-              Previous period · {rangeLabel(prior.data.period)}
+              Previous period · {rangeLabel(comparisonData.period)}
             </p>
           )}
         </>
@@ -314,8 +337,9 @@ function DetailPanel({
     },
     { retry: false }
   );
+  const postedCurrency = q.data?.postedCurrencies?.[0] ?? currency;
   const amount = (v: number) =>
-    selection.chart === 'returnMedicine' ? v + ' units' : reportMoney(v, currency);
+    selection.chart === 'returnMedicine' ? v + ' units' : reportMoney(v, postedCurrency);
   return (
     <SectionCard
       title={CHARTS[selection.chart] + ' · ' + selection.label}
@@ -340,7 +364,7 @@ function DetailPanel({
                     selection.chart === 'returnRate' ||
                     isProfit(selection.chart)) &&
                   row.base !== 0
-                    ? ' · Sales ' + reportMoney(row.base, currency)
+                    ? ' · Sales ' + reportMoney(row.base, postedCurrency)
                     : ''}
                 </span>
               </li>
@@ -382,19 +406,25 @@ function Figures({
   const q = useChart(chart, filters);
   if (!q.data)
     return <p role="status">{q.isError ? 'Figures could not be loaded.' : 'Loading figures…'}</p>;
+  const currencies = q.data.postedCurrencies ?? [];
+  if (currencies.length > 1)
+    return (
+      <p role="status">Choose one posted currency before viewing or exporting profit figures.</p>
+    );
+  const postedCurrency = currencies[0] ?? currency;
   return (
     <VisualReportTable
       rows={q.data.rows}
       unit={percent(chart) ? 'percent' : chart === 'returnMedicine' ? 'units' : 'money'}
-      currency={currency}
+      currency={postedCurrency}
       title={CHARTS[chart]}
       scope={branchLabel + ' · ' + rangeLabel(q.data.period)}
-      format={formatter(chart, currency)}
+      format={formatter(chart, postedCurrency)}
       extra={
         isProfit(chart) || chart === 'returnsDay' || chart === 'returnRate'
           ? {
               label: isProfit(chart) ? 'Net revenue' : 'Sales',
-              format: (r) => reportMoney(r.base, currency),
+              format: (r) => reportMoney(r.base, postedCurrency),
             }
           : undefined
       }

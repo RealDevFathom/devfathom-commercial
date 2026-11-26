@@ -354,6 +354,16 @@ export const pharmacyReportsRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      if (
+        !organizationId ||
+        ctx.organization?.id !== organizationId ||
+        ctx.session.user.organizationId !== organizationId
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Organization is outside your report scope.',
+        });
       await requireFinancialReports(ctx);
       const available = await reportScope(ctx, await pharmacyReportAccess(ctx));
       const branches = available.branches.filter(

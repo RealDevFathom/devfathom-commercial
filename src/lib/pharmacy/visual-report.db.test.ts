@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { grossMargin } from './finance-reports';
+import { grossMargin, ledgerCurrencies } from './finance-reports';
 import { readPharmacyOwnerCommandCentre } from './reports';
 import { readVisualChart } from './visual-report-query';
 import { seedVisualReport } from './visual-report.fixture';
@@ -95,6 +95,16 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
         const row = report.rows[0]!;
         const profit = REPORT_CHARTS.Profit.some((id) => id === chart);
         if (profit) {
+          const posted = await ledgerCurrencies(
+            db,
+            { organizationId: org, branchId: branch },
+            {
+              from: new Date(day),
+              to: new Date('2026-11-25'),
+              accountCodes: ['SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD'],
+            }
+          );
+          expect(report.postedCurrencies).toEqual(posted);
           expect(row.amount).toBe(expected.grossMarginMinor);
           expect(row.base).toBe(expected.revenueMinor - expected.discountMinor);
           expect(row.excluded).toBe(1);
