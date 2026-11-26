@@ -329,6 +329,15 @@ test('an outside supplier confirms one order, proposes a date and attaches a PDF
   });
   expect(issue.status()).toBe(200);
   const token = (await issue.json()).result.data.json.token;
+  const shortExpiry = new Date(Date.now() + 10_000);
+  const shortLink = await page.request.post('/api/trpc/pharmacySupplierLinks.issue', {
+    data: {
+      json: { ...fixture.supplierOrder, expiresAt: shortExpiry.toISOString() },
+      meta: { values: { expiresAt: ['Date'] } },
+    },
+  });
+  expect(shortLink.status()).toBe(200);
+  const expiringToken = (await shortLink.json()).result.data.json.token;
   const guest = await browser.newContext({ baseURL, viewport: { width: 375, height: 812 } });
   try {
     const supplier = await guest.newPage();
@@ -397,6 +406,21 @@ test('an outside supplier confirms one order, proposes a date and attaches a PDF
     expect(await supplier.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
       true
     );
+
+    await expect.poll(() => Date.now()).toBeGreaterThanOrEqual(shortExpiry.getTime());
+    const invalidPages: string[] = [];
+    for (const invalidToken of [expiringToken, 'synthetic-unknown-supplier-link']) {
+      const lookup = supplier.waitForResponse((res) =>
+        res.url().includes('/api/trpc/pharmacySupplierLinks.get')
+      );
+      await supplier.goto('/supplier/po/' + invalidToken);
+      expect((await lookup).status()).toBe(404);
+      await expect(supplier.getByRole('heading', { level: 1 })).toHaveText(
+        'This link is not valid'
+      );
+      invalidPages.push(await supplier.locator('main').innerText());
+    }
+    expect(invalidPages[0]).toBe(invalidPages[1]);
   } finally {
     await guest.close();
   }

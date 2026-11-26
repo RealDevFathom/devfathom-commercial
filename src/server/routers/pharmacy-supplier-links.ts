@@ -47,6 +47,10 @@ async function assertBranch(ctx: TRPCContext, branchId: string) {
 
 function mapError(error: unknown): never {
   if (!(error instanceof SupplierLinkError)) throw error;
+  if (error.reason === 'EXPIRY_NOT_FUTURE')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be in the future.' });
+  if (error.reason === 'EXPIRY_TOO_LATE')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be within 30 days.' });
   if (error.reason === 'INVALID_LINK' || error.exhausted) throw genericLinkError();
   throw new TRPCError({
     code:
@@ -93,12 +97,15 @@ export const pharmacySupplierLinksRouter = router({
     .meta(PROCUREMENT)
     .input(
       z
-        .object({ branchId: id, relationshipId: id, purchaseOrderId: id, expiresAt: z.date() })
+        .object({
+          branchId: id,
+          relationshipId: id,
+          purchaseOrderId: id,
+          expiresAt: z.date().optional(),
+        })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (input.expiresAt <= new Date())
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be in the future.' });
       await assertBranch(ctx, input.branchId);
       try {
         return await issueSupplierActionLink(ctx.db, {

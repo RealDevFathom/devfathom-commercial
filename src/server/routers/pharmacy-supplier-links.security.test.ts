@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -67,7 +67,6 @@ const actions = {
       branchId: 'branch',
       relationshipId: 'relationship',
       purchaseOrderId: 'order',
-      expiresAt: new Date('2035-01-01'),
     }),
   revoke: () => f.caller.revoke({ linkId: 'link' }),
   recordManual: () =>
@@ -185,6 +184,49 @@ it('issues a signed link for an assigned procurement actor and matching supplier
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+describe('supplier link expiry at issuance', () => {
+  const issuedAt = new Date('2028-02-20T12:34:56.789Z');
+  const order = { branchId: 'branch', relationshipId: 'relationship', purchaseOrderId: 'order' };
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(issuedAt);
+    vi.stubEnv('AUTH_SECRET', 'synthetic-supplier-lifetime-fixture');
+    f.db.pharmacySupplierRelationship.findFirst.mockResolvedValue({ supplierId: 'supplier' });
+    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'order', supplierId: 'supplier' });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  it.each([
+    ['defaults to 14 days', undefined, '2028-03-05T12:34:56.789Z'],
+    ['honors a shorter expiry', '2028-02-21T08:00:00Z', '2028-02-21T08:00:00Z'],
+    ['accepts exactly 30 days', '2028-03-21T12:34:56.789Z', '2028-03-21T12:34:56.789Z'],
+  ] as const)('%s', async (_name, requested, expected) => {
+    const result = await f.caller.issue(
+      requested ? { ...order, expiresAt: new Date(requested) } : order
+    );
+    expect(result.expiresAt).toEqual(new Date(expected));
+    expect(f.db.pharmacySupplierActionLink.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ expiresAt: new Date(expected) }),
+    });
+  });
+
+  it.each([
+    ['at issuance', issuedAt],
+    ['one millisecond over 30 days', new Date('2028-03-21T12:34:56.790Z')],
+  ] as const)('refuses expiry %s without creating a link', async (_name, expiresAt) => {
+    const outcome = await f.caller.issue({ ...order, expiresAt }).then(
+      () => 'issued',
+      (error) => error.code
+    );
+    expect(outcome).toBe('BAD_REQUEST');
+    expect(f.db.pharmacySupplierActionLink.create).not.toHaveBeenCalled();
+  });
 });
 
 it('records manual evidence for the assigned branch', async () => {

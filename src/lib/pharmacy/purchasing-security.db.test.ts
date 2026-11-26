@@ -96,7 +96,6 @@ async function newLink() {
       relationshipId: id('relationship'),
       purchaseOrderId: order.id,
       actorUserId: id('owner'),
-      expiresAt: expiry,
     })
   );
 }

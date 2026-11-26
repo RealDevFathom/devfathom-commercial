@@ -14,6 +14,8 @@ export class SupplierLinkError extends Error {
   constructor(
     public readonly reason:
       | 'INVALID_LINK'
+      | 'EXPIRY_NOT_FUTURE'
+      | 'EXPIRY_TOO_LATE'
       | 'MISMATCH'
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_UPLOAD'
@@ -123,6 +125,8 @@ export function supplierLinkId(token: string): string | null {
   return expected.length === candidate.length && timingSafeEqual(expected, candidate) ? id : null;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export async function issueSupplierActionLink(
   db: ScopedDb,
   input: {
@@ -131,9 +135,14 @@ export async function issueSupplierActionLink(
     relationshipId: string;
     purchaseOrderId: string;
     actorUserId: string;
-    expiresAt: Date;
+    expiresAt?: Date;
   }
 ) {
+  const now = Date.now();
+  const expiresAt = input.expiresAt ?? new Date(now + 14 * DAY_MS);
+  if (!(expiresAt.getTime() > now)) throw new SupplierLinkError('EXPIRY_NOT_FUTURE');
+  if (expiresAt.getTime() > now + 30 * DAY_MS) throw new SupplierLinkError('EXPIRY_TOO_LATE');
+
   const [relationship, purchaseOrder] = await Promise.all([
     db.pharmacySupplierRelationship.findFirst({
       where: { id: input.relationshipId, branchId: input.branchId, active: true, revokedAt: null },
@@ -156,11 +165,11 @@ export async function issueSupplierActionLink(
       supplierRelationshipId: input.relationshipId,
       purchaseOrderId: input.purchaseOrderId,
       tokenHash: digest(secret),
-      expiresAt: input.expiresAt,
+      expiresAt,
       createdByUserId: input.actorUserId,
     },
   });
-  return { token: `${body}.${signature(body)}`, expiresAt: input.expiresAt };
+  return { token: `${body}.${signature(body)}`, expiresAt };
 }
 
 async function liveLink(db: ScopedDb, token: string, now = new Date()) {
