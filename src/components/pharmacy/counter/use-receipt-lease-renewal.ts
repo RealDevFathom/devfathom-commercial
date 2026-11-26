@@ -8,6 +8,7 @@ import {
   type LeaseRenewalResult,
   type PharmacyCounterRuntime,
 } from '@/lib/pharmacy/counter-offline-runtime';
+import { reserveCounterReceipts } from '@/lib/pharmacy/counter-offline-transport';
 
 export const COUNTER_LEASE_PATH = '/api/pharmacy/counter/lease';
 
@@ -49,23 +50,30 @@ export function counterLeaseReserver(
  * topped up in the background (now, every interval, and on reconnect) so a cashier
  * is never stopped mid-shift by an exhausted lease. Stops when the counter closes,
  * the session changes or the component unmounts. Returns the latest attempt.
+ * DEV-957 passes only the session token. The browser supplies its HttpOnly cookie.
  */
 export function useReceiptLeaseRenewal(
   runtime: Pick<PharmacyCounterRuntime, 'renewReceiptLeases'> | null,
-  credentials: CounterTerminalCredentials | null,
+  credentials: { sessionToken: string; deviceSecret?: string } | null,
   options: { intervalMs?: number; fetchImpl?: typeof fetch } = {}
 ): LeaseRenewalResult | null {
-  const [result, setResult] = useState<LeaseRenewalResult | null>(null);
+  const [latest, setLatest] = useState<{
+    runtime: NonNullable<typeof runtime>;
+    sessionToken: string;
+    result: LeaseRenewalResult;
+  } | null>(null);
   const deviceSecret = credentials?.deviceSecret ?? null;
   const sessionToken = credentials?.sessionToken ?? null;
   const { intervalMs, fetchImpl } = options;
   useEffect(() => {
-    if (!runtime || !deviceSecret || !sessionToken) return;
+    if (!runtime || !sessionToken) return;
     return startReceiptLeaseRenewal(
       runtime,
-      counterLeaseReserver({ deviceSecret, sessionToken }, fetchImpl),
-      { intervalMs, onResult: setResult }
+      deviceSecret
+        ? counterLeaseReserver({ deviceSecret, sessionToken }, fetchImpl)
+        : (size) => reserveCounterReceipts(sessionToken, size),
+      { intervalMs, onResult: (result) => setLatest({ runtime, sessionToken, result }) }
     );
   }, [runtime, deviceSecret, sessionToken, intervalMs, fetchImpl]);
-  return result;
+  return latest?.runtime === runtime && latest.sessionToken === sessionToken ? latest.result : null;
 }
