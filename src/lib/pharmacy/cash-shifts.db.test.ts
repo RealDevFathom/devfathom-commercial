@@ -401,7 +401,8 @@ async function asMember<T>(
     caller: ReturnType<
       (typeof import('@/server/routers/pharmacy-sales'))['pharmacySalesRouter']['createCaller']
     >
-  ) => Promise<T>
+  ) => Promise<T>,
+  approvalCounter?: import('@/server/trpc').TRPCContext['approvalCounter']
 ) {
   const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
   const organizationId = s.owner.organizationId;
@@ -433,6 +434,7 @@ async function asMember<T>(
           support: null,
           requestMeta: { ip: null, userAgent: null },
           audit: { detail: {} },
+          approvalCounter,
         } as never)
       ),
     { userId, timeout: 60_000 }
@@ -2258,6 +2260,86 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
       vi.unstubAllEnvs();
     }
   });
+
+  it.each(['cashier', 'till', 'approver'] as const)(
+    'DEV-961: a spent %s budget refuses a valid code at the tender discard entry point without consuming or auditing it',
+    async (cap) => {
+      const s = await shop('spent_' + cap, { shifts: true, approvalAuthenticator: true });
+      const { establishToken, issueApprovalDeviceProof } =
+        await import('./counter-terminal-session');
+      const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+      const { generateTotpSecret } = await import('@/lib/totp');
+      const { encryptSecret } = await import('@/lib/secret-crypto');
+      const seed = generateTotpSecret();
+      const scope = s.as(s.cashier);
+      const { device, secret } = await tenant(s.owner, async (db) => {
+        await db.approvalAuthenticator.create({
+          data: {
+            userId: s.manager,
+            encryptedSecret: encryptSecret(seed),
+            enabledAt: new Date(),
+            lastUsedStep: 1,
+          },
+        });
+        return devices.enrollPharmacyCounter(db, s.owner, { name: 'Budget fixture' });
+      });
+      const key = {
+        cashier: JSON.stringify(['pharmacy-approval-requester', scope.organizationId, s.cashier]),
+        till: JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),
+        approver: `approver-pin-typed-by-another:${scope.organizationId}:${s.manager}`,
+      }[cap];
+      await tenant(
+        scope,
+        (db) => db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+        VALUES (${rateLimitStorageKey(key)}, 5, now() + interval '15 minutes')`
+      );
+      const snapshot = () =>
+        tenant(scope, async (db) => ({
+          auditRows: await db.auditLog.count(),
+          authenticator: await db.approvalAuthenticator.findFirstOrThrow({
+            where: { userId: s.manager },
+            select: { lastUsedStep: true },
+          }),
+        }));
+      const before = await snapshot();
+      const sessionToken = establishToken({ scope, deviceId: device.id, deviceSecret: secret });
+      vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+      try {
+        await expect(
+          asMember(
+            s,
+            s.cashier,
+            (caller) =>
+              caller.discardTenderAttempt({
+                attempt: {
+                  branchId: scope.branchId,
+                  saleId: 'fixture-only',
+                  deviceId: device.id,
+                  businessDate: s.today,
+                  type: 'CASH',
+                  amountMinor: 1,
+                  idempotencyKey: 'fixture-only',
+                },
+                reason: 'Synthetic budget verification',
+                approval: { pin: codeAt(seed, new Date()) },
+              }),
+            {
+              deviceId: device.id,
+              sessionToken,
+              deviceProof: issueApprovalDeviceProof(sessionToken),
+            }
+          )
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message:
+            'Discarding a payment attempt needs a manager or owner to approve it with their authenticator code.',
+        });
+        expect(await snapshot()).toEqual(before);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
 
   it('DEV-961: the variance approval and its solo self-approval follow the approval setting; app codes typed by someone else spend the same guess budget as PINs', async () => {
     const { encryptSecret } = await import('@/lib/secret-crypto');
