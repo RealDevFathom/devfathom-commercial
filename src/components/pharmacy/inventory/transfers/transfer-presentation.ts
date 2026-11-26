@@ -37,6 +37,7 @@ export function transferStatusLabel(transfer: Pick<TransferBoardRow, 'status' | 
   return (
     {
       DRAFT: 'Draft',
+      SUPERSEDED: 'Replaced',
       ALLOCATED: 'Awaiting approval',
       APPROVED: 'Ready to dispatch',
       DISPATCHED: 'In transit',
@@ -132,4 +133,11 @@ export function transferErrorMessage(action: TransferAction, error: unknown): st
     default:
       return reason || 'The transfer action could not be completed.';
   }
+}
+
+/** A quality hold may also withdraw the pick and reset approval. */
+export function isDispatchHeld(transfer: { status: string }) {
+  return (
+    transfer.status === 'APPROVED' || transfer.status === 'ALLOCATED' || transfer.status === 'DRAFT'
+  );
 }

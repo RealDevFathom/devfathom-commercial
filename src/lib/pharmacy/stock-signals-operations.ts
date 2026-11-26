@@ -192,6 +192,11 @@ export async function loadSignalFacts(
       WHERE line."organizationId" = ${scope.organizationId}
         AND transfer."toBranchId" = ${scope.branchId}
         AND transfer."status" IN ('APPROVED','DISPATCHED','PARTIALLY_RECEIVED')
+        AND NOT EXISTS (
+          SELECT 1 FROM pharmacy_warehouse_reservations withdrawn
+          WHERE withdrawn."organizationId" = line."organizationId"
+            AND withdrawn."transferLineId" = line.id AND withdrawn.state = 'CANCELLED'
+        )
       GROUP BY batch."medicineId", transfer."id"
       HAVING SUM(line."quantityUnits" - line."receivedUnits") > 0
       ORDER BY transfer."id" ASC, batch."medicineId" ASC`

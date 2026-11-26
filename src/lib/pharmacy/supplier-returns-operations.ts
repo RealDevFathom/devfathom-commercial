@@ -33,6 +33,7 @@ import { appendControlledSupplierReturn, lockRegister } from './controlled-regis
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { eligibleHeldSupplierReturns } from './warehouse-supplier-returns';
 import { postSupplierClaimEntry } from './finance-postings';
 import type { LedgerScope } from './stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
@@ -214,6 +215,7 @@ export async function submitPurchaseReturn(
   scope: LedgerScope,
   input: { purchaseReturnId: string; at: Date }
 ) {
+  await db.$queryRaw`SELECT id FROM pharmacy_purchase_returns WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${input.purchaseReturnId} FOR UPDATE`;
   const found = await loadReturn(db, scope, input.purchaseReturnId);
   assertPurchaseReturnTransition(found.status as PurchaseReturnStatus, 'SUBMITTED');
 
@@ -227,27 +229,55 @@ export async function submitPurchaseReturn(
       FROM "pharmacy_stock_balances" balance
       WHERE balance."organizationId" = ${scope.organizationId}
         AND balance."branchId" = ${scope.branchId}
-        AND balance."disposition" = 'AVAILABLE'
+        AND balance."disposition" IN ('AVAILABLE', 'QUARANTINE', 'DAMAGED')
         AND balance."inventoryLotId" IN (${Prisma.join(
           found.lines.length ? found.lines.map((line) => line.inventoryLotId) : ['']
         )})`,
     { balance: true }
   );
+  const quality = await eligibleHeldSupplierReturns(
+    db,
+    scope,
+    found.lines.map((line) => line.inventoryLotId)
+  );
+  const heldLines = new Set<string>();
+  for (const line of found.lines) {
+    const index = quality.findIndex(
+      (q) =>
+        q.supplierId === found.supplierId &&
+        q.inventoryLotId === line.inventoryLotId &&
+        q.stockLocationId === line.stockLocationId &&
+        q.quantityUnits === line.quantityUnits
+    );
+    if (index < 0) continue;
+    const [incident] = quality.splice(index, 1);
+    const assigned = await db.pharmacyWarehouseQualityIncident.updateMany({
+      where: { id: incident!.id, status: 'RETURN', supplierReturnLineId: null },
+      data: { supplierReturnLineId: line.id },
+    });
+    if (assigned.count !== 1) throw new PharmacySupplierReturnError('ALREADY_CLAIMED');
+    heldLines.add(line.id);
+  }
+
   for (const line of found.lines) {
     assertReturnWindowOpen({ returnWindowEndsAt: line.returnWindowEndsAt, at: input.at });
-    const locked = await lockLotForClaim(db, scope, line.inventoryLotId);
-    if (!locked) throw new PharmacySupplierReturnError('ALREADY_CLAIMED');
-    assertClaimable({
-      onHandUnits: locked.onHandUnits,
-      reservedUnits: locked.reservedUnits,
-      requestedUnits: line.quantityUnits,
-    });
+    if (!heldLines.has(line.id)) {
+      const locked = await lockLotForClaim(db, scope, line.inventoryLotId);
+      if (!locked) throw new PharmacySupplierReturnError('ALREADY_CLAIMED');
+      assertClaimable({
+        onHandUnits: locked.onHandUnits,
+        reservedUnits: locked.reservedUnits,
+        requestedUnits: line.quantityUnits,
+      });
+    }
     const claim = await db.pharmacySupplierClaim.create({
       data: {
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         inventoryLotId: line.inventoryLotId,
         reservedUnits: line.quantityUnits,
+        // A quality return already owns physical held stock, so it must not reserve saleable units again.
+        ...(heldLines.has(line.id) ? { status: 'SUBMITTED' as const } : {}),
         returnBy: line.returnWindowEndsAt,
         createdById: scope.actorId,
       },
@@ -284,7 +314,8 @@ async function removalArrangement(
   inventoryLotId: string,
   stockLocationId: string,
   units: number,
-  unitsPerPack: number
+  unitsPerPack: number,
+  disposition: 'AVAILABLE' | 'DAMAGED' | 'QUARANTINE' = 'AVAILABLE'
 ) {
   const balance = await db.pharmacyStockBalance.findFirst({
     where: {
@@ -292,7 +323,7 @@ async function removalArrangement(
       branchId: scope.branchId,
       inventoryLotId,
       stockLocationId,
-      disposition: 'AVAILABLE',
+      disposition,
     },
   });
   if (!balance || balance.onHandUnits < units) {
@@ -447,16 +478,33 @@ export async function dispatchPurchaseReturn(
     return loadReturn(db, scope, found.id);
   }
 
+  const decisions = await db.pharmacyWarehouseQualityIncident.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'RETURN',
+      supplierReturnLineId: { in: found.lines.map((line) => line.id) },
+    },
+    select: { supplierReturnLineId: true, sourceKey: true },
+  });
+  const heldSources = new Map(
+    decisions.map((q) => [
+      q.supplierReturnLineId,
+      q.sourceKey.startsWith('damage:') ? ('DAMAGED' as const) : ('QUARANTINE' as const),
+    ])
+  );
   // DEV-825: every balance the dispatch writes, locked once in the global key order.
   await lockStockBalances(
     db,
     scope,
     found.lines.flatMap((line) =>
-      (['AVAILABLE', 'RETURN_TO_SUPPLIER'] as const).map((disposition) => ({
-        inventoryLotId: line.inventoryLotId,
-        stockLocationId: line.stockLocationId,
-        disposition,
-      }))
+      ([heldSources.get(line.id) ?? 'AVAILABLE', 'RETURN_TO_SUPPLIER'] as const).map(
+        (disposition) => ({
+          inventoryLotId: line.inventoryLotId,
+          stockLocationId: line.stockLocationId,
+          disposition,
+        })
+      )
     )
   );
   for (const [index, line] of found.lines.entries()) {
@@ -466,7 +514,8 @@ export async function dispatchPurchaseReturn(
       line.inventoryLotId,
       line.stockLocationId,
       line.quantityUnits,
-      line.lot.unitsPerPack
+      line.lot.unitsPerPack,
+      heldSources.get(line.id) ?? 'AVAILABLE'
     );
     // ADJUSTMENT on both legs, exactly as `quarantinePart` does: this is a
     // disposition move within one lot and location, and the ledger's direction
@@ -487,7 +536,7 @@ export async function dispatchPurchaseReturn(
     const outgoing = await db.pharmacyStockMovement.create({
       data: {
         ...common,
-        disposition: 'AVAILABLE',
+        disposition: heldSources.get(line.id) ?? 'AVAILABLE',
         quantityUnits: -line.quantityUnits,
         sealedPackDelta: -arrangement.sealedPacks,
         looseUnitDelta: -arrangement.looseUnits,

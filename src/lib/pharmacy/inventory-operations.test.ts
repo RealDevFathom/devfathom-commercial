@@ -45,6 +45,7 @@ function database(witness: { id: string } | null) {
         .fn()
         .mockResolvedValue({ state: 'ACTIVE', expiresAt: new Date('2099-01-01T00:00:00.000Z') }),
     },
+    pharmacyWarehouseQualityIncident: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyStockBalance: {
       findFirst: vi.fn().mockResolvedValue({ onHandUnits: 20, looseUnits: 5 }),
     },

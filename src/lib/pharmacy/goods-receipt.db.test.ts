@@ -355,6 +355,211 @@ beforeAll(async () => {
   );
 }, 120_000);
 
+describeIfDatabase('Warehouse receiving and put-away', () => {
+  it('offers a reviewed receipt lot to its recorded supplier after the distributor changes name', async () => {
+    const f = await fixture(ORG_A, tag('return-supplier'), 'return-supplier');
+    const scope = scopeOf(f);
+    const { quarantinePart } = await import('./inventory-operations');
+    const { openWarehouseIncident, reviewWarehouseQuality } = await import('./warehouse-quality');
+    const { listReturnableLots } = await import('./purchasing-console');
+    await inOrg(ORG_A, async (db) => {
+      const draft = await draftReceipt(db, f, 'return-supplier', {
+        line: { receivedPacks: 2, bonusPacks: 0 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scope, {
+        goodsReceiptId: draft.id,
+        at: RECEIVED_AT,
+      });
+      const inventoryLotId = posted.lines[0]!.inventoryLotId!;
+      const original = await db.pharmacySupplier.findUniqueOrThrow({ where: { id: f.supplierId } });
+      await db.pharmacySupplier.update({
+        where: { id: f.supplierId },
+        data: { name: tag('New distributor name') },
+      });
+      await db.pharmacySupplier.create({ data: { organizationId: ORG_A, name: original.name } });
+      const stock = { inventoryLotId, stockLocationId: f.storeId };
+      await quarantinePart(db, scope, {
+        ...stock,
+        units: 20,
+        reason: 'Transport excursion',
+        idempotencyKeyPrefix: tag('hold'),
+      });
+      const incident = await openWarehouseIncident(db, scope, {
+        ...stock,
+        quantityUnits: 20,
+        quarantineUnits: 20,
+        sourceKey: tag('incident'),
+        reason: 'Transit excursion',
+      });
+      await reviewWarehouseQuality(db, scope, {
+        incidentId: incident.id,
+        decision: 'RETURN',
+        reason: 'Warranty return',
+        evidenceRef: tag('review'),
+      });
+      const options = await listReturnableLots(db, scope);
+      expect(options.filter((row) => row.lot.id === inventoryLotId)).toMatchObject([
+        {
+          location: { id: f.storeId },
+          onHandUnits: 0,
+          approvedHeldReturns: [
+            { supplierId: f.supplierId, disposition: 'QUARANTINE', quantityUnits: 20 },
+          ],
+        },
+      ]);
+    });
+  });
+
+  it('holds accepted units, keeps rejects in quarantine, validates the physical scans and releases once', async () => {
+    const inbound = await import('./warehouse-inbound');
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    const branchId = tag('warehouse');
+    const f = await fixture(ORG_A, branchId, 'warehouse');
+    const scope = scopeOf(f);
+    const start = new Date('2026-01-01T00:00:00Z');
+    const end = new Date('2028-01-01T00:00:00Z');
+    const rules = await withPlatformDb((db) =>
+      db.jurisdictionRuleSet.create({
+        data: {
+          code: tag('warehouse-rules'),
+          version: 1,
+          effectiveFrom: start,
+          licenceCategories: {},
+          permittedSchedules: {},
+          prescriptionOnlyClasses: {},
+          prescriptionRetentionDays: {},
+          controlledRegisterFlags: {},
+          pharmacistCoverageRule: {},
+          recordRetentionByClass: {},
+        },
+      })
+    );
+    const source = await inOrg(ORG_A, async (db) => {
+      await db.pharmacyBranch.update({ where: { id: branchId }, data: { warehouseEnabled: true } });
+      await db.branchRegulatoryProfile.create({
+        data: {
+          organizationId: ORG_A,
+          branchId,
+          version: 1,
+          effectiveFrom: start,
+          provinceCode: 'PB',
+          jurisdictionRuleSetId: rules.id,
+          premises: { addressLine: '1 Test Road', city: 'Lahore' },
+          licenceCategory: 'WAREHOUSE',
+          licenceNumber: 'TEST-WH',
+          licenceValidFrom: start,
+          licenceValidTo: end,
+          licenceEvidenceFileRef: 'test-evidence',
+          permittedSchedules: [],
+          qualifiedPersonRegistration: 'TEST-QP',
+          qualifiedPersonValidFrom: start,
+          qualifiedPersonValidTo: end,
+          qualifiedPersonCoverageRosterRef: 'test-roster',
+          fiscalStatus: 'test',
+          retentionPolicy: {},
+        },
+      });
+      await db.medicine.update({ where: { id: f.medicineId }, data: { saleable: true } });
+      const destination = await db.pharmacyStockLocation.create({
+        data: {
+          organizationId: ORG_A,
+          branchId,
+          code: 'A-01',
+          name: 'Rack A',
+          kind: 'RACK_BIN',
+        },
+      });
+      const receipt = await draftReceipt(db, f, 'warehouse-receipt', {
+        line: { receivedPacks: 4, bonusPacks: 0, rejectedCanonicalUnits: 10 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scope, {
+        goodsReceiptId: receipt.id,
+        at: RECEIVED_AT,
+      });
+      return { lot: posted.lines[0]!.inventoryLotId, receiptId: receipt.id, destination };
+    });
+    expect(await inOrg(ORG_A, (db) => balancesFor(db, ORG_A, source.lot))).toEqual({
+      WAREHOUSE_RECEIVING: 30,
+      QUARANTINE: 10,
+    });
+    const [task] = await inOrg(ORG_A, (db) => inbound.listWarehousePutAwayTasks(db, scope));
+    expect(task?.quantityUnits).toBe(30);
+    expect(
+      await inOrg(ORG_B, (db) => db.pharmacyWarehousePutAway.count({ where: { id: task!.id } }))
+    ).toBe(0);
+    const confirm = {
+      taskId: task!.id,
+      productScan: f.medicineId,
+      batchScan: task!.batchNumber,
+      destinationCode: source.destination.code,
+      quantityUnits: 30,
+    };
+    for (const wrong of [
+      { quantityUnits: 29 },
+      { batchScan: 'WRONG' },
+      { productScan: 'WRONG' },
+      { destinationCode: 'WRONG' },
+    ]) {
+      await expect(
+        inOrg(ORG_A, (db) =>
+          inbound.completeWarehousePutAway(db, scope, { ...confirm, ...wrong }, RECEIVED_AT)
+        )
+      ).rejects.toThrow();
+    }
+    const [first, replay] = await Promise.all([
+      inOrg(ORG_A, (db) => inbound.completeWarehousePutAway(db, scope, confirm, RECEIVED_AT)),
+      inOrg(ORG_A, (db) => inbound.completeWarehousePutAway(db, scope, confirm, RECEIVED_AT)),
+    ]);
+    expect(replay).toEqual(first);
+    expect(await inOrg(ORG_A, (db) => balancesFor(db, ORG_A, source.lot))).toEqual({
+      AVAILABLE: 30,
+      WAREHOUSE_RECEIVING: 0,
+      QUARANTINE: 10,
+    });
+    expect(await inOrg(ORG_A, (db) => inbound.listWarehousePutAwayTasks(db, scope))).toHaveLength(
+      0
+    );
+    await expect(
+      inOrg(ORG_A, (db) =>
+        inbound.completeWarehousePutAway(db, scope, { ...confirm, quantityUnits: 10 }, RECEIVED_AT)
+      )
+    ).rejects.toThrow('IDEMPOTENCY_CONFLICT');
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.reverseGoodsReceipt(db, scope, {
+          goodsReceiptId: source.receiptId,
+          reason: 'Incorrect invoice',
+          at: RECEIVED_AT,
+        })
+      )
+    ).rejects.toThrow('REVERSAL_STOCK_MOVED');
+    const beforePutAway = await inOrg(ORG_A, async (db) => {
+      const draft = await draftReceipt(db, f, 'reverse-at-dock', {
+        direct: true,
+        line: { receivedPacks: 1, bonusPacks: 0 },
+      });
+      await deps.receipts.postGoodsReceipt(db, scope, {
+        goodsReceiptId: draft.id,
+        at: RECEIVED_AT,
+      });
+      return draft;
+    });
+    expect(await inOrg(ORG_A, (db) => inbound.listWarehousePutAwayTasks(db, scope))).toHaveLength(
+      1
+    );
+    await inOrg(ORG_A, (db) =>
+      deps.receipts.reverseGoodsReceipt(db, scope, {
+        goodsReceiptId: beforePutAway.id,
+        reason: 'Incorrect invoice',
+        at: RECEIVED_AT,
+      })
+    );
+    expect(await inOrg(ORG_A, (db) => inbound.listWarehousePutAwayTasks(db, scope))).toHaveLength(
+      0
+    );
+  });
+});
+
 // ── Row level security ──────────────────────────────────────────────────────
 
 describeIfDatabase('PH-PUR receiving — row level security', () => {

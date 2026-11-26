@@ -78,15 +78,23 @@ let withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb']
 let routers: {
   sales: (typeof import('./pharmacy-sales'))['pharmacySalesRouter'];
   inventory: (typeof import('./pharmacy-inventory'))['pharmacyInventoryRouter'];
+  medicine: (typeof import('./pharmacy-medicine'))['pharmacyMedicineRouter'];
+  warehouse: (typeof import('./pharmacy-warehouse'))['pharmacyWarehouseRouter'];
   marketing: (typeof import('./pharmacy-marketing'))['pharmacyMarketingRouter'];
 };
 
-function context(db: ScopedDb, userId: string) {
+function context(db: ScopedDb, userId: string, procurementLicensed = false) {
   return {
     db,
     entitlements: {
       organizationId: ORG,
-      enabledModules: ['pharmacy-core', 'pharmacy-counter', 'pharmacy-inventory', 'pharmacy-crm'],
+      enabledModules: [
+        'pharmacy-core',
+        'pharmacy-counter',
+        'pharmacy-inventory',
+        'pharmacy-crm',
+        ...(procurementLicensed ? ['pharmacy-procurement'] : []),
+      ],
       modules: [],
       limits: {},
       seatLimit: 20,
@@ -112,18 +120,26 @@ function context(db: ScopedDb, userId: string) {
 type Callers = {
   sales: ReturnType<(typeof routers)['sales']['createCaller']>;
   inventory: ReturnType<(typeof routers)['inventory']['createCaller']>;
+  medicine: ReturnType<(typeof routers)['medicine']['createCaller']>;
+  warehouse: ReturnType<(typeof routers)['warehouse']['createCaller']>;
   marketing: ReturnType<(typeof routers)['marketing']['createCaller']>;
 };
 
 /** One request by `userId`, in ORG's tenant transaction. */
-function as<T>(userId: string, run: (api: Callers) => Promise<T>): Promise<T> {
+function as<T>(
+  userId: string,
+  run: (api: Callers) => Promise<T>,
+  procurementLicensed = false
+): Promise<T> {
   return withTenantDb(
     ORG,
     (db) => {
-      const ctx = context(db, userId);
+      const ctx = context(db, userId, procurementLicensed);
       return run({
         sales: routers.sales.createCaller(ctx),
         inventory: routers.inventory.createCaller(ctx),
+        medicine: routers.medicine.createCaller(ctx),
+        warehouse: routers.warehouse.createCaller(ctx),
         marketing: routers.marketing.createCaller(ctx),
       });
     },
@@ -134,6 +150,7 @@ function as<T>(userId: string, run: (api: Callers) => Promise<T>): Promise<T> {
 const fixture = {
   customerId: '',
   noticeId: '',
+  medicineId: '',
   mainLotId: '',
   dhaLotId: '',
 };
@@ -157,6 +174,8 @@ describeIfDatabase('DEV-965 pharmacy permission gaps, against PostgreSQL with RL
     routers = {
       sales: (await import('./pharmacy-sales')).pharmacySalesRouter,
       inventory: (await import('./pharmacy-inventory')).pharmacyInventoryRouter,
+      medicine: (await import('./pharmacy-medicine')).pharmacyMedicineRouter,
+      warehouse: (await import('./pharmacy-warehouse')).pharmacyWarehouseRouter,
       marketing: (await import('./pharmacy-marketing')).pharmacyMarketingRouter,
     };
     await assertRlsEnforcingRole(withPlatformDb);
@@ -272,6 +291,7 @@ describeIfDatabase('DEV-965 pharmacy permission gaps, against PostgreSQL with RL
         },
         include: { presentations: true },
       });
+      fixture.medicineId = medicine.id;
       const packLevel = await db.packLevel.create({
         data: {
           organizationId: ORG,
@@ -460,6 +480,184 @@ describeIfDatabase('DEV-965 pharmacy permission gaps, against PostgreSQL with RL
       expect(rows.map((row) => row.inventoryLotId)).toEqual(
         expect.arrayContaining([fixture.mainLotId, fixture.dhaLotId])
       );
+    });
+  });
+
+  describe('Warehouse safety scope', () => {
+    it('admits assigned safety reviewers to the quality desk while keeping inventory and other premises protected', async () => {
+      const orgMedicines = await withTenantDb(ORG, async (db) => {
+        const medicines = [];
+        for (const coldChain of [true, false]) {
+          medicines.push(
+            await db.medicine.create({
+              data: {
+                organizationId: ORG,
+                productFamily: 'PHARMACEUTICAL',
+                productName: `Desk lookup ${suffix} ${coldChain ? 'cold' : 'ambient'}`,
+                coldChain,
+                saleable: true,
+              },
+            })
+          );
+        }
+        for (const [branchId, lotId] of [
+          [MAIN, fixture.mainLotId],
+          [DHA, fixture.dhaLotId],
+        ]) {
+          const balance = await db.pharmacyStockBalance.findFirstOrThrow({
+            where: { organizationId: ORG, branchId, inventoryLotId: lotId },
+          });
+          await db.pharmacyWarehouseQualityIncident.create({
+            data: {
+              organizationId: ORG,
+              branchId,
+              inventoryLotId: lotId,
+              stockLocationId: balance.stockLocationId,
+              quantityUnits: 1,
+              reason: 'Inspection required',
+              sourceKey: `desk-${branchId}`,
+              createdById: P.safety,
+            },
+          });
+        }
+        return medicines;
+      });
+      await expect(as(P.cashier, (api) => api.warehouse.sites())).rejects.toMatchObject(PERMISSION);
+      const assigned = await as(P.safety, (api) => api.warehouse.sites());
+      expect(assigned).toEqual([
+        { id: MAIN, name: expect.any(String), warehouseEnabled: false, accessMode: 'quality' },
+      ]);
+      expect(
+        (await as(P.stock, (api) => api.warehouse.sites())).map((row) => row.accessMode)
+      ).toEqual(['inventory']);
+      expect(
+        (await as(P.owner, (api) => api.warehouse.sites())).map((row) => row.id).sort()
+      ).toEqual([MAIN, DHA].sort());
+      const incident = await as(P.safety, (api) => api.warehouse.quality({ branchId: MAIN }));
+      expect(incident.map((row) => row.inventoryLotId)).toEqual([fixture.mainLotId]);
+      expect(incident[0]).not.toHaveProperty('quarantineUnits');
+      const search = { branchId: MAIN, query: `Desk lookup ${suffix}` };
+      expect(
+        (await as(P.safety, (api) => api.warehouse.searchMedicines(search))).map((row) => row.id)
+      ).toEqual([orgMedicines[0]!.id]);
+      expect(
+        (await as(P.stock, (api) => api.warehouse.searchMedicines(search)))
+          .map((row) => row.id)
+          .sort()
+      ).toEqual(orgMedicines.map((row) => row.id).sort());
+      await expect(
+        as(P.safety, (api) => api.warehouse.quality({ branchId: DHA }))
+      ).rejects.toMatchObject(OUTSIDE);
+      await expect(
+        as(P.safety, (api) => api.warehouse.searchMedicines({ ...search, branchId: DHA }))
+      ).rejects.toMatchObject(OUTSIDE);
+      await expect(
+        as(P.safety, (api) => api.warehouse.setup({ branchId: MAIN }))
+      ).rejects.toMatchObject(PERMISSION);
+      await expect(
+        as(P.safety, (api) => api.warehouse.overview({ branchId: MAIN }))
+      ).rejects.toMatchObject(PERMISSION);
+      await expect(
+        as(P.safety, (api) => api.warehouse.requestQueue({ branchId: MAIN }))
+      ).rejects.toMatchObject(PERMISSION);
+    });
+
+    it('links warehouse staff to supplier returns only with licensed procurement and financial access', async () => {
+      const setup = (api: Callers) => api.warehouse.setup({ branchId: MAIN });
+      expect(await as(P.owner, setup)).toMatchObject({
+        canPurchase: false,
+        canSupplierReturn: false,
+      });
+      expect(await as(P.owner, setup, true)).toMatchObject({
+        canPurchase: true,
+        canSupplierReturn: true,
+      });
+      expect(await as(P.stock, setup, true)).toMatchObject({
+        canPurchase: false,
+        canSupplierReturn: false,
+      });
+      await withTenantDb(ORG, (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            userId: P.granted,
+            capability: 'pharmacy:procurement',
+            effect: 'ALLOW',
+            reason: 'Warehouse procurement',
+          },
+        })
+      );
+      expect(await as(P.granted, setup, true)).toMatchObject({
+        canPurchase: true,
+        canSupplierReturn: false,
+      });
+    });
+
+    it('keeps a labelled storage change pending until an authorized catalogue reviewer approves', async () => {
+      const proposal = { branchId: MAIN, medicineId: fixture.medicineId, minimumC: 2, maximumC: 8 };
+      const live = () =>
+        withTenantDb(ORG, (db) =>
+          db.medicine.findUniqueOrThrow({
+            where: { id: fixture.medicineId },
+            select: { minimumStorageTemperatureC: true, maximumStorageTemperatureC: true },
+          })
+        );
+      await expect(
+        as(P.stock, (api) => api.warehouse.proposeProductTemperatures(proposal))
+      ).rejects.toMatchObject(PERMISSION);
+      await expect(
+        as(P.safety, (api) =>
+          api.warehouse.proposeProductTemperatures({ ...proposal, branchId: DHA })
+        )
+      ).rejects.toMatchObject(OUTSIDE);
+      await expect(
+        as(P.safety, (api) =>
+          api.warehouse.proposeProductTemperatures({ ...proposal, minimumC: 12 })
+        )
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      const [pending, retry] = await Promise.all([
+        as(P.safety, (api) => api.warehouse.proposeProductTemperatures(proposal)),
+        as(P.safety, (api) => api.warehouse.proposeProductTemperatures(proposal)),
+      ]);
+      expect(retry.proposalId).toBe(pending.proposalId);
+      const different = await as(P.safety, (api) =>
+        api.warehouse.proposeProductTemperatures({ ...proposal, minimumC: 3 })
+      );
+      expect(different.proposalId).not.toBe(pending.proposalId);
+      expect(pending.status).toBe('PENDING');
+      expect(await live()).toEqual({
+        minimumStorageTemperatureC: null,
+        maximumStorageTemperatureC: null,
+      });
+      const approve = { editId: pending.proposalId, decision: 'APPROVE' as const };
+      await expect(
+        as(P.safety, (api) => api.medicine.decideCatalogueEdit(approve))
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await as(P.pharmacist, (api) => api.medicine.decideCatalogueEdit(approve));
+      expect(await live()).toEqual({
+        minimumStorageTemperatureC: 2,
+        maximumStorageTemperatureC: 8,
+      });
+    });
+
+    it('keeps a closed premises in the head-office recall and consults assigned premises for branch staff', async () => {
+      const request = { branchId: MAIN, noticeId: fixture.noticeId };
+      await withTenantDb(ORG, (db) =>
+        db.pharmacyBranch.update({ where: { id: DHA }, data: { active: false } })
+      );
+      try {
+        await expect(
+          as(P.stock, (api) => api.warehouse.recallTrace(request))
+        ).rejects.toMatchObject(PERMISSION);
+        const local = await as(P.safety, (api) => api.warehouse.recallTrace(request));
+        expect(new Set(local.bins.map((row) => row.branchId))).toEqual(new Set([MAIN]));
+        const headOffice = await as(P.owner, (api) => api.warehouse.recallTrace(request));
+        expect(new Set(headOffice.bins.map((row) => row.branchId))).toEqual(new Set([MAIN, DHA]));
+        expect(headOffice.receipts.map((row) => row.inventoryLotId)).toContain(fixture.dhaLotId);
+      } finally {
+        await withTenantDb(ORG, (db) =>
+          db.pharmacyBranch.update({ where: { id: DHA }, data: { active: true } })
+        );
+      }
     });
   });
 

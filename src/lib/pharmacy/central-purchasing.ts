@@ -10,7 +10,9 @@ import {
 } from './supplier-compliance-policy';
 
 export class CentralPurchasingError extends Error {
-  constructor(readonly reason: 'FORBIDDEN' | 'INVALID_ALLOCATION' | 'NOT_FOUND') {
+  constructor(
+    readonly reason: 'FORBIDDEN' | 'INVALID_ALLOCATION' | 'NOT_FOUND' | 'WAREHOUSE_PUTAWAY_REQUIRED'
+  ) {
     super(reason);
   }
 }
@@ -202,7 +204,9 @@ export async function allocateCentralReceipt(
   await requireOrganizationPurchaser(db, scope);
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId, status: 'POSTED' },
-    include: { lines: true },
+    include: {
+      lines: { include: { warehousePutAway: { select: { id: true, completedAt: true } } } },
+    },
   });
   if (!receipt) throw new CentralPurchasingError('NOT_FOUND');
   if (
@@ -230,6 +234,27 @@ export async function allocateCentralReceipt(
     )
   )
     throw new CentralPurchasingError('INVALID_ALLOCATION');
+  const placedLines = receipt.lines.filter((line) => line.warehousePutAway);
+  if (placedLines.some((line) => !line.warehousePutAway?.completedAt)) {
+    throw new CentralPurchasingError('WAREHOUSE_PUTAWAY_REQUIRED');
+  }
+  // The placement's immutable ledger leg carries the bin ID even after a bin is renamed.
+  const putAwayLocations = new Map<string, string>();
+  if (placedLines.length) {
+    const movements = await db.pharmacyStockMovement.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: receipt.branchId,
+        idempotencyKey: {
+          in: placedLines.map((line) => `warehouse-putaway:${line.warehousePutAway!.id}:in`),
+        },
+      },
+      select: { idempotencyKey: true, stockLocationId: true },
+    });
+    for (const move of movements) putAwayLocations.set(move.idempotencyKey, move.stockLocationId);
+    if (putAwayLocations.size !== placedLines.length)
+      throw new CentralPurchasingError('INVALID_ALLOCATION');
+  }
   const results = [];
   for (const allocation of input.allocations) {
     const line = receipt.lines.find((candidate) => candidate.id === allocation.goodsReceiptLineId)!;
@@ -241,7 +266,9 @@ export async function allocateCentralReceipt(
         lines: [
           {
             sourceLotId: line.inventoryLotId!,
-            sourceStockLocationId: line.stockLocationId,
+            sourceStockLocationId: line.warehousePutAway
+              ? putAwayLocations.get(`warehouse-putaway:${line.warehousePutAway.id}:in`)!
+              : line.stockLocationId,
             destinationStockLocationId: allocation.destinationStockLocationId,
             quantityUnits: allocation.quantityUnits,
           },

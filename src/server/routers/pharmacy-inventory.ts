@@ -1,3 +1,7 @@
+import {
+  dispatchWarehouseTransfer,
+  warehouseDispatchSource,
+} from '@/lib/pharmacy/warehouse-outbound';
 /**
  * PH-INV / INV-01..04 — the minimal procedures behind the `pharmacy-inventory`
  * entitlement (module-catalog).
@@ -7,6 +11,7 @@
  * input, pins the tenant/branch/actor scope to the SESSION rather than the
  * payload, and maps the domain error onto a tRPC code.
  */
+import { isWarehouseTransfer } from '@/lib/pharmacy/warehouse-quality';
 import { randomUUID } from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
@@ -445,7 +450,7 @@ async function assertTransferRowAllowed(
   });
 }
 
-async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+export async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = await scopeFor(ctx, branch);
   const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
     where: { ...activeAssignmentOf(scope.organizationId, scope.actorId), branchId: branch },
@@ -481,6 +486,17 @@ export async function admittedInventoryBranchIds(ctx: TRPCContext): Promise<Set<
     select: { branchId: true },
   });
   return new Set(rows.map((row) => row.branchId));
+}
+
+/** Head-office recall history includes inactive premises. Branch staff see only active assignments. */
+export async function admittedRecallBranchIds(ctx: TRPCContext): Promise<string[] | undefined> {
+  const { organizationId, actorId } = actorFor(ctx);
+  if (await tenantAdminException(ctx, organizationId, actorId)) return undefined;
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: activeAssignmentOf(organizationId, actorId),
+    select: { branchId: true },
+  });
+  return assignments.map((row) => row.branchId);
 }
 
 // ── PH-A5 — expiry board actions ────────────────────────────────────────────
@@ -670,7 +686,7 @@ function transferVarianceKey(transferId: string, lineId: string): string {
 }
 
 async function transferBoard(db: ScopedDb, scope: LedgerScope) {
-  const transfers = await db.pharmacyInterbranchTransfer.findMany({
+  const documents = await db.pharmacyInterbranchTransfer.findMany({
     where: {
       organizationId: scope.organizationId,
       OR: [{ fromBranchId: scope.branchId }, { toBranchId: scope.branchId }],
@@ -697,6 +713,23 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
       },
     },
   });
+  const withdrawn = documents.length
+    ? await db.pharmacyWarehouseReservation.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          transferId: { in: documents.map((t) => t.id) },
+          state: 'CANCELLED',
+        },
+        select: { transferLineId: true },
+      })
+    : [];
+  const withdrawnIds = new Set(withdrawn.map((row) => row.transferLineId));
+  const transfers = documents
+    .map((document) => ({
+      ...document,
+      lines: document.lines.filter((line) => !withdrawnIds.has(line.id)),
+    }))
+    .filter((document) => document.lines.length);
   const lines = transfers.flatMap((transfer) => transfer.lines);
   const locationIds = [
     ...new Set(
@@ -827,10 +860,29 @@ async function receiveTransferWithVariance(
   if (!RECEIVABLE_TRANSFER_STATUSES.includes(transfer.status))
     throw new PharmacyInventoryError('INVALID_STATE');
 
+  const warehouseReceipt = await isWarehouseTransfer(
+    db,
+    scope.organizationId,
+    transfer.id,
+    scope.branchId
+  );
+  const reservations = warehouseReceipt
+    ? await db.pharmacyWarehouseReservation.findMany({
+        where: { organizationId: scope.organizationId, transferId: transfer.id },
+        select: { state: true, transferLineId: true },
+      })
+    : [];
+  const dispatched = new Set(
+    reservations.filter((row) => row.state === 'DISPATCHED').map((row) => row.transferLineId)
+  );
+  const manifest = reservations.length
+    ? transfer.lines.filter((line) => dispatched.has(line.id))
+    : transfer.lines;
+
   const answered = new Map(input.lines.map((line) => [line.lineId, line.receivedUnits]));
   if (answered.size !== input.lines.length) throw new PharmacyInventoryError('INVALID_UNITS');
   for (const [lineId, units] of answered) {
-    const line = transfer.lines.find((one) => one.id === lineId);
+    const line = manifest.find((one) => one.id === lineId);
     if (!line) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
     if (
       !Number.isSafeInteger(units) ||
@@ -839,10 +891,28 @@ async function receiveTransferWithVariance(
     )
       throw new PharmacyInventoryError('INVALID_UNITS');
   }
-  const open = transfer.lines.filter((line) => line.receivedUnits < line.quantityUnits);
+  const open = manifest.filter((line) => line.receivedUnits < line.quantityUnits);
   // A closing receipt answers every open line; silence is not a count.
   if (open.some((line) => !answered.has(line.id)))
     throw new PharmacyInventoryError('INVALID_UNITS');
+
+  if (warehouseReceipt) {
+    // Verify every physical arrival through the scanner workflow. The closing
+    // variance action may only retire previously reported outstanding shortages.
+    const prior = await db.pharmacyWarehouseTransportEvidence.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        transferId: transfer.id,
+        phase: 'RECEIPT',
+        shortageUnits: { gt: 0 },
+      },
+      select: { transferLineId: true },
+    });
+    const reported = new Set(prior.map((row) => row.transferLineId));
+    if (open.some((line) => answered.get(line.id) !== 0 || !reported.has(line.id))) {
+      throw new PharmacyInventoryError('INVALID_STATE');
+    }
+  }
 
   // DEV-628: a shortfall is a stock loss, so it takes the same two-person
   // control as a write-off: a witness assigned to this branch, confirming with
@@ -1349,8 +1419,17 @@ export const pharmacyInventoryRouter = router({
       try {
         // The lot and its opening RECEIPT are one fact: a committed lot with no
         // receipt is unreceived stock the ledger would then refuse to move.
-        return await ctx.db.$transaction(async (tx) =>
-          receiveLot(txDb(tx), scope, {
+        return await ctx.db.$transaction(async (tx) => {
+          const [branch] = await tx.$queryRaw<{ warehouseEnabled: boolean }[]>`
+            SELECT "warehouseEnabled" FROM pharmacy_branches
+            WHERE id=${scope.branchId} AND "organizationId"=${scope.organizationId} FOR SHARE`;
+          if (branch?.warehouseEnabled) {
+            throw new PharmacyInventoryError(
+              'INVALID_STATE',
+              'Record this warehouse delivery in Purchasing → Receiving so staff can confirm its put-away.'
+            );
+          }
+          return receiveLot(txDb(tx), scope, {
             manufacturingBatchId: input.manufacturingBatchId,
             packLevelId: input.packLevelId,
             stockLocationId: input.stockLocationId,
@@ -1364,8 +1443,8 @@ export const pharmacyInventoryRouter = router({
             quantityUnits: input.quantityUnits,
             idempotencyKey: input.idempotencyKey,
             receivedAt: input.received ? new Date() : undefined,
-          })
-        );
+          });
+        });
       } catch (error) {
         domainError(error);
       }
@@ -1914,6 +1993,14 @@ export const pharmacyInventoryRouter = router({
         const scope = await admittedScopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
+          if (await warehouseDispatchSource(db, scope, input.transferId)) {
+            return dispatchWarehouseTransfer(
+              db,
+              scope,
+              input.transferId,
+              input.idempotencyKeyPrefix
+            );
+          }
           // DEV-908: stock leaves the premises now, so the drug and licence rules
           // are checked again for every transfer, whatever allocated it.
           const premises = await assertTransferRowAllowed(db, scope, input.transferId, false);
@@ -1944,7 +2031,19 @@ export const pharmacyInventoryRouter = router({
           branchId,
           transferId: z.string().min(1),
           lineId: z.string().min(1),
-          receivedUnits: z.number().int().positive(),
+          receivedUnits: z.number().int().nonnegative(),
+          damagedUnits: z.number().int().nonnegative().optional(),
+          productScan: z.string().trim().min(1).max(160).optional(),
+          lotScan: z.string().trim().min(1).max(160).optional(),
+          binScan: z.string().trim().min(1).max(160).optional(),
+          transportEvidence: z
+            .object({
+              minimumC: z.number().min(-100).max(100).nullish(),
+              maximumC: z.number().min(-100).max(100).nullish(),
+              evidenceRef: z.string().trim().min(1).max(500),
+            })
+            .strict()
+            .optional(),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
         })
         .strict()
@@ -1992,15 +2091,8 @@ export const pharmacyInventoryRouter = router({
     .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        const { organizationId, actorId } = actorFor(ctx);
-        const branchIds = (await tenantAdminException(ctx, organizationId, actorId))
-          ? undefined
-          : (
-              await ctx.db.pharmacyBranchAssignment.findMany({
-                where: activeAssignmentOf(organizationId, actorId),
-                select: { branchId: true },
-              })
-            ).map((row) => row.branchId);
+        const { organizationId } = actorFor(ctx);
+        const branchIds = await admittedRecallBranchIds(ctx);
         return await recallTrace(ctx.db, organizationId, input.recallNoticeId, branchIds);
       } catch (error) {
         domainError(error);

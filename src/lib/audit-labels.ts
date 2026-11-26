@@ -108,6 +108,7 @@ const AREA_LABELS: Readonly<Record<string, string>> = {
   pharmacyOrdering: 'Customer orders',
   pharmacyPrinting: 'Receipt printing',
   pharmacyInventory: 'Stock',
+  pharmacyWarehouse: 'Warehouse',
   pharmacyOwnerImport: 'Stock import',
   pharmacyMedicine: 'Medicines and prices',
   pharmacyPurchasing: 'Purchasing and goods-in',

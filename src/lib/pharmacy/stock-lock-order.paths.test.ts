@@ -274,6 +274,7 @@ describe('count approval and quarantine release take stock locks in the global o
       pharmacyStockBalance: {
         findFirst: vi.fn(async () => ({ onHandUnits: 5, sealedPacks: 0, looseUnits: 5 })),
       },
+      pharmacyWarehouseQualityIncident: { findMany: vi.fn(async () => []) },
       pharmacyRecallQuarantineAction: { findMany: vi.fn(async () => []) },
       pharmacyStockMovement: { create: movementCreate(trace) },
     };
@@ -284,7 +285,9 @@ describe('count approval and quarantine release take stock locks in the global o
       reason: 'Inspected',
       idempotencyKeyPrefix: 'release',
     });
-    expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE']);
+    // Warehouse and recall checks re-enter the same ordered pair before posting.
+    const pair = ['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE'];
+    expect(trace.balanceKeys()).toEqual([...pair, ...pair]);
     expectLockedBeforeWrites(trace);
   });
 });
@@ -381,6 +384,7 @@ describe('supplier claims and returns take stock locks in the global order', () 
     });
     return {
       $queryRaw: trace.$queryRaw,
+      pharmacyWarehouseQualityIncident: { findMany: vi.fn(async () => []) },
       pharmacyPurchaseReturn: {
         findFirst: vi.fn(async () => ({
           id: 'return',

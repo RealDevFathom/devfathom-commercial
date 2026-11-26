@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { outstandingTransferLine } from './transfer-manifest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { safeDemandTotal, type DemandScope } from './demand-evidence';
@@ -153,6 +154,7 @@ export async function loadForecastingInputs(
   });
   const transferLines = await db.pharmacyInterbranchTransferLine.findMany({
     where: {
+      ...outstandingTransferLine,
       organizationId: scope.organizationId,
       transfer: {
         organizationId: scope.organizationId,

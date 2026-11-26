@@ -281,6 +281,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // PH-INV (INV-01..04): the batch/lot stock ledger is licensed as Pharmacy
   // Inventory, separately from the mandatory medicine identity in Core.
   pharmacyInventory: 'pharmacy-inventory',
+  pharmacyWarehouse: 'pharmacy-inventory',
   pharmacyOwnerImport: 'pharmacy-inventory',
   pharmacyPrescriptions: 'pharmacy-dispensing',
   pharmacyDispensing: 'pharmacy-dispensing',

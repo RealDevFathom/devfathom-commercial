@@ -36,7 +36,11 @@ mkdir "$work/develop"
 git archive 514ac9d29274250ab927c453d30fcedf2990bd7b | tar -x -C "$work/develop"
 ln -s "$root/node_modules" "$work/develop/node_modules"
 suite=src/lib/pharmacy/goods-receipt.db.test.ts
-cp "$suite" "$work/develop/$suite"
+# Use the DEV-293 fixture producer tested against this archived application.
+# Current receipt tests import modules added after that schema. They run below
+# on the current checkout, after the archived application has created the fixture.
+fixture_producer=dabdad9c57c3c84085df5bcdfe9768ebc1395433
+git show "${fixture_producer}:${suite}" > "$work/develop/$suite"
 export DEV293_UPGRADE_FIXTURE="$work/fixture.json"
 (
   cd "$work/develop"

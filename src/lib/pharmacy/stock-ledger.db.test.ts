@@ -2093,97 +2093,74 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
     });
   });
 
-  it('does not sell units a concurrent claim reserved while the sale waited (#355, claim-first)', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'claim-first');
+  async function assertSupplierClaimSaleRace(first: 'claim' | 'sale') {
+    const fixture = await scenario(ORG_A, BRANCH_A, `claim-race-${first}`);
     const lotId = await inOrg(ORG_A, async (db) => {
       const { lot } = await stockLot(db, fixture, {
         expiresAt: LATER,
         units: 10,
-        label: 'claim-first',
+        label: `claim-race-${first}`,
       });
       return lot.id;
     });
-    let releaseClaim: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      releaseClaim = resolve;
-    });
-    const claim = inOrg(ORG_A, async (db) => {
-      const result = await deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
-        inventoryLotId: lotId,
-        reservedUnits: 10,
-        returnBy: LATER,
-      });
-      await held;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const sale = inOrg(ORG_A, (db) =>
-      deps.ledger.allocateForSale(db, scopeOf(fixture), {
-        medicineId: fixture.medicineId,
-        requiredUnits: 10,
-        at: NOW,
-        idempotencyKeyPrefix: `claim-first-${suffix}-sale`,
-      })
-    );
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    releaseClaim();
-    const [claimOutcome, saleOutcome] = await Promise.allSettled([claim, sale]);
-    expect(claimOutcome.status).toBe('fulfilled');
-    expect(saleOutcome.status).toBe('rejected');
-    const claims = await inOrg(ORG_A, (db) =>
-      db.pharmacySupplierClaim.count({ where: { inventoryLotId: lotId, status: 'RESERVED' } })
-    );
-    expect(claims).toBe(1);
-  });
-
-  it('serializes a supplier claim against a concurrent sale of the same units (#355)', async () => {
-    const fixture = await scenario(ORG_A, BRANCH_A, 'claim-race');
-    const lotId = await inOrg(ORG_A, async (db) => {
-      const { lot } = await stockLot(db, fixture, {
-        expiresAt: LATER,
-        units: 10,
-        label: 'claim-race',
-      });
-      return lot.id;
-    });
-    let releaseSale: () => void = () => {};
-    const held = new Promise<void>((resolve) => {
-      releaseSale = resolve;
-    });
-    const sale = inOrg(ORG_A, async (db) => {
-      const result = await deps.ledger.allocateForSale(db, scopeOf(fixture), {
-        medicineId: fixture.medicineId,
-        requiredUnits: 10,
-        at: NOW,
-        idempotencyKeyPrefix: `claim-race-${suffix}-sale`,
-      });
-      await held;
-      return result;
-    });
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    const startedClaim = Date.now();
-    const claim = inOrg(ORG_A, (db) =>
+    const claim = (db: ScopedDb) =>
       deps.operations.reserveSupplierClaim(db, scopeOf(fixture), {
         inventoryLotId: lotId,
         reservedUnits: 10,
         returnBy: LATER,
-      })
-    );
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    releaseSale();
-    const [saleOutcome, claimOutcome] = await Promise.allSettled([sale, claim]);
-    const waitedMs = Date.now() - startedClaim;
-    expect(saleOutcome.status).toBe('fulfilled');
-    expect(claimOutcome.status).toBe('rejected');
-    // The claim was blocked on the balance-row lock the sale held, not run on a stale read.
-    expect(waitedMs).toBeGreaterThanOrEqual(200);
-    expect((claimOutcome as PromiseRejectedResult).reason).toMatchObject({
-      reason: 'INSUFFICIENT_STOCK',
-    });
+      });
+    const sell = (db: ScopedDb) =>
+      deps.ledger.allocateForSale(db, scopeOf(fixture), {
+        medicineId: fixture.medicineId,
+        requiredUnits: 10,
+        at: NOW,
+        idempotencyKeyPrefix: tag('claim-race-sale'),
+      });
+    const [holder, waiter] = first === 'claim' ? [claim, sell] : [sell, claim];
+    let waiterOutcome: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await inOrg(ORG_A, async (db) => {
+        // The winner has changed stock and still holds its locks in this transaction.
+        await holder(db);
+        let waiterPid = 0;
+        const competing = inOrg(ORG_A, async (other) => {
+          const [backend] = await other.$queryRaw<
+            Array<{ pid: number }>
+          >`SELECT pg_backend_pid() AS pid`;
+          waiterPid = backend!.pid;
+          return waiter(other);
+        });
+        waiterOutcome = Promise.allSettled([competing]);
+        await expect
+          .poll(
+            async () => {
+              const [row] = await db.$queryRaw<Array<{ waiting: boolean }>>`
+                SELECT pg_backend_pid() = ANY(pg_blocking_pids(${waiterPid}::int)) AS waiting`;
+              return row!.waiting;
+            },
+            { timeout: 10_000 }
+          )
+          .toBe(true);
+      });
+    } finally {
+      // A failed lock assertion rolls the holder back before we finish the waiter.
+      await waiterOutcome;
+    }
+    expect(await waiterOutcome).toMatchObject([
+      { status: 'rejected', reason: { reason: 'INSUFFICIENT_STOCK' } },
+    ]);
     const claims = await inOrg(ORG_A, (db) =>
       db.pharmacySupplierClaim.count({ where: { inventoryLotId: lotId, status: 'RESERVED' } })
     );
-    expect(claims).toBe(0);
+    expect(claims).toBe(first === 'claim' ? 1 : 0);
+  }
+
+  it('does not sell units a concurrent claim reserved while the sale waited (#355, claim-first)', async () => {
+    await assertSupplierClaimSaleRace('claim');
+  });
+
+  it('serializes a supplier claim against a concurrent sale of the same units (#355)', async () => {
+    await assertSupplierClaimSaleRace('sale');
   });
 });
 

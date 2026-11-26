@@ -70,8 +70,10 @@ import {
   normalizeExpiryBoundary,
   receiveLot,
   reverseMovements,
+  SALEABLE_TRANSFER_DESTINATIONS,
 } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
+import { warehouseReceivingSite } from './warehouse-inbound';
 import { acceptedKey, goodsReceiptMovementKeys, quarantineKey } from './goods-receipt-keys';
 import {
   PharmacyFinanceError,
@@ -498,6 +500,7 @@ export async function postGoodsReceipt(
     await lockRegister(db, scope.organizationId, scope.branchId);
   }
 
+  const warehouse = await warehouseReceivingSite(db, scope, input.at);
   const lines: PostGoodsReceiptResult['lines'][number][] = [];
   const exceptions: PostGoodsReceiptResult['exceptions'][number][] = [];
   const debitNoteLines: Array<ReceiptDebitNoteLineDraft & { receivingExceptionId: string }> = [];
@@ -542,6 +545,27 @@ export async function postGoodsReceipt(
       expiryPrecision: line.expiryPrecision,
     });
 
+    if (warehouse && line.acceptedCanonicalUnits > 0) {
+      const bin = await db.pharmacyStockLocation.findFirst({
+        where: {
+          id: line.stockLocationId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+        },
+        select: { kind: true },
+      });
+      if (
+        !bin ||
+        !SALEABLE_TRANSFER_DESTINATIONS.has(bin.kind) ||
+        (controlledIds.has(line.medicineId) && bin.kind !== 'SAFE')
+      ) {
+        throw new PharmacyInventoryError(
+          'UNSALEABLE_DESTINATION',
+          'Choose an active receiving bin compatible with this medicine. Controlled stock requires a safe.'
+        );
+      }
+    }
     const posted = await receiveLot(db, scope, {
       manufacturingBatchId: batch.id,
       packLevelId: line.packLevelId,
@@ -557,6 +581,7 @@ export async function postGoodsReceipt(
       receivedExpiresAt: batch.expiresAt,
       receivedExpiryPrecision: line.expiryPrecision,
       quantityUnits: line.acceptedCanonicalUnits,
+      acceptedDisposition: warehouse ? 'WAREHOUSE_RECEIVING' : 'AVAILABLE',
       idempotencyKey: acceptedKey(line.id),
       // The receipt keeps the calendar date keyed on it (UTC midnight). Stock being posted is
       // on hand now, so the lot is never received later than the posting instant: a GRN keyed
@@ -587,6 +612,16 @@ export async function postGoodsReceipt(
           : {}),
       },
     });
+    if (warehouse && posted.movement && line.acceptedCanonicalUnits > 0) {
+      await db.pharmacyWarehousePutAway.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          goodsReceiptLineId: line.id,
+          quantityUnits: line.acceptedCanonicalUnits,
+        },
+      });
+    }
     lines.push({
       goodsReceiptLineId: line.id,
       inventoryLotId: posted.lot.id,

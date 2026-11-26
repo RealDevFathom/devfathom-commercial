@@ -38,6 +38,7 @@ import {
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
+import { BranchTransferPolicyError } from '@/lib/pharmacy/branch-transfer-policy';
 import { blockReasonFor, PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { listDrapPriceAlerts } from '@/lib/pharmacy/drap-monitoring';
 import {
@@ -178,6 +179,9 @@ const MAX_RECEIPT_LINES = 20_000;
 const MAX_RECEIPT_ALLOCATIONS = MAX_RECEIPT_LINES * 4;
 
 function domainError(error: unknown): never {
+  if (error instanceof BranchTransferPolicyError) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.reason, cause: error });
+  }
   if (error instanceof ControlledRestorationDenied) {
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message, cause: error });
   }

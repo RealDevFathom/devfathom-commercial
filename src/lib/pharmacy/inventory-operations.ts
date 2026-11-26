@@ -17,8 +17,20 @@ import {
 } from './counter-stock-holds';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
 import type { LedgerScope } from './stock-ledger';
+import {
+  dispatchWarehouseTransfer,
+  lockWarehouseQuality,
+  releaseWarehouseReservationsForHold,
+  warehouseDispatchSource,
+} from './warehouse-outbound';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import { hasKnownExpiryPassed } from './unrecorded-batch';
+
+import {
+  isWarehouseTransfer,
+  receiveWarehouseTransferLine,
+  type WarehouseReceiptInput,
+} from './warehouse-quality';
 
 /** Serialize recall-authority decisions that can overlap at batch or medicine scope. */
 export async function lockRecallAuthority(db: ScopedDb, organizationId: string) {
@@ -105,11 +117,66 @@ export async function setManufacturingBatchState(
       { batchIds: [batch.id] },
       input.state === 'RECALLED' ? 'RECALL' : 'QUARANTINE'
     );
+  if (input.state !== 'ACTIVE') {
+    await releaseWarehouseReservationsForHold(
+      db,
+      { organizationId, actorId },
+      {
+        batchId: batch.id,
+        reason: input.reason ?? input.state,
+        sourceKey: 'batch-state:' + batch.id,
+      }
+    );
+  }
   return updated;
 }
 
 function assertPositive(units: number) {
   if (!Number.isSafeInteger(units) || units <= 0) throw new PharmacyInventoryError('INVALID_UNITS');
+}
+
+/** Quality-managed quantities stay unavailable until the reviewer selects the matching action. */
+async function assertWarehouseHoldDebit(
+  db: ScopedDb,
+  scope: LedgerScope,
+  inventoryLotId: string,
+  stockLocationId: string,
+  units: number,
+  disposition: 'QUARANTINE' | 'DAMAGED',
+  action: 'RELEASE' | 'DISPOSE'
+) {
+  const items = await db.pharmacyWarehouseQualityIncident.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId,
+      stockLocationId,
+      status: { in: action === 'RELEASE' ? ['OPEN', 'RETURN', 'DISPOSE'] : ['OPEN', 'RETURN'] },
+    },
+    select: { quarantineUnits: true, quantityUnits: true, sourceKey: true },
+  });
+  const held = items.reduce(
+    (sum, item) =>
+      sum +
+      (disposition === 'QUARANTINE'
+        ? item.quarantineUnits
+        : item.sourceKey.startsWith('damage:')
+          ? item.quantityUnits
+          : 0),
+    0
+  );
+  if (held === 0) return;
+  const balance = await db.pharmacyStockBalance.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId,
+      stockLocationId,
+      disposition,
+    },
+  });
+  if (!balance || balance.onHandUnits - held < units)
+    throw new PharmacyInventoryError('BLOCKED_STOCK');
 }
 
 /** Keep recall-managed units available for the safety-authorized reversal. */
@@ -623,6 +690,17 @@ export async function writeOff(
       disposition: input.disposition ?? 'AVAILABLE',
     },
   ]);
+  if (input.disposition === 'QUARANTINE' || input.disposition === 'DAMAGED') {
+    await assertWarehouseHoldDebit(
+      db,
+      scope,
+      lot.id,
+      input.stockLocationId,
+      input.units,
+      input.disposition,
+      'DISPOSE'
+    );
+  }
   const a = await removalArrangement(
     db,
     scope,
@@ -794,6 +872,7 @@ export async function releaseQuarantinedPart(
   input: {
     inventoryLotId: string;
     stockLocationId: string;
+    destinationStockLocationId?: string;
     units: number;
     reason: string;
     idempotencyKeyPrefix: string;
@@ -808,6 +887,27 @@ export async function releaseQuarantinedPart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  await lockStockBalances(db, scope, [
+    ...(['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition,
+    })),
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.destinationStockLocationId ?? input.stockLocationId,
+      disposition: 'AVAILABLE',
+    },
+  ]);
+  await assertWarehouseHoldDebit(
+    db,
+    scope,
+    lot.id,
+    input.stockLocationId,
+    input.units,
+    'QUARANTINE',
+    'RELEASE'
+  );
   const a = await removalArrangement(
     db,
     scope,
@@ -839,6 +939,7 @@ export async function releaseQuarantinedPart(
   const released = await db.pharmacyStockMovement.create({
     data: {
       ...common,
+      stockLocationId: input.destinationStockLocationId ?? input.stockLocationId,
       disposition: 'AVAILABLE',
       quantityUnits: input.units,
       sealedPackDelta: a.sealedPacks,
@@ -963,6 +1064,30 @@ export async function approveTransfer(
   transferId: string,
   options: { soloSelfApproval?: boolean } = {}
 ) {
+  if (await warehouseDispatchSource(db, scope, transferId)) {
+    await lockWarehouseQuality(db, scope.organizationId, false);
+    // A replenishment may replace this draft and carry its live reservations
+    // forward. Serialize approval with that change before counting reservations.
+    await db.$queryRaw(Prisma.sql`
+      SELECT id FROM pharmacy_interbranch_transfers
+      WHERE "organizationId"=${scope.organizationId} AND "fromBranchId"=${scope.branchId} AND id=${transferId}
+      FOR UPDATE
+    `);
+    if (
+      !(await db.pharmacyWarehouseReservation.count({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          transferId,
+          state: { in: ['RESERVED', 'PICKED', 'PACKED'] },
+        },
+      }))
+    )
+      throw new PharmacyInventoryError(
+        'INVALID_STATE',
+        'This shipment has no active warehouse reservations to approve.'
+      );
+  }
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
   });
@@ -990,6 +1115,8 @@ export async function dispatchTransfer(
   transferId: string,
   key: string
 ) {
+  if (await warehouseDispatchSource(db, scope, transferId))
+    return dispatchWarehouseTransfer(db, scope, transferId, key);
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: { id: transferId, organizationId: scope.organizationId, fromBranchId: scope.branchId },
     include: { lines: true },
@@ -1078,8 +1205,11 @@ export async function dispatchTransfer(
 export async function receiveTransferLine(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { transferId: string; lineId: string; receivedUnits: number; idempotencyKeyPrefix: string }
+  input: WarehouseReceiptInput
 ) {
+  if (await isWarehouseTransfer(db, scope.organizationId, input.transferId, scope.branchId)) {
+    return receiveWarehouseTransferLine(db, scope, input);
+  }
   assertPositive(input.receivedUnits);
   const transfer = await db.pharmacyInterbranchTransfer.findFirst({
     where: {
@@ -1201,6 +1331,11 @@ export async function createRecall(
     { batchIds: lockedBatches.map((batch) => batch.id) },
     'RECALL'
   );
+  await releaseWarehouseReservationsForHold(db, scope, {
+    batchIds: lockedBatches.map((batch) => batch.id),
+    reason: input.reason,
+    sourceKey: 'recall:' + input.reference,
+  });
   return db.pharmacyRecallNotice.create({
     data: {
       organizationId: scope.organizationId,

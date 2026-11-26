@@ -462,6 +462,8 @@ export async function postWriteOffEntry(
   if (!lot) throw new PharmacyFinanceError('NOT_FOUND');
 
   const amountMinor = lot.unitCostMinor * Math.abs(movement.quantityUnits);
+  // The witnessed movement records disposal even when the lot carries no book value.
+  if (amountMinor === 0) return null;
   const dimensions = {
     branchId: movement.branchId,
     productId: lot.medicineId,
@@ -661,7 +663,7 @@ export async function postInterbranchTransferReceiptEntry(
   }
   if (
     movement.kind !== 'TRANSFER_IN' ||
-    movement.disposition !== 'AVAILABLE' ||
+    !['AVAILABLE', 'QUARANTINE', 'DAMAGED'].includes(movement.disposition) ||
     movement.quantityUnits <= 0 ||
     movement.stockLocationId !== line.destinationStockLocationId
   ) {

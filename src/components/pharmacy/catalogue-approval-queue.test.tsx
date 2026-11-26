@@ -260,6 +260,27 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(screen.getByText('All branches')).toBeVisible();
     expect(screen.queryByText('pack_strip')).not.toBeInTheDocument();
   });
+  it('shows both proposed warehouse temperature limits in degrees Celsius', () => {
+    m.queue.data = [
+      {
+        id: 'temperature-edit',
+        operation: 'UPDATE_MEDICINE',
+        medicine: { productName: 'Cold chain test medicine' },
+        editor: { name: 'Warehouse safety reviewer' },
+        changes: { minimumStorageTemperatureC: -1.5, maximumStorageTemperatureC: 7 },
+        stale: false,
+        targets: [],
+      },
+    ];
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Minimum storage temperature')).toBeVisible();
+    expect(screen.getByText('-1.5 °C')).toBeVisible();
+    expect(screen.getByText('Maximum storage temperature')).toBeVisible();
+    expect(screen.getByText('7 °C')).toBeVisible();
+    expect(document.getElementById('catalogue-edit-temperature-edit')).toHaveTextContent(
+      'Pending review'
+    );
+  });
   it('shows every queued catalogue price in rupees with two decimals, never paisa (DEV-722)', () => {
     m.queue.data = [
       {

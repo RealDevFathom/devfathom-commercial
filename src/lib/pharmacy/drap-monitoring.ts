@@ -1,3 +1,4 @@
+import { releaseWarehouseReservationsForHold } from './warehouse-outbound';
 import { createHash } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -413,7 +414,7 @@ export async function confirmDrapRecall(
   const balances = await db.pharmacyStockBalance.findMany({
     where: {
       organizationId: scope.organizationId,
-      disposition: 'AVAILABLE',
+      disposition: { in: ['AVAILABLE', 'WAREHOUSE_RESERVED'] },
       onHandUnits: { gt: 0 },
       lot: { manufacturingBatchId: { in: recalledIds } },
     },
@@ -424,14 +425,19 @@ export async function confirmDrapRecall(
     db,
     { organizationId: scope.organizationId },
     balances.flatMap((balance) =>
-      (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+      ([balance.disposition, 'QUARANTINE'] as const).map((disposition) => ({
         inventoryLotId: balance.inventoryLotId,
         stockLocationId: balance.stockLocationId,
         disposition,
       }))
     )
   );
-  for (const balance of balances) {
+  await releaseWarehouseReservationsForHold(db, scope, {
+    batchIds: recalledIds,
+    reason,
+    sourceKey: 'drap:' + ingest.id,
+  });
+  for (const balance of balances.filter((b) => b.disposition === 'AVAILABLE')) {
     const moved = await quarantinePart(
       db,
       { ...scope, branchId: balance.branchId },

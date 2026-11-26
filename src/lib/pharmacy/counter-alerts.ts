@@ -56,6 +56,8 @@ const SEVERITY_RANK: Record<CounterAlertSeverity, number> = {
 
 /** INV-03 hard blocks, phrased for a counter rather than for a ledger. */
 const BLOCK_MESSAGES: Record<BlockReason, string> = {
+  WAREHOUSE_RESERVED: 'Stock is reserved for a warehouse shipment.',
+  WAREHOUSE_RECEIVING: 'Stock is awaiting warehouse put-away.',
   EXPIRED: 'Nearest batch is expired and cannot be dispensed.',
   RECALLED: 'Batch is under recall and is blocked from sale.',
   QUARANTINED: 'Stock is quarantined and is blocked from sale.',

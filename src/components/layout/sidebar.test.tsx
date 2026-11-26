@@ -239,6 +239,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   ];
   const destinations = [
     ['Inventory', '/pharmacy/inventory', 'pharmacy-inventory'],
+    ['Warehouse', '/pharmacy/inventory/warehouse', 'pharmacy-inventory'],
     ['Purchasing', '/pharmacy/purchasing', 'pharmacy-procurement'],
     ['Finance', '/pharmacy/finance', 'pharmacy-finance'],
     ['Reports & Insights', '/pharmacy/reports', 'pharmacy-reports'],
@@ -331,8 +332,9 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
       ).not.toBeInTheDocument();
       const hrefs = screen.getAllByRole('link').map((link) => link.getAttribute('href'));
       expect(hrefs).not.toContain(href);
-      for (const [, otherHref] of destinations) {
-        if (otherHref !== href) expect(hrefs).toContain(otherHref);
+      for (const [, otherHref, otherModule] of destinations) {
+        if (otherModule === module) expect(hrefs).not.toContain(otherHref);
+        else expect(hrefs).toContain(otherHref);
       }
       expect(hrefs).toContain('/chat');
     }
@@ -620,6 +622,7 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ['/pharmacy/counter/close', 'Day close'],
     ['/pharmacy/settings/cameras/privacy', 'Cameras'],
     ['/pharmacy/inventory/expiry', 'Inventory'],
+    ['/pharmacy/inventory/warehouse', 'Warehouse'],
     ['/pharmacy/medicines/prices', 'Medicine catalog'],
     ['/pharmacy/regulatory/fbr-tier-1', 'Regulatory profile'],
   ])('marks exactly the right destination current at %s (DEV-497)', (pathname, label) => {
@@ -1051,7 +1054,9 @@ describe('menu drawer user chip with the browser offline', () => {
     const { container } = renderDrawer(collapsed);
     const chip = container.querySelector('[data-sidebar-identity="offline"]');
     expect(chip).not.toBeNull();
-    expect(chip).toHaveTextContent(collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked');
+    expect(chip).toHaveTextContent(
+      collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked'
+    );
     expect(container).not.toHaveTextContent('Ayesha Khan');
     expect(container).not.toHaveTextContent('Branch manager');
     expect(container).not.toHaveTextContent(/\bAK\b/);

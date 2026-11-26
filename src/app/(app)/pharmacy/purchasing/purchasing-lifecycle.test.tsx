@@ -624,6 +624,122 @@ it('makes Receiving Reverse a distinct operation after a confirmed Post', async 
   expect(reverse).toHaveBeenCalledOnce();
 });
 
+it.each(['QUARANTINE', 'DAMAGED'] as const)(
+  'drafts and submits an approved %s return using the authorized supplier and held quantity',
+  async (disposition) => {
+    const lot = {
+      lot: {
+        id: 'held-lot',
+        batch: {
+          batchNumber: 'HELD-1',
+          expiresAt: new Date('2028-09-01'),
+          medicine: { productName: 'Held medicine' },
+        },
+      },
+      location: { id: 'held-bin', name: 'Quality shelf' },
+      onHandUnits: 0,
+      approvedHeldReturns: [{ supplierId: licensedSupplier.id, quantityUnits: 7, disposition }],
+    };
+    const draft = {
+      id: 'ret-held',
+      reference: 'RET-HELD',
+      kind: 'PURCHASE_RETURN',
+      status: 'DRAFT',
+      createdAt: new Date('2026-09-01'),
+      supplier: licensedSupplier,
+      debitNotes: [],
+      lines: [
+        {
+          ...lot,
+          id: 'held-line',
+          quantityUnits: 7,
+          expectedCreditMinor: 1200,
+          reason: 'Quality review',
+          supplierClaimId: null,
+          returnWindowEndsAt: new Date('2028-08-01'),
+          windowState: 'OPEN',
+          daysToWindowEnd: 70,
+        },
+      ],
+    };
+    const create = vi.fn().mockResolvedValue(draft);
+    const submit = vi.fn().mockResolvedValue({});
+    const list = vi.fn().mockResolvedValue([]);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        returnableLots: vi.fn().mockResolvedValue([lot]),
+        purchaseReturns: list,
+        createPurchaseReturn: create,
+        submitPurchaseReturn: submit,
+      })
+    );
+    vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+    const view = render(
+      await ReturnsPage({
+        searchParams: params({ branch: 'branch-1', lot: 'held-lot', bin: 'held-bin' }),
+      })
+    );
+    const form = screen.getByRole('button', { name: 'Draft return' }).closest('form')!;
+    const fields = within(form);
+    const supplier = fields.getByLabelText('Supplier');
+    expect(supplier).toHaveValue(licensedSupplier.id);
+    expect(fields.getByLabelText('Line 1 — lot')).toHaveValue('held-lot|held-bin');
+    expect(fields.getAllByLabelText('Units')[0]).toHaveValue('7');
+    const words =
+      disposition === 'DAMAGED'
+        ? '7 damaged units approved for return'
+        : '7 quarantined units approved for return';
+    expect(fields.getAllByText(new RegExp(words))).toHaveLength(3);
+    fireEvent.change(supplier, { target: { value: lapsedSupplier.id } });
+    expect(fields.queryByText(new RegExp(words))).toBeNull();
+    fireEvent.change(supplier, { target: { value: licensedSupplier.id } });
+    fireEvent.change(fields.getByLabelText('Line 1 — lot'), {
+      target: { value: 'held-lot|held-bin' },
+    });
+    fireEvent.change(fields.getByLabelText('Reference'), { target: { value: draft.reference } });
+    fireEvent.change(fields.getAllByLabelText('Reason')[0]!, {
+      target: { value: 'Quality review' },
+    });
+    fireEvent.change(fields.getAllByLabelText('Return window ends')[0]!, {
+      target: { value: '2028-08-01' },
+    });
+    fireEvent.change(fields.getAllByLabelText('Expected credit (PKR)')[0]!, {
+      target: { value: '12' },
+    });
+    await act(async () => {
+      fireEvent.click(fields.getByRole('button', { name: 'Draft return' }));
+    });
+    expect(create).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-1',
+      supplierId: licensedSupplier.id,
+      kind: 'PURCHASE_RETURN',
+      reference: 'RET-HELD',
+      note: undefined,
+      lines: [
+        {
+          inventoryLotId: 'held-lot',
+          stockLocationId: 'held-bin',
+          quantityUnits: 7,
+          reason: 'Quality review',
+          returnWindowEndsAt: new Date('2028-08-01'),
+          expectedCreditMinor: 1200,
+        },
+      ],
+    });
+    list.mockResolvedValue([draft]);
+    view.rerender(
+      await ReturnsPage({ searchParams: params({ branch: 'branch-1', return: draft.id }) })
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Submit and reserve the stock' }));
+    });
+    expect(submit).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-1',
+      purchaseReturnId: draft.id,
+    });
+  }
+);
+
 it('keeps Returns success and sibling credit draft when Submit becomes Dispatch', async () => {
   const row = {
     id: 'ret-1',
@@ -655,7 +771,7 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   expect(screen.queryByLabelText('Witness PIN or approval code')).toBeNull();
   const outcome = screen.getByRole('link', { name: 'View saved record' }).parentElement!;
   expect(within(outcome).getByRole('status')).toHaveTextContent(
-    /^Return submitted\. The quantity is reserved and can no longer be sold\. Check the updated record before starting another change\.$/
+    /^Return submitted\. The quantity is reserved for supplier dispatch\. Check the updated record before starting another change\.$/
   );
   expect(
     screen.getByText(

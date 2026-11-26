@@ -13,6 +13,7 @@ import { actorIsPharmacyOwner } from './procurement-access';
 import { can, subjectFromSession, ACTIVE_STATUSES } from '@/lib/abac';
 import type { AuthzDb } from '@/lib/authz';
 
+const storageTemperature = z.number().finite().min(-100).max(100).optional();
 const nullableText = (max: number) => z.string().trim().max(max).nullable().optional();
 // Neither product family nor saleability can be changed here. Publication retains
 // its registration, strength, presentation and reviewed-provenance requirements.
@@ -31,6 +32,8 @@ export const catalogueChanges = z
     highAlert: z.boolean().optional(),
     lasa: z.boolean().optional(),
     coldChain: z.boolean().optional(),
+    minimumStorageTemperatureC: storageTemperature,
+    maximumStorageTemperatureC: storageTemperature,
     retailPriceMinor: z.number().int().positive().max(2147483647).nullable().optional(),
     retailCategory: nullableText(200),
   })
@@ -38,6 +41,12 @@ export const catalogueChanges = z
   .refine(
     (value) => Object.values(value).some((field) => field !== undefined),
     'Supply at least one catalogue edit.'
+  )
+  .refine(
+    ({ minimumStorageTemperatureC: minimum, maximumStorageTemperatureC: maximum }) =>
+      (minimum === undefined && maximum === undefined) ||
+      (minimum !== undefined && maximum !== undefined && minimum <= maximum),
+    'Supply both labelled temperatures. The minimum must be at or below the maximum.'
   );
 
 type Scope = {
@@ -348,15 +357,43 @@ export async function submitCatalogueEdit(
   db: ScopedDb,
   scope: Scope,
   medicineId: string,
-  rawChanges: unknown
+  rawChanges: unknown,
+  options: { reusePendingWarehouseTemperatures?: boolean } = {}
 ) {
-  const medicine = await db.medicine.findFirst({ where: { id: medicineId } });
+  // Warehouse scan submissions run inside one tenant transaction. Wait for a concurrent
+  // submission before reading the medicine version and its outstanding proposal.
+  if (options.reusePendingWarehouseTemperatures) {
+    const key = JSON.stringify([
+      'warehouse-product-temperatures',
+      scope.organizationId,
+      scope.actorId,
+      medicineId,
+    ]);
+    await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+  }
+  const medicine = await db.medicine.findFirst({
+    where: { id: medicineId, organizationId: scope.organizationId },
+  });
   if (!medicine)
     throw new TRPCError({
       code: 'NOT_FOUND',
       message: 'Catalogue item not found.',
     });
   const changes = validatedChanges(medicine, rawChanges);
+  if (options.reusePendingWarehouseTemperatures) {
+    const previous = await db.pharmacyCatalogueEdit.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        medicineId,
+        editorId: scope.actorId,
+        operation: 'UPDATE_MEDICINE',
+        status: 'PENDING',
+        expectedUpdatedAt: medicine.updatedAt,
+        changes: { equals: changes as Prisma.InputJsonObject },
+      },
+    });
+    if (previous) return previous;
+  }
   return db.pharmacyCatalogueEdit.create({
     data: {
       medicineId,

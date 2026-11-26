@@ -159,6 +159,10 @@ function makeDb(options: Options = {}) {
       create: vi.fn().mockResolvedValue({ id: 'lot_dst' }),
     },
     pharmacyStockLocation: { findFirst: vi.fn().mockResolvedValue({ id: 'location_dst' }) },
+    pharmacyWarehouseReservation: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyInterbranchTransfer: {
       create: vi.fn().mockResolvedValue({ id: 'transfer_new' }),
       findFirst: vi.fn(async () => transfer),

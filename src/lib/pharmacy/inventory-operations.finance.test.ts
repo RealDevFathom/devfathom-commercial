@@ -153,6 +153,8 @@ describe('inter-branch transfers journal dispatch and receipt', () => {
   it('brings what arrived out of transit at the destination', async () => {
     const destination = { ...scope, branchId: 'branch_dest' };
     const db = {
+      pharmacyWarehouseReservation: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ warehouseEnabled: false }) },
       pharmacyInterbranchTransfer: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'transfer_1',

@@ -172,6 +172,7 @@ export function toAuditJson(value: unknown, depth = 0): unknown {
 // ---------------------------------------------------------------------------
 
 const ROUTER_CATEGORY: Record<string, string> = {
+  pharmacyWarehouse: 'PHARMACY_INVENTORY',
   projects: 'PROJECT',
   finance: 'FINANCE',
   clients: 'CLIENT',

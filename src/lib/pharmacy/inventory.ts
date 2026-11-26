@@ -63,6 +63,8 @@ export type BatchState = 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
 /** Lot/location-scope state; quarantine and damage can apply to part of one lot. */
 export type StockDisposition =
   | 'AVAILABLE'
+  | 'WAREHOUSE_RECEIVING'
+  | 'WAREHOUSE_RESERVED'
   | 'QUARANTINE'
   | 'DAMAGED'
   | 'DESTROYED'
@@ -72,6 +74,8 @@ export type StockDisposition =
 
 /** Why a candidate may not be sold or transferred (INV-03). */
 export type BlockReason =
+  | 'WAREHOUSE_RECEIVING'
+  | 'WAREHOUSE_RESERVED'
   | 'EXPIRED'
   | 'RECALLED'
   | 'QUARANTINED'
@@ -249,6 +253,8 @@ export function blockReasonFor(
   if (candidate.batchState === 'RECALLED') return 'RECALLED';
   if (candidate.batchState === 'QUARANTINED') return 'QUARANTINED';
   if (candidate.batchState !== 'ACTIVE') return 'UNAUTHORIZED';
+  if (candidate.disposition === 'WAREHOUSE_RESERVED') return 'WAREHOUSE_RESERVED';
+  if (candidate.disposition === 'WAREHOUSE_RECEIVING') return 'WAREHOUSE_RECEIVING';
   if (candidate.disposition === 'QUARANTINE') return 'QUARANTINED';
   if (candidate.disposition === 'DAMAGED') return 'DAMAGED';
   if (candidate.disposition === 'DESTROYED') return 'DESTROYED';
