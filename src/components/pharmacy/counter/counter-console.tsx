@@ -3483,7 +3483,12 @@ function ScopedPharmacyCounterConsole({
           ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         sentKey = payload.idempotencyKey;
-        const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
+        const original: TenderAttempt = {
+          version: payload.type === 'CARD' ? 2 : 1,
+          scope: recoveryScope,
+          input: payload,
+          draft,
+        };
         // Persistence and read-back must succeed before any money write starts.
         persistTenderAttempt(original);
         attemptRef.current = original;

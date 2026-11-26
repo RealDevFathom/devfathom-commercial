@@ -8,6 +8,7 @@ import {
   BANK_TRANSFER_REFERENCE_MAX_LENGTH,
   hasValidTenderProviderReference,
   optionalCardCaptureSchema,
+  manualCardCaptureSchema,
   manualTenderCaptureSchema,
 } from '@/lib/pharmacy/manual-payments';
 
@@ -15,7 +16,7 @@ export type TenderAttemptInput = inferRouterInputs<AppRouter>['pharmacySales']['
 export type TenderAttemptScope = { organizationId: string; accountId: string; branchId: string };
 export type TenderDraft = { amount: string; cashReceived: string };
 export type TenderAttempt = {
-  version: 1;
+  version: 1 | 2;
   scope: TenderAttemptScope;
   input: TenderAttemptInput;
   draft: TenderDraft;
@@ -30,7 +31,7 @@ const amountText = z
   .regex(/^\s*(?:\d{1,12}(?:\.\d{1,2})?)?\s*$/);
 const storedSchema = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
     scope: scopeSchema,
     input: z
       .object({
@@ -115,7 +116,11 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   } else if (input.type === 'CARD') {
     if (input.payerName !== undefined || input.referenceSkipped !== undefined)
       throw new Error(TENDER_STORAGE_MESSAGE);
-    optionalCardCaptureSchema.parse({
+    const schema =
+      stored.version === 1 && (input.providerRef !== undefined || input.approvalCode !== undefined)
+        ? manualCardCaptureSchema
+        : optionalCardCaptureSchema;
+    schema.parse({
       providerRef: input.providerRef,
       approvalCode: input.approvalCode,
     });
