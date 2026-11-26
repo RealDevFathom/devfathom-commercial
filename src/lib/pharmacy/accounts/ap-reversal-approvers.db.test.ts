@@ -1026,17 +1026,20 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
           tenderIds: [tender.id],
         })
       );
-      await checked('manage', (api) =>
-        api.publishTaxProfile({
-          branchId,
-          name: 'Test tax',
-          effectiveFrom: at,
-          approvalReference: id('taxapproval'),
-          idempotencyKey: id('tax'),
-          rules: [
-            { productClass: 'FRONT_SHOP', pctHsCode: '1234', priceMode: 'EXCLUSIVE', rate: '0' },
-          ],
-        })
+      await checkFinance(
+        (ctx) =>
+          router.createCaller(ctx).publishTaxProfile({
+            branchId,
+            name: 'Test tax',
+            effectiveFrom: at,
+            approvalReference: id('taxapproval'),
+            idempotencyKey: id('tax'),
+            rules: [
+              { productClass: 'FRONT_SHOP', pctHsCode: '1234', priceMode: 'EXCLUSIVE', rate: '0' },
+            ],
+          }),
+        reopener,
+        'manage'
       );
     }, 60_000);
   });

@@ -926,62 +926,71 @@ export default async function PharmacyFinancePage({
             </p>
           )}
         </SectionCard>
-        <SectionCard title="Publish tax profile" eyebrow="Tax · Accountant approval">
+        <SectionCard
+          title={isAdmin ? 'Publish tax profile' : 'Tax profiles'}
+          eyebrow="Tax · Accountant approval"
+        >
           <a
             href={`/pharmacy/accounts/tax-profile-review?${new URLSearchParams({ branch: branch.id })}`}
             className="mb-5 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Review recorded tax profile versions
           </a>
-          <form action={perform} className="grid gap-3 sm:grid-cols-2">
-            <input type="hidden" name="action" value="tax" />
-            <input type="hidden" name="branchId" value={branch.id} />
-            <label className="text-sm">
-              Profile name
-              <Input className="mt-1 min-h-11" name="profileName" required />
-            </label>
-            <label className="text-sm">
-              Accountant approval reference
-              <Input className="mt-1 min-h-11" name="approvalReference" required />
-            </label>
-            <label className="text-sm">
-              Effective from
-              <Input className="mt-1 min-h-11" name="effectiveFrom" type="date" required />
-            </label>
-            <label className="text-sm">
-              Effective to (optional)
-              <Input className="mt-1 min-h-11" name="effectiveTo" type="date" />
-            </label>
-            <label className="text-sm">
-              Medicine PCT / HS code
-              <Input className="mt-1 min-h-11" name="medicineHs" required />
-            </label>
-            <label className="text-sm">
-              Front-shop PCT / HS code
-              <Input className="mt-1 min-h-11" name="frontShopHs" required />
-            </label>
-            <label className="text-sm">
-              Rate (0–1)
-              <Input className="mt-1 min-h-11" name="rate" required placeholder="0.18" />
-            </label>
-            <label className="text-sm">
-              Price mode
-              <StudioSelect className={inputClass} name="priceMode">
-                <option value="INCLUSIVE">Tax inclusive</option>
-                <option value="EXCLUSIVE">Tax exclusive</option>
-              </StudioSelect>
-            </label>
-            <label className="text-sm sm:col-span-2">
-              SRO reference (always provisional)
-              <Input className="mt-1 min-h-11" name="sroReference" />
-              <span className="mt-1 block text-xs text-text-muted">
-                Verify against the final gazette before operational use.
-              </span>
-            </label>
-            <Button disabled={!workspace.mayManageAccounts} type="submit" className="sm:col-span-2">
-              Publish approved version
-            </Button>
-          </form>
+          {isAdmin && (
+            <form action={perform} className="grid gap-3 sm:grid-cols-2">
+              <input type="hidden" name="action" value="tax" />
+              <input type="hidden" name="branchId" value={branch.id} />
+              <label className="text-sm">
+                Profile name
+                <Input className="mt-1 min-h-11" name="profileName" required />
+              </label>
+              <label className="text-sm">
+                Accountant approval reference
+                <Input className="mt-1 min-h-11" name="approvalReference" required />
+              </label>
+              <label className="text-sm">
+                Effective from
+                <Input className="mt-1 min-h-11" name="effectiveFrom" type="date" required />
+              </label>
+              <label className="text-sm">
+                Effective to (optional)
+                <Input className="mt-1 min-h-11" name="effectiveTo" type="date" />
+              </label>
+              <label className="text-sm">
+                Medicine PCT / HS code
+                <Input className="mt-1 min-h-11" name="medicineHs" required />
+              </label>
+              <label className="text-sm">
+                Front-shop PCT / HS code
+                <Input className="mt-1 min-h-11" name="frontShopHs" required />
+              </label>
+              <label className="text-sm">
+                Rate (0–1)
+                <Input className="mt-1 min-h-11" name="rate" required placeholder="0.18" />
+              </label>
+              <label className="text-sm">
+                Price mode
+                <StudioSelect className={inputClass} name="priceMode">
+                  <option value="INCLUSIVE">Tax inclusive</option>
+                  <option value="EXCLUSIVE">Tax exclusive</option>
+                </StudioSelect>
+              </label>
+              <label className="text-sm sm:col-span-2">
+                SRO reference (always provisional)
+                <Input className="mt-1 min-h-11" name="sroReference" />
+                <span className="mt-1 block text-xs text-text-muted">
+                  Verify against the final gazette before operational use.
+                </span>
+              </label>
+              <Button
+                disabled={!workspace.mayManageAccounts}
+                type="submit"
+                className="sm:col-span-2"
+              >
+                Publish approved version
+              </Button>
+            </form>
+          )}
           <div className="mt-5 space-y-2">
             {workspace.taxProfiles.length ? (
               workspace.taxProfiles.map((profile) => (

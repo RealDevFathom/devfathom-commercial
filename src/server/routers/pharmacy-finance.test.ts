@@ -729,3 +729,20 @@ it('allows a Finance employee to import a bank line only for an assigned branch'
   ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your finance scope.' });
   expect(mocks.bankLineCreate).toHaveBeenCalledTimes(1);
 });
+
+it('reserves publishing a tax profile for administrators even at an assigned Finance branch', async () => {
+  mocks.assignments.mockResolvedValue([{ branchId: 'branch_1' }]);
+  await expect(
+    caller('EMPLOYEE').publishTaxProfile({
+      branchId: 'branch_1',
+      name: 'Synthetic tax',
+      effectiveFrom: '2026-11-01',
+      approvalReference: 'review',
+      idempotencyKey: 'tax1',
+      rules: [{ productClass: 'FRONT_SHOP', pctHsCode: '1234', priceMode: 'EXCLUSIVE', rate: '0' }],
+    })
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'Only an administrator can publish a tax profile.',
+  });
+});

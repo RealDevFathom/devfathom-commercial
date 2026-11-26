@@ -675,6 +675,14 @@ export const pharmacyFinanceRouter = router({
     }),
 
   publishTaxProfile: bookkeepingMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only an administrator can publish a tax profile.',
+        });
+      return next();
+    })
     .input(
       z.object({
         branchId: id,

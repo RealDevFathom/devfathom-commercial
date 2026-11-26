@@ -334,7 +334,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.publishTaxProfile': {
-    gate: `${bookkeepingGate} + finance:manage`,
+    gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.reconcile': {
