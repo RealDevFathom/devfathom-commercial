@@ -83,3 +83,21 @@ it('explains branch loading, empty, denied and failed reads', () => {
   view.rerender(<PharmacyReceiptDesigner canSave />);
   expect(screen.getByRole('alert')).toHaveTextContent(/could not be loaded/);
 });
+
+it('shows the profile notice only to an administrator whose branch lacks a registered name', () => {
+  const notice =
+    "Add the registered name from your drug-sale licence in the branch's regulatory profile to print it on receipts.";
+  const view = render(<PharmacyReceiptDesigner canSave />);
+  expect(screen.getByText(notice)).toBeVisible();
+  expect(screen.getByTitle('Sample receipt').getAttribute('srcdoc')).not.toContain(
+    'Example Registered Pharmacy'
+  );
+  view.rerender(<PharmacyReceiptDesigner canSave={false} />);
+  expect(screen.queryByText(notice)).not.toBeInTheDocument();
+  state.format = {
+    data: { revision: 2, layout: receiptDesign(null), registeredName: 'Market Pharmacy' },
+  };
+  view.rerender(<PharmacyReceiptDesigner canSave />);
+  expect(screen.queryByText(notice)).not.toBeInTheDocument();
+  expect(screen.getByTitle('Sample receipt').getAttribute('srcdoc')).toContain('Market Pharmacy');
+});

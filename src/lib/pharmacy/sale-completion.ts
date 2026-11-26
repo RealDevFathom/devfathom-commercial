@@ -135,7 +135,7 @@ export async function completePaidPharmacySale(
     snapshotText(input.buyerName, 200) ?? snapshotText(sale.customer?.displayName, 200);
   const organization = await db.organization.findUnique({
     where: { id: scope.organizationId },
-    select: { timezone: true, legalName: true },
+    select: { timezone: true },
   });
   const regulatoryIdentity = await readPharmacyReceiptTaxIdentity(
     db,
@@ -167,7 +167,7 @@ export async function completePaidPharmacySale(
         ? {
             seller: {
               branchName: issuingBranch.name,
-              registeredName: regulatoryIdentity.registeredName ?? organization?.legalName ?? null,
+              registeredName: regulatoryIdentity.registeredName ?? null,
               counterLabel: issuingDevice?.name?.trim() || counterLabel(input.deviceId),
             },
           }

@@ -85,6 +85,19 @@ it('sends the configured pharmacy phone to the supported profile save procedure'
   );
 });
 
+it('submits the optional registered name the owner enters on the branch profile', () => {
+  render(<PharmacyRegulatoryProfileForm initial={initial} />);
+  const name = screen.getByLabelText('Registered name on the drug-sale licence (optional)');
+  fireEvent.change(name, { target: { value: '  Market Pharmacy  ' } });
+  fireEvent.submit(name.closest('form')!);
+  expect(mocks.mutate).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      branchId: 'branch-1',
+      registeredName: 'Market Pharmacy',
+    })
+  );
+});
+
 it('shows the pharmacist coverage hours for the selected branch (DEV-846)', () => {
   render(<PharmacyRegulatoryProfileForm initial={initial} />);
   expect(screen.getByTestId('pharmacist-coverage-hours')).toHaveTextContent('branch-1');

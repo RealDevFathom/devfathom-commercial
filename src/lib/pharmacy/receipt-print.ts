@@ -23,6 +23,7 @@ import {
   type PharmacyReceiptTaxIdentity,
 } from './counter-receipt';
 import { counterReceiptFacts } from './counter-receipt-presentation';
+import { profileRegisteredName } from './regulatory-profile-form';
 import { regulatoryProfileInForceWhere } from './regulatory-start';
 
 /** Registered tax identity printed on the receipt; null fields are omitted, never invented. */
@@ -192,10 +193,9 @@ export async function readPharmacyReceiptTaxIdentity(
     .filter((value): value is string => typeof value === 'string' && Boolean(value.trim()))
     .map((value) => value.trim())
     .join(', ');
+  const registeredName = profileRegisteredName(premises);
   return {
-    ...(typeof premises?.registeredName === 'string' && premises.registeredName.trim()
-      ? { registeredName: premises.registeredName.trim() }
-      : {}),
+    ...(registeredName ? { registeredName } : {}),
     address: address || null,
     phone: typeof premises?.phone === 'string' ? premises.phone.trim() || null : null,
     licenceNumber: profile?.licenceNumber?.trim() || null,

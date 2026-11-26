@@ -5638,9 +5638,14 @@ export const pharmacySalesRouter = router({
   /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
   counterReceiptFormat: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
-    .query(async ({ ctx, input }) =>
-      readPharmacyReceiptFormat(ctx.db, await requireCounterReceiptAccess(ctx, input.branchId))
-    ),
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const [format, identity] = await Promise.all([
+        readPharmacyReceiptFormat(ctx.db, scope),
+        readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(), ctx.organization?.timezone),
+      ]);
+      return { ...format, registeredName: identity.registeredName ?? null };
+    }),
 
   counterUploadReceiptLogo: adminProcedure
     .input(receiptLogoUpload)

@@ -327,6 +327,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         new Date('2026-09-05T10:00:00Z')
       );
       expect(identity.phone).toBeNull();
+      expect(identity.registeredName).toBeUndefined();
     });
   });
 
@@ -334,6 +335,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
+        registeredName: '  Market Pharmacy  ',
         premisesPhone: '  +92 (42) 123-4567  ',
       });
       expect(saved.version).toBe(1);
@@ -370,6 +372,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         new Date('2026-09-05T10:00:00Z')
       );
       expect(identity).toMatchObject({
+        registeredName: 'Market Pharmacy',
         address: '12 Mall Road, Lahore',
         phone: '+92 (42) 123-4567',
         licenceNumber: 'LIC-4471',

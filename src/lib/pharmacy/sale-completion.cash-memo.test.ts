@@ -76,6 +76,7 @@ function makeDb() {
     organization: { findUnique: vi.fn(async () => ({ timezone: 'Asia/Karachi' })) },
     branchRegulatoryProfile: {
       findFirst: vi.fn(async () => ({
+        premises: { registeredName: 'Issued seller' },
         provinceCode: 'PK-SD',
         licenceNumber: 'SYNTHETIC-SD-77',
         licenceValidFrom: new Date('2026-01-01T00:00:00Z'),
@@ -126,7 +127,7 @@ describe('#708 cash memo facts in the completion snapshot', () => {
     );
     expect(db.organization.findUnique).toHaveBeenCalledWith({
       where: { id: 'org_a' },
-      select: { timezone: true, legalName: true },
+      select: { timezone: true },
     });
   });
 
@@ -199,7 +200,7 @@ it('records the seller, branch and issuing counter on the immutable receipt snap
     pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ name: 'Issued counter' })) },
   });
   db.organization.findUnique.mockResolvedValue({
-    ...{ legalName: 'Issued seller' },
+    ...{ legalName: 'Different organization' },
     timezone: 'Asia/Karachi',
   });
   const snapshot = await snapshotFor(issuedSale);
@@ -209,3 +210,25 @@ it('records the seller, branch and issuing counter on the immutable receipt snap
     counterLabel: 'Issued counter',
   });
 });
+
+it.each(['Organization name', ''])(
+  'can complete a sale without a profile name when the organization name is %j',
+  async (legalName) => {
+    const profile = await db.branchRegulatoryProfile.findFirst();
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({
+      ...profile,
+      premises: { registeredName: '  ' },
+    });
+    db.organization.findUnique.mockResolvedValue({ timezone: 'Asia/Karachi', ...{ legalName } });
+    Object.assign(db, { pharmacyRegisteredDevice: { findFirst: vi.fn(async () => null) } });
+    const snapshot = await snapshotFor({
+      ...sale({}),
+      ...{ visibilityAnchor: { name: 'Market branch' } },
+    });
+    expect(snapshot.seller).toEqual({
+      branchName: 'Market branch',
+      registeredName: null,
+      counterLabel: 'Counter TERA',
+    });
+  }
+);

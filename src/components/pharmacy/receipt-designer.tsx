@@ -25,7 +25,12 @@ import {
 import { layoutWithPaper } from '@/lib/pharmacy/receipt-layout';
 import { ReceiptPaperPreview } from './receipt-paper-preview';
 
-type Saved = { layout: PharmacyReceiptLayout; revision: number; receiptLogoPng?: string };
+type Saved = {
+  registeredName: string | null;
+  layout: PharmacyReceiptLayout;
+  revision: number;
+  receiptLogoPng?: string;
+};
 const labels = {
   businessText: 'Business text',
   headerText: 'Header',
@@ -69,11 +74,27 @@ const papers = (
     <option value="A4">A4 sheet</option>
   </>
 );
-function Preview({ layout, png }: { layout: ReceiptDesign; png?: string }) {
+function Preview({
+  layout,
+  png,
+  registeredName,
+}: {
+  layout: ReceiptDesign;
+  png?: string;
+  registeredName: string | null;
+}) {
   const [paper, setPaper] = useState('saved');
   const format = (paper === 'saved' ? counterFormatFromLayout(layout) : paper) as PrinterTestFormat;
   const html = buildCounterBrowserReceipt(
-    { ...receiptDesignSample, receiptLayout: layout, receiptLogoPng: png },
+    {
+      ...receiptDesignSample,
+      taxIdentity: {
+        ...receiptDesignSample.taxIdentity!,
+        registeredName: registeredName ?? undefined,
+      },
+      receiptLayout: layout,
+      receiptLogoPng: png,
+    },
     'en',
     format
   );
@@ -123,7 +144,7 @@ function Editor({
       const next = await save.mutateAsync({ branchId, revision: base, layout: parsed.data });
       utils.pharmacySales.counterReceiptFormat.setData(
         { branchId },
-        { ...next, receiptLogoPng: png }
+        { ...next, registeredName: saved.registeredName, receiptLogoPng: png }
       );
       setBase(next.revision);
       setDraft(receiptDesign(next.layout));
@@ -178,6 +199,12 @@ function Editor({
             status={dirty ? 'draft' : 'saved'}
             label={dirty ? 'Unsaved draft' : 'Saved design'}
           />
+          {canSave && !saved.registeredName && (
+            <p className="text-sm text-text-muted">
+              Add the registered name from your drug-sale licence in the branch&apos;s regulatory
+              profile to print it on receipts.
+            </p>
+          )}
           {!canSave && (
             <p className="text-sm text-text-muted">
               You can preview this design. A workspace administrator can edit it.
@@ -432,6 +459,7 @@ function Editor({
           {savedPreview || parsed.success ? (
             <Preview
               layout={savedPreview ? receiptDesign(saved.layout) : draft}
+              registeredName={saved.registeredName}
               png={savedPreview ? saved.receiptLogoPng : png}
             />
           ) : (
