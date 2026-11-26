@@ -730,6 +730,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         sites: { 'src/server/routers/pharmacy-supplier-links.ts': 1 },
       },
       {
+        id: 'upload-supplier-document',
+        text: "Upload a supplier document at the purchase order's branch with a valid supplier response link",
+        sites: { 'src/app/api/pharmacy/supplier-documents/upload/route.ts': 1 },
+      },
+      {
         id: 'see-highermargin-brand-suggestions',
         text: 'See higher-margin brand suggestions, with cost and margin, for their branches',
         sites: { 'src/server/routers/pharmacy-sales.ts': 1 },
