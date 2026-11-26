@@ -9,6 +9,7 @@ import { BusinessChart, reportMoney } from './business-chart';
 import type { TradingSection } from '@/lib/pharmacy/owner-trading';
 
 const labels = {
+  stock: ['Stock value over time', 'Last 30 business days · available units at landed cost'],
   summary: ['Trading today', 'Compared with the same weekday last week'],
   days: ['Daily sales', 'Last 30 business days · dashed line shows the previous 30'],
   hours: ['Sales by hour', 'Today · business local time'],
@@ -87,14 +88,16 @@ function TradingPanel({
           title={title}
           points={query.data}
           empty={
-            section === 'profits'
-              ? 'No medicine profit recorded in the last 30 days.'
-              : section === 'days' || section === 'medicines'
-                ? 'No sales recorded in this period.'
-                : 'No sales yet today.'
+            section === 'stock'
+              ? 'No available stock recorded in this period.'
+              : section === 'profits'
+                ? 'No medicine profit recorded in the last 30 days.'
+                : section === 'days' || section === 'medicines'
+                  ? 'No sales recorded in this period.'
+                  : 'No sales yet today.'
           }
           format={money}
-          line={section === 'days'}
+          line={section === 'days' || section === 'stock'}
           comparison={section === 'days'}
         />
       )}
@@ -113,6 +116,7 @@ export function TradingOverview({ branchId, financial, currency, branches }: Pro
           <TradingPanel {...props} section="days" />
           <TradingPanel {...props} section="hours" />
           <TradingPanel {...props} section="payments" />
+          <TradingPanel {...props} section="stock" />
           <TradingPanel
             {...props}
             section={profit ? 'profits' : 'medicines'}

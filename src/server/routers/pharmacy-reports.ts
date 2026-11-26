@@ -1058,6 +1058,7 @@ export const pharmacyReportsRouter = router({
             'branches',
             'medicines',
             'profits',
+            'stock',
           ]),
           branchId: z.string().min(1).max(128).optional(),
         })

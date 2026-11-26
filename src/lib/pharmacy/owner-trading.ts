@@ -3,6 +3,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { workspaceTimezone } from '@/lib/timezone';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { pharmacyBusinessDay, pharmacyBusinessDayRange, shiftPharmacyDay } from './business-day';
+import { onHandValueQuery } from './migration/parallel-run';
 import { grossMarginQuery } from './finance-reports';
 import { reportSaleLineJoin, reportSaleLineMinor, reportTenderTotal } from './trading-report-sql';
 
@@ -22,7 +23,7 @@ export type TradingPoint = {
   count?: boolean;
 };
 export type TradingSection =
-  'summary' | 'days' | 'hours' | 'payments' | 'branches' | 'medicines' | 'profits';
+  'summary' | 'days' | 'hours' | 'payments' | 'branches' | 'medicines' | 'profits' | 'stock';
 export function comparisonDays(rows: Row[]): TradingPoint[] {
   const totals = new Map(rows.map((row) => [Number(row.key), row.value]));
   return Array.from({ length: 30 }, (_, index) => {
@@ -76,6 +77,36 @@ export async function readOwnerTrading(
 ): Promise<TradingPoint[]> {
   if (!periods.length) return [];
   if (section !== 'summary' && !financial) return [];
+  if (section === 'stock') {
+    // Anchor on the same on-hand projection as the stock reconciliation report.
+    // In one database snapshot subtract subsequent AVAILABLE movements to get each close.
+    const days = periods.flatMap((p) =>
+      Array.from({ length: 30 }, (_, i) => {
+        const offset = i - 29;
+        const day = shiftPharmacyDay(p.today, offset);
+        const bounds = pharmacyBusinessDayRange(day, day, p.clock);
+        return Prisma.sql`(${p.id}::text,${offset}::int,${bounds.from}::timestamp,${bounds.to}::timestamp)`;
+      })
+    );
+    const rows = await db.$queryRaw<{ offset: number; value: number }[]>(Prisma.sql`
+      WITH days(branch,offset_day,start_at,end_at) AS (VALUES ${Prisma.join(days)}),
+      anchor AS (${onHandValueQuery(
+        organizationId,
+        periods.map((p) => p.id)
+      )}),
+      movement AS (SELECT d.offset_day, COALESCE(SUM(m."quantityUnits"::bigint * lot."unitCostMinor"),0) AS delta
+        FROM days d LEFT JOIN pharmacy_stock_movements m ON m."organizationId"=${organizationId} AND m."branchId"=d.branch
+          AND m.disposition='AVAILABLE' AND m."occurredAt">=d.start_at AND m."occurredAt"<d.end_at
+        LEFT JOIN pharmacy_inventory_lots lot ON lot."organizationId"=m."organizationId" AND lot.id=m."inventoryLotId"
+        GROUP BY d.offset_day)
+      SELECT offset_day AS offset, ((SELECT value FROM anchor)-COALESCE(SUM(delta) OVER
+        (ORDER BY offset_day ROWS BETWEEN 1 FOLLOWING AND UNBOUNDED FOLLOWING),0))::float8 AS value
+      FROM movement ORDER BY offset_day`);
+    return rows.map((r) => ({
+      label: r.offset === 0 ? 'Today' : `${-r.offset}d ago`,
+      value: r.value,
+    }));
+  }
   const dates = periodsTable(periods);
   const sales = Prisma.sql`FROM ${dates} JOIN pharmacy_sales s ON s."organizationId"=${organizationId} AND s."branchId"=period.id AND s.status='COMPLETED'`;
   const lines = Prisma.sql`JOIN pharmacy_sale_lines l ON ${reportSaleLineJoin}`;

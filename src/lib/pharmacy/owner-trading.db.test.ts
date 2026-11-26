@@ -4,6 +4,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { dashboardPeriods, readOwnerTrading, type TradingSection } from './owner-trading';
 import { aggregateTenderTotals } from './manual-payments';
 import { readPharmacyOwnerCommandCentre } from './reports';
+import { receiveLot } from './stock-ledger';
 import { grossMargin } from './finance-reports';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -43,6 +44,45 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       await db.$executeRaw`INSERT INTO pharmacy_medicines(id,"organizationId","productName","productFamily","updatedAt") VALUES (${org},${org},'Synthetic medicine','PHARMACEUTICAL',now())`;
       await db.$executeRaw`INSERT INTO pharmacy_presentations(id,"organizationId","medicineId",presentation,"updatedAt") VALUES (${org},${org},${org},'Unit',now())`;
       await db.$executeRaw`INSERT INTO pharmacy_pack_levels(id,"organizationId","presentationId","versionGroupId",version,level,"unitsPerParent","effectiveFrom") VALUES (${org},${org},${org},${org},1,'UNIT',1,'2020-01-01')`;
+      const expiresAt = new Date(Date.now() + 10 * 86400000);
+      await db.pharmacyManufacturingBatch.create({
+        data: {
+          id: org,
+          organizationId: org,
+          medicineId: org,
+          batchNumber: 'Synthetic',
+          expiresAt,
+        },
+      });
+      await db.pharmacyStockLocation.create({
+        data: {
+          id: org,
+          organizationId: org,
+          branchId: id,
+          code: 'Main',
+          name: 'Store',
+          kind: 'STORE',
+        },
+      });
+      await receiveLot(
+        db,
+        { organizationId: org, branchId: id, actorId: 'fixture' },
+        {
+          manufacturingBatchId: org,
+          packLevelId: org,
+          stockLocationId: org,
+          unitsPerPack: 1,
+          supplierName: 'Synthetic',
+          supplierInvoiceRef: org,
+          unitCostMinor: 100,
+          printedMrpMinor: 500,
+          receivedExpiresAt: expiresAt,
+          receivedExpiryPrecision: 'DAY',
+          quantityUnits: 12,
+          idempotencyKey: org,
+          receivedAt: at,
+        }
+      );
       await db.$executeRaw`INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserId","businessDate","completedAt","receiptNumber","createdAt","updatedAt") VALUES (${org},${org},${id},'COMPLETED','synthetic','2026-10-09',${at},1,${at},${at})`;
       await db.$executeRaw`INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","discountMinor","discountKind","approvalPolicy","approvedByUserId","idempotencyKey") VALUES (${org},${org},${id},${org},${org},${org},${org},'PACK',2,1,2,500,1000,500,100,75,'DISCOUNT','synthetic','synthetic',${org})`;
       await db.$executeRaw`INSERT INTO pharmacy_tenders(id,"organizationId","branchId","saleId",type,"amountMinor","businessDate","actorId","deviceId","createdAt") VALUES (${org},${org},${id},${org},'CARD',925,'2026-10-09','synthetic','synthetic',${at})`;
@@ -123,5 +163,32 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       { label: 'Bills', value: 1, previous: 0, count: true },
     ]);
     expect(await read('profits', false)).toEqual([]);
+  });
+
+  it('finishes at the current on-hand valuation report and includes all 30 business days', async () => {
+    const { branchStockValueMinor } = await import('./migration/parallel-run');
+    const [report, points] = await scoped.withTenantDb(org, async (db) =>
+      Promise.all([
+        branchStockValueMinor(db, { organizationId: org, branchId: id }),
+        readOwnerTrading(db, org, periods, 'stock', true),
+      ])
+    );
+    expect(points).toHaveLength(30);
+    expect(report).toBe(BigInt(1200));
+    expect(points.at(-2)?.value).toBe(0);
+    expect(points.at(-1)?.value).toBe(Number(report));
+  });
+  it('indexes the business-date and movement-time ranges used on each load', async () => {
+    const indexes = await scoped.withTenantDb(
+      org,
+      (db) =>
+        db.$queryRaw<
+          { indexname: string }[]
+        >`SELECT indexname FROM pg_indexes WHERE schemaname='public' AND indexname IN ('pharmacy_dashboard_sale_days','pharmacy_dashboard_stock_days')`
+    );
+    expect(indexes.map((i) => i.indexname).sort()).toEqual([
+      'pharmacy_dashboard_sale_days',
+      'pharmacy_dashboard_stock_days',
+    ]);
   });
 });
