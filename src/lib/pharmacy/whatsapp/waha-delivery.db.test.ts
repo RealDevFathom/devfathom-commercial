@@ -34,14 +34,12 @@ const server = createServer(async (req, res) => {
       return;
     }
     if (mode === '463' || mode === '475') {
-      res
-        .writeHead(500)
-        .end(
-          JSON.stringify({
-            exception: { message: 'server returned error ' + mode },
-            request: { body: { text: 'private synthetic payload' } },
-          })
-        );
+      res.writeHead(500).end(
+        JSON.stringify({
+          exception: { message: 'server returned error ' + mode },
+          request: { body: { text: 'private synthetic payload' } },
+        })
+      );
       return;
     }
     res.end(JSON.stringify({ id: randomUUID() }));
@@ -258,4 +256,55 @@ describe.skipIf(!url)('WAHA business entry points on PostgreSQL 16', () => {
     await expect(send(input)).resolves.toMatchObject({ acceptedByProvider: true });
     expect(attempts - before).toBe(1);
   });
+  it('keeps an authenticated restriction even when a newer session status arrived first', async () => {
+    const { org, row } = await fixture();
+    const timestamp = Date.now();
+    const status = (time: number, restricted: boolean) => ({
+      event: 'session.status',
+      session: row.sessionName,
+      id: randomUUID(),
+      timestamp: time,
+      payload: {
+        name: row.sessionName,
+        status: restricted ? 'FAILED' : 'WORKING',
+        data: { messageCapping: { cappingStatus: restricted ? 'CAPPED' : 'OK' } },
+      },
+    });
+    expect(await webhook(row, status(timestamp, false))).toBe(200);
+    expect(await webhook(row, status(timestamp - 1000, true))).toBe(200);
+    const state = await withTenantDb(org, (db) => readWahaSession(db, org));
+    expect({ status: state?.status, code: state?.restrictionCode }).toEqual({
+      status: 'WORKING',
+      code: 475,
+    });
+  });
+
+  it.each(['day', 'minute'])(
+    'reserves the last %s slot just once during concurrent sends',
+    async (period) => {
+      mode = 'ok';
+      const { org, customer } = await fixture();
+      await withTenantDb(org, async (db) => {
+        await db.pharmacyMessageLog.create({
+          data: {
+            organizationId: org,
+            customerId: customer,
+            direction: 'INBOUND',
+            kind: 'OPT_IN',
+            status: 'RECEIVED',
+            dedupeKey: randomUUID(),
+          },
+        });
+        await db.$executeRaw`UPDATE pharmacy_waha_sessions SET "perMinute"=${period === 'day' ? 60 : 1},"perDay"=${period === 'day' ? 1 : 100} WHERE "organizationId"=${org}`;
+      });
+      const before = attempts;
+      const outcomes = await Promise.allSettled(
+        Array.from({ length: 2 }, () =>
+          guardedWahaSend(org, phone, 'test', { text: 'Synthetic notice' })
+        )
+      );
+      expect(outcomes.map((outcome) => outcome.status).sort()).toEqual(['fulfilled', 'rejected']);
+      expect(attempts - before).toBe(1);
+    }
+  );
 });

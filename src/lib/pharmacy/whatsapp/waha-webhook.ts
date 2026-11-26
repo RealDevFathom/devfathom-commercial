@@ -201,10 +201,14 @@ export async function receiveWahaEvent(
     if (event.kind === 'ack')
       await db.$executeRaw`UPDATE pharmacy_message_logs SET "wahaAck"=greatest("wahaAck",${event.ack}::smallint)
       WHERE "organizationId"=${organizationId} AND direction='OUTBOUND' AND "providerMessageId"=${messageId}`;
-    if (event.kind === 'status')
-      await db.$executeRaw`UPDATE pharmacy_waha_sessions SET status=${event.status},"statusAt"=${event.occurredAt},"connectedNumber"=${event.number},
-      "restrictionCode"=COALESCE("restrictionCode",${event.restriction}::int)
+    if (event.kind === 'status') {
+      if (event.restriction) {
+        await db.$executeRaw`UPDATE pharmacy_waha_sessions SET "restrictionCode"=COALESCE("restrictionCode",${event.restriction}::int)
+          WHERE "organizationId"=${organizationId}`;
+      }
+      await db.$executeRaw`UPDATE pharmacy_waha_sessions SET status=${event.status},"statusAt"=${event.occurredAt},"connectedNumber"=${event.number}
       WHERE "organizationId"=${organizationId} AND ("statusAt" IS NULL OR "statusAt"<=${event.occurredAt})`;
+    }
     return 200;
   });
 }
