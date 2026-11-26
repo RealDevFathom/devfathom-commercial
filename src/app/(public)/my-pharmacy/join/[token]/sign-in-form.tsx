@@ -97,7 +97,7 @@ export function PortalSignInForm({ token }: { token: string }) {
         />
       </div>
       <details className="text-sm text-text-muted">
-        <summary className="cursor-pointer focus-visible:outline-ring">
+        <summary className="flex min-h-11 cursor-pointer items-center focus-visible:outline-2 focus-visible:outline-ring">
           Didn’t receive a code?
         </summary>
         <dl className="mt-3 space-y-2">

@@ -40,6 +40,20 @@ async function signIn() {
       );
       await page.getByRole('button', { name: 'Send me a code' }).click();
       if ((await response).status() !== 202) throw new Error('Code request failed.');
+      const codeInput = page.getByLabel('Six-digit code');
+      await codeInput.focus();
+      await page.keyboard.press('Tab');
+      const recovery = page.getByText('Didn’t receive a code?', { exact: true });
+      const usable = await recovery.evaluate(
+        (toggle) =>
+          toggle.matches(':focus-visible') &&
+          toggle.getBoundingClientRect().height >= 44 &&
+          Number.parseFloat(getComputedStyle(toggle).outlineWidth) >= 2
+      );
+      if (!usable)
+        throw new Error('Recovery toggle missed its touch target or keyboard focus indicator.');
+      await page.keyboard.press('Enter');
+      await page.getByText('If delivery failed', { exact: true }).waitFor();
       const buffer = Buffer.alloc(4096);
       let output = '';
       const deadline = Date.now() + 30_000;
@@ -52,7 +66,7 @@ async function signIn() {
         if (!code) await wait(100);
       }
       if (!code) throw new Error('Local synthetic delivery was unavailable.');
-      await page.getByLabel('Six-digit code').fill(code);
+      await codeInput.fill(code);
       await page.getByRole('button', { name: 'Sign in', exact: true }).click();
       await page.waitForURL(new URL('/my-pharmacy', url).href);
       await page.getByRole('heading', { name: /^Hello, / }).waitFor();
