@@ -208,6 +208,12 @@ const readOnlyEmployee: Candidate = {
   deny: 'finance:manage',
 };
 const employeeJobBranch = id('employee_jobs_branch');
+const financePayer: Candidate = { ...financeEmployee, key: 'finance_payer' };
+const employeeJobPayer = {
+  ...financePayer,
+  key: 'employee_job_payer',
+  assignedTo: employeeJobBranch,
+};
 const employeeJobMaker = {
   ...financeEmployee,
   key: 'employee_jobs_maker',
@@ -399,6 +405,8 @@ beforeAll(async () => {
       financeEmployee,
       employeeJobMaker,
       readOnlyEmployee,
+      financePayer,
+      employeeJobPayer,
       ...excludedEmployees,
       rolelessAdministrator,
       readOnlyAdministrator,
@@ -836,16 +844,20 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
           }),
         otherSigner
       );
-      const payment = await checked('manage', (api) =>
-        api.pay({
-          branchId,
-          invoiceId,
-          commandKey: id('pay'),
-          reference: id('payment'),
-          amountMinor,
-          paidAt: new Date().toISOString(),
-          fundingAccount: 'BANK',
-        })
+      const payment = await checked(
+        'manage',
+        (api) =>
+          api.pay({
+            branchId,
+            invoiceId,
+            commandKey: id('pay'),
+            reference: id('payment'),
+            amountMinor,
+            paidAt: new Date().toISOString(),
+            fundingAccount: 'BANK',
+            ...(maker.role === 'ADMIN' ? { pin: PIN } : {}),
+          }),
+        maker.role === 'ADMIN' ? maker : employeeJobPayer
       );
       await checked(
         'manage',
@@ -1067,15 +1079,22 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       description: 'Office supplies',
       evidenceReference: 'Slip',
     });
-    const payment = await api.pay({
+    const command = {
       branchId,
       invoiceId: invoice.id,
       commandKey: id('employee-payment'),
       reference: id('employee-payment'),
       amountMinor: 1000,
       paidAt: new Date().toISOString(),
-      fundingAccount: 'BANK',
+      fundingAccount: 'BANK' as const,
+    };
+    await expect(api.pay(command)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Someone else must pay an invoice you recorded.',
     });
+    const payer = callerFor(financePayer);
+    const payment = await payer.pay(command);
+    expect((await payer.pay(command)).id).toBe(payment.id);
     expect(payment.invoiceId).toBe(invoice.id);
     const { pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance');
     const finance = pharmacyFinanceRouter.createCaller(contextFor(financeEmployee));

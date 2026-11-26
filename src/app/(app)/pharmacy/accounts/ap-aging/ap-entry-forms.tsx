@@ -258,6 +258,10 @@ export function PayApInvoiceForm({
             <option value="BANK">Bank</option>
           </StudioSelect>
         </label>
+        <label className="text-sm">
+          Administrator approval PIN or code (when required)
+          <Input type="password" name="pin" autoComplete="off" inputMode="numeric" maxLength={8} />
+        </label>
         <label className={fieldClass}>
           Payment reference
           <Input

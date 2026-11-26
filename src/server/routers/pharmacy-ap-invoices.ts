@@ -1,3 +1,5 @@
+import { authorizeSupplierPayment } from '@/lib/pharmacy/accounts/supplier-payment-approval';
+import { lockPharmacyLedgerScope } from '@/lib/pharmacy/ledger-lock';
 import {
   pharmacyFinanceMemberProcedure,
   pharmacyFinanceMemberMutation,
@@ -646,7 +648,44 @@ export const pharmacyApInvoicesRouter = router({
     try {
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
-        const result = await payApInvoice(db, scope, input);
+        const { pin, ...command } = input;
+        await lockPharmacyLedgerScope(db, scope);
+        const prior = await db.pharmacyApInvoiceSettlement.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            commandKey: command.commandKey,
+          },
+          select: { createdByUserId: true },
+        });
+        if (prior && prior.createdByUserId !== scope.actorId)
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This payment was already recorded by another person.',
+          });
+        if (!prior) {
+          const invoice = await db.pharmacyApInvoice.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              id: command.invoiceId,
+            },
+            select: { createdByUserId: true },
+          });
+          if (!invoice) throw new TRPCError({ code: 'NOT_FOUND', message: 'NOT_FOUND' });
+          await authorizeSupplierPayment(
+            db,
+            scope,
+            {
+              recordedBy: invoice.createdByUserId,
+              amountMinor: command.amountMinor,
+              reference: command.reference,
+              action: 'pharmacyApInvoices.pay',
+            },
+            { pin }
+          );
+        }
+        const result = await payApInvoice(db, scope, command);
         await recordApAudit(db, ctx, scope, {
           action: 'pharmacyApInvoices.pay',
           description: `Paid supplier expense invoice ${result.settlement.invoiceId}`,

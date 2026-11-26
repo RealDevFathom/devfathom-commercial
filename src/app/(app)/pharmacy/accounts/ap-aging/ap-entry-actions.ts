@@ -57,6 +57,13 @@ const PAY_REASONS: Record<string, string> = {
 
 function failure(error: unknown, reasons: Record<string, string>, fallback: string) {
   unstable_rethrow(error);
+  if (
+    error instanceof TRPCError &&
+    error.code === 'FORBIDDEN' &&
+    (error.message === 'Someone else must pay an invoice you recorded.' ||
+      error.message === 'Enter the approving administrator’s PIN or authenticator code.')
+  )
+    return { status: 'error' as const, message: error.message };
   if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)) {
     return {
       status: 'error' as const,
@@ -127,7 +134,9 @@ export async function payApInvoiceFromForm(
     const caller = pharmacyApInvoicesRouter.createCaller(ctx);
     // The picker reads the workspace clock; the server receives an instant with its zone.
     const paidAt = workspaceInstantFromInput(paidAtInput, ctx.organization?.timezone);
+    const pin = field(form, 'pin');
     await caller.pay({
+      ...(pin ? { pin } : {}),
       branchId: field(form, 'branchId'),
       invoiceId: field(form, 'invoiceId'),
       commandKey: field(form, 'commandKey'),
