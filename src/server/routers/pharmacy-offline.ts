@@ -60,6 +60,7 @@ import {
   applyPharmacyTender,
   lockPharmacyDay,
   recordRejectedOfflineCash,
+  pharmacyDayClosedForTrading,
 } from '@/lib/pharmacy/settlement';
 import {
   manualTenderCaptureSchema,
@@ -1212,14 +1213,18 @@ export async function replayCounterCommand(
   // Only a PENDING command reaches here, so a sale already replayed is never moved.
   // DEV-958A: on the branch's clock, whose day ends at its "day ends at" hour, so a sale
   // signed at 00:30 at a branch whose day ends at 05:00 books on the day before.
-  const businessDate = pharmacyBusinessDate(
-    await readPharmacyDayClock(db, scope),
-    new Date(command.leasedReceipt.originalSaleAt)
-  );
+  const clock = await readPharmacyDayClock(db, scope);
+  const soldDay = pharmacyBusinessDate(clock, new Date(command.leasedReceipt.originalSaleAt));
+  await lockPharmacyDay(db, scope, soldDay);
+  const bookOnCurrentDay =
+    reviewed &&
+    priorRefusal?.reason === 'DAY_CLOSED' &&
+    (await pharmacyDayClosedForTrading(db, scope, soldDay));
+  const businessDate = bookOnCurrentDay ? pharmacyBusinessDate(clock) : soldDay;
   // DEV-631: take the sale's day lock before any stock lock, the same order the online
   // counter uses (day, then stock), so a replay and a counter line cannot deadlock.
   // The tender below re-enters this lock and still refuses a closed day.
-  await lockPharmacyDay(db, scope, businessDate);
+  if (businessDate.getTime() !== soldDay.getTime()) await lockPharmacyDay(db, scope, businessDate);
   // addSaleLine re-enters these request locks after the command's stock locks.
   // Hold every line key up front so a concurrent online retry cannot invert that order.
   for (let index = 0; index < command.lines.length; index += 1)
@@ -1343,7 +1348,10 @@ export async function replayCounterCommand(
     { deviceSecret, signature: receiptSignature },
     // DEV-821: an enrolled counter replays a sale it took offline into its own drawer;
     // the device is authenticated by its secret and the signed command above.
-    { drawerOperator: { kind: 'REGISTERED_DEVICE_REPLAY' } }
+    {
+      drawerOperator: { kind: 'REGISTERED_DEVICE_REPLAY' },
+      ...(bookOnCurrentDay ? { offlineSoldDay: soldDay.toISOString().slice(0, 10) } : {}),
+    }
   );
   if (!('settled' in result) || !result.settled)
     throw new CounterTransportError('offline_total_changed', 409);

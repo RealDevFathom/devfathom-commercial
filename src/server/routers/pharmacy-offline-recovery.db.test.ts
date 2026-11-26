@@ -334,9 +334,12 @@ async function setup(openDrawer = true) {
       })
     );
   }
-  const established = await call('establish');
-  expect(established.status).toBe(201);
-  token = (await established.json()).sessionToken;
+  async function establish() {
+    const established = await call('establish');
+    expect(established.status).toBe(201);
+    token = (await established.json()).sessionToken;
+  }
+  await establish();
   const leased = await call('lease', { size: 2 });
   expect(leased.status).toBe(200);
   const lease = await leased.json();
@@ -409,7 +412,7 @@ async function setup(openDrawer = true) {
       ).nextNumber,
     }));
   }
-  return { fixture, command, call, replay, counts, lease, chain };
+  return { fixture, command, call, replay, counts, lease, chain, establish };
 }
 
 async function supervisor<T>(
@@ -617,6 +620,76 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
       });
     }
   );
+  it('rebooks a closed-day receipt on the current open day and preserves its printed sale date', async () => {
+    const counter = await setup();
+    const scope = scopeOf(counter.fixture),
+      command = counter.chain.seal(counter.command);
+    const { closePharmacyCashShift } = await import('@/lib/pharmacy/cash-shifts');
+    const { readPharmacyClose, closePharmacyDay } = await import('@/lib/pharmacy/day-close');
+    const { openPharmacyDrawer } = await import('@/lib/pharmacy/settlement');
+    const { readCounterReceipt } = await import('@/lib/pharmacy/counter');
+    const { receiptOfflineReferenceLine } = await import('@/lib/pharmacy/counter-receipt');
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const soldDay = await inOrg(ORG_A, async (db) => {
+      const shift = await db.pharmacyCashShift.findFirstOrThrow({
+        where: { deviceId: counter.fixture.deviceId },
+      });
+      await closePharmacyCashShift(
+        db,
+        scope,
+        { shiftId: shift.id, countedCashMinor: 0 },
+        { actorIsManager: true }
+      );
+      const day = await readPharmacyClose(db, scope, shift.businessDate);
+      await closePharmacyDay(db, scope, {
+        businessDate: shift.businessDate,
+        sourceHash: day.totals.sourceHash,
+        counts: [{ drawerSessionId: shift.drawerSessionId, countedCashMinor: 0 }],
+        varianceNote: '',
+      });
+      return shift.businessDate;
+    });
+    const today = new Date(soldDay.getTime() + 86400000);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(Date.now() + 86400000));
+    try {
+      await counter.establish();
+      expect(await (await counter.replay(command)).json()).toEqual({ error: 'DAY_CLOSED' });
+      await inOrg(ORG_A, (db) =>
+        openPharmacyDrawer(db, scope, {
+          deviceId: counter.fixture.deviceId,
+          businessDate: today,
+          openingFloatMinor: 0,
+        })
+      );
+      const sign = (data: unknown) =>
+        signPharmacyCommand(scope, counter.fixture.deviceId, data, counter.fixture.deviceSecret);
+      const response = await counter.call(
+        'retry',
+        { command, reason: 'Approved prior business day' },
+        {
+          'idempotency-key': command.idempotencyKey,
+          'x-command-signature': sign(command),
+          'x-receipt-signature': sign(command.leasedReceipt),
+        }
+      );
+      const result = await response.json();
+      expect(response.status, JSON.stringify(result)).toBe(200);
+      await inOrg(ORG_A, async (db) => {
+        const receipt = await readCounterReceipt(db, scope, result.saleId, {
+          name: 'Counter',
+          currency: 'PKR',
+        });
+        expect(receipt.businessDate).toBe(today.toISOString().slice(0, 10));
+        expect(receiptOfflineReferenceLine(receipt, 'en')).toBe(
+          'Sold offline on ' + soldDay.toISOString().slice(0, 10)
+        );
+        expect((await readPharmacyClose(db, scope, soldDay)).close?.reopen).toBeNull();
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it('shows rejected cash as a dated late receipt on its closed shift and recording day', async () => {
     const counter = await setup();
     const scope = scopeOf(counter.fixture);

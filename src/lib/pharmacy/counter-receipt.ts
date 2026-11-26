@@ -104,6 +104,7 @@ export type CounterReceipt = {
    * branch number because a block leased before branch-wide numbering repeated one.
    */
   offlineReference?: number | null;
+  offlineSoldDay?: string;
   branchName: string;
   businessDate: string | null;
   completedAt: string | null;
@@ -329,12 +330,21 @@ export function localizeReceiptNumber(value: string, locale: CounterReceiptLocal
 
 /** DEV-637: "Printed offline as receipt 12" when replay renumbered the sale, else null. */
 export function receiptOfflineReferenceLine(
-  receipt: Pick<CounterReceipt, 'offlineReference'>,
+  receipt: Pick<CounterReceipt, 'offlineReference' | 'offlineSoldDay'>,
   locale: CounterReceiptLocale
 ): string | null {
-  if (!receipt.offlineReference) return null;
-  const number = localizeReceiptNumber(String(receipt.offlineReference), locale);
-  return `${COUNTER_RECEIPT_STRINGS[locale].offlineReference} ${number}`;
+  const lines = [];
+  if (receipt.offlineReference)
+    lines.push(
+      `${COUNTER_RECEIPT_STRINGS[locale].offlineReference} ${localizeReceiptNumber(String(receipt.offlineReference), locale)}`
+    );
+  if (receipt.offlineSoldDay)
+    lines.push(
+      locale === 'ur'
+        ? `آف لائن فروخت کی تاریخ ${localizeReceiptNumber(receipt.offlineSoldDay, locale)}`
+        : `Sold offline on ${receipt.offlineSoldDay}`
+    );
+  return lines.join(' · ') || null;
 }
 
 /** ISO timestamp reduced to the date a receipt prints. */

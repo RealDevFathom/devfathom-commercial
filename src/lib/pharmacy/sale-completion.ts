@@ -46,7 +46,7 @@ export async function completePaidPharmacySale(
   db: ScopedDb,
   scope: LedgerScope,
   sale: Prisma.PharmacySaleGetPayload<{ include: typeof completionSaleInclude }>,
-  input: { deviceId: string; businessDate: Date; buyerName?: string },
+  input: { deviceId: string; businessDate: Date; buyerName?: string; offlineSoldDay?: string },
   /** F2: a leased offline receipt number the caller already consumed in this transaction. */
   leasedReceiptNumber: number | null = null,
   /** Provider-backed settlement keeps the instant checked before charging. */
@@ -149,6 +149,7 @@ export async function completePaidPharmacySale(
   const snapshot = validateReceiptIdentity(
     {
       receiptIdentitySnapshotVersion: 1,
+      ...(input.offlineSoldDay ? { offlineSoldDay: input.offlineSoldDay } : {}),
       cashMemoIdentity,
       saleId: sale.id,
       receiptNumber,

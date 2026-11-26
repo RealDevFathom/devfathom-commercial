@@ -48,6 +48,7 @@ const snapshotSchema = z
     receiptNumber: units,
     /** DEV-637: the number printed offline when replay gave the sale a fresh number. */
     offlineReference: units.optional(),
+    offlineSoldDay: z.iso.date().optional(),
     deviceId: id,
     businessDate: z.iso.date(),
     issuedAt: z.iso.datetime(),

@@ -559,6 +559,7 @@ export type PharmacyDrawerOperator =
 export type PharmacySettlementOptions = {
   /** Internal settlement of money already counted in offline suspense. */
   fundedFromOfflineSuspense?: true;
+  offlineSoldDay?: string;
   requireCurrentBusinessDate?: boolean;
   /** Authorized refund procedure can recognize the obligation without paying cash. */
   recordProviderRefundOwed?: boolean;
@@ -949,7 +950,7 @@ export async function applyPharmacyTender(
       db,
       scope,
       sale,
-      input,
+      { ...input, ...(options.offlineSoldDay ? { offlineSoldDay: options.offlineSoldDay } : {}) },
       receiptNumber,
       providerPostingAt
     );
