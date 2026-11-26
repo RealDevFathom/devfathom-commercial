@@ -10,7 +10,12 @@ import type { Session } from 'next-auth';
 import { appRouter } from '@/server/routers/_app';
 import { anonymousFallbackRouter } from '@/server/routers/anonymous-fallback';
 import { createTRPCContext } from '@/server/trpc';
-import { preflightTrelloImport } from '@/server/trello-import-transport';
+import {
+  admitTrelloImport,
+  checkTrelloImportHeaders,
+  preflightTrelloImport,
+  trelloImportIndex,
+} from '@/server/trello-import-transport';
 import {
   isTenantLifecycleAccessible,
   requestHost,
@@ -29,6 +34,7 @@ import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
 import { clientIp } from '@/lib/rate-limit';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
+import { proxyRequestHeaders } from '@/lib/security/proxy-request-headers';
 
 /**
  * `/api/trpc` is the only tRPC transport in the app, and it required a session
@@ -37,7 +43,7 @@ import { readBoundedBody } from '@/lib/http/read-bounded-body';
  * account. This handler now has two ways in:
  *
  *   1. A tenant actor, exactly as before. Unchanged.
- *   2. No session, an EXACT allowlist of five procedures, and a tenant derived
+ *   2. No session, an EXACT allowlist of procedures, and a tenant derived
  *      from evidence the caller supplied — a globally unique token, or a host
  *      that is explicitly bound to one organization.
  *
@@ -47,6 +53,10 @@ import { readBoundedBody } from '@/lib/http/read-bounded-body';
  */
 
 const TRPC_ENDPOINT = '/api/trpc';
+const ANONYMOUS_BODY_BYTES = 256 * 1024;
+// Retain the previous 8 MiB transport capacity for signed-in callers such
+// as restaurant menu import. Trello has a separately throttled 16 MiB limit.
+const AUTHENTICATED_BODY_BYTES = 8 * 1024 * 1024;
 
 function unauthorized() {
   return Response.json({ error: 'Unauthorized' }, { status: 401 });
@@ -415,13 +425,9 @@ function servable(organization: TenantOrganization | null): TenantOrganization |
   return isTenantLifecycleAccessible(organization.status) ? organization : null;
 }
 
-async function boundAnonymousPost(req: Request, procedures: string[]): Promise<Request | Response> {
+async function boundPost(req: Request, limit: number): Promise<Request | Response> {
   if (req.method !== 'POST' || !req.body) return req;
 
-  // Keep the anonymous supplier upload cap aligned with the Next.js proxy buffer.
-  const limit = procedures.includes('pharmacySupplierLinks.uploadDocument')
-    ? 8 * 1024 * 1024
-    : 256 * 1024;
   const body = await readBoundedBody(req, limit);
   if (body === null) {
     return requestFailed(
@@ -445,7 +451,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
     routing.kind === 'token' &&
     req.method === 'POST' &&
     !new URL(req.url).searchParams.get('input');
-  const tokenRequest = tokenNeedsBody ? await boundAnonymousPost(req, routing.procedures) : req;
+  const tokenRequest = tokenNeedsBody ? await boundPost(req, ANONYMOUS_BODY_BYTES) : req;
   if (tokenRequest instanceof Response) return tokenRequest;
   const token = routing.kind === 'token' ? await anonymousToken(tokenRequest) : null;
 
@@ -459,9 +465,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
     );
   }
 
-  const boundedRequest = tokenNeedsBody
-    ? tokenRequest
-    : await boundAnonymousPost(req, routing.procedures);
+  const boundedRequest = tokenNeedsBody ? tokenRequest : await boundPost(req, ANONYMOUS_BODY_BYTES);
   if (boundedRequest instanceof Response) return boundedRequest;
 
   if (routing.kind === 'token') {
@@ -481,17 +485,37 @@ async function handleAnonymous(req: Request): Promise<Response> {
   return organization ? runAnonymously(boundedRequest, organization) : runFallback(boundedRequest);
 }
 
-async function handler(req: Request) {
+async function dispatch(req: Request) {
   try {
-    if (isPlatformAiSettingsRequest(req)) return servePlatformAiSettings(req);
-    try {
-      await preflightTrelloImport(req, procedurePaths(req));
-    } catch (error) {
-      if (error instanceof TRPCError) return requestFailed(error);
-      throw error;
+    // This flow uses a separate platform session inside each procedure, so
+    // cap the transport before dispatch just as for a public POST.
+    if (isPlatformAiSettingsRequest(req)) {
+      const bounded = await boundPost(req, ANONYMOUS_BODY_BYTES);
+      return bounded instanceof Response ? bounded : servePlatformAiSettings(bounded);
     }
+    const importIndex = trelloImportIndex(req, procedurePaths(req));
+    if (importIndex !== null) checkTrelloImportHeaders(req);
     const actor = await resolveTenantActor({ request: req });
-    if (!actor) return handleAnonymous(req);
+    if (!actor) return importIndex === null ? handleAnonymous(req) : unauthorized();
+
+    if (importIndex !== null) {
+      const admission = await admitTrelloImport(actor.session.user.id);
+      if (!admission.ok) {
+        const response = requestFailed(
+          new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Too many Trello imports. Try again later.',
+          })
+        );
+        response.headers.set('retry-after', String(Math.max(1, admission.retryAfter)));
+        return response;
+      }
+      await preflightTrelloImport(req, importIndex);
+    } else {
+      const bounded = await boundPost(req, AUTHENTICATED_BODY_BYTES);
+      if (bounded instanceof Response) return bounded;
+      req = bounded;
+    }
 
     const organization = await requireOrganizationForRequest(
       req,
@@ -504,6 +528,7 @@ async function handler(req: Request) {
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);
     if (passwordChange) return passwordChange;
+    if (error instanceof TRPCError) return requestFailed(error);
     if (error instanceof TenantHostError) {
       return Response.json({ error: error.message }, { status: error.status });
     }
@@ -511,4 +536,32 @@ async function handler(req: Request) {
   }
 }
 
-export { handler as GET, handler as POST };
+async function handler(incoming: Request) {
+  const { requestHeaders, csp } = proxyRequestHeaders(incoming);
+  const request = new Request(incoming.url, {
+    method: incoming.method,
+    headers: requestHeaders,
+    body: incoming.body,
+    signal: incoming.signal,
+    duplex: 'half',
+  } as RequestInit);
+  const response = await dispatch(request);
+  response.headers.set('Content-Security-Policy', csp);
+  return response;
+}
+
+export { handler as GET, handler as HEAD, handler as POST };
+
+export {
+  uploadMethodResponse as PUT,
+  uploadMethodResponse as PATCH,
+  uploadMethodResponse as DELETE,
+} from '@/lib/uploads/multipart-request';
+
+export function OPTIONS(request: Request) {
+  const { csp } = proxyRequestHeaders(request);
+  return new Response(null, {
+    status: 204,
+    headers: { Allow: 'GET, HEAD, OPTIONS, POST', 'Content-Security-Policy': csp },
+  });
+}

@@ -4805,14 +4805,29 @@ model RecurringExpense {
   currency       Currency        @default(USD)
   category       ExpenseCategory
   interval       String // monthly, yearly, quarterly
+  billingDay     Int             @db.SmallInt
   nextDueDate    DateTime
   vendorName     String?
   active         Boolean         @default(true)
   createdAt      DateTime        @default(now())
   updatedAt      DateTime        @updatedAt
 
+  postings       RecurringExpensePosting[]
+
+  @@unique([organizationId, id])
   @@index([organizationId])
   @@map("recurring_expenses")
+}
+
+/// One claim per civil billing date, committed with its ledger transaction.
+model RecurringExpensePosting {
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  recurringExpenseId String
+  dueDate            DateTime @db.Date
+  expense            RecurringExpense @relation(fields: [organizationId, recurringExpenseId], references: [organizationId, id], onDelete: Restrict, onUpdate: Cascade)
+
+  @@id([organizationId, recurringExpenseId, dueDate])
+  @@map("recurring_expense_postings")
 }
 
 /// FIN-01 / §8A invariant 15 — the shared double-entry journal. One entry per

@@ -113,6 +113,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',
   },
+  'pharmacyBranchAssignments.cashModes': {
+    gate: 'adminProcedure + pharmacy-core + live pharmacy owner, no support session',
+    none: 'owner only',
+  },
+  'pharmacyBranchAssignments.setCashMode': {
+    gate: 'adminProcedure + pharmacy-core + live pharmacy owner, no support session',
+    none: 'owner only',
+  },
   'pharmacyBranchAssignments.controlledWitnessSettings': {
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators can read active branch witness settings',
@@ -2918,10 +2926,6 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacySupplierLinks.submit': {
     gate: 'publicProcedure (supplier link token)',
     none: 'public supplier response link: the supplier submits with the link token, no staff permission involved',
-  },
-  'pharmacySupplierLinks.uploadDocument': {
-    gate: 'publicProcedure (supplier link token)',
-    none: 'public supplier response link: the supplier uploads with the link token, no staff permission involved',
   },
   'pharmacySupplierPriceLists.decide': {
     gate: 'meta PRICE_LIST_APPROVAL -> admin:access; importer cannot approve own list unless solo owner with approval code',

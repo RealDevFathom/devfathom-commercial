@@ -6,6 +6,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   applyPharmacyTender,
   cashShiftRefusal,
+  lockPharmacyCashMode,
   requirePharmacyDayOpen,
   type PharmacyPaymentAdapter,
 } from '../settlement';
@@ -341,6 +342,8 @@ export function prismaCardTerminalAttemptStore(
           select: { id: true },
         });
         if (open) throw new CardTerminalError('ATTEMPT_IN_PROGRESS');
+        // Outside the preflight savepoint so the mode stays fixed until the attempt commits.
+        await lockPharmacyCashMode(db, scope);
         await preflightTerminalCharge(db, scope, draft);
         // The preflight's day lock was taken inside its savepoint, and rolling the savepoint back
         // released it. Hold the day lock to commit, so a day close either sees this attempt or
