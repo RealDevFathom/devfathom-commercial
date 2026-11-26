@@ -44,3 +44,13 @@ it('compares recorded sales against an empty prior period and opens the selected
     expect.anything()
   );
 });
+
+it('reserves the chart area for each independently loading panel', () => {
+  read.mockReturnValue({ data: undefined, isError: false });
+  render(<VisualReports initialReport="Sales" branches={[]} currency="PKR" today="2026-11-24" />);
+  for (const name of ['sales by day', 'sales by cashier']) {
+    const pending = screen.getByText('Loading ' + name + '…');
+    expect(pending).toHaveAttribute('aria-busy', 'true');
+    expect(pending).toHaveClass('min-h-56');
+  }
+});

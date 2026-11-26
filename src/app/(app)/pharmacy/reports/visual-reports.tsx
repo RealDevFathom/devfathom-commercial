@@ -224,7 +224,9 @@ function ChartPanel({
             </Button>
           </p>
         ) : (
-          <p aria-busy="true">Loading {CHARTS[chart].toLowerCase()}…</p>
+          <p aria-busy="true" className="min-h-56 text-sm text-text-muted">
+            Loading {CHARTS[chart].toLowerCase()}…
+          </p>
         )
       ) : (
         <>
