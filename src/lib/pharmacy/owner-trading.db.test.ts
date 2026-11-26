@@ -388,4 +388,51 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       );
     });
   });
+  it('preserves outstanding card attempts across a business-day boundary', async () => {
+    const { readOpenWork } = await import('./owner-watch');
+    const { countOpenCardTerminalAttempts } = await import('./card-terminal/open-attempts');
+    await scoped.withTenantDb(org, async (db) => {
+      const scope = { organizationId: org, branchId: id, actorId: 'synthetic' };
+      const yesterday = new Date('2026-10-08');
+      const sale = await db.pharmacySale.create({
+        data: {
+          organizationId: org,
+          branchId: id,
+          businessDate: yesterday,
+          createdByUserId: 'synthetic',
+        },
+      });
+      await db.pharmacyCardTerminalAttempt.create({
+        data: {
+          organizationId: org,
+          branchId: id,
+          saleId: sale.id,
+          deviceId: 'synthetic',
+          terminalId: 'desk',
+          provider: 'QA_DEVICE',
+          attemptKey: randomUUID(),
+          amountMinor: 100,
+          currency: 'PKR',
+          businessDate: yesterday,
+          actorId: 'synthetic',
+        },
+      });
+      const rows = await readOpenWork(
+        db,
+        scope,
+        periods,
+        {
+          inventory: false,
+          counter: true,
+          purchasing: false,
+          controlled: false,
+          includeUnscoped: false,
+        },
+        at
+      );
+      const oldDay = await countOpenCardTerminalAttempts(db, scope, yesterday);
+      expect(oldDay).toBe(1);
+      expect(rows.find((r) => r.label === 'Card payments unresolved')?.value).toBe(oldDay);
+    });
+  });
 });

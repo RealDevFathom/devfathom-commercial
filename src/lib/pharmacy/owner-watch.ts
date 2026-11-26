@@ -8,7 +8,7 @@ import { readKhataAgingMinor } from './reports';
 import { roleDashboard } from './stock-signals-operations';
 import { purchaseOrderScopeWhere } from './purchasing-console';
 import { legacySupplierDispatches } from './supplier-returns-operations';
-import { countOpenCardTerminalAttempts } from './card-terminal/open-attempts';
+import { countOutstandingCardAttempts } from './card-terminal/open-attempts';
 
 export type WatchRow = {
   label: string;
@@ -171,16 +171,12 @@ export async function readOpenWork(
     );
     let open = 0;
     for (const p of periods)
-      open += await countOpenCardTerminalAttempts(
-        db,
-        { ...scope, branchId: p.id },
-        new Date(p.today)
-      );
+      open += await countOutstandingCardAttempts(db, { ...scope, branchId: p.id });
     add(
       'Card payments unresolved',
       open,
-      '/pharmacy/counter/close',
-      'Today’s open terminal attempts'
+      '/pharmacy/counter',
+      'Open terminal attempts across business days'
     );
   }
   if (access.controlled) {
