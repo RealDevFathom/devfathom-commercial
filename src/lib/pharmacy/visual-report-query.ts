@@ -35,6 +35,8 @@ const sql = Prisma.sql;
 
 // Imported history extension point: a future source supplies separate, labelled series with
 // its own coverage dates. These facts are exclusively live transactions.
+const receiptLabel = sql`COALESCE('Receipt ' || s."receiptNumber"::text, 'Receipt number unavailable')`;
+
 function saleFacts(chart: ChartId, zone: string) {
   let key = sql`s."businessDate"::text`;
   let label = key;
@@ -58,7 +60,7 @@ function saleFacts(chart: ChartId, zone: string) {
   const revenue = completedLineRevenue;
   const returns = chart === 'returnRate' || chart === 'returnsDay';
   return sql`SELECT ${key} AS key, ${label} AS label, l.id AS ref,
-    concat(COALESCE('Receipt '||s."receiptNumber"::text,'Sale '||s.id), ' · ',m."productName") AS detail,
+    concat(${receiptLabel}, ' · ',m."productName") AS detail,
     ${returns ? sql`0` : revenue}::bigint AS amount, ${returns ? revenue : sql`0`}::bigint AS base, 0 AS excluded
     FROM bounds b JOIN pharmacy_sales s ON s."organizationId"=${org} AND s."branchId"=b.id
       AND s.status='COMPLETED' AND s."businessDate">=b.first AND s."businessDate"<b.stop
@@ -72,9 +74,10 @@ const org = sql`current_setting('app.current_organization_id',true)`;
 function chartFacts(chart: ChartId, zone: string) {
   if (chart === 'salesPayment')
     return sql`SELECT t.type::text AS key, initcap(replace(t.type::text,'_',' ')) AS label,
-    t.id AS ref,concat('Payment · ',t."saleId") AS detail,t."amountMinor"::bigint AS amount,0::bigint AS base,0 AS excluded
+    t.id AS ref,concat('Payment · ',${receiptLabel}) AS detail,t."amountMinor"::bigint AS amount,0::bigint AS base,0 AS excluded
     FROM bounds b JOIN pharmacy_tenders t ON t."organizationId"=${org} AND t."branchId"=b.id
-    AND t."businessDate">=b.first AND t."businessDate"<b.stop`;
+    AND t."businessDate">=b.first AND t."businessDate"<b.stop
+    LEFT JOIN pharmacy_sales s ON s."organizationId"=t."organizationId" AND s."branchId"=t."branchId" AND s.id=t."saleId"`;
   if (chart === 'returnMedicine' || chart === 'physicalReason') {
     const reason = sql`COALESCE(NULLIF(trim(reason),''),'No reason recorded')`;
     return sql`SELECT ${chart === 'returnMedicine' ? sql`"medicineId"` : reason} AS key,

@@ -43,7 +43,7 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
         await db.pharmacyBranch.create({
           data: { id, name: id, code: id, addressLine: 'Test', city: 'Lahore', provinceCode: 'PB' },
         });
-        const seeded = await seedVisualReport(db, id, id, day);
+        const seeded = await seedVisualReport(db, id, id, day, 50, id === branch ? 1048 : null);
         if (id === branch) medicine = seeded.medicine;
       }
     });
@@ -151,6 +151,29 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
         },
       });
       await expectPostedMargin(db, branch, date, -90, 0);
+    });
+  });
+  it('shows receipt numbers and a plain missing-number label in sale and tender drilldowns', async () => {
+    await scoped.withTenantDb(org, async (db) => {
+      for (const [id, receipt] of [
+        [branch, 'Receipt 1048'],
+        [org + '_other', 'Receipt number unavailable'],
+      ] as const) {
+        for (const [chart, bucket, expected] of [
+          ['salesDay', day, receipt + ' · Sample tablets'],
+          ['salesPayment', 'CARD', 'Payment · ' + receipt],
+        ] as const) {
+          const drill = await readVisualChart(db, [{ id }], 'Asia/Karachi', {
+            chart,
+            bucket,
+            preset: 'custom',
+            custom,
+          });
+          expect(drill.rows.map((row) => row.label)).toEqual(
+            chart === 'salesDay' ? [expected, expected] : [expected]
+          );
+        }
+      }
     });
   });
   it('provides tenant, branch and date indexes for the bounded chart reads', async () => {

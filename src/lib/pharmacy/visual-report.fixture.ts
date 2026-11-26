@@ -6,7 +6,8 @@ export async function seedVisualReport(
   branch: string,
   prefix: string,
   day: string,
-  cost = 50
+  cost = 50,
+  receiptNumber: number | null = null
 ) {
   const id = (suffix: string) => prefix + '_' + suffix;
   const at = new Date(day + 'T12:00:00Z');
@@ -54,6 +55,7 @@ export async function seedVisualReport(
       id: id('sale'),
       branchId: branch,
       status: 'COMPLETED',
+      receiptNumber,
       createdByUserId: 'sample-cashier',
       completedAt: at,
       businessDate,
