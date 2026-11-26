@@ -415,14 +415,10 @@ function servable(organization: TenantOrganization | null): TenantOrganization |
   return isTenantLifecycleAccessible(organization.status) ? organization : null;
 }
 
-async function boundAnonymousPost(req: Request, procedures: string[]): Promise<Request | Response> {
+async function boundAnonymousPost(req: Request): Promise<Request | Response> {
   if (req.method !== 'POST' || !req.body) return req;
 
-  // Keep the anonymous supplier upload cap aligned with the Next.js proxy buffer.
-  const limit = procedures.includes('pharmacySupplierLinks.uploadDocument')
-    ? 8 * 1024 * 1024
-    : 256 * 1024;
-  const body = await readBoundedBody(req, limit);
+  const body = await readBoundedBody(req, 256 * 1024);
   if (body === null) {
     return requestFailed(
       new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message: 'Request body is too large.' })
@@ -445,7 +441,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
     routing.kind === 'token' &&
     req.method === 'POST' &&
     !new URL(req.url).searchParams.get('input');
-  const tokenRequest = tokenNeedsBody ? await boundAnonymousPost(req, routing.procedures) : req;
+  const tokenRequest = tokenNeedsBody ? await boundAnonymousPost(req) : req;
   if (tokenRequest instanceof Response) return tokenRequest;
   const token = routing.kind === 'token' ? await anonymousToken(tokenRequest) : null;
 
@@ -459,9 +455,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
     );
   }
 
-  const boundedRequest = tokenNeedsBody
-    ? tokenRequest
-    : await boundAnonymousPost(req, routing.procedures);
+  const boundedRequest = tokenNeedsBody ? tokenRequest : await boundAnonymousPost(req);
   if (boundedRequest instanceof Response) return boundedRequest;
 
   if (routing.kind === 'token') {

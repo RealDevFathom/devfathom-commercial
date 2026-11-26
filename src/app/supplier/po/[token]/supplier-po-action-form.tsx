@@ -5,11 +5,19 @@ import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
+import {
+  SUPPLIER_DOCUMENT_MAX_BYTES,
+  SUPPLIER_DOCUMENT_MAX_MB,
+  SUPPLIER_DOCUMENT_SIZE_MESSAGE,
+  SUPPLIER_DOCUMENT_TOKEN_HEADER,
+  SUPPLIER_DOCUMENT_TYPES,
+  SUPPLIER_DOCUMENT_UPLOAD_URL,
+} from '@/lib/pharmacy/supplier-document-contract';
 
 export function SupplierPoActionForm({ token }: { token: string }) {
   const order = trpc.pharmacySupplierLinks.get.useQuery({ token }, { retry: false });
   const submit = trpc.pharmacySupplierLinks.submit.useMutation();
-  const upload = trpc.pharmacySupplierLinks.uploadDocument.useMutation();
+  const [uploading, setUploading] = useState(false);
   const [eta, setEta] = useState('');
   const [proposal, setProposal] = useState('');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -155,31 +163,45 @@ export function SupplierPoActionForm({ token }: { token: string }) {
           </Button>
         </div>
       </SectionCard>
-      <SectionCard title="Supporting document" eyebrow="PDF, PNG or JPEG · 10 MB maximum">
+      <SectionCard
+        title="Supporting document"
+        eyebrow={`PDF, PNG or JPEG · ${SUPPLIER_DOCUMENT_MAX_MB} MB maximum`}
+      >
         <input
           aria-label="Supporting document"
           type="file"
-          accept="application/pdf,image/png,image/jpeg"
-          disabled={upload.isPending}
+          accept={SUPPLIER_DOCUMENT_TYPES.join(',')}
+          disabled={uploading}
+          aria-busy={uploading}
           onChange={async (event) => {
-            const file = event.target.files?.[0];
+            const input = event.currentTarget;
+            const file = input.files?.[0];
             if (!file) return;
-            const bytes = new Uint8Array(await file.arrayBuffer());
-            let binary = '';
-            for (const byte of bytes) binary += String.fromCharCode(byte);
-            upload.mutate(
-              {
-                token,
-                idempotencyKey: browserUuid(),
-                fileName: file.name,
-                declaredMimeType: file.type as 'application/pdf' | 'image/png' | 'image/jpeg',
-                contentBase64: btoa(binary),
-              },
-              {
-                onSuccess: () => setMessage('Document recorded as evidence.'),
-                onError: (error) => setMessage(error.message),
-              }
-            );
+            input.value = '';
+            if (file.size > SUPPLIER_DOCUMENT_MAX_BYTES) {
+              setMessage(SUPPLIER_DOCUMENT_SIZE_MESSAGE);
+              return;
+            }
+            setUploading(true);
+            setMessage('Uploading document…');
+            try {
+              const form = new FormData();
+              form.set('file', file);
+              form.set('idempotencyKey', browserUuid());
+              const response = await fetch(SUPPLIER_DOCUMENT_UPLOAD_URL, {
+                method: 'POST',
+                headers: { [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token },
+                body: form,
+              });
+              if (response.ok) setMessage('Document recorded as evidence.');
+              else if (response.headers.get('content-type')?.startsWith('text/plain'))
+                setMessage(await response.text());
+              else setMessage('The document could not be saved. Try again shortly.');
+            } catch {
+              setMessage('The document could not be saved. Try again shortly.');
+            } finally {
+              setUploading(false);
+            }
           }}
           className="block w-full text-sm"
         />

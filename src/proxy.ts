@@ -204,5 +204,6 @@ export async function proxy(request: Request) {
 // These exact route handlers apply the API header policy themselves and bound
 // the multipart stream. All other paths keep Next's 8 MB proxy clone limit.
 export const config = {
-  matcher: '/((?!api/(?:upload|(?:restaurant|pharmacy)/sop/evidence)/?$).*)',
+  matcher:
+    '/((?!api/(?:upload|pharmacy/supplier-documents/upload|(?:restaurant|pharmacy)/sop/evidence)/?$).*)',
 };

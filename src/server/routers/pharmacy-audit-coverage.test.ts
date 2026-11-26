@@ -38,8 +38,6 @@ vi.mock('@/server/audit', async (importOriginal) => ({
 const MUTATION_EXEMPTIONS: Readonly<Record<string, string>> = {
   'pharmacySupplierLinks.submit':
     'An outside supplier answering a signed one-time link: there is no workspace user to name. The submission row records it, and staff accept or reject it through audited procedures.',
-  'pharmacySupplierLinks.uploadDocument':
-    'An outside supplier uploading to a signed one-time link: no workspace user. The document row records it; staff review is audited.',
 };
 
 /**

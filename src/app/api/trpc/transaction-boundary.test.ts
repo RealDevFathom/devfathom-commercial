@@ -166,7 +166,7 @@ vi.mock('@/server/routers/_app', async () => {
         }),
       }),
       pharmacySupplierLinks: t.router({
-        uploadDocument: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
+        submit: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
       }),
       trelloImport: t.router({
         importBoard: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
@@ -765,7 +765,7 @@ describe('Trello import HTTP preflight', () => {
 
 it.each([
   ['passwordReset.request', 256 * 1024],
-  ['pharmacySupplierLinks.uploadDocument', 8 * 1024 * 1024],
+  ['pharmacySupplierLinks.submit', 256 * 1024],
 ] as const)('stops reading at the anonymous tRPC cap for %s', async (procedure, limit) => {
   mocks.resolveTenantActor.mockResolvedValue(null);
   const input = oversizedRequest(limit, {
@@ -779,10 +779,10 @@ it.each([
   expect(harness.scopeTenants).toEqual([]);
 });
 
-it('rejects an over-cap anonymous upload declaration even with a short delivered body', async () => {
+it('rejects an over-cap anonymous supplier submission declaration even with a short delivered body', async () => {
   mocks.resolveTenantActor.mockResolvedValue(null);
-  const limit = 8 * 1024 * 1024;
-  const request = new Request(url('pharmacySupplierLinks.uploadDocument', '?batch=1'), {
+  const limit = 256 * 1024;
+  const request = new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -798,17 +798,17 @@ it('rejects an over-cap anonymous upload declaration even with a short delivered
   expect(organizationForAnonymousToken).not.toHaveBeenCalled();
 });
 
-it('replays an anonymous upload at exactly 8 MiB for tenant lookup and the tRPC parser', async () => {
-  const payload = { token: 'supplier-link', contentBase64: 'A'.repeat(300 * 1024) };
+it('replays an anonymous supplier submission at exactly 256 KiB for tenant lookup and the tRPC parser', async () => {
+  const payload = { token: 'supplier-link', kind: 'ACKNOWLEDGEMENT' };
   mocks.resolveTenantActor.mockResolvedValue(null);
   mocks.resolveOrganizationById.mockResolvedValueOnce(ORGANIZATION);
   vi.mocked(organizationForAnonymousToken).mockResolvedValueOnce(ORGANIZATION.id);
 
   const response = await POST(
-    new Request(url('pharmacySupplierLinks.uploadDocument', '?batch=1'), {
+    new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ '0': { json: payload } }).padEnd(8 * 1024 * 1024),
+      body: JSON.stringify({ '0': { json: payload } }).padEnd(256 * 1024),
     })
   );
 

@@ -31,7 +31,6 @@ export const ANONYMOUS_TOKEN_PROCEDURES = new Set([
   'passwordReset.reset',
   'pharmacySupplierLinks.get',
   'pharmacySupplierLinks.submit',
-  'pharmacySupplierLinks.uploadDocument',
 ]);
 
 export const SUPPLIER_LINK_GENERIC_MESSAGE = 'This supplier link is invalid, expired, or revoked.';

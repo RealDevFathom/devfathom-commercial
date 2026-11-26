@@ -39,13 +39,3 @@ export const supplierLinkSubmitInput = z
     supersedesId: supplierId.optional(),
   })
   .strict();
-
-export const supplierLinkUploadInput = z
-  .object({
-    token: supplierId,
-    idempotencyKey: supplierId,
-    fileName: z.string().trim().min(1).max(255),
-    declaredMimeType: z.enum(['application/pdf', 'image/png', 'image/jpeg']),
-    contentBase64: z.string().min(1).max(14_000_000),
-  })
-  .strict();

@@ -180,26 +180,14 @@ describe('fallback and real routers serialize refusals identically', () => {
       },
     ],
     [
-      'pharmacySupplierLinks.uploadDocument',
+      'pharmacySupplierLinks.submit',
       'mutation',
-      {
-        token: 'token',
-        idempotencyKey: 'key',
-        fileName: 'evidence.txt',
-        declaredMimeType: 'text/plain',
-        contentBase64: 'dGVzdA==',
-      },
+      { token: 'token', kind: 'DOCUMENT', idempotencyKey: 'key', payload: {} },
     ],
     [
-      'pharmacySupplierLinks.uploadDocument',
+      'pharmacySupplierLinks.submit',
       'mutation',
-      {
-        token: 'token',
-        idempotencyKey: 'key',
-        fileName: 'evidence.pdf',
-        declaredMimeType: 'application/pdf',
-        contentBase64: '',
-      },
+      { token: 'token', kind: 'ETA', idempotencyKey: '', payload: {} },
     ],
   ] as const)('matches production validation for malformed %s input', async (path, kind, input) => {
     const request = () => (kind === 'query' ? queryWithInput(path, input) : mutation(path, input));
