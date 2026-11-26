@@ -1,5 +1,6 @@
 import { postDueRecurringExpenses } from '@/lib/finance/recurring-expense-posting';
 import {
+  recurringIntervalLabel,
   recurringBillingDay,
   recurringInterval,
   rollForwardDueDate,
@@ -830,6 +831,7 @@ export const financeRouter = router({
     return expenses
       .map((exp) => ({
         ...exp,
+        intervalLabel: recurringIntervalLabel(exp.interval),
         nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone, exp.billingDay),
       }))
       .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime());
@@ -956,7 +958,7 @@ export const financeRouter = router({
       getOutstandingInvoiceGroups(ctx.db),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
-        select: { amount: true, currency: true, interval: true },
+        select: { id: true, name: true, amount: true, currency: true, interval: true },
       }),
     ]);
 
@@ -967,8 +969,14 @@ export const financeRouter = router({
     // profit silently omitted them. Fold each active subscription's monthly-
     // equivalent run-rate (currency-aware) into the monthly/yearly expense.
     const recurringMonthlyMap = new Map<string, number>();
+    const unsupported: Array<{ id: string; name: string; interval: string }> = [];
     for (const e of recurring) {
-      const factor = RECURRING_MONTHLY_FACTOR[e.interval.toLowerCase()] ?? 1;
+      const interval = recurringInterval.safeParse(e.interval.toLowerCase());
+      if (!interval.success) {
+        unsupported.push({ id: e.id, name: e.name, interval: e.interval });
+        continue;
+      }
+      const factor = RECURRING_MONTHLY_FACTOR[interval.data]!;
       recurringMonthlyMap.set(
         e.currency,
         (recurringMonthlyMap.get(e.currency) ?? 0) + Number(e.amount) * factor
@@ -1006,6 +1014,7 @@ export const financeRouter = router({
     );
 
     return {
+      unsupported,
       monthlyIncome,
       monthlyExpense,
       monthlyProfit: diffByCurrency(monthlyIncome, monthlyExpense),

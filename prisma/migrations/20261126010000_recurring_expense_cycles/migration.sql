@@ -10,7 +10,7 @@ ALTER TABLE recurring_expenses ADD COLUMN IF NOT EXISTS "billingDay" smallint
 -- instants in the workspace zone. Match the application's UTC fallback.
 WITH zones AS MATERIALIZED (
   SELECT o.id, COALESCE(z.name, 'UTC') AS zone
-  FROM organizations o LEFT JOIN pg_timezone_names z ON z.name = o.timezone
+  FROM organizations o LEFT JOIN pg_timezone_names z ON lower(z.name) = lower(o.timezone)
 )
 UPDATE recurring_expenses e SET "billingDay" = EXTRACT(DAY FROM
   CASE WHEN e."nextDueDate"::time = time '00:00' THEN e."nextDueDate"

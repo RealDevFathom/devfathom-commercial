@@ -9,6 +9,34 @@ vi.mock('@/lib/trpc', () => {
       useUtils: () => ({}),
       finance: {
         getFinancialSummary: { useQuery: () => ({}) },
+        getRecurringExpenses: {
+          useQuery: () => ({
+            data: [
+              {
+                id: 'w',
+                name: 'Weekly hosting',
+                amount: 10,
+                category: 'HOSTING',
+                nextDueDate: new Date('2020-01-01'),
+                intervalLabel: 'Interval not supported',
+              },
+              {
+                id: 'm',
+                name: 'Monthly hosting',
+                amount: 20,
+                category: 'HOSTING',
+                nextDueDate: new Date('2020-01-01'),
+                intervalLabel: 'monthly',
+              },
+            ],
+          }),
+        },
+        createRecurringExpense: { useMutation: () => ({}) },
+        deleteRecurringExpense: { useMutation: () => ({}) },
+        postDueRecurringExpenses: {
+          useMutation: () => ({ data: { unsupported: [{ id: 'w', name: 'Weekly hosting' }] } }),
+        },
+        getBudgetVsActuals: query,
         getTransactions: query,
         createTransaction: { useMutation: () => ({}) },
       },
@@ -41,4 +69,15 @@ it('opens the new transaction form on the business date at 00:30 in Karachi', ()
   } finally {
     vi.useRealTimers();
   }
+});
+
+it('renders both charges and names the unsupported charge in the posting result', async () => {
+  render(<FinanceContent />);
+  fireEvent.click(screen.getByRole('tab', { name: 'Recurring' }));
+  expect(await screen.findByText('Monthly hosting')).toBeVisible();
+  expect(screen.getByText('Interval not supported')).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent(
+    '1 charge not posted: their billing interval is not monthly, quarterly or yearly. Delete and add them again with one of those.'
+  );
+  expect(screen.getByRole('status')).toHaveTextContent('Weekly hosting');
 });

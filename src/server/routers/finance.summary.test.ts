@@ -61,6 +61,39 @@ describe('finance.getFinancialSummary', () => {
     mocks.recurringFindMany.mockResolvedValue([]);
   });
 
+  it('lists overdue unsupported charges without advancing or projecting them', async () => {
+    const date = new Date('2020-01-31');
+    const weekly = { id: 'w', name: 'Weekly rent', interval: 'weekly' };
+    const charges = [
+      { ...weekly, amount: 99 },
+      { id: 'm', name: 'Monthly rent', interval: 'monthly', amount: 12 },
+    ].map((row) => ({ ...row, nextDueDate: date, billingDay: 31, currency: 'USD' }));
+    mocks.recurringFindMany.mockResolvedValue(charges);
+    const router = caller('UTC');
+    const assistant = buildFinanceTools({
+      db: {
+        recurringExpense: { findMany: mocks.recurringFindMany },
+        organization: { findUnique: async () => ({ timezone: 'UTC' }) },
+      },
+      ctx: { organizationId: 'org-1' },
+      isAdmin: true,
+      now: () => new Date(),
+    } as unknown as AssistantHelpers) as unknown as {
+      listRecurringExpenses: { execute(input: object): Promise<unknown[]> };
+    };
+    const unsupported = expect.objectContaining({
+      ...weekly,
+      nextDueDate: date,
+      intervalLabel: 'Interval not supported',
+    });
+    expect(await router.getRecurringExpenses()).toContainEqual(unsupported);
+    expect(await assistant.listRecurringExpenses.execute({})).toContainEqual(unsupported);
+    const summary = await router.getFinancialSummary();
+    expect(summary.unsupported).toEqual([weekly]);
+    expect(summary.monthlyExpense).toEqual([{ currency: 'USD', amount: 12 }]);
+    expect(summary.yearlyExpense).toEqual([{ currency: 'USD', amount: 144 }]);
+  });
+
   it.each(['router', 'assistant'])(
     'uses the Karachi month and day at 00:30 for %s finance',
     async (surface) => {

@@ -30,7 +30,7 @@ describe.skipIf(!ownerUrl || !runtimeUrl)('recurring expenses on PostgreSQL', ()
         CREATE TABLE recurring_expenses (id text PRIMARY KEY, "organizationId" text NOT NULL,
           "nextDueDate" timestamp(3) NOT NULL, UNIQUE ("organizationId", id));
         CREATE TABLE transactions (LIKE public.transactions INCLUDING DEFAULTS);
-        INSERT INTO organizations VALUES ('east', 'Asia/Karachi'), ('west', 'America/New_York');
+        INSERT INTO organizations VALUES ('east', 'asia/karachi'), ('west', 'America/New_York');
         INSERT INTO recurring_expenses VALUES
           ('local', 'east', '2026-01-30 19:00'), ('legacy', 'west', '2026-01-01'),
           ('drifted', 'west', '2026-03-28');
@@ -97,6 +97,16 @@ describe.skipIf(!ownerUrl || !runtimeUrl)('recurring expenses on PostgreSQL', ()
           [org, date]
         );
 
+        await runtime.query(
+          `INSERT INTO recurring_expenses (id,name,amount,category,interval,"nextDueDate","billingDay","updatedAt")
+          VALUES ($1,'Legacy weekly',99,'SOFTWARE','weekly',$2,1,now())`,
+          [org + '_weekly', date]
+        );
+        const weekly = () =>
+          runtime.query('SELECT record_send(e) AS bytes FROM recurring_expenses e WHERE id=$1', [
+            org + '_weekly',
+          ]);
+        const previous = await weekly();
         const run = (at: Date) =>
           withTenantDb(org, (tx) => postDueRecurringExpenses(tx, org, zone, at));
         expect((await run(new Date(now.getTime() - 1))).posted).toBe(0);
@@ -125,7 +135,12 @@ describe.skipIf(!ownerUrl || !runtimeUrl)('recurring expenses on PostgreSQL', ()
           date,
           org,
         ]);
-        expect((await run(now)).posted).toBe(0);
+        const replay = await run(now);
+        expect(replay.posted).toBe(0);
+        expect(replay.unsupported).toEqual([
+          { id: org + '_weekly', name: 'Legacy weekly', interval: 'weekly' },
+        ]);
+        expect((await weekly()).rows).toEqual(previous.rows);
         expect(
           (
             await runtime.query(

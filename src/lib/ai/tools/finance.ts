@@ -1,4 +1,5 @@
 import {
+  recurringIntervalLabel,
   recurringBillingDay,
   recurringInterval,
   rollForwardDueDate,
@@ -458,6 +459,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       return expenses
         .map((exp) => ({
           ...exp,
+          intervalLabel: recurringIntervalLabel(exp.interval),
           nextDueDate: rollForwardDueDate(
             exp.nextDueDate,
             exp.interval,
@@ -474,6 +476,7 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
           currency: exp.currency,
           category: exp.category,
           interval: exp.interval,
+          intervalLabel: exp.intervalLabel,
           nextDueDate: exp.nextDueDate,
           vendorName: exp.vendorName,
         }));

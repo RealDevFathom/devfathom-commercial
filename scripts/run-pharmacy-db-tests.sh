@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Runs every pharmacy *.db.test.ts file, one file at a time, against ONE migrated
+# Runs the pharmacy and recurring-expense database suites, one file at a time, against ONE migrated
 # disposable PostgreSQL database. Setup and roles: docs/LOCAL_SETUP.md,
 # "Running all pharmacy database suites". Local use only; not part of CI.
 #
@@ -103,7 +103,7 @@ admin_files=(
   src/lib/pharmacy/whatsapp/khata-reminder-rollout.db.test.ts
   src/lib/pharmacy/whatsapp/message-log.db.test.ts
 )
-mapfile -t files < <(git ls-files '*.db.test.ts' | grep -i pharmacy | grep -vxF -f <(printf '%s\n' "${admin_files[@]}") | sort)
+mapfile -t files < <(git ls-files '*.db.test.ts' | grep -iE 'pharmacy|src/lib/finance/recurring-expense' | grep -vxF -f <(printf '%s\n' "${admin_files[@]}") | sort)
 echo "Running $((${#files[@]} + ${#admin_files[@]})) pharmacy database suites against $host port $port, database $database" >&2
 
 status=0

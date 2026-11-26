@@ -5,6 +5,12 @@ export const recurringInterval = z.enum(['monthly', 'quarterly', 'yearly'], {
   error: 'Choose monthly, quarterly or yearly for the billing interval.',
 });
 
+export function recurringIntervalLabel(interval: string) {
+  return recurringInterval.safeParse(interval.toLowerCase()).success
+    ? interval
+    : 'Interval not supported';
+}
+
 const monthsByInterval = { monthly: 1, quarterly: 3, yearly: 12 };
 
 // Older date pickers encoded a civil billing date as exactly midnight UTC.
@@ -49,7 +55,7 @@ export function rollForwardDueDate(
   billingDay: number
 ) {
   const cutoff = isLegacyBillingDate(due) ? new Date(workspaceToday(zone, today)) : today;
-  if (due >= cutoff) return due;
+  if (due >= cutoff || !recurringInterval.safeParse(interval.toLowerCase()).success) return due;
   const advance = recurringExpenseSchedule(due, interval, zone, billingDay);
   let next = due;
   for (let i = 0; next < cutoff && i < 600; i++) next = advance(next);

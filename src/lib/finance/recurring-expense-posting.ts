@@ -1,6 +1,10 @@
 import type { Prisma, RecurringExpense } from '@/generated/prisma/client';
 import { workspaceDateRange, workspaceToday } from '@/lib/timezone';
-import { billingCalendarDate, recurringExpenseSchedule } from './recurring-expense';
+import {
+  billingCalendarDate,
+  recurringExpenseSchedule,
+  recurringInterval,
+} from './recurring-expense';
 
 export async function postDueRecurringExpenses(
   tx: Prisma.TransactionClient,
@@ -18,11 +22,18 @@ export async function postDueRecurringExpenses(
     WHERE "organizationId" = ${organizationId} AND active AND "nextDueDate" < ${end}
     ORDER BY id FOR UPDATE SKIP LOCKED
   `;
+  const unsupported: Array<{ id: string; name: string; interval: string }> = [];
   let posted = 0;
   const details: Array<{ id: string; name: string; cycles: number }> = [];
   for (const exp of expenses) {
     let due = exp.nextDueDate;
-    const advance = recurringExpenseSchedule(due, exp.interval, zone, exp.billingDay);
+    if (billingCalendarDate(due, zone) > today) continue;
+    const interval = recurringInterval.safeParse(exp.interval.toLowerCase());
+    if (!interval.success) {
+      unsupported.push({ id: exp.id, name: exp.name, interval: exp.interval });
+      continue;
+    }
+    const advance = recurringExpenseSchedule(due, interval.data, zone, exp.billingDay);
     const dates: Date[] = [];
     for (let i = 0; i < 36; i++) {
       const day = billingCalendarDate(due, zone);
@@ -56,5 +67,5 @@ export async function postDueRecurringExpenses(
     }
     await tx.recurringExpense.update({ where: { id: exp.id }, data: { nextDueDate: due } });
   }
-  return { posted, details };
+  return { posted, details, unsupported };
 }
