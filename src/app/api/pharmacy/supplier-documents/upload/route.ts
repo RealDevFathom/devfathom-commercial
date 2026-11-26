@@ -142,11 +142,6 @@ export const POST = uploadPost(async (request, readUploadForm) => {
         const action = 'pharmacySupplierLinks.uploadDocument';
         const auditRow = {
           organizationId,
-          actorType: user ? 'USER' : 'ANONYMOUS',
-          actorId: userId,
-          actorName: user?.name,
-          actorEmail: user?.email,
-          actorRole: user?.role,
           source: 'REST_API',
           category: categoryForPath(action),
           operation: 'CREATE',
@@ -167,8 +162,16 @@ export const POST = uploadPost(async (request, readUploadForm) => {
               : {}),
           },
         } satisfies Parameters<typeof recordAudit>[0];
-        if (outside) await recordAudit(auditRow, db);
-        else recordAudit(auditRow);
+        if (outside) await recordAudit({ ...auditRow, actorType: 'ANONYMOUS' }, db);
+        else
+          recordAudit({
+            ...auditRow,
+            actorType: 'USER',
+            actorId: userId,
+            actorName: user?.name,
+            actorEmail: user?.email,
+            actorRole: user?.role,
+          });
       },
       { userId, timeout: 60_000 }
     );

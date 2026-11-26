@@ -76,6 +76,11 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   if (/^camera-snapshot-/iu.test(name) || MENU_IMPORT_SOURCE.test(name)) {
     return new Response('Not found', { status: 404 });
   }
+  // Only the procurement reader may release an order document, even if a
+  // generic upload registration later references the same object name.
+  if (/^supplier-po-[a-f0-9-]{36}-[a-f0-9]{64}$/iu.test(name)) {
+    return new Response('Not found', { status: 404 });
+  }
   // DEV-783: an owner data export is released only by its own PIN-gated,
   // audited, expiry-checked download route, never as a generic file.
   if (isOwnerDataExportObjectName(name)) {
