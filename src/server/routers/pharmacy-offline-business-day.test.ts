@@ -99,15 +99,16 @@ function envelope(
   };
 }
 
-
 /**
  * DEV-957 phase 2 (hardening 4): the counter seals each sale when it is taken; the route
  * checks that seal. This counter's first sale names no sale before it.
  */
 function command(originalSaleAt: string) {
-  return router.counterReplaySchema.parse(offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(originalSaleAt), {
-    previousHash: null,
-  }));
+  return router.counterReplaySchema.parse(
+    offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(originalSaleAt), {
+      previousHash: null,
+    })
+  );
 }
 
 function unsealedCommand(originalSaleAt: string) {
@@ -201,7 +202,7 @@ beforeEach(() => {
     command: { id: 'cmd_1', status: 'PENDING', serverRef: null, receiptNumber: 900 },
   });
   mocks.createSale.mockResolvedValue({ id: 'sale_1' });
-  mocks.addSaleLine.mockResolvedValue({ line: { id: 'line_1' } });
+  mocks.addSaleLine.mockResolvedValue({ line: { id: 'line_1', grossMinor: 100 } });
   mocks.openDeviceLotQuota.mockResolvedValue({ quotaUnits: 100, consumedUnits: 0 });
   mocks.consumeDeviceLotQuota.mockResolvedValue(undefined);
   mocks.applyPharmacyTender.mockResolvedValue({ settled: true, receiptNumber: 900 });

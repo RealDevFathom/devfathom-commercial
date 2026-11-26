@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { canRetryOfflineReceipt } from '@/lib/pharmacy/counter-replay-transport';
 import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -983,6 +984,17 @@ export async function replayCounterCommand(
   }
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
+  // The original receipt's review requirement survives a browser reset or another tab.
+  // Accepted commands returned above, including a retry after its response was lost.
+  await scopeReceiptHistory(db, scope.branchId);
+  const [priorRefusal] = await db.$queryRaw<{ reason: string }[]>`
+    SELECT reason FROM pharmacy_offline_receipt_events WHERE "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} AND "deviceId"=${deviceId} AND "commandKey"=${command.idempotencyKey}
+      AND "commandHash"=${recorded.command.payloadHash} AND kind='REFUSED' ORDER BY "createdAt" DESC,id DESC LIMIT 1`;
+  if (reviewed && !canRetryOfflineReceipt(priorRefusal?.reason))
+    throw new CounterTransportError('review_requires_fixable_refusal', 409);
+  if (!reviewed && canRetryOfflineReceipt(priorRefusal?.reason))
+    throw new CounterTransportError(priorRefusal!.reason, 409);
   // DEV-957 phase 2 (hardening 4): the command log has already kept the FIFO order
   // (a skipped sequence is SEQUENCE_OUT_OF_ORDER); the seal proves this is the sale the
   // counter signed when it was taken, following on from the sale recorded before it.
@@ -1131,6 +1143,8 @@ export async function replayCounterCommand(
         ...(reviewed ? { reviewedPrice: reviewedOfflinePrice(command, index) } : {}),
       }
     );
+    if (created.line.grossMinor !== command.seal.lineTotalsMinor[index])
+      throw new CounterTransportError('offline_total_changed', 409);
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -1653,6 +1667,8 @@ async function appendReceiptEvent(
 }
 
 function receiptRefusal(error: unknown): string | null {
+  if (error instanceof CounterTransportError && error.code === 'review_requires_fixable_refusal')
+    return null;
   if (error instanceof CounterTransportError)
     return error.status === 409 || error.status === 403 ? error.code : null;
   if (isAccountingPeriodClosedError(error)) return 'PERIOD_CLOSED';

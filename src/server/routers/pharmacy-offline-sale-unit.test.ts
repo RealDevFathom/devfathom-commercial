@@ -97,9 +97,11 @@ function envelope(
  * checks that seal. This counter's first sale names no sale before it.
  */
 function command(multiplier: number) {
-  return router.counterReplaySchema.parse(offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(multiplier), {
-    previousHash: null,
-  }));
+  return router.counterReplaySchema.parse(
+    offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(multiplier), {
+      previousHash: null,
+    })
+  );
 }
 
 function unsealedCommand(multiplier: number) {
@@ -187,6 +189,21 @@ beforeEach(() => {
 });
 
 describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
+  it('requires supervisor review of the same receipt after a drawer refusal', async () => {
+    const target = db();
+    vi.mocked(target.$queryRaw).mockImplementation(async (query) =>
+      Array.isArray(query) &&
+      query.join('').includes('SELECT reason FROM pharmacy_offline_receipt_events')
+        ? [{ reason: 'DRAWER_NOT_OPEN' }]
+        : []
+    );
+    await expect(replay(target, command(10))).rejects.toMatchObject({
+      code: 'DRAWER_NOT_OPEN',
+      status: 409,
+    });
+    expect(mocks.createSale).not.toHaveBeenCalled();
+  });
+
   it('refuses a PACK with a single-unit multiplier before quota or stock moves', async () => {
     await expect(replay(db(), command(1))).rejects.toMatchObject({
       code: 'invalid_pack',
