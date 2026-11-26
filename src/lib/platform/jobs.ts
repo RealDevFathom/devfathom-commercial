@@ -13,6 +13,7 @@ import {
 } from '@/generated/prisma/client';
 import { claimJob, runClaimedJob, type JobResult } from './job-runner';
 import { endSupportSessions } from '@/lib/platform/capabilities';
+import { enqueueStarterImport } from '@/lib/pharmacy/migration/starter-queue';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
 import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
@@ -103,9 +104,10 @@ async function sharedProvision(
   const organizationId = requiredOrganization(job);
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
-    select: { slug: true },
+    select: { slug: true, vertical: true },
   });
   if (!organization) throw new Error('Organization no longer exists.');
+  if (organization.vertical === 'PHARMACY') await enqueueStarterImport(db, organizationId);
   const baseDomain = (process.env.PLATFORM_BASE_DOMAIN ?? 'localhost').replace(/^admin\./, '');
   const protocol = baseDomain === 'localhost' ? 'http' : 'https';
   const url =
@@ -180,10 +182,11 @@ async function dedicatedProvision(
     vercelClient(bearerToken),
     db.organization.findUnique({
       where: { id: organizationId },
-      select: { slug: true, displayName: true },
+      select: { slug: true, displayName: true, vertical: true },
     }),
   ]);
   if (!organization) throw new Error('Organization no longer exists.');
+  if (organization.vertical === 'PHARMACY') await enqueueStarterImport(db, organizationId);
   const deploymentRecord = await db.organizationDeployment.upsert({
     where: { organizationId_environment: { organizationId, environment: 'production' } },
     update: { mode: 'DEDICATED', status: 'PROVISIONING', provider: 'VERCEL' },
