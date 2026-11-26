@@ -41,6 +41,7 @@ import { ObservedDemand } from './observed-demand';
 import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-labels';
 import { StaffingSuggestions } from './staffing-suggestions';
 import { ReportCsvButton } from './report-csv-button';
+import { VisualReports } from './visual-reports';
 import { ReportPrintButton } from './report-print-button';
 import { DEFAULT_STAFFING_CONFIG } from '@/lib/pharmacy/staffing-suggestions';
 import { BATCH_NOT_RECORDED } from '@/lib/pharmacy/unrecorded-batch';
@@ -50,6 +51,7 @@ export const metadata: Metadata = { title: screenCopy.reports.pharmacyReports };
 type SearchParams = Promise<
   Partial<
     Record<
+      | 'view'
       | 'branch'
       | 'from'
       | 'to'
@@ -197,6 +199,75 @@ export default async function PharmacyReportsPage({
   );
   const clock = { timeZone, dayEnd: sharedDayEnd.dayEnd };
   const today = pharmacyBusinessDay(clock);
+  const selectedReport = value(query.section);
+  const visual =
+    query.view !== 'operations' &&
+    (!selectedReport || ['sales', 'returns', 'profit'].includes(selectedReport)) &&
+    ![
+      'supplier',
+      'ingredient',
+      'batch',
+      'digest',
+      'anomaly',
+      'advisor',
+      'authentication',
+      'staffCapacity',
+      'staffMinimum',
+    ].some((key) => key in query);
+  if (visual) {
+    const initialPeriod =
+      query.from || query.to
+        ? { from: value(query.from) ?? today, to: value(query.to) ?? today }
+        : undefined;
+    return (
+      <div className="min-w-0 space-y-6">
+        <PageHeader
+          eyebrow={screenCopy.reports.pharmacyOperations}
+          heading={screenCopy.reports.reports}
+          description="Sales, returns and gross profit for your branches."
+          actions={
+            <Link
+              className={buttonVariants({ variant: 'outline' })}
+              href="/pharmacy/reports/operations"
+            >
+              Operational reports
+            </Link>
+          }
+        />
+        {!catalog.permissions.financial ? (
+          <ReportNotice
+            title="Financial reports unavailable"
+            detail="Sales, refund and profit figures require financial report access. You can still open your operational reports."
+          />
+        ) : !branchResult.branches.length ? (
+          <ReportNotice
+            title="No branches available"
+            detail="Reports appear when an active branch is available to you."
+          />
+        ) : branch && !branchResult.branches.some((item) => item.id === branch) ? (
+          <ReportNotice
+            title="Branch unavailable"
+            detail="Choose an available branch from Reports."
+          />
+        ) : (
+          <VisualReports
+            branches={branchResult.branches.map(({ id, name }) => ({ id, name }))}
+            initialBranch={branch}
+            initialPeriod={initialPeriod}
+            currency={currency}
+            today={today}
+            initialReport={
+              selectedReport === 'profit'
+                ? 'Profit'
+                : selectedReport === 'returns'
+                  ? 'Returns'
+                  : 'Sales'
+            }
+          />
+        )}
+      </div>
+    );
+  }
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
   const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);

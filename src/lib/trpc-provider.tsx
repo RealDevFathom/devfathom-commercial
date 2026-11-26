@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { httpBatchLink, TRPCClientError } from '@trpc/client';
+import { httpBatchLink, httpLink, splitLink, TRPCClientError } from '@trpc/client';
 import superjson from 'superjson';
 import { signInRedirectPath } from '@/lib/auth/session-state';
 import { trpc } from './trpc';
@@ -68,9 +68,10 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
   const [trpcClient] = useState(() =>
     trpc.createClient({
       links: [
-        httpBatchLink({
-          url: `${getBaseUrl()}/api/trpc`,
-          transformer: superjson,
+        splitLink({
+          condition: (op) => op.path === 'pharmacyReports.visualChart',
+          true: httpLink({ url: `${getBaseUrl()}/api/trpc`, transformer: superjson }),
+          false: httpBatchLink({ url: `${getBaseUrl()}/api/trpc`, transformer: superjson }),
         }),
       ],
     })

@@ -177,7 +177,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
   },
 }));
 
-import PharmacyReportsPage from './page';
+import PharmacyReportsPage from './operations/page';
 
 /** True only when both a Chromium binary and Poppler's pdftotext can run here. Mirrors the
  * browser lookup in tests/helpers/pharmacy-report-print.ts, including Playwright's bundled one. */
@@ -890,4 +890,14 @@ describe('pharmacy report catalog filters', () => {
     );
     expect(within(owner).queryByText(/All available branches · ledger source/)).toBeNull();
   });
+});
+
+it('opens the visual reports without reading the legacy command centre', async () => {
+  reportAccess.can.mockResolvedValue(true);
+  reportAccess.session = true;
+  commandCentre.mockClear();
+  const { default: VisualEntry } = await import('./page');
+  const element = await VisualEntry({ searchParams: Promise.resolve({}) });
+  expect(commandCentre).not.toHaveBeenCalled();
+  expect(element).toBeDefined();
 });
