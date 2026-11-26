@@ -62,6 +62,7 @@ import {
   protectedProcedure,
   router,
 } from './trpc';
+import { restaurantStaffRouter } from './routers/restaurant-staff';
 import type { TRPCContext } from './trpc';
 
 describe('createTRPCContext request actor resolution', () => {
@@ -132,6 +133,7 @@ const probe = router({
 });
 
 const demoProbe = router({
+  restaurantStaff: restaurantStaffRouter,
   webhooks: router({
     list: protectedProcedure.query(() => 'blocked'),
     create: adminProcedure.mutation(() => 'blocked'),
@@ -282,6 +284,14 @@ describe('central demo procedure isolation', () => {
   });
 
   it.each([
+    [
+      'self-service terminal credential revocation',
+      (caller: ReturnType<typeof demoProbe.createCaller>) =>
+        caller.restaurantStaff.revokeMyTerminalCredential({
+          credentialId: 'synthetic-badge',
+          currentPassword: 'synthetic-password',
+        }),
+    ],
     [
       'blocked integration read',
       (caller: ReturnType<typeof demoProbe.createCaller>) => caller.webhooks.list(),

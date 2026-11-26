@@ -42,6 +42,7 @@ const BLOCKED_MUTATIONS = new Set([
   'restaurantStaff.issueCredential',
   'restaurantStaff.provisionMyProfile',
   'restaurantStaff.revokeCredential',
+  'restaurantStaff.revokeMyTerminalCredential',
   'restaurantStaff.rotateCredential',
   'restaurantStaff.seedDefaultJobRoles',
   'restaurantStaff.setJobRoleCapabilities',
