@@ -2169,8 +2169,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               now.getTime() + branch.offlineReconnectHours * 3_600_000
             )
           );
-          // A shorter signed safety lease still ends selling sooner.
-          const expiry = new Date(Math.min(reconnectBy.getTime(), now.getTime() + 8 * 3_600_000));
+          const expiry = reconnectBy;
           const safetyLease = {
             issuedAt: now.toISOString(),
             expiresAt: expiry.toISOString(),

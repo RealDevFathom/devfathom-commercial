@@ -762,11 +762,11 @@ function BranchCounters({
         Revoking from another computer: from that moment the server refuses everything the revoked
         counter sends and its earmarked units go back to the branch. The next time it reaches the
         server it deletes its price lists, receipt numbers, unfinished bills and stored page, and it
-        can never take another sale; once its signed price list ends (at most 8 hours) it cannot
-        sell offline even if it never reconnects. Offline sales it never sent are not deleted: that
-        computer keeps them, read-only, under Sales to reconcile on the counter page, for a manager
-        to export and record what was done with each one. Sales it sent before the revoke stay
-        booked.
+        can never take another sale; once its signed price list expires at the configured offline
+        limit it cannot sell offline even if it never reconnects. Offline sales it never sent are
+        not deleted: that computer keeps them, read-only, under Sales to reconcile on the counter
+        page, for a manager to export and record what was done with each one. Sales it sent before
+        the revoke stay booked.
       </p>
       <NoticeLine notice={notice} />
       <OfflineCashSellingSwitch branchId={branchId} />

@@ -455,6 +455,25 @@ async function supervisor<T>(
 }
 
 describeIfDatabase('Offline receipt recovery through the counter routes', () => {
+  it('signs each price list for the branch reconnect limit, including the 72 hour default', async () => {
+    const counter = await setup();
+    for (const hours of [72, 24]) {
+      if (hours !== 72)
+        await supervisor((api) =>
+          api.setReconnectLimit({ branchId: counter.fixture.branchId, hours })
+        );
+      const response = await counter.call('snapshot');
+      expect(response.status).toBe(200);
+      const { snapshots } = await response.json();
+      const price = snapshots.find(
+        (s: { envelope: { kind: string } }) => s.envelope.kind === 'PRICES'
+      );
+      expect(Date.parse(price.envelope.expiresAt) - Date.parse(price.envelope.issuedAt)).toBe(
+        hours * 3600000
+      );
+      expect(price.envelope.safetyLease.expiresAt).toBe(price.envelope.expiresAt);
+    }
+  });
   it('retains a refusal for branch review, then books a reviewed drawer receipt once', async () => {
     const counter = await setup(false);
     const sealed = counter.chain.seal(counter.command);
