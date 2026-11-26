@@ -27,7 +27,7 @@ describe('DEV-1056 card-terminal refund events purge migration contract', () => 
     expect(migrations.indexOf(NAME)).toBeGreaterThan(migrations.indexOf(ORIGINAL));
   });
 
-  it('keeps the tenant and branch scope and adds only the platform-admin exception', () => {
+  it('keeps the tenant and branch scope, and adds the platform-admin exception to USING only', () => {
     const policy = code.slice(
       code.indexOf('CREATE POLICY terminal_refund_scope'),
       code.indexOf('CREATE OR REPLACE FUNCTION')
@@ -36,7 +36,6 @@ describe('DEV-1056 card-terminal refund events purge migration contract', () => 
     const using = scope(policy.slice(policy.indexOf('USING ('), policy.indexOf('WITH CHECK (')));
     const check = scope(policy.slice(policy.indexOf('WITH CHECK (')));
     for (const clause of [using, check]) {
-      expect(clause).toContain(`current_setting('app.is_platform_admin', true) = 'true' OR (`);
       expect(clause).toContain(
         `"organizationId" = NULLIF(current_setting('app.current_organization_id', true), '')`
       );
@@ -44,6 +43,15 @@ describe('DEV-1056 card-terminal refund events purge migration contract', () => 
         `NULLIF(current_setting('app.current_branch_id', true), '') IS NULL OR "branchId" = current_setting('app.current_branch_id', true)`
       );
     }
+    // The purge reads and deletes through USING.
+    expect(using).toContain(`current_setting('app.is_platform_admin', true) = 'true' OR (`);
+    // WITH CHECK decides what may be written: the control plane must not INSERT a refund
+    // event, so it is exactly the tenant and branch scope of the original migration.
+    expect(check).not.toContain('app.is_platform_admin');
+    expect(check).not.toMatch(/\bOR \(/);
+    expect(check).toBe(
+      `WITH CHECK ( "organizationId" = NULLIF(current_setting('app.current_organization_id', true), '') AND ( NULLIF(current_setting('app.current_branch_id', true), '') IS NULL OR "branchId" = current_setting('app.current_branch_id', true) ) ); `
+    );
   });
 
   it('admits a DELETE only in the platform purge of the row’s own tenant, and never an UPDATE', () => {

@@ -14,7 +14,9 @@
  *   - a tenant can neither delete nor update a row, not even by naming its own purge;
  *   - a tenant cannot reach another business's rows at all;
  *   - the control plane deletes nothing outside the purge of the row's own tenant, and never
- *     updates.
+ *     updates;
+ *   - the control plane cannot INSERT a refund event (the platform-admin exception is in the
+ *     policy's USING clause only), while the tenant's own INSERT still works.
  *
  * The events are written by the real review service as the tenant, so each one carries its
  * balanced journal posting. The suite stops at this table: the whole purge job of such a
@@ -260,5 +262,78 @@ describeIfDatabase('DEV-1056 card-terminal refund events in the purge of a busin
     ]);
     expect(await eventsOf(PURGED_ORG)).toEqual([]);
     expect(await eventsOf(LIVE_ORG)).toEqual(live);
+  });
+
+  it('refuses a refund event INSERT from the control plane, and still takes the tenant’s own', async () => {
+    const { branch, manager } = ids(LIVE_ORG);
+    // A second card payment of the live business, with no refund event yet.
+    const attempt = `second_${LIVE_ORG}`;
+    await withTenantDb(
+      LIVE_ORG,
+      async (db) => {
+        await db.$executeRawUnsafe(
+          `INSERT INTO pharmacy_sales (id, "organizationId", "branchId", "createdByUserId", "updatedAt")
+           VALUES ($1, $2, $3, 'cashier', now())`,
+          attempt,
+          LIVE_ORG,
+          branch
+        );
+        await db.$executeRawUnsafe(
+          `INSERT INTO pharmacy_card_terminal_attempts (id, "organizationId", "branchId", "saleId", "deviceId", "terminalId", provider, "attemptKey", "amountMinor", currency, "businessDate", "actorId", "updatedAt")
+           VALUES ($1, $2, $3, $1, 'device', 'terminal', 'FAKE_TERMINAL', $1, 1601, 'PKR', current_date, 'cashier', now())`,
+          attempt,
+          LIVE_ORG,
+          branch
+        );
+      },
+      { userId: manager }
+    );
+    // One statement for both callers: a review closed as declined, which needs no journal
+    // posting, so nothing but the row level security policy decides who may write it.
+    const insert = (db: ScopedDb, id: string) =>
+      db.$executeRawUnsafe(
+        `INSERT INTO pharmacy_terminal_refund_events
+           (id, "organizationId", "branchId", "attemptId", kind, "amountMinor", "remainingMinor",
+            "actorId", reason, "slipRef", "roleRules", "ownerAuthority", "terminalConfirmed", "commandKey")
+         VALUES ($1, $2, $3, $4, 'DECLINED', 1601, 0, $5, 'Slip shows declined', 'SLIP-2', '{}', false, true, $1)`,
+        id,
+        LIVE_ORG,
+        branch,
+        attempt,
+        manager
+      );
+    const before = await eventsOf(LIVE_ORG);
+
+    // The control plane, with and without the purge of that business named.
+    for (const purging of [undefined, LIVE_ORG]) {
+      expect(
+        await refusal(
+          withPlatformDb(async (db) => {
+            if (purging !== undefined)
+              await db.$queryRawUnsafe(
+                `SELECT set_config('app.purging_organization_id', $1, true)`,
+                purging
+              );
+            return insert(db, `platform_event_${suffix}`);
+          })
+        )
+      ).toMatch(/row-level security policy/);
+    }
+    expect(await eventsOf(LIVE_ORG)).toEqual(before);
+
+    // Another tenant cannot write into this business either.
+    expect(
+      await refusal(withTenantDb(PURGED_ORG, (db) => insert(db, `foreign_event_${suffix}`)))
+    ).toMatch(/row-level security policy/);
+    expect(await eventsOf(LIVE_ORG)).toEqual(before);
+
+    // The business itself still can.
+    const own = `tenant_event_${suffix}`;
+    await expect(
+      withTenantDb(LIVE_ORG, (db) => insert(db, own), { userId: manager })
+    ).resolves.toBe(1);
+    expect((await eventsOf(LIVE_ORG)).map((event) => event.id).sort()).toEqual(
+      [...before.map((event) => event.id), own].sort()
+    );
   });
 });
