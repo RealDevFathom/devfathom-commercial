@@ -633,12 +633,12 @@ describe('pharmacy owner digest capability boundary', () => {
       mocks.comparisonRead.mock.calls[0][1].branches.map((branch: { id: string }) => branch.id)
     ).toEqual(['branch_1']);
   });
-  it('denies branch comparison to a non-owner even with financial capability', async () => {
+  it('refuses branch comparison to a financial reader without an admitted branch', async () => {
     mocks.can.mockResolvedValue(true);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
     await expect(
       caller('EMPLOYEE').branchComparison({ from: '2026-10-01', to: '2026-10-07' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
     expect(mocks.comparisonRead).not.toHaveBeenCalled();
   });
   it('denies digest reads without reports:financial before tenant data access', async () => {
