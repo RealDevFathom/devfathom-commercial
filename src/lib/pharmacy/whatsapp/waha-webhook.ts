@@ -161,9 +161,8 @@ export async function receiveWahaEvent(
       /* Return the same authentication response as an unknown selector. */
     }
   }
-  const bound = session !== null;
   const ok = authenticateWaha(raw, headers, key);
-  if (!ok || !bound || !organizationId) return 401;
+  if (!ok || !session || !organizationId) return 401;
   const event = parseWahaEvent(raw, session.sessionName);
   if (!event) return 400;
   if (event.kind === 'ignore') return 200;

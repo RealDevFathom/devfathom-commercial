@@ -3,7 +3,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { hasModule } from '@/lib/entitlements';
 import { deliveryNotice } from '@/lib/pharmacy/whatsapp/waha-staff-notice';
 
-export async function WahaDeliveryNotice() {
+async function readNotice() {
   try {
     const ctx = await createTRPCContext();
     const org = ctx.organization;
@@ -23,17 +23,21 @@ export async function WahaDeliveryNotice() {
             WHERE a."organizationId"=s."organizationId" AND a."createdAt">now()-interval '24 hours'
             AND a.outcome IN ('NOT_ON_WHATSAPP','UNAVAILABLE','UNKNOWN') ORDER BY a."createdAt" DESC LIMIT 1)
       END AS outcome FROM pharmacy_waha_sessions s WHERE s."organizationId"=${org.id}`;
-    const notice = deliveryNotice(result?.outcome ?? null);
-    return notice ? (
-      <p
-        role="status"
-        className="mb-3 rounded-control border border-border-subtle bg-surface-card px-4 py-3 text-sm text-text-body"
-      >
-        {notice}
-      </p>
-    ) : null;
+    return deliveryNotice(result?.outcome ?? null);
   } catch (error) {
     unstable_rethrow(error);
     return null;
   }
+}
+
+export async function WahaDeliveryNotice() {
+  const notice = await readNotice();
+  return notice ? (
+    <p
+      role="status"
+      className="mb-3 rounded-control border border-border-subtle bg-surface-card px-4 py-3 text-sm text-text-body"
+    >
+      {notice}
+    </p>
+  ) : null;
 }
