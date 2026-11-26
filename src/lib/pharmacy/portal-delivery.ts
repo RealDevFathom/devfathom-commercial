@@ -1,6 +1,13 @@
 import 'server-only';
 
+import { randomUUID } from 'node:crypto';
 import { readWhatsAppConfig, type WhatsAppConfig } from './whatsapp/provider';
+
+export function reportPortalFailure(reason: 'SEND_FAILED' | 'UNEXPECTED') {
+  const reference = randomUUID();
+  console.error('pharmacy.portal', { reason, reference });
+  return reference;
+}
 
 export function portalWhatsAppReady(
   organizationId: string,

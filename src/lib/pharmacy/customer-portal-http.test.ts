@@ -143,4 +143,32 @@ vi.mock('next/server', async (original) => ({
 vi.mock('./customer-portal', async (original) => ({
   ...(await original<typeof import('./customer-portal')>()),
   startPortalSignIn: vi.fn(),
+  verifyPortalSignIn: vi.fn(),
 }));
+
+it('returns the support message and a redacted reference when verification is unavailable', async () => {
+  const { verifyPortalSignIn } = await import('./customer-portal');
+  const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    vi.mocked(verifyPortalSignIn).mockRejectedValueOnce(new Error('private diagnostic'));
+    resolveTenant.mockResolvedValue({ id: 'org', status: 'ACTIVE' });
+    moduleEnabled.mockReturnValue(true);
+    const context = await portalContext(new Request('http://pharmacy.localhost'));
+    const response = await context!.handle('verify', {
+      token: 'pcl_' + '2'.repeat(26),
+      otp: '000001',
+    });
+    expect(response.status).toBe(500);
+    const body = await response.json();
+    expect(body).toEqual({
+      ok: false,
+      message: 'Something went wrong on our side. Please try again.',
+      reference: expect.any(String),
+    });
+    expect(log.mock.calls).toEqual([
+      ['pharmacy.portal', { reason: 'UNEXPECTED', reference: body.reference }],
+    ]);
+  } finally {
+    log.mockRestore();
+  }
+});

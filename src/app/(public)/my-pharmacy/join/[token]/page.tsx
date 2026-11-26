@@ -2,7 +2,11 @@ import { headers } from 'next/headers';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { PORTAL_LINK_PATTERN } from '@/lib/pharmacy/customer-portal';
-import { portalSyntheticSender, portalWhatsAppReady } from '@/lib/pharmacy/portal-delivery';
+import {
+  portalSyntheticSender,
+  portalWhatsAppReady,
+  reportPortalFailure,
+} from '@/lib/pharmacy/portal-delivery';
 import { portalSignInMessages } from '@/lib/pharmacy/portal-sign-in-messages';
 import {
   resolveOrganizationForRequest,
@@ -14,6 +18,27 @@ import { PortalSignInForm } from './sign-in-form';
 
 export const dynamic = 'force-dynamic';
 
+async function joinMessage(request: Request, token: string) {
+  try {
+    const organization = await resolveOrganizationForRequest(request);
+    if (
+      !organization ||
+      !isTenantLifecycleAccessible(organization.status) ||
+      !PORTAL_LINK_PATTERN.test(token)
+    )
+      return portalSignInMessages.invalidLink;
+    if (
+      !portalWhatsAppReady(organization.id) &&
+      !portalSyntheticSender(organization, requestHost(request))
+    )
+      return portalSignInMessages.setup;
+    return null;
+  } catch {
+    reportPortalFailure('UNEXPECTED');
+    return portalSignInMessages.unexpected;
+  }
+}
+
 export default async function MyPharmacyJoinPage({
   params,
 }: {
@@ -22,15 +47,7 @@ export default async function MyPharmacyJoinPage({
   const { token } = await params;
   const requestHeaders = await headers();
   const request = new Request('http://local', { headers: requestHeaders });
-  const organization = await resolveOrganizationForRequest(request);
-  const available = organization && isTenantLifecycleAccessible(organization.status);
-  const message =
-    !available || !PORTAL_LINK_PATTERN.test(token)
-      ? portalSignInMessages.invalidLink
-      : !portalWhatsAppReady(organization.id) &&
-          !portalSyntheticSender(organization, requestHost(request))
-        ? portalSignInMessages.setup
-        : null;
+  const message = await joinMessage(request, token);
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-surface-page px-4 py-10 text-text-body">

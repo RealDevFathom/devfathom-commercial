@@ -1,6 +1,5 @@
 import 'server-only';
 
-import { randomUUID } from 'node:crypto';
 import { after } from 'next/server';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -31,7 +30,7 @@ import {
   verifyPortalSignIn,
   type PortalSession,
 } from './customer-portal';
-import { portalSyntheticSender, portalWhatsAppReady } from './portal-delivery';
+import { portalSyntheticSender, portalWhatsAppReady, reportPortalFailure } from './portal-delivery';
 import { portalSignInMessages } from './portal-sign-in-messages';
 import { persistPrescriptionFile } from './prescription-files';
 import { createWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
@@ -42,12 +41,6 @@ const TEN_MINUTES = 10 * 60_000;
 type Json = Record<string, unknown>;
 const json = (body: Json, status = 200, headers: HeadersInit = {}) =>
   Response.json(body, { status, headers: { 'Cache-Control': 'private, no-store', ...headers } });
-
-function reportPortalFailure(reason: 'SEND_FAILED' | 'UNEXPECTED') {
-  const reference = randomUUID();
-  console.error('pharmacy.portal', { reason, reference });
-  return reference;
-}
 
 export const portalResponse = {
   tooLarge: () => json({ ok: false, message: 'Request body too large.' }, 413),
@@ -220,11 +213,9 @@ export async function portalContext(request: Request) {
           organizationId,
           (db) => verifyPortalSignIn(db, organizationId, parsed.data.token, parsed.data.otp),
           { maxWait: 500, timeout: 1500 }
-        ).catch(() => {
-          reportPortalFailure('UNEXPECTED');
-          return { ok: false } as const;
-        });
+        ).catch(() => null);
         await release;
+        if (!result) return portalResponse.unexpected();
         if (!result.ok) return portalResponse.invalid(PORTAL_ERROR_MESSAGES.CODE_INVALID);
         return json({ ok: true }, 200, {
           'Set-Cookie': sessionCookie(request, result.sessionToken, result.expiresAt),
