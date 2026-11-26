@@ -28,6 +28,11 @@ it('shows the server mode per branch and submits only the branch being edited', 
   });
   save.mockReturnValue({ reset: vi.fn(), mutate });
   render(<BranchCashMode />);
+  expect(
+    screen.getByText(
+      'If any counter has been selling offline, let it reconnect and finish syncing before you change this.'
+    )
+  ).toBeVisible();
   const field = screen.getByLabelText('Main (MAIN)', { selector: 'select' });
   const submit = within(field.closest('form')!).getByRole('button', { name: 'Save choice' });
   expect(field).toHaveValue('day');

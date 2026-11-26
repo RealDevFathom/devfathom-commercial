@@ -17,6 +17,7 @@ vi.mock('@/server/audit', async () => {
   };
 });
 
+import { OPEN_ATTEMPT_STATUSES } from '@/lib/pharmacy/card-terminal/open-attempts';
 import type { TRPCContext } from '../trpc';
 import { pharmacyBranchAssignmentsRouter } from './pharmacy-branch-assignments';
 
@@ -191,13 +192,16 @@ describe('pharmacy branch assignments', () => {
 });
 
 describe('branch cash mode', () => {
-  function cashModeFixture() {
+  function cashModeFixture(enabled = false) {
     const f = fixture();
-    const branch = { id: 'branch-a', name: 'Counter A', cashShiftsEnabled: false };
+    const branch = { id: 'branch-a', name: 'Counter A', cashShiftsEnabled: enabled };
     const updateMany = vi.fn(async () => ({ count: 1 }));
     const create = vi.fn(async () => ({}));
     const tx = {
       pharmacyBranch: { findFirst: vi.fn(async () => branch), updateMany },
+      pharmacyCardTerminalAttempt: { count: vi.fn(async () => 0) },
+      pharmacyDrawerSession: { count: vi.fn(async () => 0) },
+      pharmacyCashShift: { count: vi.fn(async () => 0) },
       auditLog: { create },
       user: {
         findFirst: vi.fn(async () => ({
@@ -233,6 +237,44 @@ describe('branch cash mode', () => {
       }),
     });
   });
+
+  it.each([true, false])(
+    'refuses to switch to shifts=%s during an open terminal payment',
+    async (enabled) => {
+      const f = cashModeFixture(!enabled);
+      f.tx.pharmacyCardTerminalAttempt.count.mockResolvedValue(1);
+      await expect(f.caller.setCashMode({ branchId: 'branch-a', enabled })).rejects.toMatchObject({
+        code: 'CONFLICT',
+        message:
+          'A card payment at this branch is still being finished. Settle or resolve it, then change how the branch closes.',
+      });
+      expect(f.tx.pharmacyCardTerminalAttempt.count).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org-a',
+          branchId: 'branch-a',
+          status: { in: [...OPEN_ATTEMPT_STATUSES] },
+        },
+      });
+      expect(f.updateMany).not.toHaveBeenCalled();
+      expect(f.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['pharmacyDrawerSession', 'pharmacyCashShift'] as const)(
+    'refuses an open %s before updating or auditing',
+    async (model) => {
+      const f = cashModeFixture();
+      f.tx[model].count.mockResolvedValue(1);
+      await expect(
+        f.caller.setCashMode({ branchId: 'branch-a', enabled: true })
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      expect(f.tx[model].count).toHaveBeenCalledWith({
+        where: { organizationId: 'org-a', branchId: 'branch-a', status: 'OPEN' },
+      });
+      expect(f.updateMany).not.toHaveBeenCalled();
+      expect(f.create).not.toHaveBeenCalled();
+    }
+  );
 
   it('hides modes from a non-owner and refuses a support session before writing', async () => {
     const f = cashModeFixture();

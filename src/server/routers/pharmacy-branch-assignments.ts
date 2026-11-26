@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { Prisma } from '@/generated/prisma/client';
+import { OPEN_ATTEMPT_STATUSES } from '@/lib/pharmacy/card-terminal/open-attempts';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
@@ -139,6 +140,33 @@ export const pharmacyBranchAssignmentsRouter = router({
             message: 'Choose an active branch in this pharmacy.',
           });
         if (branch.cashShiftsEnabled !== input.enabled) {
+          // Drawer opening and terminal preflight hold the shared side through commit.
+          await tx.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_branches
+            WHERE id = ${input.branchId} AND "organizationId" = ${organizationId} FOR UPDATE`);
+          const scope = { organizationId, branchId: input.branchId };
+          if (
+            await tx.pharmacyCardTerminalAttempt.count({
+              where: { ...scope, status: { in: [...OPEN_ATTEMPT_STATUSES] } },
+            })
+          )
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'A card payment at this branch is still being finished. Settle or resolve it, then change how the branch closes.',
+            });
+          const open = { ...scope, status: 'OPEN' as const };
+          if (await tx.pharmacyCashShift.count({ where: open }))
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'Close the open cash shifts and drawers at this branch before changing how it closes.',
+            });
+          if (await tx.pharmacyDrawerSession.count({ where: open }))
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Close the open drawers at this branch before changing how it closes.',
+            });
+
           const updated = await tx.pharmacyBranch.updateMany({
             where: { ...where, cashShiftsEnabled: branch.cashShiftsEnabled },
             data: { cashShiftsEnabled: input.enabled },

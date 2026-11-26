@@ -105,8 +105,11 @@ export function BranchCashMode() {
         <div className="space-y-4">
           <p className="text-sm text-text-body">
             Choose a single count at day close, or have each cashier count their shift before day
-            close. The choice applies when a drawer opens. Drawers already open keep their current
-            mode.
+            close. Finish open card payments and close all shifts and drawers before switching.
+          </p>
+          <p className="text-sm text-text-muted">
+            If any counter has been selling offline, let it reconnect and finish syncing before you
+            change this.
           </p>
           {modes.data.map((branch) => (
             <BranchChoice key={branch.id} branch={branch} />

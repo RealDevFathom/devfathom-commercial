@@ -333,6 +333,7 @@ const legacy: Record<string, string[]> = {
     );
     expect(pharmacistGrants.rows).toEqual([
       { organizationRoleId: id('denied_pharmacist'), effect: 'DENY' },
+      { organizationRoleId: id('new_pharmacist'), effect: 'ALLOW' },
       { organizationRoleId: id('pharmacist'), effect: 'ALLOW' },
     ]);
     const customAdministrator = await client.query(
