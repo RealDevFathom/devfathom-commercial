@@ -6,11 +6,8 @@ import { z } from 'zod';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
-import {
-  isTenantLifecycleAccessible,
-  requestHost,
-  resolveOrganizationForRequest,
-} from '@/lib/tenancy/host';
+import { isTenantLifecycleAccessible, resolveOrganizationForRequest } from '@/lib/tenancy/host';
+import { matchesTenantRequestOrigin } from '@/lib/tenancy/tenant-request-origin';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
@@ -123,14 +120,7 @@ async function gate(keys: Array<[string, number]>): Promise<number | null> {
  * cross-origin browser request, an inaccessible tenant or one without pharmacy.
  */
 export async function portalContext(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin) {
-    try {
-      if (new URL(origin).host.toLowerCase() !== requestHost(request)) return null;
-    } catch {
-      return null;
-    }
-  }
+  if (!matchesTenantRequestOrigin(request)) return null;
   const organization = await resolveOrganizationForRequest(request);
   if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
   const organizationId = organization.id;
