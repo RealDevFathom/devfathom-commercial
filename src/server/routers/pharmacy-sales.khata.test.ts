@@ -954,6 +954,17 @@ describe('Khata router trust and recovery boundary', () => {
         }
       );
 
+      it('requires authenticator setup for a sole owner who already has a PIN', async () => {
+        const f = fixture([{ capability: '*', effect: 'ALLOW' }]);
+        await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: APPROVAL_AUTHENTICATOR_SETUP_MESSAGE,
+        });
+        expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+        expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+        expect(applyPharmacyTender).not.toHaveBeenCalled();
+      });
+
       it('refuses a manager ringing the sale while another owner or manager exists', async () => {
         vi.mocked(isSoleActiveApprover).mockResolvedValueOnce(false);
         const f = fixture(manager, 'EMPLOYEE');

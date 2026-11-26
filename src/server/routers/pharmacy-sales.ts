@@ -1505,29 +1505,27 @@ async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): P
   if (!approver || !(await isSoleActiveApprover(db, scope, 'KHATA_OVER_LIMIT'))) return false;
   if (await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId)) {
     const { organizationId, actorId: userId } = scope;
-    const [pin, authenticator] = await Promise.all([
-      db.restaurantOperatorCredential.findFirst({
-        where: {
-          organizationId,
-          type: 'PIN',
-          revokedAt: null,
-          deviceId: null,
-          staffProfile: { organizationId, userId, status: 'ACTIVE' },
-        },
-        select: { id: true },
-      }),
-      db.approvalAuthenticator.findFirst({
-        where: { organizationId, userId, enabledAt: { not: null } },
-        select: { id: true },
-      }),
-    ]);
-    if (!pin && !authenticator)
+    const mode = await approvalSecretKindFor(db, organizationId);
+    const credential =
+      mode === 'CODE'
+        ? await db.approvalAuthenticator.findFirst({
+            where: { organizationId, userId, enabledAt: { not: null } },
+            select: { id: true },
+          })
+        : await db.restaurantOperatorCredential.findFirst({
+            where: {
+              organizationId,
+              type: 'PIN',
+              revokedAt: null,
+              deviceId: null,
+              staffProfile: { organizationId, userId, status: 'ACTIVE' },
+            },
+            select: { id: true },
+          });
+    if (!credential)
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message:
-          (await approvalSecretKindFor(db, organizationId)) === 'PIN'
-            ? NO_PIN_SET_MESSAGE
-            : APPROVAL_AUTHENTICATOR_SETUP_MESSAGE,
+        message: mode === 'CODE' ? APPROVAL_AUTHENTICATOR_SETUP_MESSAGE : NO_PIN_SET_MESSAGE,
       });
   }
   return true;
