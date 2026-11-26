@@ -1046,6 +1046,22 @@ describe('Khata router trust and recovery boundary', () => {
       };
       const tillCharge = { ...overLimit, overLimitApproval: managerPin };
 
+      it('refuses an anonymous approval without till proof before any charge or credential check', async () => {
+        const f = fixture([counter], 'EMPLOYEE');
+        await expect(f.caller().tender({ ...overLimit, overLimitApproval: { pin: '000000' } }))
+          .rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Choose the approver by name') });
+        expect(authorizeCounterApproval).not.toHaveBeenCalled();
+        expect(applyPharmacyTender).not.toHaveBeenCalled();
+      });
+
+      it('rejects code-only approval on tenderOutcome before reading the ledger', async () => {
+        const f = fixture([counter], 'EMPLOYEE');
+        await expect(f.caller().tenderOutcome({ ...overLimit, overLimitApproval: { pin: '000000' } }))
+          .rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('only accepted when taking payment') });
+        expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+        expect(authorizeCounterApproval).not.toHaveBeenCalled();
+      });
+
       it('lets a cashier charge over the limit once a manager approves with their PIN', async () => {
         vi.mocked(authorizeCounterApproval).mockResolvedValue(pinApproval);
         // A cashier: counter access only, no pharmacy:manage and no tenant ADMIN.

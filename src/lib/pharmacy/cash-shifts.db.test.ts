@@ -1953,6 +1953,31 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
       const { rateLimit } = await import('@/lib/rate-limit');
       const { MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS } =
         await import('@/lib/restaurant/operator-credentials');
+      const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+      const { spendApproverPinGuessTypedByAnother } = await import('@/lib/approver-pin-guess-budget');
+      const budgetKeys = [s.manager, other].map((id) =>
+        rateLimitStorageKey(`approver-pin-typed-by-another:${scope.organizationId}:${id}`)
+      );
+      await tenant(scope, async (db) => {
+        for (const key of budgetKeys)
+          await db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+            VALUES (${key}, ${MAX_FAILED_ATTEMPTS - 1}, now() + interval '15 minutes')
+            ON CONFLICT (key) DO UPDATE SET count = EXCLUDED.count, "resetAt" = EXCLUDED."resetAt"`;
+      });
+      // The two fixture authenticators share a synthetic seed. Pick one known
+      // nonmatching input offline and submit it once to check internal accounting.
+      const fixtureCodes = [-30_000, 0, 30_000].map((delta) =>
+        codeAt(secret, new Date(later.getTime() + delta))
+      );
+      const nonmatching = ['111111', '222222', '333333', '444444'].find((value) => !fixtureCodes.includes(value))!;
+      await expect(submit(nonmatching)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      const budgets = await tenant(scope, (db) =>
+        db.$queryRaw<{ count: number }[]>`SELECT count FROM rate_limit_buckets
+          WHERE key IN (${budgetKeys[0]}, ${budgetKeys[1]})`
+      );
+      expect(budgets.map(({ count }) => count)).toEqual([MAX_FAILED_ATTEMPTS, MAX_FAILED_ATTEMPTS]);
+      for (const id of [s.manager, other])
+        expect((await spendApproverPinGuessTypedByAnother(scope.organizationId, id)).ok).toBe(false);
       for (let i = 0; i < MAX_FAILED_ATTEMPTS; i++)
         await rateLimit(
           JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),
