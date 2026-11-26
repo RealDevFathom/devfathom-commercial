@@ -26,7 +26,12 @@ BEGIN
     AND conname = 'pharmacy_stock_movements_counter_sale_fkey') THEN
     ALTER TABLE pharmacy_stock_movements ADD CONSTRAINT pharmacy_stock_movements_counter_sale_fkey
       FOREIGN KEY ("organizationId", "branchId", "counterSaleId")
-      REFERENCES pharmacy_sales ("organizationId", "branchId", id) ON UPDATE RESTRICT ON DELETE RESTRICT;
+      REFERENCES pharmacy_sales ("organizationId", "branchId", id) ON UPDATE RESTRICT ON DELETE RESTRICT NOT VALID;
   END IF;
 END $$;
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+ALTER TABLE pharmacy_stock_movements VALIDATE CONSTRAINT pharmacy_stock_movements_counter_sale_fkey;
 COMMIT;
