@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
   context: vi.fn(),
   caller: vi.fn(),
+  stockValuation: vi.fn(),
   module: vi.fn(),
   form: vi.fn(),
   writeOff: vi.fn(),
@@ -121,6 +122,7 @@ beforeEach(() => {
   mocks.assigned.mockResolvedValue(new Set([branch.id]));
   mocks.caller.mockReturnValue({
     nearExpiryBoard: nearExpiry,
+    stockValuation: mocks.stockValuation,
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
     writeOff: mocks.writeOff,
     releaseQuarantinedPart: mocks.release,
@@ -138,6 +140,12 @@ beforeEach(() => {
   mocks.writeOff.mockResolvedValue({});
   mocks.release.mockResolvedValue({});
   nearExpiry.mockResolvedValue([]);
+  mocks.stockValuation.mockResolvedValue({
+    productCount: 1,
+    businessTotal: false,
+    canSeeBusinessTotal: false,
+    money: null,
+  });
   lots.mockResolvedValue([lot]);
 });
 
@@ -1081,4 +1089,12 @@ it('DEV-1044 explains the inventory overview in shop language', async () => {
   expect(document.body).not.toHaveTextContent(
     /Organization-scoped|Working branch|Ledger projection|Distinct co-author required|Ranked by due time|Imported stock references|Main · Not recorded/
   );
+});
+
+it('DEV-1044 shows product quantities at the top with no valuation for a storekeeper', async () => {
+  await show();
+  expect(screen.getByText('Products in stock')).toBeVisible();
+  expect(screen.queryByText('Value at cost')).not.toBeInTheDocument();
+  expect(screen.queryByText('Value at selling price')).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: 'Inventory', level: 1 })).toBeVisible();
 });

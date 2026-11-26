@@ -467,6 +467,7 @@ export async function LedgerReportsSection({
   from,
   to,
   at,
+  valuationInstant,
   by,
   marginFrom,
   marginTo,
@@ -478,6 +479,7 @@ export async function LedgerReportsSection({
   from?: string;
   to?: string;
   at?: string;
+  valuationInstant?: string;
   by?: string;
   marginFrom?: string;
   marginTo?: string;
@@ -505,7 +507,19 @@ export async function LedgerReportsSection({
     withinReaderLimit(start, end, timeZone, dayEnd);
   // The cutoff is the start of the picked day on the organisation's clock; it cannot be later
   // than now, so today is the latest day that can be picked.
-  const atValid = !!atDate && Date.parse(ledgerDayStart(cutoff, timeZone, dayEnd)) <= now.getTime();
+  const exactAt =
+    typeof valuationInstant === 'string' &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(valuationInstant)
+      ? Date.parse(valuationInstant)
+      : NaN;
+  const validExactAt =
+    Number.isFinite(exactAt) &&
+    exactAt <= now.getTime() &&
+    new Date(exactAt).toISOString() === valuationInstant;
+  const atValid =
+    !!atDate &&
+    Date.parse(ledgerDayStart(cutoff, timeZone, dayEnd)) <= now.getTime() &&
+    (valuationInstant === undefined || validExactAt);
   const groupValid = groups.includes(group as Group);
   let results:
     | [PromiseSettledResult<Valuation>, PromiseSettledResult<Margin>, PromiseSettledResult<Leakage>]
@@ -519,7 +533,9 @@ export async function LedgerReportsSection({
     results = await Promise.allSettled([
       caller.perpetualValuation({
         branchId: branch.id,
-        at: ledgerDayStart(cutoff, timeZone, dayEnd),
+        at: validExactAt
+          ? new Date(exactAt).toISOString()
+          : ledgerDayStart(cutoff, timeZone, dayEnd),
       }),
       caller.grossMargin({ ...period, by: group as Group }),
       caller.leakageReport(period),
@@ -609,7 +625,13 @@ export async function LedgerReportsSection({
       </SectionCard>
       {results && (
         <>
-          <SectionCard title="Perpetual valuation" titleLevel={2}>
+          <SectionCard title="Perpetual valuation" titleLevel={2} id="stock-valuation">
+            {validExactAt && (
+              <p className="mb-4 text-sm text-text-body">
+                Stock value from Inventory at {formatWorkspaceDateTime(new Date(exactAt), timeZone)}
+                . Apply the filters above to return to the start of a selected day.
+              </p>
+            )}
             {results[0].status === 'fulfilled' ? (
               <ValuationLedger
                 timeZone={timeZone}

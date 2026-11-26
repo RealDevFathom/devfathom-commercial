@@ -44,6 +44,7 @@ import { createTRPCContext } from '@/server/trpc';
 import { BATCH_NOT_RECORDED, batchNumberLabel, batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
 import { BreakPackForm } from './break-pack-form';
+import { StockValueSummary } from './stock-value-summary';
 
 export const metadata: Metadata = { title: 'Pharmacy inventory' };
 
@@ -187,7 +188,7 @@ async function inventoryControlAllowed(ctx: InventoryContext): Promise<boolean> 
 export default async function PharmacyInventoryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ branch?: string; notice?: string; kind?: string }>;
+  searchParams: Promise<{ branch?: string; notice?: string; kind?: string; missingCost?: string }>;
 }) {
   const query = await searchParams;
   const ctx = await tenantContext();
@@ -265,6 +266,10 @@ export default async function PharmacyInventoryPage({
   // DEV-660: the gated read admits the branch (and, for a tenant ADMIN without an
   // assignment, writes the exception's audit row) before any direct stock read.
   const nearExpiry = await caller.nearExpiryBoard({ branchId: branch.id });
+  const missingPage =
+    typeof query.missingCost === 'string' && /^[1-9][0-9]{0,5}$/.test(query.missingCost)
+      ? Number(query.missingCost)
+      : undefined;
   const [
     organizationLocations,
     lots,
@@ -274,6 +279,7 @@ export default async function PharmacyInventoryPage({
     signals,
     writeOffWitnesses,
     temperatureLogs,
+    valuation,
   ] = await Promise.all([
     ctx.db.pharmacyStockLocation.findMany({
       where: { organizationId, active: true },
@@ -371,6 +377,13 @@ export default async function PharmacyInventoryPage({
       take: 20,
       include: { location: { select: { name: true } } },
     }),
+    caller
+      .stockValuation({
+        branchId: branch.id,
+        allBranches: query.branch === 'all',
+        missingPage,
+      })
+      .catch(() => null),
   ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
@@ -642,7 +655,12 @@ export default async function PharmacyInventoryPage({
         <form className="flex flex-wrap items-end gap-3" method="get">
           <label className="min-w-0 basis-48 flex-1 text-sm text-text-body">
             Branch
-            <StudioSelect className={inputClass} defaultValue={branch.id} name="branch">
+            <StudioSelect
+              className="mt-1 min-h-11 w-full rounded-control"
+              defaultValue={valuation?.businessTotal ? 'all' : branch.id}
+              name="branch"
+            >
+              {valuation?.canSeeBusinessTotal ? <option value="all">All branches</option> : null}
               {workingBranches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
@@ -652,10 +670,16 @@ export default async function PharmacyInventoryPage({
             </StudioSelect>
           </label>
           <Button type="submit" variant="secondary">
-            Open branch
+            Apply branch
           </Button>
         </form>
       </SectionCard>
+      <StockValueSummary result={valuation} branch={branch} missingPage={missingPage} />
+      {valuation?.businessTotal ? (
+        <p className="text-sm text-text-muted">
+          The stock tasks below are for {branch.name}. Choose a branch above to work with its stock.
+        </p>
+      ) : null}
       <section aria-label="Inventory summary" className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
           label="Available units"

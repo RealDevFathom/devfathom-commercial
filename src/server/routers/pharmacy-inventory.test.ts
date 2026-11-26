@@ -1702,6 +1702,11 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
     invoke: () => caller().nearExpiryBoard({ branchId: 'branch_a' }),
   },
   {
+    name: 'stockValuation',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().stockValuation({ branchId: 'branch_a' }),
+  },
+  {
     name: 'onHand',
     capability: 'pharmacy:inventory',
     invoke: () => caller().onHand({ branchId: 'branch_a', medicineId: 'medicine_1' }),
@@ -2150,6 +2155,7 @@ const READ_REFUSAL = {
 
 const READS = new Set([
   'nearExpiryBoard',
+  'stockValuation',
   'onHand',
   'temperatureZoneStatuses',
   'expiryBoardLots',
@@ -2570,7 +2576,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(44);
+    expect(ASSIGNMENT_GATED).toHaveLength(45);
   });
 });
 

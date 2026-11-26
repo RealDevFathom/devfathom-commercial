@@ -137,6 +137,7 @@ import {
 } from '@/lib/pharmacy/cold-chain-sensors';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
 import { maskPhone } from '@/lib/pharmacy/patient-prescriptions';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
@@ -2191,7 +2192,6 @@ export const pharmacyInventoryRouter = router({
         }
       );
       const canOpenFinanceReport =
-        !businessTotal &&
         canSeeBusinessTotal &&
         finance &&
         reports &&
