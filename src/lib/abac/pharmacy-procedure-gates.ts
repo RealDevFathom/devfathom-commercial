@@ -234,7 +234,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/sign-own-line-alone'],
   },
   'pharmacyDispensing.decideReview': {
-    gate: "capabilityProcedure('pharmacy:dispense') + rxReviewSignerDenial (active, assigned to the sale's branch or org ADMIN)",
+    gate: "capabilityProcedure('pharmacy:dispense') + rxReviewSignerDenial (active, assigned to the sale's branch or tenant owner)",
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.enqueueReview': {

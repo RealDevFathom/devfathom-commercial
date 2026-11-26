@@ -28,22 +28,17 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const dispense = capabilityProcedure('pharmacy:dispense');
 
 /**
- * DEV-913: a review or substitution is about one counter sale line, so its audit
- * entry carries that sale's branch. Read only for the entry; a line that does not
- * resolve leaves it workspace-wide and the write decides the outcome as before.
- * DEV-955: a line that does resolve is at a branch, and the caller must be allowed
- * to act there (the counter's branch rule: an active assignment, or an organization
- * ADMIN). A pharmacist of another branch of this organization is refused.
+ * Tag the audit entry with the sale line's branch and require admission before writing.
  */
 async function assertSaleLineBranch(ctx: TRPCContext, saleLineId: string) {
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   const line = await ctx.db.pharmacySaleLine.findFirst({
-    where: { id: saleLineId },
+    where: { id: saleLineId, organizationId },
     select: { branchId: true },
   });
   annotateAuditBranch(ctx, line?.branchId);
-  if (!line) return;
-  const organizationId = ctx.entitlements?.organizationId;
-  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (!line) throw new TRPCError({ code: 'NOT_FOUND', message: 'This sale line was not found.' });
   if (
     await counterBranchAssignmentDenial(
       ctx.db as unknown as ScopedDb,
@@ -283,7 +278,7 @@ export const pharmacyDispensingRouter = router({
         });
       // DEV-955: the decider must be allowed to sign at the sale's branch, by the same rule the
       // solo rule counts other signers with (`otherRxReviewSigners`): ACTIVE (not on leave), the
-      // dispensing right, and an active assignment to the branch or organization ADMIN.
+      // dispensing right, and an active assignment to the branch or live tenant ownership.
       const denial = await rxReviewSignerDenial(ctx.db as unknown as ScopedDb, {
         organizationId,
         branchId: line.branchId,

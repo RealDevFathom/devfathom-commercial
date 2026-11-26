@@ -223,7 +223,7 @@ export const pharmacyPrescriptionsRouter = router({
         select: { id: true, name: true },
       });
       // DEV-941: refill reminders belong to a branch. A pharmacist sees only the branches
-      // they are assigned to, an organisation admin every branch: the counter's branch rule,
+      // they are assigned to, a tenant owner every branch: the counter's branch rule,
       // as `captureRefillReminder` writes them and `decideReview` signs at a branch.
       const visible = await Promise.all(
         activeBranches.map(

@@ -439,6 +439,46 @@ afterAll(async () => {
 });
 
 describeIfDatabase('prescription checks are decided only at the signer’s branch (DEV-955)', () => {
+  it('requires an active branch assignment for a non-owner administrator to decide a review', async () => {
+    const sale = await ringUp();
+    const decision = { reviewItemId: sale.reviewItemId, kind: 'VERIFY' };
+    await expect(decide(ids.admin, decision)).rejects.toMatchObject(BRANCH_REFUSAL);
+    expect(await decisions(sale.reviewItemId)).toEqual([]);
+    const assignment = await tenant((db) =>
+      db.pharmacyBranchAssignment.create({
+        data: { userId: ids.admin, branchId: ids.branch, active: true },
+      })
+    );
+    try {
+      await expect(decide(ids.admin, decision)).resolves.toMatchObject({ id: expect.any(String) });
+    } finally {
+      await tenant((db) => db.pharmacyBranchAssignment.delete({ where: { id: assignment.id } }));
+    }
+  });
+
+  it('refuses both sale-line writes when the sale belongs to another business', async () => {
+    const sale = await ringUp();
+    const api = (run: (dispense: DispensingWrites) => Promise<unknown>) =>
+      dispensing(ids.foreign, (dispense) => run(dispense as unknown as DispensingWrites));
+    const missing = { code: 'NOT_FOUND', message: 'This sale line was not found.' };
+    await expect(
+      api((caller) => caller.enqueueReview({ prescriptionLineId, saleLineId: sale.saleLineId }))
+    ).rejects.toMatchObject(missing);
+    await expect(
+      api((caller) =>
+        caller.recordSubstitution({
+          prescriptionLineId,
+          saleLineId: sale.saleLineId,
+          prescribedPresentationId: rx.presentationId,
+          suppliedPresentationId: rx.presentationId,
+          equivalenceBasis: 'Same presentation',
+          patientCommunication: 'Discussed with patient',
+          jurisdictionRuleRef: 'RX-04',
+        })
+      )
+    ).rejects.toMatchObject(missing);
+  });
+
   it('refuses a pharmacist of another branch to sign, override or verify, and writes nothing', async () => {
     const sale = await ringUp();
     for (const decision of [
