@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '@/lib/receipts/configuration';
 import { readReceiptLogo } from './receipt-logo';
 import {
+  receiptDesign,
   safePharmacyLayout,
   SavePharmacyReceiptLayoutSchema,
   type PharmacyReceiptLayout,
@@ -71,7 +72,10 @@ export function buildPharmacyReceiptPrintDocument(
     throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
   }
   // The ESC/POS baseline has no Urdu code page; Urdu stays on the browser path.
-  const layout = safePharmacyLayout(options.layout);
+  const saved = safePharmacyLayout(options.layout);
+  // Apply the same protected header bounds to branding saved by the v1 editor.
+  const layout =
+    saved.version === 1 && (saved.businessText || saved.headerText) ? receiptDesign(saved) : saved;
   if (locale !== 'en' || (layout.version === 2 && layout.locale !== 'en'))
     throw new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
   let facts;
@@ -96,7 +100,7 @@ export function buildPharmacyReceiptPrintDocument(
     receiptSnapshot: {
       layout:
         layout.version === 1
-          ? layout
+          ? { ...layout, headerText: options.reprint ? layout.headerText : 'Original' }
           : { ...DEFAULT_RECEIPT_LAYOUT, paperWidth: layout.paperWidth },
       facts,
     },

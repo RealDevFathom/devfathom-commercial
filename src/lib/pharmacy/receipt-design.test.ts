@@ -182,3 +182,22 @@ it('moves a tall branding block below the complete marked sale', () => {
     blocks.findIndex((b) => b.kind === 'text' && b.text.includes('Header end'))
   );
 });
+
+it('marks new thermal originals from legacy or absent settings', () => {
+  const job = buildPharmacyReceiptEscPosJob(receiptDesignSample, 'en', {
+    layout: DEFAULT_RECEIPT_LAYOUT,
+    taxIdentity,
+    reprint: false,
+  });
+  expect(Buffer.from(job.escPos.data, 'base64').toString('ascii')).toContain('\nOriginal\n');
+});
+it('prints the recorded facts ahead of oversized legacy branding', () => {
+  const job = buildPharmacyReceiptEscPosJob(receiptDesignSample, 'en', {
+    layout: { ...DEFAULT_RECEIPT_LAYOUT, headerText: '\n'.repeat(20) + 'Legacy branding' },
+    taxIdentity,
+    reprint: false,
+  });
+  const text = Buffer.from(job.escPos.data, 'base64').toString('ascii');
+  expect(text.indexOf('Receipt: 101')).toBeGreaterThan(-1);
+  expect(text.indexOf('Legacy branding')).toBeGreaterThan(text.indexOf('Receipt: 101'));
+});

@@ -40,7 +40,7 @@ beforeEach(() => {
 it('preserves a conflicting draft until the administrator reviews the new revision', async () => {
   state.save.mockRejectedValueOnce({ data: { code: 'CONFLICT' } });
   const view = render(<PharmacyReceiptDesigner canSave />);
-  const header = screen.getByRole('textbox', { name: 'Header', exact: true });
+  const header = screen.getByRole('textbox', { name: /^Header$/ });
   fireEvent.change(header, { target: { value: 'My draft' } });
   const save = screen.getByRole('button', { name: 'Save design' });
   fireEvent.click(save);
@@ -64,7 +64,7 @@ it('preserves a conflicting draft until the administrator reviews the new revisi
 });
 it('keeps read access separate from the admin-only design controls', () => {
   render(<PharmacyReceiptDesigner canSave={false} />);
-  expect(screen.getByRole('textbox', { name: 'Header', exact: true })).toBeDisabled();
+  expect(screen.getByRole('textbox', { name: /^Header$/ })).toBeDisabled();
   expect(screen.getByRole('button', { name: 'Reset to defaults' })).toBeDisabled();
   expect(screen.getByRole('combobox', { name: 'Preview paper' })).toBeEnabled();
 });
