@@ -12,6 +12,7 @@ import { anonymousFallbackRouter } from '@/server/routers/anonymous-fallback';
 import { createTRPCContext } from '@/server/trpc';
 import {
   admitTrelloImport,
+  checkTrelloImportHeaders,
   preflightTrelloImport,
   trelloImportIndex,
 } from '@/server/trello-import-transport';
@@ -493,6 +494,7 @@ async function dispatch(req: Request) {
       return bounded instanceof Response ? bounded : servePlatformAiSettings(bounded);
     }
     const importIndex = trelloImportIndex(req, procedurePaths(req));
+    if (importIndex !== null) checkTrelloImportHeaders(req);
     const actor = await resolveTenantActor({ request: req });
     if (!actor) return importIndex === null ? handleAnonymous(req) : unauthorized();
 

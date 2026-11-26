@@ -733,6 +733,32 @@ describe('Trello import HTTP preflight', () => {
     }
   );
 
+  it.each([
+    ['wrong media type', 400, { 'content-type': 'text/plain' }],
+    [
+      'oversized declaration',
+      413,
+      {
+        'content-type': 'application/json',
+        'content-length': String(MAX_TRELLO_REQUEST_BYTES + 1),
+      },
+    ],
+  ] as const)(
+    'refuses %s before auth, throttle or body access',
+    async (_label, status, headers) => {
+      const request = new Request(url(path, '?batch=1'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ '0': { json: input } }),
+      });
+      expect((await POST(request)).status).toBe(status);
+      expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+      expect(mocks.rateLimit).not.toHaveBeenCalled();
+      expect(request.bodyUsed).toBe(false);
+      expect(harness.outcomes).toEqual([]);
+    }
+  );
+
   it('hands an exact-byte-limit request to the real tRPC adapter and transaction', async () => {
     const json = JSON.stringify({ '0': { json: input } });
     const response = await post(json.padEnd(MAX_TRELLO_REQUEST_BYTES));

@@ -42,11 +42,14 @@ export function trelloImportIndex(req: Request, paths: string[]): number | null 
   return index;
 }
 
-/** Check the signed-in, rate-limited import before opening its tenant transaction. */
-export async function preflightTrelloImport(req: Request, index: number) {
+/** Reject malformed headers without reading the body or spending an attempt. */
+export function checkTrelloImportHeaders(req: Request) {
   if (Number(req.headers.get('content-length')) > MAX_TRELLO_REQUEST_BYTES) oversized();
   if (req.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json') invalid();
+}
 
+/** Check the signed-in, rate-limited import before opening its tenant transaction. */
+export async function preflightTrelloImport(req: Request, index: number) {
   const reader = req.body?.getReader();
   if (!reader) invalid();
   const chunks: Uint8Array[] = [];
