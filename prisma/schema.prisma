@@ -210,6 +210,8 @@ model PharmacyBranch {
   khataReminderCadenceDays        Int                          @default(7)
   khataReminderMinBalanceMinor    Int                          @default(10000)
   khataReminderRevision           Int                          @default(0)
+  /// Whether controlled dispensing requires an independent pharmacist at this branch.
+  requireSecondPharmacist         Boolean                      @default(false)
   /// DEV-846: the owner's record of pharmacist coverage hours for this branch,
   /// `{ timeZone, windows }` (the rule-set `presenceHours` shape). A record only:
   /// the live-sale hours check reads the jurisdiction rule set, never this.
@@ -14174,8 +14176,13 @@ model PharmacyControlledRegisterEntry {
   balanceDelta           Int                               @default(0)
   runningBalance         Int
   recordedByUserId       String
-  /// Null only for an owner-confirmed historical supplier dispatch.
+  /// Empty when a single pharmacist dispenses or an owner confirms a historical dispatch.
   witnessedByUserId      String?
+  witnessStatement        String?
+  /// Original counter line and time for a retrospective controlled sale entry. createdAt is the recording time.
+  lateSaleLineId          String?
+  originalSaleAt          DateTime?
+  lateEntryReason         String?
   signatureRef           String?
   rxSerialWritten        Boolean                           @default(false)
   emergency              Boolean                           @default(false)

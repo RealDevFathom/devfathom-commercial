@@ -544,27 +544,40 @@ async function qaShots(
   name: string,
   {
     focus,
+    previous,
     widths = QA_KEYBOARD_WIDTHS,
     dir = QA_DIR,
+    reducedMotion = 'reduce',
   }: {
     /** A control inside the panel: it takes the keyboard focus for the shot. */
     focus: Locator;
+    previous?: Locator;
     widths?: readonly number[];
     dir?: string;
+    reducedMotion?: 'reduce' | 'no-preference';
   }
 ) {
   const original = page.viewportSize();
   for (const width of widths) {
     await page.setViewportSize({ width, height: width < 768 ? 812 : 900 });
     for (const theme of ['light', 'dark'] as const) {
-      await page.emulateMedia({ colorScheme: theme, reducedMotion: 'reduce' });
+      await page.emulateMedia({ colorScheme: theme, reducedMotion });
       await page.evaluate(
         (value) => document.documentElement.setAttribute('data-theme', value),
         theme
       );
+      // Let the new viewport and theme paint before entering the dialog's tab cycle.
+      // The responsive dialog restores focus when its layout changes.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          )
+      );
       // Focus arrives from the keyboard (Shift+Tab, Tab), so :focus-visible draws its ring.
       await focus.focus();
       await page.keyboard.press('Shift+Tab');
+      if (previous) await expect(previous).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(focus).toBeFocused();
       expect(
@@ -2122,6 +2135,18 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await reason.focus();
   await reason.press('Space');
   await pressControl(voidDialog.getByRole('button', { name: 'Void bill' }));
+  const restore = page.getByRole('dialog', { name: 'Confirm this controlled stock restoration' });
+  await restore.getByLabel('Approving pharmacist').selectOption(PHARMACY_E2E.adminStaffProfileId);
+  await restore.locator('input[type=password]').fill(PHARMACY_E2E.adminPin);
+  for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+    await qaShots(page, 'controlled-void-' + reducedMotion, {
+      focus: restore.getByLabel('Approving pharmacist'),
+      previous: restore.getByRole('button', { name: 'Close' }),
+      widths: QA_STATE_WIDTHS,
+      reducedMotion,
+    });
+  }
+  await pressControl(restore.getByRole('button', { name: 'Confirm void' }));
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
   });
@@ -2785,5 +2810,351 @@ test('this spec drives the counter without a pointer', async () => {
   expect(body).toContain('bill 3 —');
   for (const pointerApi of ['.click(', '.dblclick(', '.hover(', '.tap(', '.dragTo(']) {
     expect(body, `pointer API used: ${pointerApi}`).not.toContain(pointerApi);
+  }
+});
+
+test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale alone and takes payment', async ({
+  page,
+}) => {
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const {
+    organizationId,
+    branchId,
+    adminId,
+    prescriberId,
+    medicines,
+    adminPinCredentialId,
+    adminPin,
+    adminStaffProfileId,
+  } = PHARMACY_E2E;
+  const med = medicines.controlled;
+  const rx = randomUUID();
+  const patientId = randomUUID();
+  const patientName = 'Synthetic solo ' + patientId.slice(0, 8);
+  const address = '103 Synthetic Test Street';
+  await db.connect();
+  try {
+    await db.query(
+      "SELECT set_config('app.current_organization_id',$1,false), set_config('app.current_branch_id',$2,false)",
+      [organizationId, branchId]
+    );
+    await db.query(
+      'INSERT INTO pharmacy_patients(id,"organizationId","displayName",cnic,"updatedAt") VALUES ($1,$2,$3,$4,now())',
+      [patientId, organizationId, patientName, '0000000000000']
+    );
+    await db.query(
+      `INSERT INTO pharmacy_patient_consents(id,"organizationId","patientId",purpose,channel,version,granted,"recordedByUserId") VALUES ($1,$2,$3,'DISPENSING','IN_PERSON',1,true,$4)`,
+      [randomUUID(), organizationId, patientId, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescriptions(id,"organizationId","patientId","prescriberId","sourceKind","sourceFileRef","validFrom","validUntil","capturedByUserId")
+      VALUES ($1,$2,$3,$4,'PAPER_IMAGE','synthetic://dev1043',now()-interval '1 day',now()+interval '1 day',$5)`,
+      [rx, organizationId, patientId, prescriberId, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescription_lines(id,"organizationId","prescriptionId","lineNumber","medicineId","presentationId","authorizedCanonicalUnits",directions)
+      VALUES ($1,$2,$3,1,$4,$5,100,'Synthetic directions')`,
+      [rx + '-line', organizationId, rx, med.id, med.presentationId]
+    );
+    await openCounter(page);
+    await openDrawer(page);
+    await search(page, 'Fathomadol');
+    await stageFirstResult(page, med.name);
+    await page.keyboard.press('F6');
+    const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
+    await pressControl(sheet.getByRole('button', { name: 'Find the patient' }));
+    const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
+    const find = checks.getByLabel('Find patient');
+    await find.fill(patientName);
+    await find.press('Enter');
+    await pressControl(checks.getByRole('button', { name: new RegExp(patientName) }));
+    await pressControl(checks.getByRole('button', { name: /^Authorise Fathomadol/ }));
+    await sheet.getByLabel('Patient address').fill(address);
+    await sheet.getByLabel('Prescription line', { exact: true }).selectOption(rx + '-line');
+    await sheet
+      .getByRole('combobox', { name: 'Approving pharmacist' })
+      .selectOption(adminStaffProfileId);
+    const pin = sheet.getByLabel(/^(Pharmacist PIN|Approval code)$/);
+    const submit = sheet.getByRole('button', { name: 'Authorise line' });
+    const strikes = async () =>
+      Number(
+        (
+          await db.query(
+            'SELECT "failedAttempts" FROM restaurant_operator_credentials WHERE id=$1',
+            [adminPinCredentialId]
+          )
+        ).rows[0].failedAttempts
+      );
+    for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+      await qaShots(page, 'controlled-own-confirmation-' + reducedMotion, {
+        focus: pin,
+        widths: QA_STATE_WIDTHS,
+        reducedMotion,
+      });
+    }
+    const before = await strikes();
+    await pin.fill('0000');
+    await pressControl(submit);
+    await expect(sheet.getByRole('alert')).toBeVisible();
+    await expect(pin).toHaveValue('');
+    expect(await strikes()).toBe(before + 1);
+    await expect(billLine(page, med.name)).toHaveCount(0);
+    await pin.fill(adminPin);
+    await pressControl(submit);
+    await expect(billLine(page, med.name)).toBeVisible({ timeout: 15000 });
+    expect(await strikes()).toBe(0);
+    await page.keyboard.press('F9');
+    await pressControl(page.getByRole('button', { name: 'Take payment', exact: true }));
+    await expect(page.getByRole('region', { name: /^Receipt \d+/ })).toContainText(med.name, {
+      timeout: 15000,
+    });
+    await page.screenshot({ path: QA_DIR + '/controlled-solo-paid-receipt.png' });
+    const records = await db.query(
+      `SELECT r.*,d."actorUserId",a.metadata,s.status FROM pharmacy_controlled_register_entries r
+      JOIN pharmacy_pharmacist_review_decisions d ON d.id=r."signatureRef" AND d."organizationId"=r."organizationId"
+      JOIN audit_logs a ON a.id=d."selfApprovalAuditId" AND a."organizationId"=r."organizationId"
+      JOIN pharmacy_sales s ON s.id=a.metadata->>'saleId' AND s."organizationId"=r."organizationId"
+      WHERE r."organizationId"=$1 AND r."prescriptionLineId"=$2`,
+      [organizationId, rx + '-line']
+    );
+    expect(records.rows).toHaveLength(1);
+    expect(records.rows[0]).toMatchObject({
+      status: 'COMPLETED',
+      entryKind: 'SALE',
+      branchId,
+      patientId,
+      patientAddress: address,
+      prescriberId,
+      prescriptionId: rx,
+      medicineId: med.id,
+      batchNumber: med.batchNumber,
+      recordedByUserId: adminId,
+      witnessedByUserId: null,
+      actorUserId: adminId,
+      witnessStatement: 'No witness: dispensed by one pharmacist',
+      metadata: expect.objectContaining({
+        selfApproved: true,
+        pinVerified: true,
+        approvalMethod: 'PIN',
+        branchId,
+      }),
+    });
+    expect(records.rows[0].quantityCanonicalUnits).toBeGreaterThan(0);
+    expect(records.rows[0].runningBalance).toBeGreaterThanOrEqual(0);
+
+    const guard = await db.query(
+      `SELECT tgdeferrable, tginitdeferred FROM pg_trigger WHERE tgname='pharmacy_require_controlled_sale_register'
+       AND tgrelid='pharmacy_sale_lines'::regclass AND tgenabled='O'`
+    );
+    expect(guard.rows).toEqual([{ tgdeferrable: true, tginitdeferred: true }]);
+
+    // Verify the deferred line rule independently of the register-insert guard.
+    await db.query('BEGIN');
+    try {
+      await db.query(
+        `INSERT INTO pharmacy_sale_lines
+           SELECT (jsonb_populate_record(NULL::pharmacy_sale_lines, to_jsonb(l) ||
+             jsonb_build_object('id',$2::text,'idempotencyKey',$2::text))).*
+           FROM pharmacy_sale_lines l WHERE l.id=$1`,
+        [records.rows[0].metadata.saleLineId, randomUUID()]
+      );
+      await expect(
+        db.query('SET CONSTRAINTS pharmacy_require_controlled_sale_register IMMEDIATE')
+      ).rejects.toMatchObject({
+        code: '23514',
+        message: 'controlled sale line requires its approved register entries',
+      });
+    } finally {
+      await db.query('ROLLBACK');
+    }
+
+    // Reuse the synthetic row's otherwise valid clinical and stock details. The database
+    // must refuse a new solo row specifically for a missing or reused approval.
+    for (const decisionId of [null, records.rows[0].signatureRef]) {
+      await db.query('BEGIN');
+      try {
+        await expect(
+          db.query(
+            `INSERT INTO pharmacy_controlled_register_entries
+          SELECT (jsonb_populate_record(NULL::pharmacy_controlled_register_entries,
+            to_jsonb(r) || jsonb_build_object('id',$2::text,'serial',r.serial+1,'signatureRef',$3::text))).*
+          FROM pharmacy_controlled_register_entries r WHERE r.id=$1`,
+            [records.rows[0].id, randomUUID(), decisionId]
+          )
+        ).rejects.toMatchObject({
+          code: '23514',
+          message: 'controlled register requires its verified self-approval',
+        });
+      } finally {
+        await db.query('ROLLBACK');
+      }
+    }
+  } finally {
+    await db.end();
+  }
+});
+
+test('DEV-1043 — the standalone queue records a reclassified sale once with its reason and original time', async ({
+  page,
+}) => {
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const { organizationId, branchId, adminId, prescriberId, medicines, adminPin } = PHARMACY_E2E;
+  const medicine = medicines.rx;
+  const patient = randomUUID(),
+    rx = randomUUID(),
+    rxLine = randomUUID();
+  const name = 'Synthetic late review ' + patient.slice(0, 8);
+  const reason = 'The medicine classification changed after the original counter sale.';
+  let reclassified = false;
+  await db.connect();
+  try {
+    await db.query(
+      "SELECT set_config('app.current_organization_id',$1,false),set_config('app.current_branch_id',$2,false)",
+      [organizationId, branchId]
+    );
+    await db.query(
+      'INSERT INTO pharmacy_patients(id,"organizationId","displayName",cnic,address,"updatedAt") VALUES ($1,$2,$3,$4,$5,now())',
+      [patient, organizationId, name, '0000000000000', '12 Synthetic Street']
+    );
+    await db.query(
+      `INSERT INTO pharmacy_patient_consents(id,"organizationId","patientId",purpose,channel,version,granted,"recordedByUserId") VALUES ($1,$2,$3,'DISPENSING','IN_PERSON',1,true,$4)`,
+      [randomUUID(), organizationId, patient, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescriptions(id,"organizationId","patientId","prescriberId","sourceKind","sourceFileRef","validFrom","validUntil","capturedByUserId") VALUES ($1,$2,$3,$4,'PAPER_IMAGE','synthetic://late-classification',now()-interval '1 day',now()+interval '1 day',$5)`,
+      [rx, organizationId, patient, prescriberId, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescription_lines(id,"organizationId","prescriptionId","lineNumber","medicineId","presentationId","authorizedCanonicalUnits",directions) VALUES ($1,$2,$3,1,$4,$5,100,'Synthetic directions')`,
+      [rxLine, organizationId, rx, medicine.id, medicine.presentationId]
+    );
+    // The standalone clinical queue requires an explicit branch assignment, including for
+    // the synthetic counter administrator who already holds the dispensing grant.
+    await db.query(
+      `INSERT INTO pharmacy_branch_assignments(id,"organizationId","branchId","userId","updatedAt")
+      VALUES ($1,$2,$3,$4,now()) ON CONFLICT ("organizationId","branchId","userId") DO NOTHING`,
+      [randomUUID(), organizationId, branchId, adminId]
+    );
+    await signIn(page);
+    const deviceId = 'counter-' + randomUUID();
+    await trpcMutation(
+      page,
+      'pharmacySales.openDrawer',
+      {
+        branchId,
+        deviceId,
+        businessDate: workspaceToday('Asia/Karachi') + 'T00:00:00.000Z',
+        openingFloatMinor: 0,
+      },
+      ['businessDate']
+    );
+    const sale = await trpcMutation<{ id: string }>(page, 'pharmacySales.create', {
+      branchId,
+      deviceId,
+    });
+    const { line } = await trpcMutation<{ line: { id: string } }>(page, 'pharmacySales.addLine', {
+      branchId,
+      saleId: sale.id,
+      medicineId: medicine.id,
+      presentationId: medicine.presentationId,
+      packLevelId: medicine.packLevelIds.box,
+      saleUnit: 'PACK',
+      quantity: 1,
+      canonicalUnitsPerSaleUnit: medicine.unitsPerPack,
+      prescription: { prescriptionLineId: rxLine, patientId: patient },
+      idempotencyKey: randomUUID(),
+    });
+    const changed = await db.query(
+      'UPDATE pharmacy_medicines SET controlled=true WHERE id=$1 AND "organizationId"=$2 AND NOT controlled',
+      [medicine.id, organizationId]
+    );
+    expect(changed.rowCount).toBe(1);
+    reclassified = true;
+    await page.goto('/pharmacy/pharmacist-queue');
+    const queue = await trpcQuery<{ items: Array<{ saleLineId: string }> }>(
+      page,
+      'pharmacyDispensing.reviewQueue',
+      {}
+    );
+    const position = queue.items.findIndex((item) => item.saleLineId === line.id);
+    expect(position).toBeGreaterThanOrEqual(0);
+    const item = page.getByRole('list').getByRole('button').nth(position);
+    await pressControl(item);
+    const form = page.getByRole('form', { name: 'Record a late controlled sale entry' });
+    const submit = form.getByRole('button', { name: 'Record late entry' });
+    await form.getByLabel('Your PIN or authenticator code').fill(adminPin);
+    await expect(submit).toBeDisabled();
+    const why = form.getByLabel('Reason for the late entry');
+    await why.fill(reason);
+    for (const reducedMotion of ['no-preference', 'reduce'] as const)
+      await qaShots(page, 'late-controlled-review-' + reducedMotion, {
+        focus: why,
+        widths: QA_STATE_WIDTHS,
+        reducedMotion,
+      });
+    await pressControl(submit);
+    await expect(page.getByRole('list', { name: 'Decision history' })).toContainText(reason);
+    await expect(form).toHaveCount(0);
+    const rows = await db.query(
+      `SELECT r."lateEntryReason",r."recordedByUserId",r."witnessedByUserId",r."originalSaleAt"=l."createdAt" AS original,r."createdAt">l."createdAt" AS late,
+        a."actorId",a.metadata->>'approvalMethod' AS method FROM pharmacy_controlled_register_entries r
+        JOIN pharmacy_sale_lines l ON l.id=r."lateSaleLineId" JOIN pharmacy_pharmacist_review_decisions d ON d.id=r."signatureRef"
+        JOIN audit_logs a ON a.id=d."selfApprovalAuditId" WHERE l.id=$1`,
+      [line.id]
+    );
+    expect(rows.rows).toEqual([
+      {
+        lateEntryReason: reason,
+        recordedByUserId: adminId,
+        witnessedByUserId: null,
+        original: true,
+        late: true,
+        actorId: adminId,
+        method: 'PIN',
+      },
+    ]);
+    // The counter role cannot inspect the register. Use a separate branch-assigned safety reader.
+    const reader = randomUUID(),
+      role = randomUUID(),
+      email = reader + '@pharmacy-counter-e2e.devfathom.invalid';
+    await db.query(
+      `INSERT INTO organization_roles(id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,$1,'Synthetic register reader',now())`,
+      [role, organizationId]
+    );
+    await db.query(
+      `INSERT INTO organization_role_permissions(id,"organizationId","organizationRoleId",capability) VALUES ($1,$2,$3,'pharmacy:safety')`,
+      [randomUUID(), organizationId, role]
+    );
+    await db.query(
+      `INSERT INTO users(id,"organizationId","organizationRoleId",name,email,password,department,title,"updatedAt")
+      SELECT $1,"organizationId",$2,'Synthetic register reader',$3,password,department,'Safety reader',now() FROM users WHERE id=$4`,
+      [reader, role, email, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_branch_assignments(id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
+      [randomUUID(), organizationId, branchId, reader]
+    );
+    await page.context().clearCookies();
+    await signIn(page, email);
+    await page.goto('/pharmacy/controlled-register');
+    await expect(page.getByText(/Needs attention · [1-9].*late controlled sale/)).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Controlled medicine register' })).toContainText(
+      reason
+    );
+    for (const reducedMotion of ['no-preference', 'reduce'] as const)
+      await qaShots(page, 'late-sale-register-' + reducedMotion, {
+        focus: page.getByRole('button', { name: 'Print register' }),
+        widths: QA_STATE_WIDTHS,
+        reducedMotion,
+      });
+  } finally {
+    if (reclassified)
+      await db.query(
+        'UPDATE pharmacy_medicines SET controlled=false WHERE id=$1 AND "organizationId"=$2',
+        [medicine.id, organizationId]
+      );
+    await db.end();
   }
 });

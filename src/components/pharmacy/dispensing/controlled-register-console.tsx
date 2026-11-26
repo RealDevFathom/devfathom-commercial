@@ -195,6 +195,12 @@ export function ControlledRegisterConsole() {
       ) : null}
       {register.data ? (
         <SectionCard title="Register" titleLevel={2}>
+          {register.data.lateSaleAttentionCount > 0 && (
+            <p className="mb-3 text-sm text-text-body">
+              Needs attention · {register.data.lateSaleAttentionCount} late controlled{' '}
+              {register.data.lateSaleAttentionCount === 1 ? 'sale' : 'sales'}
+            </p>
+          )}
           {register.data.entries.length === 0 ? (
             <p className="text-xs text-text-muted">
               No rows yet. A sale or purchase of a controlled medicine adds the first one.
@@ -250,9 +256,11 @@ export function ControlledRegisterConsole() {
                                   ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
                                   : entry.entryKind === 'RETURN_TO_SUPPLIER'
                                     ? supplierReturnLabel(entry, timeZone)
-                                    : entry.emergency
-                                      ? 'Emergency sale'
-                                      : 'Sale'}
+                                    : entry.originalSaleAt
+                                      ? lateSaleLabel(entry, timeZone)
+                                      : entry.emergency
+                                        ? 'Emergency sale'
+                                        : 'Sale'}
                               {entry.refEntry ? ` · repeats ${entry.refEntry.serial}` : ''}
                             </span>
                           </td>
@@ -305,17 +313,20 @@ export function ControlledRegisterConsole() {
                             {batchNumberLabel(entry.batchNumber)}
                           </td>
                           <td className={cell}>
-                            {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')}
+                            {entry.witnessStatement ??
+                              (entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—'))}
                             {entry.signatureRef ? (
                               <span className="mt-0.5 block text-text-muted">
-                                {entry.lateDispatchAt
-                                  ? 'Owner confirmed'
-                                  : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
-                                      entry.signatureRef.startsWith('solo-')
-                                    ? 'Sender confirmed'
-                                    : entry.signatureRef.startsWith('authenticator:')
-                                      ? 'Approval code witnessed'
-                                      : 'PIN witnessed'}
+                                {entry.witnessStatement
+                                  ? entry.recordedByName
+                                  : entry.lateDispatchAt
+                                    ? 'Owner confirmed'
+                                    : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
+                                        entry.signatureRef.startsWith('solo-')
+                                      ? 'Sender confirmed'
+                                      : entry.signatureRef.startsWith('authenticator:')
+                                        ? 'Approval code witnessed'
+                                        : 'PIN witnessed'}
                               </span>
                             ) : null}
                             {open ? (
@@ -473,6 +484,7 @@ type ShownEntry = {
   batchNumber: string | null;
   inventoryLotId: string;
   witnessName: string | null;
+  witnessStatement?: string | null;
   correctionReason: string | null;
   patientAddress: string | null;
   counterpartyName: string | null;
@@ -483,6 +495,8 @@ type ShownEntry = {
   prescriber: { name: string; registrationNumber: string } | null;
   line: { medicine: { productName: string } } | null;
   correctsEntry: { serial: number } | null;
+  originalSaleAt?: Date | null;
+  lateEntryReason?: string | null;
   lateDispatchAt?: Date | null;
   sentByName?: string | null;
   recordedByName?: string | null;
@@ -509,6 +523,9 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
   );
 }
 
+function lateSaleLabel(entry: ShownEntry, timeZone: string) {
+  return `Late sale entry · Sold ${formatWorkspaceDateTime(entry.originalSaleAt!, timeZone)} · Recorded ${formatWorkspaceDateTime(entry.createdAt, timeZone)} by ${entry.recordedByName ?? 'Name unavailable'} · ${entry.lateEntryReason}`;
+}
 function supplierReturnLabel(
   entry: Pick<
     ShownEntry,
@@ -542,6 +559,9 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
             <p className="font-mono text-text-strong">
               {entry.serial} · {formatWorkspaceDateTime(entry.createdAt, timeZone)}
             </p>
+            {entry.originalSaleAt && (
+              <p className="mt-1 text-text-muted">{lateSaleLabel(entry, timeZone)}</p>
+            )}
             {entry.entryKind === 'RETURN_TO_SUPPLIER' && (
               <p className="mt-1 text-text-muted">{supplierReturnLabel(entry, timeZone)}</p>
             )}
@@ -550,8 +570,10 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
             </p>
             <p className="mt-1 text-text-muted">
               {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
-              {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')} · balance{' '}
-              {entry.runningBalance}
+              {entry.witnessStatement ??
+                (entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—'))}{' '}
+              · balance {entry.runningBalance}
+              {entry.witnessStatement && entry.recordedByName ? ` · ${entry.recordedByName}` : null}
             </p>
           </article>
         );

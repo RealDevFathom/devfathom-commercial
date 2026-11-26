@@ -8,12 +8,14 @@ export type ReviewKind = 'VERIFY' | 'CLARIFY' | 'REFUSE' | 'OVERRIDE' | 'COUNSEL
 
 export function QueueActions({
   canApprove,
+  separateSign = false,
   pending = false,
   disabled = false,
   onDirtyChange,
   onAction,
 }: {
   canApprove: boolean;
+  separateSign?: boolean;
   pending?: boolean;
   disabled?: boolean;
   onDirtyChange?: (dirty: boolean) => void;
@@ -59,6 +61,7 @@ export function QueueActions({
     }
   }
 
+  if (!canApprove && separateSign) return null;
   if (!canApprove) {
     return (
       <p
@@ -73,22 +76,24 @@ export function QueueActions({
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-2" aria-label="Review actions">
-        {(['VERIFY', 'CLARIFY', 'REFUSE', 'OVERRIDE', 'COUNSEL', 'SIGN'] as const).map((kind) => (
-          <Button
-            key={kind}
-            type="button"
-            variant={kind === 'REFUSE' ? 'destructive' : mode === kind ? 'default' : 'outline'}
-            disabled={locked}
-            onClick={() => {
-              setMode(kind);
-              setReason('');
-              setError(null);
-              onDirtyChange?.(true);
-            }}
-          >
-            {kind[0] + kind.slice(1).toLowerCase()}
-          </Button>
-        ))}
+        {(['VERIFY', 'CLARIFY', 'REFUSE', 'OVERRIDE', 'COUNSEL', 'SIGN'] as const)
+          .filter((kind) => kind !== 'SIGN' || !separateSign)
+          .map((kind) => (
+            <Button
+              key={kind}
+              type="button"
+              variant={kind === 'REFUSE' ? 'destructive' : mode === kind ? 'default' : 'outline'}
+              disabled={locked}
+              onClick={() => {
+                setMode(kind);
+                setReason('');
+                setError(null);
+                onDirtyChange?.(true);
+              }}
+            >
+              {kind[0] + kind.slice(1).toLowerCase()}
+            </Button>
+          ))}
       </div>
       {reasonRequired ? (
         <Field

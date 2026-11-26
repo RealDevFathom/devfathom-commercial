@@ -692,6 +692,8 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         expect(f.db.pharmacyControlledRegisterEntry.findMany).toHaveBeenCalledExactlyOnceWith({
           where: { organizationId: 'org-1', stockMovementId: { in: ['movement-1'] } },
           select: {
+            witnessStatement: true,
+            recordedByUserId: true,
             patientId: true,
             patientAddress: true,
             prescriptionLineId: true,
@@ -761,6 +763,16 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
       'names a different prescription line',
       recordedEntry({ prescriptionLineId: 'rx-line-1', emergency: false }),
       { emergency: false, prescriptionLineId: 'rx-line-2' },
+    ],
+    [
+      'changes a recorded solo approval to an independent countersign',
+      recordedEntry({
+        emergency: false,
+        prescriptionLineId: 'rx-line-1',
+        witnessStatement: 'No witness: dispensed by one pharmacist',
+        recordedByUserId: 'earlier-pharmacist',
+      }),
+      { emergency: false, prescriptionLineId: 'rx-line-1' },
     ],
     ['changes the patient address', recordedEntry({ patientAddress: '7 Canal Road' }), {}],
     ['changes the serial-written flag', recordedEntry(), { rxSerialWritten: false }],
@@ -858,5 +870,28 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
     const f = callerFor([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     await expect(f.caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
+  });
+});
+
+describe('DEV-1043 controlled dispensing by the signed-in pharmacist', () => {
+  const own = {
+    ...line,
+    controlledAuthorization: {
+      ...line.controlledAuthorization,
+      selfApproval: true as const,
+      staffProfileId: 'own-staff',
+      emergency: false,
+      prescriptionLineId: 'rx-line-1',
+    },
+  };
+
+  it('refuses self-approval before verifying a PIN when the branch requires a witness', async () => {
+    const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+    f.lock.mockResolvedValue([{ requireSecondPharmacist: true }]);
+    await expect(f.caller.addLine(own)).resolves.toMatchObject({
+      blocked: expect.stringContaining('second pharmacist'),
+    });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
   });
 });

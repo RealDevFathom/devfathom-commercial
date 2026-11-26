@@ -66,7 +66,7 @@ export function PharmacistCheckSetting({
         tone: 'status',
         text: result.policy.enabled
           ? 'The pharmacist check is on again for every sale.'
-          : 'The pharmacist check is off. Prescription-only and controlled medicines now sell without a pharmacist step.',
+          : 'The pharmacist check is off. Non-controlled prescription medicines now sell without a pharmacist step. Controlled medicines still require pharmacist approval.',
       });
       router.refresh();
     },
@@ -115,8 +115,9 @@ export function PharmacistCheckSetting({
           {on ? (
             <p className="max-w-prose text-sm text-text-body">
               A prescription-only or controlled medicine is sold only after a pharmacist has checked
-              it and a prescription has been recorded. Controlled medicines also need an independent
-              pharmacist PIN and get a controlled register entry.
+              it and a prescription has been recorded. Controlled medicines require fresh pharmacist
+              approval and a controlled register entry. A branch may also require an independent
+              countersign.
               {policy.source === 'FAIL_CLOSED'
                 ? ' The stored setting could not be read, so the check stays on.'
                 : changed}
@@ -124,10 +125,9 @@ export function PharmacistCheckSetting({
           ) : (
             <div className="space-y-2">
               <p className="max-w-prose text-sm text-text-body">
-                Prescription-only and controlled medicines are sold like any other item: no
-                pharmacist signature, no prescription record and no refusal for a cashier. Every
-                controlled sale still gets its controlled register entry, marked as written with the
-                pharmacist check switched off by the owner.{changed}
+                Non-controlled prescription medicines can be sold without a pharmacist signature or
+                prescription record. Controlled medicines still require pharmacist approval and a
+                controlled register entry.{changed}
               </p>
               <p className="max-w-prose text-sm text-text-muted">
                 Refunds, discounts, expired stock, stock, tax and money checks are unchanged.

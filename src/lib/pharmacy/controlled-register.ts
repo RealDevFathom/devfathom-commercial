@@ -194,7 +194,9 @@ type SaleRegisterInput = {
   rxSerialWritten: boolean;
   refEntryId: string | null;
   recordedByUserId: string;
-  witnessedByUserId: string;
+  witnessedByUserId: string | null;
+  witnessStatement?: string;
+  late?: { lateSaleLineId: string; originalSaleAt: Date; lateEntryReason: string; createdAt: Date };
   signatureRef: string;
 };
 
@@ -216,21 +218,29 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
     });
     const quantityCanonicalUnits = -movement.quantityUnits;
     const balanceDelta = -quantityCanonicalUnits;
-    const runningBalance = await runningFromLot(
-      db,
-      {
-        organizationId: input.organizationId,
-        branchId: input.branchId,
-        medicineId: input.medicineId,
-        inventoryLotId: lot.id,
-      },
-      balanceDelta
-    );
+    // A retrospective entry records a movement already reflected in current stock.
+    const runningBalance = input.late
+      ? await sellableOnHand(db, {
+          organizationId: input.organizationId,
+          branchId: input.branchId,
+          inventoryLotId: lot.id,
+        })
+      : await runningFromLot(
+          db,
+          {
+            organizationId: input.organizationId,
+            branchId: input.branchId,
+            medicineId: input.medicineId,
+            inventoryLotId: lot.id,
+          },
+          balanceDelta
+        );
     await createRegisterRow(db, {
       organizationId: input.organizationId,
       branchId: input.branchId,
       serial: ++serial,
       entryKind: 'SALE',
+      ...input.late,
       prescriptionId: input.prescriptionId,
       prescriptionLineId: input.prescriptionLineId,
       patientId: input.patientId,
@@ -251,6 +261,7 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
       recordedByUserId: input.recordedByUserId,
       witnessedByUserId: input.witnessedByUserId,
       signatureRef: input.signatureRef,
+      ...(input.witnessStatement ? { witnessStatement: input.witnessStatement } : {}),
       rxSerialWritten: input.rxSerialWritten,
       emergency: input.emergency,
       refEntryId: input.refEntryId,
@@ -661,6 +672,32 @@ export async function appendControlledRestorations(
     });
     if (runningBalance !== sellable) throw new Error('BALANCE');
     const serial = await nextSerial(db, input.organizationId, input.branchId);
+    const method = input.witness.counterSelfApproval;
+    const approval = method
+      ? await db.auditLog.create({
+          data: {
+            organizationId: input.organizationId,
+            actorId: input.recordedByUserId,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'EXECUTE',
+            action: 'pharmacySales.controlledRestorationSelfApproval',
+            outcome: 'SUCCESS',
+            targetType: 'PharmacyStockMovement',
+            targetId: line.restorationMovementId,
+            metadata: {
+              selfApproved: true,
+              approvalMethod: method,
+              pinVerified: method === 'PIN',
+              authenticatorVerified: method === 'AUTHENTICATOR',
+              branchId: input.branchId,
+              correctsEntryId: source.id,
+              restorationMovementId: line.restorationMovementId,
+            },
+          },
+          select: { id: true },
+        })
+      : null;
     await createRegisterRow(db, {
       organizationId: input.organizationId,
       branchId: input.branchId,
@@ -683,8 +720,9 @@ export async function appendControlledRestorations(
       balanceDelta,
       runningBalance,
       recordedByUserId: input.recordedByUserId,
-      witnessedByUserId: input.witness.witnessedByUserId,
-      signatureRef: input.witness.signatureRef,
+      witnessedByUserId: approval ? null : input.witness.witnessedByUserId,
+      signatureRef: approval?.id ?? input.witness.signatureRef,
+      ...(approval ? { witnessStatement: 'No witness' } : {}),
       rxSerialWritten: source.rxSerialWritten,
       emergency: source.emergency,
       counterpartyName: source.counterpartyName,

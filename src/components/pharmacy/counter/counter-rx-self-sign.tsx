@@ -1,6 +1,7 @@
 'use client';
 
 import { useId, useRef, useState } from 'react';
+import { LateControlledReviewForm } from '../dispensing/late-controlled-review-form';
 import Link from 'next/link';
 
 import { Button } from '@/components/ui/button';
@@ -46,7 +47,15 @@ export function CounterRxSelfSign({ branchId, saleId, enabled, onSigned }: Props
           <h3 className="text-sm font-semibold text-text-strong">
             {line.productName} needs a pharmacist’s signature
           </h3>
-          {line.maySelfSign || (line.mayDeclareSolo && status.data?.declaration) ? (
+          {line.mayRecordLate ? (
+            <LateControlledReviewForm
+              reviewItemId={line.reviewItemId}
+              onRecorded={async () => {
+                await status.refetch();
+                onSigned?.();
+              }}
+            />
+          ) : line.maySelfSign || (line.mayDeclareSolo && status.data?.declaration) ? (
             <SelfSignForm
               reviewItemId={line.reviewItemId}
               declaration={line.maySelfSign ? null : (status.data?.declaration ?? null)}

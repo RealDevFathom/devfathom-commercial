@@ -1,3 +1,4 @@
+import { completeLateControlledReview } from '@/lib/pharmacy/late-controlled-review';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
@@ -178,10 +179,38 @@ export const pharmacyDispensingRouter = router({
         decisions: { orderBy: { createdAt: 'asc' } },
       },
     });
+    const candidates = items.filter((item) => item.line.medicine.controlled);
+    const originals = candidates.length
+      ? await ctx.db.pharmacySaleLine.findMany({
+          where: {
+            organizationId: ctx.entitlements!.organizationId,
+            id: { in: candidates.map((item) => item.saleLineId) },
+            prescriptionLineId: { not: null },
+          },
+          select: { id: true, prescriptionLineId: true },
+        })
+      : [];
+    const recorded = originals.length
+      ? await ctx.db.pharmacyControlledRegisterEntry.findMany({
+          where: {
+            organizationId: ctx.entitlements!.organizationId,
+            lateSaleLineId: { in: originals.map((line) => line.id) },
+          },
+          select: { lateSaleLineId: true },
+        })
+      : [];
+    const recordedIds = new Set(recorded.map((row) => row.lateSaleLineId));
+    const pending = new Map(
+      originals
+        .filter((line) => !recordedIds.has(line.id))
+        .map((line) => [line.id, line.prescriptionLineId])
+    );
     return {
       currentUserId: user.id,
       items: items.map((item) => ({
         ...item,
+        lateControlled:
+          pending.has(item.saleLineId) && pending.get(item.saleLineId) === item.prescriptionLineId,
         line: {
           ...item.line,
           prescription: {
@@ -272,7 +301,11 @@ export const pharmacyDispensingRouter = router({
       const line = item
         ? await ctx.db.pharmacySaleLine.findFirst({
             where: { id: item.saleLineId, organizationId },
-            select: { branchId: true },
+            select: {
+              branchId: true,
+              prescriptionLineId: true,
+              medicine: { select: { controlled: true } },
+            },
           })
         : null;
       annotateAuditBranch(ctx, line?.branchId);
@@ -291,6 +324,11 @@ export const pharmacyDispensingRouter = router({
       });
       if (denial)
         throw new TRPCError({ code: 'FORBIDDEN', message: RX_REVIEW_SIGNER_MESSAGES[denial] });
+      if (input.kind === 'SIGN' && line.prescriptionLineId && line.medicine.controlled)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Record the late entry with a reason and your own PIN or authenticator code.',
+        });
       return ctx.db.pharmacyPharmacistReviewDecision.create({
         data: {
           ...input,
@@ -313,7 +351,11 @@ export const pharmacyDispensingRouter = router({
         return { lines: [], pin: null };
       const saleLines = await ctx.db.pharmacySaleLine.findMany({
         where: { organizationId, branchId: input.branchId, saleId: input.saleId },
-        select: { id: true, medicine: { select: { productName: true, controlled: true } } },
+        select: {
+          id: true,
+          prescriptionLineId: true,
+          medicine: { select: { productName: true, controlled: true } },
+        },
       });
       if (saleLines.length === 0) return { lines: [], pin: null };
       const items = await ctx.db.pharmacyPharmacistReviewItem.findMany({
@@ -330,7 +372,26 @@ export const pharmacyDispensingRouter = router({
           },
         },
       });
-      const waiting = items.filter((item) => item.decisions.length === 0);
+      const reclassified = saleLines.filter(
+        (line) => line.medicine.controlled && line.prescriptionLineId
+      );
+      const recorded = reclassified.length
+        ? await db.pharmacyControlledRegisterEntry.findMany({
+            where: {
+              organizationId,
+              branchId: input.branchId,
+              lateSaleLineId: { in: reclassified.map((line) => line.id) },
+            },
+            select: { lateSaleLineId: true },
+          })
+        : [];
+      const recordedIds = new Set(recorded.map((row) => row.lateSaleLineId));
+      const pendingLate = new Set(
+        reclassified.filter((line) => !recordedIds.has(line.id)).map((line) => line.id)
+      );
+      const waiting = items.filter(
+        (item) => item.decisions.length === 0 || pendingLate.has(item.saleLineId)
+      );
       if (waiting.length === 0) return { lines: [], pin: null };
       const [other] = await otherRxReviewSigners(db, {
         organizationId,
@@ -357,6 +418,7 @@ export const pharmacyDispensingRouter = router({
           productName: line.medicine.productName,
           controlled: line.medicine.controlled,
           rungUpByYou: mine,
+          mayRecordLate: pendingLate.has(item.saleLineId),
           // The solo rule: nobody else at this branch could sign it, and it is not controlled.
           maySelfSign: mine && !line.medicine.controlled && !other,
           // DEV-960: others are on the staff list, but the owner allows a declared solo sign-off.
@@ -383,6 +445,7 @@ export const pharmacyDispensingRouter = router({
           reviewItemId: z.string().min(1),
           // The signed-in pharmacist's own PIN, re-entered for every self-signature. The request
           // audit redacts it by key.
+          reason: z.string().trim().min(1).max(500).optional(),
           pin: z.string().regex(/^\d{4,8}$/),
           // DEV-960: "I am the only pharmacist on duty now", confirmed for this signature. Only
           // used when others are on the staff list and the owner turned "One pharmacist per
@@ -402,6 +465,16 @@ export const pharmacyDispensingRouter = router({
       if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const actor = ctx.session!.user;
       const db = ctx.db as unknown as ScopedDb;
+      if (input.reason) {
+        const signed = await completeLateControlledReview(db, {
+          organizationId,
+          actorId: actor.id,
+          reviewItemId: input.reviewItemId,
+          pin: input.pin,
+          reason: input.reason,
+        });
+        return { decisionId: signed.id, signedAt: signed.signedAt };
+      }
       let context;
       try {
         context = await assertRxSelfSignAllowed(db, {

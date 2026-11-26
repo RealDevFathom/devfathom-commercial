@@ -9,7 +9,7 @@
  *   and, for an operator who takes payment, this device's OPEN drawer (DEV-725).
  * - `warnings` leave ordinary sales open but refuse part of them: a prescription,
  *   restricted or controlled line outside the pharmacist-presence hours (DEV-86), and
- *   a controlled line with no second pharmacist holding an active staff PIN.
+ *   a controlled line at a branch requiring a witness when no second pharmacist holds an active PIN.
  *
  * It authorizes nothing. Every write keeps its own gate in its own transaction. The
  * answer carries reason codes and booleans only, never another user's name or record.
@@ -152,7 +152,12 @@ export async function evaluateCounterSaleReadiness(
     if (!drawer) blockers.push('DRAWER_NOT_OPEN');
   }
 
+  const branch = await db.pharmacyBranch.findFirstOrThrow({
+    where: { organizationId: input.organizationId, id: input.branchId },
+    select: { requireSecondPharmacist: true },
+  });
   if (
+    branch.requireSecondPharmacist &&
     !(await hasIndependentPharmacistPin(db, {
       organizationId: input.organizationId,
       actorId: input.actorId,

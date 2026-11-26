@@ -115,7 +115,7 @@ const attemptLabel: Record<Attempt['kind'], string> = {
   refund: 'refund',
 };
 /** Transient witness credential. Never persisted with the saved attempt. */
-type ControlledWitness = { staffProfileId: string; pin: string };
+type ControlledWitness = { staffProfileId: string; pin: string; selfApproval?: true };
 const witnessPinPattern = /^\d{4,8}$/;
 
 /**
@@ -440,14 +440,23 @@ export function ReturnForm({
       : groupMode
         ? groupControlled
         : !!data?.lines.find((row) => row.id === witnessLineId)?.controlled);
-  const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
-    enabled: ready && online && witnessRequired,
-    retry: false,
-  });
+  const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(
+    { branchId },
+    {
+      enabled: ready && online && witnessRequired,
+      retry: false,
+    }
+  );
   const witnessReady = !witnessRequired || (!!witnessStaffId && witnessPinPattern.test(witnessPin));
   const witness: ControlledWitness | undefined =
     witnessRequired && witnessReady
-      ? { staffProfileId: witnessStaffId, pin: witnessPin }
+      ? {
+          staffProfileId: witnessStaffId,
+          pin: witnessPin,
+          ...(pharmacists.data?.some((staff) => staff.ownApproval && staff.id === witnessStaffId)
+            ? { selfApproval: true as const }
+            : {}),
+        }
       : undefined;
   const manualRequired = !tender?.prepaid && (tender?.type === 'CARD' || tender?.type === 'WALLET');
   const typedRefund = amountInputToMinor(amount);
@@ -669,7 +678,11 @@ export function ReturnForm({
       aria-label="Controlled medicine return witness"
       className="space-y-3 rounded-md border border-border-subtle p-3"
     >
-      <p className="text-sm text-text-muted">{approvalCopy.witnessIntro}</p>
+      <p className="text-sm text-text-muted">
+        {pharmacists.data?.some((staff) => staff.ownApproval)
+          ? 'Confirm this controlled return with a fresh PIN or approval code. You may select your own confirmation.'
+          : approvalCopy.witnessIntro}
+      </p>
       <Label htmlFor="return-witness">Witnessing pharmacist</Label>
       <select
         id="return-witness"
@@ -684,7 +697,7 @@ export function ReturnForm({
         <option value="">Select pharmacist</option>
         {pharmacists.data?.map((staff) => (
           <option key={staff.id} value={staff.id}>
-            {staff.name}
+            {staff.ownApproval ? `${staff.name} (your own confirmation)` : staff.name}
           </option>
         ))}
       </select>

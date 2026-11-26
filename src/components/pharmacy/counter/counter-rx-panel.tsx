@@ -511,7 +511,7 @@ export type CounterRxPanelProps = {
     prescriptionLineId: string;
     staffProfileId: string;
     pin: string;
-    pharmacists: ReadonlyArray<{ id: string; name: string }>;
+    pharmacists: ReadonlyArray<{ id: string; name: string; ownApproval?: true }>;
     loading: boolean;
     error: boolean;
     patientAddress: string | null;
@@ -960,6 +960,7 @@ export function CounterControlledAuthorization({
 }) {
   // DEV-961: the pharmacist's approval follows the authenticator for approvals setting.
   const approvalCopy = useCounterApprovalCopy();
+  const own = controlled.pharmacists.find((staff) => staff.ownApproval);
   return (
     <section
       aria-label="Controlled medicine authorization"
@@ -978,7 +979,11 @@ export function CounterControlledAuthorization({
             </h4>
           </>
         )}
-        <p className="text-xs text-text-muted">{approvalCopy.controlledIntro}</p>
+        <p className="text-xs text-text-muted">
+          {own
+            ? 'You may confirm a prescribed controlled medicine with your own PIN or approval code. Select yourself as the approving pharmacist.'
+            : approvalCopy.controlledIntro}
+        </p>
       </div>
       <ControlledSteps
         steps={[
@@ -1128,7 +1133,7 @@ export function CounterControlledAuthorization({
           <option value="">Select pharmacist</option>
           {controlled.pharmacists.map((staff) => (
             <option key={staff.id} value={staff.id}>
-              {staff.name}
+              {staff.ownApproval ? `${staff.name} (your own confirmation)` : staff.name}
             </option>
           ))}
         </select>

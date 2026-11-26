@@ -19,12 +19,18 @@ import { controlledSaleRestorationWitness } from './sales';
 const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'cashier-1' };
 const pin = { staffProfileId: 'staff-1', pin: '1234' };
 
-function dbWith(policy: unknown) {
+function dbWith(policy: unknown, requireSecondPharmacist = false) {
   const findUnique = vi.fn(async () => {
     if (policy instanceof Error) throw policy;
     return policy;
   });
-  return { db: { pharmacyOwnerPolicy: { findUnique } } as unknown as ScopedDb, findUnique };
+  return {
+    db: {
+      $queryRaw: async () => [{ requireSecondPharmacist }],
+      pharmacyOwnerPolicy: { findUnique },
+    } as unknown as ScopedDb,
+    findUnique,
+  };
 }
 
 beforeEach(() => {
@@ -70,4 +76,11 @@ describe('controlledSaleRestorationWitness', () => {
     const { db } = dbWith({ pharmacistCheckEnabled: false, pharmacistCheckPolicyVersion: 2 });
     await expect(controlledSaleRestorationWitness(db, scope, pin)).rejects.toThrow('database down');
   });
+});
+
+it('keeps the independent counter restoration when the branch requires it despite the business check being OFF', async () => {
+  const refusal = new ControlledRestorationDenied();
+  vi.mocked(authorizeControlledRestoration).mockRejectedValue(refusal);
+  const { db } = dbWith({ pharmacistCheckEnabled: false, pharmacistCheckPolicyVersion: 2 }, true);
+  await expect(controlledSaleRestorationWitness(db, scope)).rejects.toBe(refusal);
 });

@@ -97,7 +97,7 @@ export const COUNTER_SETUP_GUIDANCE: Record<CounterSetupReason, SetupGuidance> =
   },
   NO_INDEPENDENT_PHARMACIST: {
     message:
-      'No second pharmacist has an active staff PIN, so controlled medicines cannot be countersigned.',
+      'This branch requires a second pharmacist for controlled medicines. No second pharmacist has an active staff PIN.',
     fix: null,
     fixerNote: 'Give another pharmacist an active staff PIN.',
   },

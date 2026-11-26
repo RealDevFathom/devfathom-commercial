@@ -12,12 +12,13 @@ import {
 } from '@/lib/restaurant/operator-credentials';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 
-export type ControlledRestorationPin = { staffProfileId: string; pin: string };
+export type ControlledRestorationPin = { staffProfileId: string; pin: string; selfApproval?: true };
 export type ControlledRestorationWitness = {
   witnessedByUserId: string;
   signatureRef: string;
   /** True when a sole pharmacist witnessed their own change with a fresh PIN. */
   soloSelfWitness?: boolean;
+  counterSelfApproval?: 'PIN' | 'AUTHENTICATOR';
 };
 
 /** Audit policy for a sole pharmacist's PIN-reauthenticated self-witness. */

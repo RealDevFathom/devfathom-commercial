@@ -79,7 +79,11 @@ type SignStatus = {
 };
 type DispensingCaller = {
   counterSignStatus: (input: { branchId: string; saleId: string }) => Promise<SignStatus>;
-  selfSignReview: (input: { reviewItemId: string; pin: string }) => Promise<{ decisionId: string }>;
+  selfSignReview: (input: {
+    reviewItemId: string;
+    pin: string;
+    reason?: string;
+  }) => Promise<{ decisionId: string }>;
   decideReview: (input: { reviewItemId: string; kind: string }) => Promise<{ id: string }>;
 };
 
@@ -95,6 +99,10 @@ let controlledPrescriptionLineId: string;
 type Medicine = { medicineId: string; presentationId: string; packLevelId: string };
 let rx: Medicine;
 let laterControlled: Medicine;
+let controlledAtSale: Medicine;
+let checkedRxLineId: string;
+let completedMedicine: Medicine;
+let completedRxLineId: string;
 
 function context(userId: string) {
   return {
@@ -397,7 +405,30 @@ beforeAll(async () => {
     };
     rx = await stocked('Amoxicillin');
     laterControlled = await stocked('Tramadol');
-    const patient = await tx.pharmacyPatient.create({ data: { displayName: 'Synthetic patient' } });
+    controlledAtSale = await stocked('Synthetic controlled test');
+    completedMedicine = await stocked('Synthetic historical sale');
+    await tx.medicine.update({
+      where: { id: controlledAtSale.medicineId },
+      data: { controlled: true },
+    });
+    const patient = await tx.pharmacyPatient.create({
+      data: {
+        displayName: 'Synthetic patient',
+        address: '12 Synthetic Street',
+        cnic: '0000000000000',
+      },
+    });
+    await tx.patientConsent.create({
+      data: {
+        patientId: patient.id,
+        purpose: 'DISPENSING',
+        channel: 'IN_PERSON',
+        granted: true,
+        version: 1,
+        recordedByUserId: ids.solo,
+      },
+    });
+
     patientId = patient.id;
     const prescriber = await tx.pharmacyPrescriber.create({
       data: { name: 'Dr Synthetic', registrationNumber: `PMDC-${suffix}` },
@@ -413,19 +444,23 @@ beforeAll(async () => {
         authorizedRepeats: 100,
         capturedByUserId: ids.solo,
         lines: {
-          create: [rx, laterControlled].map((medicine, index) => ({
-            lineNumber: index + 1,
-            medicineId: medicine.medicineId,
-            presentationId: medicine.presentationId,
-            authorizedCanonicalUnits: 100_000,
-            directions: 'One capsule three times a day',
-          })),
+          create: [rx, laterControlled, controlledAtSale, completedMedicine].map(
+            (medicine, index) => ({
+              lineNumber: index + 1,
+              medicineId: medicine.medicineId,
+              presentationId: medicine.presentationId,
+              authorizedCanonicalUnits: 100_000,
+              directions: 'One capsule three times a day',
+            })
+          ),
         },
       },
       include: { lines: { orderBy: { lineNumber: 'asc' } } },
     });
     prescriptionLineId = prescription.lines[0]!.id;
     controlledPrescriptionLineId = prescription.lines[1]!.id;
+    checkedRxLineId = prescription.lines[2]!.id;
+    completedRxLineId = prescription.lines[3]!.id;
   });
   for (const userId of [ids.solo, ids.cashier])
     await sales(userId, (api) =>
@@ -444,6 +479,96 @@ afterAll(async () => {
 });
 
 describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)', () => {
+  it('requires a pharmacist for the controlled item on the same cashier bill with both switches OFF', async () => {
+    const owner = 'owner_' + suffix;
+    await tenant(async (db) => {
+      const role = await db.organizationRole.create({
+        data: { key: 'owner', name: 'Synthetic owner', isSystem: true },
+      });
+      await db.user.create({
+        data: {
+          id: owner,
+          name: owner,
+          email: owner + '@example.test',
+          department: 'LEADERSHIP',
+          title: 'Owner',
+          organizationRoleId: role.id,
+        },
+      });
+    });
+    const { writePharmacistCheckPolicy } = await import('@/lib/pharmacy/pharmacist-check-policy');
+    const { PHARMACIST_CHECK_DISCLAIMER } = await import('@/lib/pharmacy/pharmacist-check');
+    const setPolicy = (enabled: boolean, expectedVersion: number) =>
+      withTenantDb(
+        ids.org,
+        (db) =>
+          writePharmacistCheckPolicy(
+            db,
+            { organizationId: ids.org, actorId: owner },
+            {
+              enabled,
+              expectedVersion,
+              disclaimer: { accepted: true, version: PHARMACIST_CHECK_DISCLAIMER.version },
+            }
+          ),
+        { userId: owner }
+      );
+    const off = await setPolicy(false, 0);
+    try {
+      const sale = await sales(ids.cashier, (api) =>
+        api.create({ branchId: ids.branch, deviceId: deviceFor(ids.cashier) })
+      );
+      const base = {
+        branchId: ids.branch,
+        saleId: sale.id,
+        saleUnit: 'STRIP',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+      };
+      const ordinary = await sales(ids.cashier, (api) =>
+        api.addLine({ ...base, ...rx, idempotencyKey: key() })
+      );
+      expect(ordinary.line.id).toBeTruthy();
+      const controlled = { ...base, ...controlledAtSale, idempotencyKey: key() };
+      await expect(sales(ids.cashier, (api) => api.addLine(controlled))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'A pharmacist must approve this controlled medicine.',
+      });
+      const own = await tenant((db) =>
+        db.restaurantStaffProfile.findFirstOrThrow({ where: { userId: ids.solo } })
+      );
+      const approved = await sales(ids.solo, (api) =>
+        api.addLine({
+          ...controlled,
+          controlledAuthorization: {
+            selfApproval: true,
+            staffProfileId: own.id,
+            pin: PINS.solo,
+            patientId,
+            patientAddress: 'Synthetic address for approval',
+            prescriptionLineId: checkedRxLineId,
+            emergency: false,
+            rxSerialWritten: true,
+          },
+        })
+      );
+      const reg = await tenant((db) =>
+        db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+          where: { prescriptionLineId: checkedRxLineId },
+        })
+      );
+      expect(reg).toMatchObject({
+        recordedByUserId: ids.solo,
+        witnessedByUserId: null,
+        witnessStatement: 'No witness: dispensed by one pharmacist',
+        patientId,
+      });
+      expect(approved.line.id).toBeTruthy();
+    } finally {
+      await setPolicy(true, off.policy.version);
+    }
+  });
+
   it('still refuses payment until the line is signed', async () => {
     const sale = await ringUp();
     expect(sale.requestedByUserId).toBe(ids.solo);
@@ -729,7 +854,7 @@ describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)',
     });
   });
 
-  it('never self-signs a controlled medicine, in the router or at the database', async () => {
+  it('records a reclassified line once with a fresh pharmacist approval and a late-entry reason', async () => {
     const sale = await ringUp(ids.solo, laterControlled, controlledPrescriptionLineId);
     // The medicine is controlled by the time the review is signed.
     await tenant((db) =>
@@ -754,8 +879,138 @@ describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)',
       /controlled medicine needs an independent pharmacist signature/
     );
     expect(await signDecisions(sale.reviewItemId)).toEqual([]);
+    const reason = 'The classification was updated after this sale line was recorded.';
+    const request = { reviewItemId: sale.reviewItemId, pin: PINS.solo, reason };
+    await expect(
+      dispensing(ids.cashier, (api) => api.selfSignReview(request))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      dispensing(ids.elsewhere, (api) => api.selfSignReview({ ...request, pin: PINS.elsewhere }))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      dispensing(ids.solo, (api) => api.selfSignReview({ ...request, pin: WRONG_PIN }))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await soloCredential()).toMatchObject({ failedAttempts: 1 });
+    const original = await tenant((db) =>
+      db.pharmacySaleLine.findUniqueOrThrow({ where: { id: sale.saleLineId } })
+    );
+    await expect(payInCash(ids.solo, sale)).rejects.toMatchObject({
+      message: 'A pharmacist must approve this controlled medicine.',
+    });
+    const { readPharmacyOwnerCommandCentre } = await import('@/lib/pharmacy/reports');
+    const attention = () =>
+      tenant(
+        async (db) =>
+          (
+            await readPharmacyOwnerCommandCentre(db, {
+              branchIds: [ids.branch],
+              from: workspaceToday('UTC'),
+              to: workspaceToday('UTC'),
+            })
+          ).metrics.safetyQueue
+      );
+    const pendingCount = await attention();
+    const signed = await dispensing(ids.solo, (api) => api.selfSignReview(request));
+    expect(await dispensing(ids.solo, (api) => api.selfSignReview(request))).toMatchObject({
+      decisionId: signed.decisionId,
+    });
+    const rows = await tenant((db) =>
+      db.pharmacyControlledRegisterEntry.findMany({
+        where: { prescriptionLineId: controlledPrescriptionLineId },
+      })
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      lateSaleLineId: original.id,
+      originalSaleAt: original.createdAt,
+      lateEntryReason: reason,
+      witnessedByUserId: null,
+      recordedByUserId: ids.solo,
+      patientId,
+      quantityCanonicalUnits: original.canonicalUnits,
+      signatureRef: signed.decisionId,
+    });
+    expect(rows[0]!.createdAt.getTime()).toBeGreaterThan(original.createdAt.getTime());
+    // The signed review leaves the queue while the late register item stays on the owner's count.
+    expect(await attention()).toBe(pendingCount);
+    const decisions = await signDecisions(sale.reviewItemId);
+    expect(decisions).toHaveLength(1);
+    expect(
+      await tenant((db) =>
+        db.auditLog.findUniqueOrThrow({ where: { id: decisions[0]!.selfApprovalAuditId! } })
+      )
+    ).toMatchObject({
+      actorId: ids.solo,
+      targetId: sale.reviewItemId,
+      metadata: expect.objectContaining({ reason, pinVerified: true, saleLineId: original.id }),
+    });
+    await expect(payInCash(ids.solo, sale)).resolves.toMatchObject({ settled: true });
   });
 
+  it('records an already completed sale at its receipt time even when the branch requires two pharmacists on new sales', async () => {
+    const sale = await ringUp(ids.solo, completedMedicine, completedRxLineId);
+    await dispensing(ids.solo, (api) =>
+      api.selfSignReview({ reviewItemId: sale.reviewItemId, pin: PINS.solo })
+    );
+    await payInCash(ids.solo, sale);
+    const receipt = await tenant((db) =>
+      db.pharmacySale.findUniqueOrThrow({ where: { id: sale.saleId } })
+    );
+    expect(receipt.completedAt).toBeInstanceOf(Date);
+    await tenant(async (db) => {
+      await db.medicine.update({
+        where: { id: completedMedicine.medicineId },
+        data: { controlled: true },
+      });
+      await db.pharmacyBranch.update({
+        where: { id: ids.branch },
+        data: { requireSecondPharmacist: true },
+      });
+    });
+    try {
+      const status = await dispensing(ids.solo, (api) =>
+        api.counterSignStatus({ branchId: ids.branch, saleId: sale.saleId })
+      );
+      expect(status.lines).toMatchObject([
+        { reviewItemId: sale.reviewItemId, maySelfSign: false, mayRecordLate: true },
+      ]);
+      const request = {
+        reviewItemId: sale.reviewItemId,
+        pin: PINS.solo,
+        reason: 'Classification updated after the receipt was issued.',
+      };
+      const [first, retry] = await Promise.all([
+        dispensing(ids.solo, (api) => api.selfSignReview(request)),
+        dispensing(ids.solo, (api) => api.selfSignReview(request)),
+      ]);
+      expect(retry.decisionId).toBe(first.decisionId);
+      const rows = await tenant((db) =>
+        db.pharmacyControlledRegisterEntry.findMany({ where: { lateSaleLineId: sale.saleLineId } })
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        originalSaleAt: receipt.completedAt,
+        recordedByUserId: ids.solo,
+        lateEntryReason: request.reason,
+        signatureRef: first.decisionId,
+      });
+      expect(
+        await tenant((db) =>
+          db.prescriptionFill.count({ where: { prescriptionLineId: completedRxLineId } })
+        )
+      ).toBe(1);
+      expect(
+        await tenant((db) => db.pharmacySale.findUniqueOrThrow({ where: { id: sale.saleId } }))
+      ).toEqual(receipt);
+    } finally {
+      await tenant((db) =>
+        db.pharmacyBranch.update({
+          where: { id: ids.branch },
+          data: { requireSecondPharmacist: false },
+        })
+      );
+    }
+  });
   it('refuses the right PIN once it is locked out (the shared lockout)', async () => {
     const sale = await ringUp();
     for (let attempt = 1; attempt < 5; attempt++)

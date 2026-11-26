@@ -121,6 +121,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure + pharmacy-core + live pharmacy owner, no support session',
     none: 'owner only',
   },
+  'pharmacyBranchAssignments.controlledWitnessSettings': {
+    gate: 'adminProcedure (admin:access)',
+    none: 'workspace administrators can read active branch witness settings',
+  },
   'pharmacyBranchAssignments.list': {
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',
@@ -128,6 +132,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
   'pharmacyBranchAssignments.otherBranchAvailability': {
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',
+  },
+  'pharmacyBranchAssignments.setControlledWitness': {
+    gate: 'adminProcedure (admin:access) + active system owner, no support session',
+    none: 'only the live pharmacy owner may change the branch witness requirement',
   },
   'pharmacyBranchAssignments.setOtherBranchAvailability': {
     gate: 'adminProcedure (admin:access)',

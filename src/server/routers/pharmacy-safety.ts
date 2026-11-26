@@ -8,6 +8,7 @@ import {
   assignedRegisterBranchIds,
   listControlledPinWitnesses,
 } from '@/lib/pharmacy/controlled-register';
+import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
 import {
   normalizeRegulatoryProvince,
@@ -60,18 +61,39 @@ export const pharmacySafetyRouter = router({
       }),
     };
   }),
-  controlledPharmacists: protectedProcedure.query(async ({ ctx }) => {
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actor.id);
-  }),
+  controlledPharmacists: protectedProcedure
+    .input(z.strictObject({ branchId: z.string().min(1) }).optional())
+    .query(
+      async ({ ctx, input }): Promise<Array<{ id: string; name: string; ownApproval?: true }>> => {
+        const actor = subjectFromSession(ctx.session!.user);
+        if (
+          !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+          !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+        ) {
+          throw new TRPCError({ code: 'FORBIDDEN' });
+        }
+        const organizationId = ctx.entitlements?.organizationId;
+        if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+        const others = await listControlledPinWitnesses(ctx.db, organizationId, actor.id);
+        if (
+          !input ||
+          (await counterBranchAssignmentDenial(
+            ctx.db,
+            ctx.session!.user,
+            organizationId,
+            input.branchId
+          ))
+        )
+          return others;
+        const branch = await ctx.db.pharmacyBranch.findFirst({
+          where: { organizationId, id: input.branchId, active: true },
+          select: { requireSecondPharmacist: true },
+        });
+        if (branch?.requireSecondPharmacist !== false) return others;
+        const own = await listControlledPinWitnesses(ctx.db, organizationId, actor.id, actor.id);
+        return [...own.map((staff) => ({ ...staff, ownApproval: true as const })), ...others];
+      }
+    ),
   branches: safety.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     const userId = ctx.session?.user?.id;
@@ -158,7 +180,9 @@ export const pharmacySafetyRouter = router({
         ...new Set(
           [
             ...entries.map((entry) => entry.witnessedByUserId),
-            ...lateEntries.map((entry) => entry.recordedByUserId),
+            ...entries
+              .filter((entry) => entry.lateDispatchAt || entry.witnessStatement)
+              .map((entry) => entry.recordedByUserId),
             ...senderByMovement.values(),
           ].filter((id): id is string => typeof id === 'string')
         ),
@@ -190,12 +214,16 @@ export const pharmacySafetyRouter = router({
       return {
         provinceName: provinceName(profile?.provinceCode ?? branch.provinceCode),
         pendingLegalReview: ruleSet ? rulesPendingLegalReview(ruleSet) : false,
+        lateSaleAttentionCount: new Set(
+          entries.map((entry) => entry.lateSaleLineId).filter(Boolean)
+        ).size,
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient
             ? { displayName: entry.patient.displayName, cnic: maskCnic(entry.patient.cnic) }
             : null,
           witnessName: personName(entry.witnessedByUserId),
+          ...(entry.witnessStatement ? { recordedByName: personName(entry.recordedByUserId) } : {}),
           ...(entry.lateDispatchAt
             ? {
                 sentByName: personName(senderByMovement.get(entry.stockMovementId ?? '')),

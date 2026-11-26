@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 
+import { ControlledWitnessSettings } from '@/components/pharmacy/controlled-witness-settings';
 import { BranchAssignmentsConsole } from '@/components/pharmacy/branch-assignments';
 import { OtherBranchAvailabilityConsole } from '@/components/pharmacy/other-branch-availability-setting';
 import { BranchCashMode } from '@/components/pharmacy/branch-cash-mode';
@@ -20,8 +21,13 @@ export default async function PharmacyBranchAssignmentsPage() {
   const caller = pharmacyBranchAssignmentsRouter.createCaller(ctx);
   let initial: Awaited<ReturnType<typeof caller.list>>;
   let availability: Awaited<ReturnType<typeof caller.otherBranchAvailability>>;
+  let witnesses: Awaited<ReturnType<typeof caller.controlledWitnessSettings>>;
   try {
-    [initial, availability] = await Promise.all([caller.list(), caller.otherBranchAvailability()]);
+    [initial, availability, witnesses] = await Promise.all([
+      caller.list(),
+      caller.otherBranchAvailability(),
+      caller.controlledWitnessSettings(),
+    ]);
   } catch {
     return (
       <div className="min-w-0 space-y-6">
@@ -49,6 +55,9 @@ export default async function PharmacyBranchAssignmentsPage() {
       <BranchCashMode />
       <SectionCard title="Who works at which branch" titleLevel={2}>
         <BranchAssignmentsConsole initial={initial} />
+      </SectionCard>
+      <SectionCard title="Require a second pharmacist for controlled medicines" titleLevel={2}>
+        <ControlledWitnessSettings initial={witnesses} />
       </SectionCard>
       <SectionCard title="Availability at your other branches" titleLevel={2}>
         <OtherBranchAvailabilityConsole initial={availability} />

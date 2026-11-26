@@ -109,7 +109,13 @@ describe('assertRxLinesPrescribed (DEV-629)', () => {
   const reviewDb = (signed: boolean) => {
     const findFirst = vi.fn().mockResolvedValue(signed ? { id: 'decision-1' } : null);
     return {
-      db: { pharmacyPharmacistReviewDecision: { findFirst } } as unknown as ScopedDb,
+      db: {
+        pharmacyPharmacistReviewDecision: { findFirst },
+        pharmacyControlledRegisterEntry: {
+          findFirst: vi.fn().mockResolvedValue(null),
+          count: vi.fn().mockResolvedValue(1),
+        },
+      } as unknown as ScopedDb,
       findFirst,
     };
   };
@@ -155,6 +161,7 @@ describe('assertRxLinesPrescribed (DEV-629)', () => {
         { id: 'otc-line', prescriptionLineId: null, medicine: otc },
         {
           id: 'controlled-line',
+          allocations: [{ stockMovementId: 'controlled-movement' }],
           prescriptionLineId: null,
           medicine: { ...otc, rx: true, controlled: true },
         },

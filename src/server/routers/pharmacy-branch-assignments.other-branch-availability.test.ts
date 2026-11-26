@@ -48,12 +48,20 @@ function liveActor(kind: Actor) {
 
 function fixture(kind: Actor, stored: boolean | null = false) {
   const db = {
+    $transaction: async (work: (tx: unknown) => unknown) => work(db),
+    $queryRaw: vi.fn(),
+    pharmacyBranch: { updateMany: vi.fn(async () => ({ count: 1 })) },
     user: {
       findUnique: vi.fn(async () => ({
         organizationRole: { permissions: [] },
         permissionOverrides: [],
       })),
-      findFirst: vi.fn(async () => liveActor(kind)),
+      findFirst: vi.fn(async () => ({
+        ...liveActor(kind),
+        id: 'admin-1',
+        organizationId: 'org-a',
+        organizationRole: { ...liveActor(kind).organizationRole, organizationId: 'org-a' },
+      })),
     },
     organization: {
       findUnique: vi.fn(async () =>
@@ -147,4 +155,36 @@ describe('DEV-907 owner switch for other-branch availability', () => {
       expect(f.db.organization.update).not.toHaveBeenCalled();
     }
   );
+});
+
+describe('controlled medicine branch witness requirement', () => {
+  it('requires the live system owner to change a branch', async () => {
+    const f = fixture('admin');
+    await expect(
+      f.caller.setControlledWitness({ branchId: 'branch-a', required: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyBranch.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('saves the owner’s choice only for an active branch in this workspace and audits it', async () => {
+    const f = fixture('owner');
+    for (const required of [true, false]) {
+      await expect(
+        f.caller.setControlledWitness({ branchId: 'branch-a', required })
+      ).resolves.toEqual({ required });
+      expect(f.db.pharmacyBranch.updateMany).toHaveBeenLastCalledWith({
+        where: { organizationId: 'org-a', id: 'branch-a', active: true },
+        data: { requireSecondPharmacist: required },
+      });
+      expect(audit.annotateAudit).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          targetType: 'PharmacyBranch',
+          targetId: 'branch-a',
+          operation: 'UPDATE',
+          metadata: { branchId: 'branch-a', requireSecondPharmacist: required },
+        })
+      );
+    }
+  });
 });

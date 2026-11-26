@@ -31,6 +31,9 @@ function fixture() {
   const witness = { id: 'new-witness', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' };
   const db = {
     $queryRaw: vi.fn(),
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ branchId: scope.branchId }),
+    },
     user: { findFirst: vi.fn().mockResolvedValue({ id: 'actor', role: 'EMPLOYEE' }) },
     restaurantOperatorCredential: {
       findFirst: vi.fn().mockResolvedValue({
@@ -72,7 +75,10 @@ describe('fresh controlled restoration authorization', () => {
       const { db } = fixture();
       const work =
         action === 'void'
-          ? changeSaleStatus(db as never, scope, 'sale', 'void', { kind: 'COUNTER', actorIsManager: true })
+          ? changeSaleStatus(db as never, scope, 'sale', 'void', {
+              kind: 'COUNTER',
+              actorIsManager: true,
+            })
           : returnSaleLine(db as never, scope, {
               saleLineId: 'line',
               canonicalUnits: 1,
@@ -119,5 +125,23 @@ describe('fresh controlled restoration authorization', () => {
     expect(first.witnessedByUserId).toBe('new-witness');
     expect(first.signatureRef).not.toBe(second.signatureRef);
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
+  });
+});
+
+describe('controlled returns at a branch allowing solo confirmation', () => {
+  it('accepts the acting pharmacist’s verified credential for a counter correction only', async () => {
+    const { controlledSaleRestorationWitness } = await import('./sales');
+    const { db, witness } = fixture();
+    witness.id = scope.actorId;
+    db.$queryRaw.mockResolvedValue([{ requireSecondPharmacist: false }]);
+    const approval = await controlledSaleRestorationWitness(db as never, scope, {
+      ...pin,
+      selfApproval: true,
+    });
+    expect(approval).toMatchObject({
+      witnessedByUserId: scope.actorId,
+      counterSelfApproval: 'PIN',
+    });
+    expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', pin.pin, 'hash');
   });
 });

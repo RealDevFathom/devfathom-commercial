@@ -409,8 +409,7 @@ function controlledNotice(
   const needs = copy.controlledNeeds;
   if (block === 'NO_SAFETY_MODULE')
     return `${needs} This counter cannot take that authorisation: it needs Pharmacy Safety, which is not switched on for this business. Ask the owner.`;
-  if (block === 'NOT_DISPENSER')
-    return `${needs} Only a pharmacist can authorise it at this till: ask the pharmacist on duty.`;
+  if (block === 'NOT_DISPENSER') return 'A pharmacist must approve this controlled medicine.';
   return online
     ? `${needs} Fill in the three steps to complete the authorization panel, then press Authorise line.`
     : `${needs} Connect online, then complete the authorization panel and press Authorise line.`;
@@ -748,6 +747,7 @@ function ScopedPharmacyCounterConsole({
   const [packApproval, setPackApproval] = useState<{
     medicineName: string;
     discount?: string;
+    controlledVoid?: boolean;
   } | null>(null);
   const finishPackApproval = useCallback((approval: CounterApprovalPin | null) => {
     const resolve = packApprovalResolver.current;
@@ -773,18 +773,6 @@ function ScopedPharmacyCounterConsole({
   const [discountHold, setHeldDiscount] = useState<
     (CounterHeldDiscount & { branchId: string }) | null
   >(null);
-  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
-    enabled: safetyLicensed,
-  });
-  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
-  // actor cannot dispense, so the controlled authorization panel is not offered (the server
-  // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
-  const controlledBlock: ControlledBlock = !safetyLicensed
-    ? 'NO_SAFETY_MODULE'
-    : (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code === 'FORBIDDEN'
-      ? 'NOT_DISPENSER'
-      : null;
-  const controlledAuthorisable = controlledBlock === null;
   // DEV-961, DEV-977 phase 3: the Authorise sheet's wording follows the approvals setting.
   const approvalCopy = useCounterApprovalCopy();
   // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
@@ -958,6 +946,22 @@ function ScopedPharmacyCounterConsole({
   const branchId = selectedBranchId || enrolledBranchId || (branches[0]?.id ?? '');
   // Every drawer, tender and loyalty write is stamped with the branch's business day:
   // DEV-958A, the workspace's day ending at the branch's "day ends at" hour.
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
+    { branchId },
+    {
+      enabled: safetyLicensed && Boolean(branchId),
+    }
+  );
+  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
+  // actor cannot dispense, so the controlled authorization panel is not offered (the server
+  // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
+  const controlledBlock: ControlledBlock = !safetyLicensed
+    ? 'NO_SAFETY_MODULE'
+    : (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code === 'FORBIDDEN'
+      ? 'NOT_DISPENSER'
+      : null;
+  const controlledAuthorisable = controlledBlock === null;
+  const ownControlledProfileId = pharmacistsQuery.data?.find((staff) => staff.ownApproval)?.id;
   const dayEnd = branches.find((entry) => entry.id === branchId)?.businessDayEndsAtHistory;
   const todayBusinessDate = useCallback(
     () => businessDate({ timeZone: workspaceZone, dayEnd }),
@@ -1523,7 +1527,11 @@ function ScopedPharmacyCounterConsole({
         discountMinor: line.discountMinor,
       };
     });
-    return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone, pharmacistCheckOff });
+    return counterAlertsFor(lines, {
+      at: new Date(),
+      timeZone: workspaceZone,
+      pharmacistCheckOff,
+    });
   }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
   const packBlocked = cart?.lines.some((line) => line.packCheckBlocked) === true;
@@ -1665,7 +1673,11 @@ function ScopedPharmacyCounterConsole({
                 return { ...current, [field]: value === true };
               }
               if (typeof value !== 'string') return current;
-              return { ...current, [field]: value };
+              return {
+                ...current,
+                [field]: value,
+                ...(field === 'staffProfileId' ? { pin: '' } : {}),
+              };
             });
           },
         }
@@ -2309,10 +2321,8 @@ function ScopedPharmacyCounterConsole({
         const freshBill = replaceClosedBill || activeSaleId !== saleId;
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
-        // DEV-911: with the owner's pharmacist check off, nothing is asked for a controlled or
-        // prescription-only line; the server writes the controlled register entry itself.
-        const checkOff = pharmacistCheckOffRef.current;
         const controlled = row.restriction.controlled;
+        const checkOff = pharmacistCheckOffRef.current && !controlled;
         const patient = billPatient;
         if (
           controlled &&
@@ -2360,7 +2370,16 @@ function ScopedPharmacyCounterConsole({
         const voucher = heldVoucher;
         let discountApproval: CounterApprovalPin | undefined;
         const attemptKeys: string[] = [];
+        let usedOwnConfirmation = false;
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
+          const solo =
+            controlled &&
+            !checkOff &&
+            Boolean(ownControlledProfileId) &&
+            billAuth.staffProfileId === ownControlledProfileId;
+          if (solo && usedOwnConfirmation)
+            throw new Error('Enter your own PIN or approval code again for this sale.');
+          usedOwnConfirmation ||= solo;
           const selection = JSON.stringify([
             lineSaleId,
             row.medicineId,
@@ -2397,6 +2416,7 @@ function ScopedPharmacyCounterConsole({
                     patientAddress:
                       patientAddress === null ? { useAddressOnFile: true } : patientAddress.trim(),
                     staffProfileId: billAuth.staffProfileId,
+                    ...(solo ? { selfApproval: true as const } : {}),
                     pin: billAuth.pin,
                     rxSerialWritten: billAuth.rxSerialWritten,
                     emergency: billAuth.emergency,
@@ -2632,6 +2652,7 @@ function ScopedPharmacyCounterConsole({
       focusSearch,
       lotOverride,
       controlledBlock,
+      ownControlledProfileId,
       approvalCopy,
       openSale,
       patientId,
@@ -2997,6 +3018,33 @@ function ScopedPharmacyCounterConsole({
     return () => window.clearTimeout(timer);
   }, [drainScanQueue, scanSettles]);
 
+  const loadControlledVoidApprovers = useCallback(async () => {
+    const rows = await utils.client.pharmacySafety.controlledPharmacists.query({ branchId });
+    return rows.map((row) => ({ id: row.id, name: row.name, self: row.ownApproval === true }));
+  }, [branchId, utils]);
+
+  const transitionWithControlledApproval = useCallback(
+    async (input: Parameters<typeof transition.mutateAsync>[0]) => {
+      const result = await transition.mutateAsync(input);
+      if (input.action !== 'void' || !result || !('blocked' in result)) return result;
+      const approval = await new Promise<CounterApprovalPin | null>((resolve) => {
+        packApprovalResolver.current = resolve;
+        setPackApproval({ medicineName: 'Controlled medicine', controlledVoid: true });
+      });
+      if (!approval) return result;
+      return transition.mutateAsync({
+        ...input,
+        controlledWitness: {
+          ...approval,
+          ...(approval.staffProfileId === ownControlledProfileId
+            ? { selfApproval: true as const }
+            : {}),
+        },
+      });
+    },
+    [transition, ownControlledProfileId]
+  );
+
   const runTransition = useCallback(
     async (action: 'hold' | 'resume' | 'void', voidReason?: SaleVoidReason) => {
       const target = action === 'resume' ? heldSaleId : saleId;
@@ -3004,12 +3052,16 @@ function ScopedPharmacyCounterConsole({
       setPending(action);
       setNotice(null);
       try {
-        await transition.mutateAsync({
+        const result = await transitionWithControlledApproval({
           branchId,
           saleId: target,
           action,
           ...(action === 'void' ? { voidReason } : {}),
         });
+        if (result && 'blocked' in result) {
+          setNotice({ tone: 'warning', message: String(result.blocked) });
+          return;
+        }
         if (action === 'hold') {
           setHeldSaleId(target);
           setActiveSale(null);
@@ -3043,7 +3095,7 @@ function ScopedPharmacyCounterConsole({
       refreshCart,
       saleId,
       setActiveSale,
-      transition,
+      transitionWithControlledApproval,
     ]
   );
 
@@ -3090,7 +3142,7 @@ function ScopedPharmacyCounterConsole({
       setPending('void');
       setNotice(null);
       try {
-        const result = await transition.mutateAsync({
+        const result = await transitionWithControlledApproval({
           branchId,
           saleId: bill.saleId,
           action: 'void',
@@ -3113,7 +3165,16 @@ function ScopedPharmacyCounterConsole({
         void refetchOpenBills();
       }
     },
-    [branchId, busy, heldSaleId, refetchOpenBills, refreshCart, saleId, setActiveSale, transition]
+    [
+      branchId,
+      busy,
+      heldSaleId,
+      refetchOpenBills,
+      refreshCart,
+      saleId,
+      setActiveSale,
+      transitionWithControlledApproval,
+    ]
   );
 
   const loadKhataAccounts = useCallback(async () => {
@@ -5624,17 +5685,29 @@ function ScopedPharmacyCounterConsole({
           {packApproval ? (
             <CounterPackApprovalDialog
               medicineName={packApproval.medicineName}
+              controlled={packApproval.controlledVoid}
               copy={
-                packApproval.discount
+                packApproval.controlledVoid
                   ? {
-                      title: 'Approve this discount?',
-                      description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
-                      confirm: 'Approve discount',
+                      title: 'Confirm this controlled stock restoration',
+                      description:
+                        'Select a pharmacist and enter a fresh PIN or approval code to void this bill and record its stock restoration.',
+                      confirm: 'Confirm void',
                     }
-                  : undefined
+                  : packApproval.discount
+                    ? {
+                        title: 'Approve this discount?',
+                        description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
+                        confirm: 'Approve discount',
+                      }
+                    : undefined
               }
               loadApprovers={
-                packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
+                packApproval.controlledVoid
+                  ? loadControlledVoidApprovers
+                  : packApproval.discount
+                    ? loadDiscountApprovers
+                    : loadScannedPackApprovers
               }
               onCancel={() => finishPackApproval(null)}
               onConfirm={finishPackApproval}
@@ -6012,7 +6085,10 @@ function ScopedPharmacyCounterConsole({
               <p>
                 {controlledBlock === 'NO_SAFETY_MODULE'
                   ? 'The controlled-medicine authorisation needs Pharmacy Safety, which is not switched on for this business, so it cannot be completed at this counter. Ask the owner.'
-                  : approvalCopy.controlledPharmacistOnly}
+                  : (saleReadiness.data as { requireControlledWitness?: boolean } | undefined)
+                        ?.requireControlledWitness === false
+                    ? 'Only a pharmacist can authorise it at this till. Ask the pharmacist on duty to open this bill and enter their own PIN or authenticator code.'
+                    : approvalCopy.controlledPharmacistOnly}
               </p>
             </CounterStateCard>
           ) : null}
@@ -6029,7 +6105,7 @@ function ScopedPharmacyCounterConsole({
           if (!open) returnToControlled.current = false;
         }}
         summary={
-          controlledTarget && controlledFields && !pharmacistCheckOff ? (
+          controlledTarget && controlledFields ? (
             <CounterNote tone="warning">
               <p>
                 {controlledTarget.displayName} is a controlled medicine. It is added once it is

@@ -26,7 +26,6 @@ import {
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import { readPharmacistCheckPolicy } from '@/lib/pharmacy/pharmacist-check-policy';
-import { pharmacistCheckOffSignature } from '@/lib/pharmacy/pharmacist-check';
 import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
@@ -77,7 +76,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { BRANCH_NOT_ASSIGNED, NO_INDEPENDENT_PHARMACIST } from '@/lib/pharmacy/counter-setup';
+import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
 import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
@@ -107,11 +106,11 @@ import {
   lookupCounterVoucher,
 } from '@/lib/pharmacy/vouchers';
 import {
-  isLockedOut,
-  registerFailedAttempt,
-  clearLockout,
-} from '@/lib/restaurant/operator-credentials';
-import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+  branchAllowsControlledSelfApproval,
+  confirmControlledApproval,
+  NO_CONTROLLED_SALE_WITNESS,
+  writeControlledReviewApproval,
+} from '@/lib/pharmacy/controlled-sale-approval';
 import {
   closePharmacyDay,
   readPharmacyClose,
@@ -311,6 +310,12 @@ const maximumWords = (bps: number) =>
 const counterApprovalPin = z
   .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
   .strict();
+const boundedControlledWitnessPin = counterApprovalPin.extend({
+  selfApproval: z.literal(true).optional(),
+});
+const controlledWitnessPin = boundedControlledWitnessPin.extend({
+  staffProfileId: z.string().min(1),
+});
 const tenderInput = z
   .object({
     branchId,
@@ -3139,8 +3144,9 @@ export const pharmacySalesRouter = router({
         return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
       return {
         ...readiness,
-        // Nobody needs to countersign while the check is off.
-        warnings: readiness.warnings.filter((warning) => warning !== NO_INDEPENDENT_PHARMACIST),
+        // This switch still governs ordinary prescriptions. A branch can independently
+        // require a countersign on every controlled line.
+        requireControlledWitness: !(await branchAllowsControlledSelfApproval(ctx.db, scope)),
         canFixSetup: orgAdmin,
         ...(approval ? { approval } : {}),
         pharmacistCheckOff: true as const,
@@ -3207,6 +3213,7 @@ export const pharmacySalesRouter = router({
                 z.object({ useAddressOnFile: z.literal(true) }).strict(),
               ]),
               staffProfileId: z.string().min(1),
+              selfApproval: z.literal(true).optional(),
               pin: z.string().regex(/^\d{4,8}$/),
               rxSerialWritten: z.boolean(),
               emergency: z.boolean(),
@@ -3396,57 +3403,12 @@ export const pharmacySalesRouter = router({
             { db }
           );
           const authorization = input.controlledAuthorization;
-          // DEV-911: the pharmacist check at each sale is on unless the owner switched it off.
-          // It is read only where today's gate would refuse (no dispense grant, or no
-          // pharmacist authorization), so with the check on nothing below changes. While it is
-          // off the line sells like any other item, and the controlled register still gets its
-          // entry, marked as written with the check switched off by the owner.
-          if (!mayDispense || !authorization) {
-            const pharmacistCheck = await readPharmacistCheckPolicy(db, scope.organizationId);
-            if (!pharmacistCheck.enabled) {
-              await requirePharmacyTodayOpenForTrading(db, scope);
-              const replay = await replaySaleLine(db, scope, lineInput);
-              if (replay) return replay;
-              for (const { kind, approval } of approvals)
-                await confirmCounterApproval(db, scope, kind, approval);
-              // DEV-825: the sale row is a document lock, so it precedes the register lock.
-              await lockSaleForControlledLine(db, scope, input.saleId);
-              await lockRegister(db, scope.organizationId, scope.branchId);
-              const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
-              await appendControlledSaleEntries(db, {
-                organizationId: scope.organizationId,
-                branchId: scope.branchId,
-                movementIds: result.allocation.movementIds,
-                patientId: null,
-                patientAddress: null,
-                medicineId: medicine.id,
-                manufacturer: medicine.manufacturer,
-                prescriberId: null,
-                prescriberName: null,
-                prescriberRegNo: null,
-                prescriptionId: null,
-                prescriptionLineId: null,
-                emergency: false,
-                rxSerialWritten: false,
-                refEntryId: null,
-                recordedByUserId: scope.actorId,
-                witnessedByUserId: scope.actorId,
-                signatureRef: pharmacistCheckOffSignature(pharmacistCheck.version),
-              });
-              annotateAudit(ctx, {
-                metadata: {
-                  pharmacistCheck: 'SWITCHED_OFF_BY_OWNER',
-                  pharmacistCheckPolicyVersion: pharmacistCheck.version,
-                  controlledSaleLineId: result.line.id,
-                },
-              });
-              return result;
-            }
-          }
           if (!mayDispense) {
             throw new TRPCError({
               code: 'FORBIDDEN',
-              message: 'You do not have permission to dispense a controlled medicine.',
+              message: authorization
+                ? 'You do not have permission to dispense a controlled medicine.'
+                : 'A pharmacist must approve this controlled medicine.',
             });
           }
           const blocked = {
@@ -3454,53 +3416,27 @@ export const pharmacySalesRouter = router({
               'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
           } as const;
           if (!authorization) return blocked;
-          // Serialize credential attempts; returning a denial commits durable lockout counters.
-          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
-          const credential = await db.restaurantOperatorCredential.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              staffProfileId: authorization.staffProfileId,
-              type: 'PIN',
-              revokedAt: null,
-              deviceId: null,
-            },
-            include: { staffProfile: { include: { user: true } } },
-          });
-          const pharmacist = credential?.staffProfile.user;
-          const now = new Date();
-          if (
-            !credential ||
-            credential.staffProfile.status !== 'ACTIVE' ||
-            !pharmacist ||
-            pharmacist.organizationId !== scope.organizationId ||
-            pharmacist.status !== 'ACTIVE' ||
-            pharmacist.id === scope.actorId ||
-            isLockedOut(credential, now)
-          )
-            return blocked;
-          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
-          if (
-            !(await verifyApprovalSecret(db, {
-              organizationId: scope.organizationId,
-              approverUserId: pharmacist.id,
-              credentialHash: credential.credentialHash,
-              secret: authorization.pin,
-              action: 'pharmacySales.controlledAuthorization',
-              approverRight: 'pharmacy:dispense',
-              requestedById: scope.actorId,
-              now,
-            }))
-          ) {
-            await db.restaurantOperatorCredential.update({
-              where: { id: credential.id },
-              data: registerFailedAttempt(credential, now),
-            });
-            return blocked;
+          if (authorization.selfApproval) {
+            if (authorization.emergency || !authorization.prescriptionLineId)
+              return {
+                blocked: 'Select a valid prescription before confirming a controlled sale alone.',
+              };
+            if (!(await branchAllowsControlledSelfApproval(db, scope)))
+              return {
+                blocked: 'This branch requires a second pharmacist for controlled medicines.',
+              };
           }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
+          const pharmacist = await confirmControlledApproval(
+            db,
+            scope,
+            authorization,
+            'pharmacySales.controlledAuthorization'
+          );
+          if (!pharmacist || pharmacist.method === 'BADGE')
+            return authorization.selfApproval
+              ? { blocked: 'Your PIN or approval code was not accepted.' }
+              : blocked;
+          const now = new Date();
           // Check the actor and witness before taking the day lock. The day lock
           // still precedes document/register locks and every stock allocation.
           await requirePharmacyTodayOpenForTrading(db, scope);
@@ -3556,6 +3492,8 @@ export const pharmacySalesRouter = router({
                 stockMovementId: { in: replay.allocation.movementIds },
               },
               select: {
+                witnessStatement: true,
+                recordedByUserId: true,
                 patientId: true,
                 patientAddress: true,
                 prescriptionLineId: true,
@@ -3580,6 +3518,9 @@ export const pharmacySalesRouter = router({
               !patientAddress ||
               recorded.some(
                 (entry) =>
+                  (entry.witnessStatement === NO_CONTROLLED_SALE_WITNESS) !==
+                    Boolean(authorization.selfApproval) ||
+                  (authorization.selfApproval && entry.recordedByUserId !== scope.actorId) ||
                   entry.patientAddress !== patientAddress ||
                   entry.emergency !== emergency ||
                   entry.prescriptionLineId !== prescriptionLineId ||
@@ -3789,6 +3730,15 @@ export const pharmacySalesRouter = router({
               requestedByUserId: scope.actorId,
             },
           });
+          const approval = authorization.selfApproval
+            ? await writeControlledReviewApproval(db, scope, {
+                reviewItemId: review.id,
+                saleLineId: result.line.id,
+                saleId: input.saleId,
+                method: pharmacist.method,
+                now,
+              })
+            : null;
           const decision = await db.pharmacyPharmacistReviewDecision.create({
             data: {
               organizationId: scope.organizationId,
@@ -3796,6 +3746,7 @@ export const pharmacySalesRouter = router({
               kind: 'SIGN',
               actorUserId: pharmacist.id,
               signedAt: now,
+              ...(approval ? { selfApprovalAuditId: approval.id } : {}),
             },
           });
           await appendControlledSaleEntries(db, {
@@ -3815,7 +3766,8 @@ export const pharmacySalesRouter = router({
             rxSerialWritten: authorization.rxSerialWritten,
             refEntryId: refEntry?.id ?? null,
             recordedByUserId: scope.actorId,
-            witnessedByUserId: pharmacist.id,
+            witnessedByUserId: approval ? null : pharmacist.id,
+            ...(approval ? { witnessStatement: NO_CONTROLLED_SALE_WITNESS } : {}),
             signatureRef: decision.id,
           });
           return result;
@@ -3949,10 +3901,7 @@ export const pharmacySalesRouter = router({
           reason: z.string().trim().min(1).max(500).optional(),
           // DEV-508: a counter void must say why, from the fixed reason codes.
           voidReason: saleVoidReasonSchema.optional(),
-          controlledWitness: z
-            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-            .strict()
-            .optional(),
+          controlledWitness: controlledWitnessPin.optional(),
         })
         .strict()
         .superRefine((value, issue) => {
@@ -4116,7 +4065,7 @@ export const pharmacySalesRouter = router({
           ctx.db as unknown as ScopedDb,
           scope.organizationId
         );
-        return pharmacistCheck.enabled
+        return pharmacistCheck.enabled || !(await branchAllowsControlledSelfApproval(ctx.db, scope))
           ? history
           : { ...history, pharmacistCheckOff: true as const };
       } catch (error) {
@@ -4132,7 +4081,7 @@ export const pharmacySalesRouter = router({
           requestId: z.uuid(),
           reason: z.string().trim().min(1).max(500),
           managerPin: z.string().regex(/^\d{4,8}$/),
-          controlledWitness: counterApprovalPin.optional(),
+          controlledWitness: boundedControlledWitnessPin.optional(),
           lines: z
             .array(
               z
@@ -4235,10 +4184,7 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
-          controlledWitness: z
-            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-            .strict()
-            .optional(),
+          controlledWitness: controlledWitnessPin.optional(),
           // Omitted legacy/unknown lot is accepted only into unidentified quarantine custody.
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
@@ -4304,10 +4250,7 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
-          controlledWitness: z
-            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-            .strict()
-            .optional(),
+          controlledWitness: controlledWitnessPin.optional(),
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
