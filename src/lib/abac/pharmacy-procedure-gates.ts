@@ -2699,8 +2699,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['run-branches/see-demand-lostsales-restockrecovery'],
   },
   'pharmacySales.upsellSuggestions': {
-    gate: 'assignedBranchScope only; no capability checked',
-    none: 'any signed-in member assigned to the branch (or a workspace administrator); no permission action is checked',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt (DEV-1056)',
+    lines: [
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/use-counter-without-counter',
+    ],
   },
   'pharmacySop.access': {
     gate: 'protectedProcedure; returns canManage/canComplete/canVerify flags',

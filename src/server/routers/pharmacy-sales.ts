@@ -4785,12 +4785,16 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) =>
-      findUpsellSuggestions(ctx.db, await assignedBranchScope(ctx, input.branchId), {
+    .query(async ({ ctx, input }) => {
+      // DEV-1056: a branch's stock and prices are a counter read, so this takes the receipt
+      // procedures' gate after the branch refusals, not branch membership alone.
+      await assignedBranchScope(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return findUpsellSuggestions(ctx.db, scope, {
         medicineIds: input.medicineIds,
         limit: input.limit,
-      })
-    ),
+      });
+    }),
   declineSubstitute: protectedProcedure
     .input(
       z
