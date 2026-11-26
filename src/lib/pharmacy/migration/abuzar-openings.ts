@@ -195,6 +195,10 @@ export async function stockDecision(
       unitsPerPack: true,
     },
   });
+  const pricedRows = await db.$queryRaw<
+    { sourceId: string; medicineId: string }[]
+  >`SELECT "sourceId","medicineId" FROM pharmacy_abuzar_product_fields WHERE "organizationId"=${scope.organizationId}`;
+  const reviewedPrices = new Map(pricedRows.map((p) => [p.sourceId, p.medicineId]));
   const byCode = new Map(links.map((l) => [l.sourceKey.slice('abuzar-item:'.length), l]));
   const medicines = await db.medicine.findMany({
     where: {
@@ -241,6 +245,8 @@ export async function stockDecision(
       if (!period || !location) reason = 'choose an open period and active stock location';
       else if (!medicine || !link || !units || candidates.length !== 1)
         reason = 'catalogue approval or matching pack required';
+      else if (reviewedPrices.get(row.ICode) !== medicine.id)
+        reason = 'complete the prices step first';
       else if (medicine.controlled && Number(row.Quantity) > 0 && !witness)
         reason = 'controlled opening requires a witnessed register entry';
       else if (

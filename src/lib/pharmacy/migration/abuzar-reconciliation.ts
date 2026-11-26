@@ -141,15 +141,12 @@ export async function readReconciliation(
   sourceBranch: string,
   data: Prepared
 ) {
-  const products = await db.pharmacyStagedMedicineLink.findMany({
-    where: {
-      organizationId: org,
-      medicineId: { not: null },
-      sourceKey: { startsWith: 'abuzar-item:' },
-      batch: { profilerVersion: 'abuzar/2', source: { kind: 'ABUZAR' } },
-    },
-    select: { sourceKey: true },
-  });
+  const products = await db.$queryRaw<{ sourceKey: string }[]>`
+    SELECT l."sourceKey" FROM pharmacy_staged_medicine_links l
+    JOIN pharmacy_migration_batches b ON b."organizationId"=l."organizationId" AND b.id=l."batchId"
+    JOIN pharmacy_migration_sources s ON s."organizationId"=b."organizationId" AND s.id=b."sourceId"
+    WHERE l."organizationId"=${org} AND l."medicineId" IS NOT NULL
+      AND b."profilerVersion"='abuzar/2' AND s.kind='ABUZAR' AND l."sourceKey" LIKE 'abuzar-item:%'`;
   const stock = await db.$queryRaw<
     { sourceId: string; units: number; value: string }[]
   >`SELECT a."sourceId",COALESCE(m."quantityUnits",0) AS units,(COALESCE(m."quantityUnits",0)::bigint*lot."unitCostMinor")::text AS value
