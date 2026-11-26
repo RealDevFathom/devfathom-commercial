@@ -903,6 +903,92 @@ function ReconnectLimit({ branchId }: { branchId: string }) {
   );
 }
 
+function ResolveOfflineCashForm({
+  branchId,
+  eventId,
+  onResolved,
+}: {
+  branchId: string;
+  eventId: string;
+  onResolved: () => void;
+}) {
+  const [outcome, setOutcome] = useState<'REBOOK' | 'REFUND' | 'WRITE_OFF'>('REBOOK');
+  const [problem, setProblem] = useState('');
+  const resolve = trpc.pharmacyOffline.resolveCash.useMutation();
+  const owner = trpc.pharmacyOffline.reconnectLimit.useQuery({ branchId });
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const managerPin = String(data.get('managerPin') ?? '');
+    const pin = form.elements.namedItem('managerPin') as HTMLInputElement;
+    pin.value = '';
+    setProblem('');
+    try {
+      await resolve.mutateAsync({
+        branchId,
+        eventId,
+        outcome,
+        reason: String(data.get('reason') ?? ''),
+        managerPin,
+        ...(outcome === 'REBOOK' ? { saleId: String(data.get('saleId') ?? '') } : {}),
+      });
+      onResolved();
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : 'Resolution could not be recorded.');
+    }
+  }
+  return (
+    <details>
+      <summary className="cursor-pointer py-2">Resolve held cash</summary>
+      <form onSubmit={submit} className="space-y-3">
+        <Label>
+          Outcome
+          <StudioSelect
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value as typeof outcome)}
+          >
+            <option value="REBOOK">Pay a re-booked sale</option>
+            <option value="REFUND">Refund the customer</option>
+            {owner.data?.canChange && (
+              <option value="WRITE_OFF">Write off as cash over/short</option>
+            )}
+          </StudioSelect>
+        </Label>
+        {outcome === 'REBOOK' && (
+          <Label>
+            Unpaid sale ID
+            <Input name="saleId" required maxLength={128} />
+          </Label>
+        )}
+        <Label>
+          Reason
+          <Input name="reason" required maxLength={500} />
+        </Label>
+        <Label>
+          Your PIN or authenticator code
+          <Input
+            type="password"
+            name="managerPin"
+            inputMode="numeric"
+            autoComplete="off"
+            required
+            pattern="[0-9]{4,8}"
+          />
+        </Label>
+        {problem && (
+          <p role="alert" className="text-destructive">
+            {problem}
+          </p>
+        )}
+        <Button type="submit" className="min-h-11" disabled={resolve.isPending}>
+          {resolve.isPending ? 'Recording…' : 'Confirm resolution'}
+        </Button>
+      </form>
+    </details>
+  );
+}
+
 function RefusedReceipts({ branchId }: { branchId: string }) {
   const history = trpc.pharmacyOffline.refusedReceipts.useQuery({ branchId }, { retry: false });
   return (
@@ -932,6 +1018,14 @@ function RefusedReceipts({ branchId }: { branchId: string }) {
                 {row.kind} · {when(row.createdAt, 'Unknown time')}
               </p>
               <p>{row.reason}</p>
+              {row.cashState === 'held' && (
+                <ResolveOfflineCashForm
+                  branchId={branchId}
+                  eventId={row.id}
+                  onResolved={() => void history.refetch()}
+                />
+              )}
+              {row.cashState === 'resolved' && <p>Cash resolved</p>}
             </li>
           ))}
         </ul>

@@ -104,6 +104,12 @@ import {
   OFFLINE_PREPARATION_LOT_LIMIT,
   offlinePreparationPlan,
 } from '@/lib/pharmacy/offline-preparation';
+import {
+  resolveOfflineCash,
+  offlineCashResolutionSchema,
+  resolutionAuditId,
+} from '@/lib/pharmacy/offline-cash-resolution';
+import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { adminProcedure, router } from '../trpc';
 
 const id = z.string().min(1).max(160);
@@ -190,13 +196,56 @@ export const pharmacyOfflineRouter = router({
         return { hours: input.hours };
       })
     ),
+  resolveCash: adminProcedure
+    .input(
+      offlineCashResolutionSchema.extend({
+        branchId: id,
+        managerPin: z.string().regex(/^\d{4,8}$/),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        if (
+          input.outcome === 'WRITE_OFF' &&
+          !(await isPharmacistCheckPolicyOwner(db, scope.organizationId, scope.actorId, {
+            lock: true,
+          }))
+        )
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the owner can write off held cash.',
+          });
+        const approval = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: input.managerPin,
+          action: 'pharmacyOffline.resolveCash',
+          policy: 'OFFLINE_CASH_RESOLUTION',
+          errorCode: 'OFFLINE_CASH_APPROVAL_REFUSED',
+        });
+        if ('blocked' in approval)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Approval refused. Check your own PIN or authenticator code.',
+          });
+        await scopeReceiptHistory(db, scope.branchId);
+        return resolveOfflineCash(db, scope, input);
+      })
+    ),
   refusedReceipts: adminProcedure.input(branchInput).query(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const db = tx as ScopedDb;
       const organizationId = ctx.entitlements.organizationId;
       await managedBranch(db, ctx.session.user, organizationId, input.branchId);
       await scopeReceiptHistory(db, input.branchId);
-      return db.pharmacyOfflineReceiptEvent.findMany({
+      const rows = await db.pharmacyOfflineReceiptEvent.findMany({
         where: { organizationId, branchId: input.branchId },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         select: {
@@ -205,8 +254,67 @@ export const pharmacyOfflineRouter = router({
           kind: true,
           reason: true,
           createdAt: true,
+          deviceId: true,
+          commandKey: true,
           device: { select: { name: true } },
         },
+      });
+      const closed = rows.filter((row) => row.kind === 'REJECTED' || row.kind === 'QUARANTINED');
+      const resolved = closed.length
+        ? await db.auditLog.findMany({
+            where: {
+              organizationId,
+              id: {
+                in: closed.map((row) =>
+                  resolutionAuditId(organizationId, row.deviceId, row.commandKey)
+                ),
+              },
+            },
+            select: { id: true },
+          })
+        : [];
+      const done = new Set(resolved.map((row) => row.id));
+      const heldCommands = closed.length
+        ? await db.pharmacyOfflineCommand.findMany({
+            where: {
+              organizationId,
+              branchId: input.branchId,
+              action: 'CASH_OTC_SALE',
+              OR: closed.map((row) => ({ deviceId: row.deviceId, idempotencyKey: row.commandKey })),
+            },
+            select: { deviceId: true, idempotencyKey: true, id: true },
+          })
+        : [];
+      const entries = heldCommands.length
+        ? await db.financeJournalEntry.findMany({
+            where: {
+              organizationId,
+              branchId: input.branchId,
+              sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH',
+              sourceId: { in: heldCommands.map((row) => row.id) },
+            },
+            select: { sourceId: true },
+          })
+        : [];
+      const held = new Set(entries.map((row) => row.sourceId));
+      const cash = new Set(
+        heldCommands
+          .filter((row) => held.has(row.id))
+          .map((row) => resolutionAuditId(organizationId, row.deviceId, row.idempotencyKey))
+      );
+      return rows.map(({ deviceId, commandKey, ...row }) => {
+        const auditId = resolutionAuditId(organizationId, deviceId, commandKey);
+        return {
+          ...row,
+          cashState:
+            row.kind === 'REJECTED' || row.kind === 'QUARANTINED'
+              ? done.has(auditId)
+                ? 'resolved'
+                : cash.has(auditId)
+                  ? 'held'
+                  : null
+              : null,
+        };
       });
     })
   ),

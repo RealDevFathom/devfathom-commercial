@@ -557,6 +557,8 @@ export type PharmacyDrawerOperator =
 
 /** Options for an online counter call; replay and delivery paths omit them. */
 export type PharmacySettlementOptions = {
+  /** Internal settlement of money already counted in offline suspense. */
+  fundedFromOfflineSuspense?: true;
   requireCurrentBusinessDate?: boolean;
   /** Authorized refund procedure can recognize the obligation without paying cash. */
   recordProviderRefundOwed?: boolean;
@@ -925,7 +927,7 @@ export async function applyPharmacyTender(
       idempotencyKey: `prepaid:spend:${tender.id}`,
     });
   await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });
-  if (drawerSessionId)
+  if (drawerSessionId && !options.fundedFromOfflineSuspense)
     await withCashShiftRefusal(
       db.pharmacyDrawerMovement.create({
         data: {

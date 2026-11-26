@@ -219,9 +219,19 @@ beforeAll(async () => {
   );
   await inOrg(ORG_A, async (db) => {
     await db.organizationDepartment.create({ data: { key: 'PHARMACY', name: 'Pharmacy' } });
+    const role = await db.organizationRole.create({
+      data: {
+        key: 'owner',
+        name: 'Owner',
+        isSystem: true,
+        permissions: { create: [{ capability: '*', effect: 'ALLOW' }] },
+      },
+    });
     await db.user.create({
       data: {
         id: ACTOR,
+        organizationRoleId: role.id,
+        status: 'ACTIVE',
         name: 'Offline review supervisor',
         email: `${ACTOR}@example.test`,
         department: 'PHARMACY',
@@ -229,6 +239,8 @@ beforeAll(async () => {
         role: 'ADMIN',
       },
     });
+    const { saveOwnPin } = await import('@/lib/pharmacy/own-pin');
+    await saveOwnPin(db, { organizationId: ORG_A, userId: ACTOR, pin: '2651' });
     // DEV-831: the counter operator gate reads the live counter-family grant.
     await db.userPermissionOverride.create({
       data: {
@@ -252,17 +264,22 @@ afterAll(async () => {
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
   resolveTenantActor: vi.fn(async () => ({
     organization: { id: ORG_A },
-    session: { user: { id: ACTOR, role: 'ADMIN' } },
+    session: {
+      user: {
+        id: ACTOR,
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        department: 'PHARMACY',
+        organizationId: ORG_A,
+      },
+    },
   })),
 }));
 vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({})),
   hasModule: vi.fn(() => true),
 }));
-vi.mock('@/lib/abac', () => ({
-  can: vi.fn(async () => true),
-  subjectFromSession: (user: unknown) => user,
-}));
+
 vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true }),
   clientIp: () => '127.0.0.1',
@@ -395,6 +412,45 @@ async function setup(openDrawer = true) {
   return { fixture, command, call, replay, counts, lease, chain };
 }
 
+async function supervisor<T>(
+  work: (
+    api: ReturnType<(typeof import('./pharmacy-offline'))['pharmacyOfflineRouter']['createCaller']>
+  ) => Promise<T>,
+  userId = ACTOR,
+  role = 'ADMIN'
+) {
+  const { router } = await import('../trpc');
+  const { pharmacyOfflineRouter } = await import('./pharmacy-offline');
+  const mounted = router({ pharmacyOffline: pharmacyOfflineRouter });
+  return inOrg(ORG_A, (db) =>
+    work(
+      mounted.createCaller({
+        db,
+        entitlements: {
+          organizationId: ORG_A,
+          vertical: 'PHARMACY',
+          enabledModules: ['pharmacy-core', 'pharmacy-counter'],
+          modules: [],
+        },
+        session: {
+          expires: 'later',
+          user: {
+            id: userId,
+            role,
+            status: 'ACTIVE',
+            department: 'PHARMACY',
+            organizationId: ORG_A,
+          },
+        },
+        organization: { id: ORG_A, vertical: 'PHARMACY' },
+        support: null,
+        requestMeta: { ip: null, userAgent: null },
+        audit: { detail: {}, db },
+      } as unknown as import('../trpc').TRPCContext).pharmacyOffline
+    )
+  );
+}
+
 describeIfDatabase('Offline receipt recovery through the counter routes', () => {
   it('retains a refusal for branch review, then books a reviewed drawer receipt once', async () => {
     const counter = await setup(false);
@@ -475,6 +531,92 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
       )
     ).toMatchObject({ grossMinor: 100 });
   });
+  it.each(['REBOOK', 'REFUND', 'WRITE_OFF'] as const)(
+    'clears held cash once with fresh approval for %s',
+    async (outcome) => {
+      const counter = await setup();
+      const scope = scopeOf(counter.fixture);
+      const { createSale, addSaleLine, signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+      const command = counter.chain.seal(counter.command);
+      const rejected = await counter.call(
+        'reject',
+        { command, reason: 'Confirmed receipt refused' },
+        {
+          'idempotency-key': command.idempotencyKey,
+          'x-command-signature': signPharmacyCommand(
+            scope,
+            counter.fixture.deviceId,
+            command,
+            counter.fixture.deviceSecret
+          ),
+        }
+      );
+      const body = await rejected.json();
+      expect(rejected.status, JSON.stringify(body)).toBe(200);
+      let saleId: string | undefined;
+      if (outcome === 'REBOOK') {
+        saleId = await inOrg(ORG_A, async (db) => {
+          const { breakPack } = await import('@/lib/pharmacy/stock-ledger');
+          await breakPack(db, scope, {
+            ...bucketOf(counter.fixture),
+            requiredLooseUnits: 11,
+            idempotencyKey: tag('loose-stock'),
+            at: new Date(),
+          });
+          const sale = await createSale(db, scope);
+          await addSaleLine(db, scope, {
+            ...command.lines[0]!,
+            saleId: sale.id,
+            idempotencyKey: tag('replacement-line'),
+          });
+          return sale.id;
+        });
+      }
+      const [event] = await supervisor((api) => api.refusedReceipts({ branchId: scope.branchId }));
+      expect(event?.cashState).toBe('held');
+      const input = {
+        branchId: scope.branchId,
+        eventId: event!.id,
+        outcome,
+        reason: 'Supervisor reconciled printed receipt',
+        managerPin: '2651',
+        saleId,
+      };
+      await expect(
+        supervisor((api) => api.resolveCash({ ...input, managerPin: '0000' }))
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      const results = await Promise.all([
+        supervisor((api) => api.resolveCash(input)),
+        supervisor((api) => api.resolveCash(input)),
+      ]);
+      expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+      await expect(
+        supervisor((api) => api.resolveCash({ ...input, reason: 'Changed disposition' }))
+      ).rejects.toMatchObject({ code: 'CONFLICT' });
+      await inOrg(ORG_A, async (db) => {
+        const entry = await db.financeJournalEntry.findFirstOrThrow({
+          where: { branchId: scope.branchId, sourceKind: 'PHARMACY_OFFLINE_CASH_RESOLUTION' },
+          include: { lines: true },
+        });
+        expect(
+          entry.lines.map((l) => [l.accountCode, l.side, Number(l.amountMinor)]).sort()
+        ).toEqual([
+          [outcome === 'WRITE_OFF' ? 'CASH_OVER_SHORT' : 'CASH', 'CREDIT', command.amountMinor],
+          ['OFFLINE_CASH_SUSPENSE', 'DEBIT', command.amountMinor],
+        ]);
+        const movements = await db.pharmacyDrawerMovement.findMany({
+          where: { drawerSession: { deviceId: counter.fixture.deviceId } },
+        });
+        expect(movements.filter((m) => m.kind === 'PAID_OUT')).toHaveLength(
+          outcome === 'REFUND' ? 1 : 0
+        );
+        expect(movements.filter((m) => m.kind === 'CASH_SALE')).toHaveLength(0);
+        expect(await db.pharmacyTender.count({ where: { branchId: scope.branchId } })).toBe(
+          outcome === 'REBOOK' ? 1 : 0
+        );
+      });
+    }
+  );
   it('audits a synthetic failed seal, quarantines only its position, and books its signed successor', async () => {
     const counter = await setup();
     const sealed = counter.chain.seal(counter.command);

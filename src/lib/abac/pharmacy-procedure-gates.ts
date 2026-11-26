@@ -1174,6 +1174,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access) + managedBranch + isPharmacistCheckPolicyOwner: owner sets the branch reconnect limit within 72 hours',
     none: 'owner only with administrative access to the active branch',
   },
+  'pharmacyOffline.resolveCash': {
+    gate: 'adminProcedure (admin:access), managedBranch and fresh own approval. Write-off also requires the pharmacy owner.',
+    none: 'Only branch administrators with fresh approval, with owner authority for a write-off.',
+  },
   'pharmacyOffline.refusedReceipts': {
     gate: 'adminProcedure (admin:access) + managedBranch: requires active branch and counterBranchAssignmentDenial, with branch-scoped receipt history RLS',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
