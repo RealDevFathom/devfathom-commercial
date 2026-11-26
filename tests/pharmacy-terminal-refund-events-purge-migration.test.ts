@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 
 import { describe, expect, it } from 'vitest';
 
-const NAME = '20261127090000_pharmacy_terminal_refund_events_purge';
+const NAME = '20261126010130_pharmacy_terminal_refund_events_purge';
 const ORIGINAL = '20261122010000_pharmacy_terminal_refund_events';
 const sql = readFileSync(`prisma/migrations/${NAME}/migration.sql`, 'utf8');
 /** The statements, without the header and inline comments. */
