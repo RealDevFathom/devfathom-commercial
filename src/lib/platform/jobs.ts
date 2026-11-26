@@ -13,7 +13,7 @@ import {
 } from '@/generated/prisma/client';
 import { claimJob, runClaimedJob, type JobResult } from './job-runner';
 import { endSupportSessions } from '@/lib/platform/capabilities';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { withOrganizationDefaults, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
 import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
 import {
@@ -735,6 +735,18 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
     );
   }
   const counts: Record<string, number> = {};
+  // Session credentials and delivery state are visible only in their tenant's scope.
+  await withOrganizationDefaults(db, organizationId, async (tenant) => {
+    const events =
+      await tenant.$executeRaw`DELETE FROM pharmacy_waha_events WHERE "organizationId"=${organizationId}`;
+    const attempts =
+      await tenant.$executeRaw`DELETE FROM pharmacy_waha_attempts WHERE "organizationId"=${organizationId}`;
+    const sessions =
+      await tenant.$executeRaw`DELETE FROM pharmacy_waha_sessions WHERE "organizationId"=${organizationId}`;
+    if (events) counts.pharmacy_waha_events = events;
+    if (attempts) counts.pharmacy_waha_attempts = attempts;
+    if (sessions) counts.pharmacy_waha_sessions = sessions;
+  });
   for (const table of plan.order) {
     const count = await db.$executeRawUnsafe(
       `DELETE FROM ${quoteIdentifier(table)} WHERE "organizationId" = $1`,

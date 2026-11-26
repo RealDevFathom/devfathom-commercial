@@ -279,6 +279,12 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         JOB_ID
       );
     });
+    for (const org of [PURGED_ORG, LIVE_ORG]) {
+      await withTenantDb(org, async (db) => {
+        const { prepareWahaSession } = await import('@/lib/pharmacy/whatsapp/waha-session');
+        await prepareWahaSession(db, org, randomBytes(32).toString('hex'));
+      });
+    }
   }, 60_000);
 
   it('purges a pharmacy tenant that has confirmed an onboarding step', async () => {
@@ -338,6 +344,20 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       customers: none,
       patients: none,
     });
+
+    for (const [org, count] of [
+      [PURGED_ORG, 0],
+      [LIVE_ORG, 1],
+    ] as const) {
+      const [actual] = await withTenantDb(
+        org,
+        (db) =>
+          db.$queryRaw<
+            { count: number }[]
+          >`SELECT count(*)::int AS count FROM pharmacy_waha_sessions WHERE "organizationId"=${org}`
+      );
+      expect(actual.count).toBe(count);
+    }
 
     const organizationFingerprint = createHmac(
       'sha256',
