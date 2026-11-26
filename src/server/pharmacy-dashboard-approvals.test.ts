@@ -11,6 +11,8 @@ const m = vi.hoisted(() => ({
   register: vi.fn(),
   solo: vi.fn(),
   orders: vi.fn(),
+  orderScope: vi.fn(),
+  canOpenOrders: vi.fn(),
   supplierCount: vi.fn(),
   reviewCount: vi.fn(),
   incidentCount: vi.fn(),
@@ -21,11 +23,15 @@ vi.mock('@/lib/abac', () => ({
   subjectFromSession: () => ({}),
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
-vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorIsPharmacyOwner: async () => false }));
+vi.mock('@/lib/pharmacy/procurement-access', () => ({
+  actorIsPharmacyOwner: async () => false,
+  actorCanProcure: m.canOpenOrders,
+}));
 vi.mock('./routers/pharmacy-medicine', async (load) => ({
   ...(await load<typeof import('./routers/pharmacy-medicine')>()),
   catalogueAccess: m.catalogue,
 }));
+vi.mock('./routers/pharmacy-purchasing', () => ({ purchasingOrderScope: m.orderScope }));
 vi.mock('./routers/pharmacy-dispensing', () => ({ clinicalReviewScope: m.clinical }));
 vi.mock('./routers/pharmacy-inventory', () => ({ admittedInventoryBranchIds: m.inventory }));
 vi.mock('./pharmacy-procurement-scope', () => ({
@@ -57,6 +63,8 @@ beforeEach(() => {
   m.grants.clear();
   m.catalogue.mockResolvedValue({ reviewer: false, ownerFallback: false });
   m.self.mockResolvedValue(false);
+  m.canOpenOrders.mockResolvedValue(true);
+  m.orderScope.mockResolvedValue({ branchIds: ['admitted'], includeUnscoped: false });
   m.solo.mockResolvedValue(false);
   m.procurement.mockResolvedValue(['admitted']);
   m.register.mockResolvedValue(['admitted']);
@@ -151,4 +159,11 @@ it('applies each clinical, inventory and register branch gate independently', as
   expect(m.stockCount).toHaveBeenCalledWith({
     where: expect.objectContaining({ branchId: 'admitted' }),
   });
+});
+
+it('uses the purchase order console’s access gate for its dashboard link', async () => {
+  m.grants.add('pharmacy:procurement-approve');
+  m.canOpenOrders.mockResolvedValue(false);
+  expect(await readDashboardApprovals(ctx, ['admitted'])).toEqual([]);
+  expect(m.orders).not.toHaveBeenCalled();
 });

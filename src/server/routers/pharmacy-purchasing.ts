@@ -411,7 +411,7 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
   return { organizationId };
 }
 
-async function purchasingOrderScope(ctx: TRPCContext) {
+export async function purchasingOrderScope(ctx: TRPCContext) {
   const { organizationId } = tenantScope(ctx);
   const userId = ctx.session!.user.id;
   const assigned = await procurementBranchIds(ctx.db, organizationId, userId);

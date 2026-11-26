@@ -1096,8 +1096,7 @@ export const pharmacyReportsRouter = router({
         return readDashboardApprovals(
           ctx,
           selected.map((b) => b.id),
-          branch,
-          scope.owner
+          branch
         );
       if (input.section === 'work') {
         const purchasing =

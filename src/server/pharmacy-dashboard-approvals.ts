@@ -10,9 +10,10 @@ import { STAGED_CREATION_OPERATION } from '@/lib/pharmacy/migration/staged-creat
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import type { WatchRow } from '@/lib/pharmacy/owner-watch';
 import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
-import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
+import { actorIsPharmacyOwner, actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import { purchaseOrderScopeWhere } from '@/lib/pharmacy/purchasing-console';
 import { reachableProcurementBranchIds, isSoloOwner } from './pharmacy-procurement-scope';
+import { purchasingOrderScope } from './routers/pharmacy-purchasing';
 import { clinicalReviewScope } from './routers/pharmacy-dispensing';
 import { admittedInventoryBranchIds } from './routers/pharmacy-inventory';
 import { approvedReorderBranch, catalogueAccess } from './routers/pharmacy-medicine';
@@ -21,8 +22,7 @@ import type { TRPCContext } from './trpc';
 export async function readDashboardApprovals(
   ctx: TRPCContext,
   branchIds: string[],
-  selectedBranch?: string,
-  owner = false
+  selectedBranch?: string
 ) {
   const rows: WatchRow[] = [];
   const user = ctx.session?.user;
@@ -44,11 +44,12 @@ export async function readDashboardApprovals(
     ]);
     const reachable =
       orders || suppliers ? await reachableProcurementBranchIds(ctx, branchIds) : [];
-    if (reachable.length && orders) {
+    if (reachable.length && orders && (await actorCanProcure(ctx.db, user.id))) {
+      const purchasing = await purchasingOrderScope(ctx);
       const scope = purchaseOrderScopeWhere({
         organizationId,
-        branchIds: reachable,
-        includeUnscoped: owner && !selectedBranch,
+        branchIds: reachable.filter((id) => purchasing.branchIds.includes(id)),
+        includeUnscoped: purchasing.includeUnscoped && !selectedBranch,
       });
       const pending = await ctx.db.pharmacyPurchaseOrder.findMany({
         where: { ...scope, status: 'SUBMITTED' },
