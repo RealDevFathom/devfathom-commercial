@@ -2,9 +2,9 @@ import { headers } from 'next/headers';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { PORTAL_LINK_PATTERN } from '@/lib/pharmacy/customer-portal';
-import { portalWhatsAppReady } from '@/lib/pharmacy/portal-delivery';
+import { portalSyntheticSender, portalWhatsAppReady } from '@/lib/pharmacy/portal-delivery';
 import { portalSignInMessages } from '@/lib/pharmacy/portal-sign-in-messages';
-import { resolveOrganizationForRequest, isTenantLifecycleAccessible } from '@/lib/tenancy/host';
+import { resolveOrganizationForRequest, requestHost, isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 
 import { PortalSignInForm } from './sign-in-form';
 
@@ -17,14 +17,13 @@ export default async function MyPharmacyJoinPage({
 }) {
   const { token } = await params;
   const requestHeaders = await headers();
-  const organization = await resolveOrganizationForRequest(
-    new Request('http://local', { headers: requestHeaders })
-  );
+  const request = new Request('http://local', { headers: requestHeaders });
+  const organization = await resolveOrganizationForRequest(request);
   const available = organization && isTenantLifecycleAccessible(organization.status);
   const message =
     !available || !PORTAL_LINK_PATTERN.test(token)
       ? portalSignInMessages.invalidLink
-      : !portalWhatsAppReady(organization.id)
+      : !portalWhatsAppReady(organization.id) && !portalSyntheticSender(organization, requestHost(request))
         ? portalSignInMessages.setup
         : null;
 

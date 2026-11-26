@@ -6,7 +6,11 @@ import { z } from 'zod';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
-import { isTenantLifecycleAccessible, resolveOrganizationForRequest } from '@/lib/tenancy/host';
+import {
+  isTenantLifecycleAccessible,
+  requestHost,
+  resolveOrganizationForRequest,
+} from '@/lib/tenancy/host';
 import { matchesTenantRequestOrigin } from '@/lib/tenancy/tenant-request-origin';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -25,7 +29,7 @@ import {
   verifyPortalSignIn,
   type PortalSession,
 } from './customer-portal';
-import { portalWhatsAppReady } from './portal-delivery';
+import { portalSyntheticSender, portalWhatsAppReady } from './portal-delivery';
 import { portalSignInMessages } from './portal-sign-in-messages';
 import { persistPrescriptionFile } from './prescription-files';
 import { createWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
@@ -131,6 +135,7 @@ export async function portalContext(request: Request) {
     return hasModule(entitlements, 'pharmacy-counter');
   });
   if (!licensed) return null;
+  const tenant = organization;
   const ip = clientIp(request);
 
   const inTenant = <T>(run: (db: ScopedDb) => Promise<T>) => withTenantDb(organizationId, run);
@@ -156,9 +161,11 @@ export async function portalContext(request: Request) {
         ]);
         if (blocked) return portalResponse.limited(blocked);
         const config = readWhatsAppConfig();
-        if (!portalWhatsAppReady(organizationId, config))
+        const synthetic = portalSyntheticSender(tenant, requestHost(request), config);
+        if (!synthetic && !portalWhatsAppReady(organizationId, config))
           return portalResponse.invalid(portalSignInMessages.setup);
-        const send = portalCodeSender(config, createWhatsAppProvider(config), organizationId);
+        const send =
+          synthetic ?? portalCodeSender(config, createWhatsAppProvider(config), organizationId);
         const sent = await inTenant((db) =>
           startPortalSignIn(db, organizationId, parsed.data.token, send)
         );
