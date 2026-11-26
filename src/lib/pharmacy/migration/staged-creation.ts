@@ -34,6 +34,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { deriveLooseUnitPrice, normalizeMedicineText, parseDefaultPackSize } from '../medicine';
+import { abuzarMedicines } from './abuzar-catalogue';
 import { applyLegacyControlledToMedicines } from './legacy-controlled';
 import { isLegacyControlledRow } from './legacy-class';
 import { MIGRATION_TARGET_KEYS } from './mapping-targets';
@@ -144,6 +145,7 @@ function boundedInt(value: bigint | number | null | undefined, min: number): num
 }
 
 export type StagedRowForCreation = {
+  preparedAbuzar?: boolean;
   id: string;
   sourceKey: string;
   rowNumber: number;
@@ -692,8 +694,11 @@ export async function createStagedMedicinesChunk(
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`pharmacy-staged-medicine-create:${organizationId}`}, 0))`;
   const rows = await tx.$queryRaw<StagedRowForCreation[]>`
     SELECT r."id", r."sourceKey", r."rowNumber", r."productName", r."packLabel", r."packFactor",
-           r."mrpMinor", r."costMinor", r."barcode", r."rawPayload"
+           r."mrpMinor", r."costMinor", r."barcode", r."rawPayload",
+           (b."profilerVersion"='abuzar/2' AND s.kind='ABUZAR') AS "preparedAbuzar"
       FROM "pharmacy_migration_rows" r
+      JOIN pharmacy_migration_batches b ON b."organizationId"=r."organizationId" AND b.id=r."batchId"
+      JOIN pharmacy_migration_sources s ON s."organizationId"=b."organizationId" AND s.id=b."sourceId"
      WHERE r."organizationId" = ${organizationId}
        AND r."batchId" = ${request.batchId}
        AND ${candidate('r')}
@@ -714,6 +719,16 @@ export async function createStagedMedicinesChunk(
     }
     return [];
   });
+  const nativeRows = planned.filter((item) => item.row.preparedAbuzar);
+  const native = await abuzarMedicines(
+    tx,
+    organizationId,
+    nativeRows.map(({ row, plan }) => ({
+      sourceId: row.sourceKey.slice('abuzar-item:'.length),
+      legacyCode: plan.legacyCode,
+      uniqueLegacy: sourceCell(row.rawPayload, ['abuzaruniquelegacy']) === 'true',
+    }))
+  );
   const earlier = await earlierMedicines(
     tx,
     organizationId,
@@ -765,13 +780,23 @@ export async function createStagedMedicinesChunk(
       mrpMinor: plan.mrpMinor,
       purchasePriceMinor: plan.purchasePriceMinor,
       legacyCode: plan.legacyCode,
-      matchKey: stagedMatchKey(plan),
+      matchKey: row.preparedAbuzar ? row.sourceKey : stagedMatchKey(plan),
       supplierName: plan.supplierName,
       supplierId: supplierOf(plan.supplierName),
       reorderLevelPacks: plan.reorderLevelPacks,
       createdById: scope.actorId,
     };
-    const existing = earlier(plan);
+    const existing = row.preparedAbuzar
+      ? native.get(row.sourceKey.slice('abuzar-item:'.length))
+      : earlier(plan);
+    if (existing === null) {
+      notCreated.push({
+        row,
+        reason: 'Ambiguous Abuzar product identity. Review the source codes.',
+        detail: null,
+      });
+      continue;
+    }
     if (existing) {
       // The medicine is already in the catalogue from an earlier file: link the row, add nothing.
       // Its barcode is reported as not added, because the existing medicine is not changed here.
@@ -895,7 +920,10 @@ export async function createStagedMedicinesChunk(
         productFamily: 'PHARMACEUTICAL',
         // The batch approval is the recorded review; missing strength and registration are
         // stored as not recorded for an imported identity (DEV-852), never a reason to hold sale.
-        saleable: true,
+        saleable: row.preparedAbuzar
+          ? plan.mrpMinor !== null && sourceCell(row.rawPayload, ['active']) === '1'
+          : true,
+        ...(row.preparedAbuzar && plan.narcoticsClass ? { controlled: true } : {}),
       },
       presentation: { id: presentationId, medicineId, presentation: plan.presentation },
       levels,
@@ -962,21 +990,36 @@ export async function createStagedMedicinesChunk(
       })),
     });
   const created = written.flatMap((write) => (write.created ? [write.created] : []));
-  const matched = new Map(
-    written.flatMap((write) => (write.matched ? [[write.matched.medicineId, write.matched]] : []))
+  const ordinary = written.filter((write) => !write.row.preparedAbuzar);
+  const ordinaryMatches = new Map(
+    ordinary.flatMap((write) => (write.matched ? [[write.matched.medicineId, write.matched]] : []))
   );
-  // DEV-854: the shared legacy NARCOTICS rule, for every medicine this step creates or matches,
-  // in one set-based statement for the chunk.
-  const controlled = (
+  let controlled = (
     await applyLegacyControlledToMedicines(tx, organizationId, [
-      ...created.map((item) => ({ ...item, controlled: false })),
-      ...[...matched.values()].map((item) => ({
+      ...ordinary.flatMap((write) =>
+        write.created ? [{ ...write.created, controlled: false }] : []
+      ),
+      ...[...ordinaryMatches.values()].map((item) => ({
         id: item.medicineId,
         productName: item.productName,
         controlled: item.controlled,
       })),
     ])
   ).length;
+  const nativeControlled = written.filter(
+    (write) => write.row.preparedAbuzar && isLegacyControlledRow(write.row.rawPayload)
+  );
+  controlled += nativeControlled.filter((write) => write.created).length;
+  const tighten = nativeControlled.flatMap((write) =>
+    write.matched && !write.matched.controlled ? [write.matched.medicineId] : []
+  );
+  if (tighten.length)
+    controlled += (
+      await tx.medicine.updateMany({
+        where: { organizationId, id: { in: tighten }, controlled: false },
+        data: { controlled: true },
+      })
+    ).count;
   return {
     created: created.length,
     matched: written.filter((write) => write.matched).length,

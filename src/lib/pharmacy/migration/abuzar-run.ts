@@ -2,6 +2,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { catalogueDecision } from './abuzar-catalogue';
 import { actorIsPharmacyOwner } from '../procurement-access';
 import { assertReviewBranch } from './staged-review-read';
 import { sourceReport, type Prepared } from '../../../../tools/abuzar-import/prepared';
@@ -9,7 +10,7 @@ import { appendParties, appendHistory, planParties, planHistory } from './abuzar
 
 export class AbuzarReviewError extends Error {}
 export const phaseInput = z.strictObject({
-  step: z.enum(['parties', 'history']),
+  step: z.enum(['catalogue', 'parties', 'history']),
   sourceBranch: z.string().trim().min(1).max(128),
   addToExisting: z.boolean(),
 });
@@ -36,15 +37,17 @@ export async function runAbuzarStep(
     !(options.addToExisting && (await actorIsPharmacyOwner(db, organizationId, actorId)));
   const source = sourceReport(data);
   const decision =
-    options.step === 'parties'
-      ? await planParties(db, scope, data.tables.parties).then((rows) => ({
-          rows,
-          apply: () => appendParties(db, scope, rows),
-        }))
-      : await planHistory(db, scope, options.sourceBranch, data.tables.history).then((rows) => ({
-          rows,
-          apply: () => appendHistory(db, scope, rows),
-        }));
+    options.step === 'catalogue'
+      ? await catalogueDecision(db, organizationId, data)
+      : options.step === 'parties'
+        ? await planParties(db, scope, data.tables.parties).then((rows) => ({
+            rows,
+            apply: () => appendParties(db, scope, rows),
+          }))
+        : await planHistory(db, scope, options.sourceBranch, data.tables.history).then((rows) => ({
+            rows,
+            apply: () => appendHistory(db, scope, rows),
+          }));
   const skipped = decision.rows.flatMap((r) =>
     r.reason ? [{ row: r.index, reason: r.reason }] : []
   );

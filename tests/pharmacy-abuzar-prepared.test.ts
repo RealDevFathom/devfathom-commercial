@@ -33,3 +33,17 @@ describe('prepared Abuzar export', () => {
     await expect(readPreparedExport(dir)).rejects.toThrow(/checksum.*history/i);
   });
 });
+
+it('stages native source identities for review with original catalogue price and shelf evidence', async () => {
+  const { profileAbuzarProducts } = await import('@/lib/pharmacy/migration/abuzar-catalogue');
+  const data = await readPreparedExport(await syntheticExport());
+  const profile = profileAbuzarProducts(data.tables.products);
+  expect(profile.rows[0]).toMatchObject({
+    sourceKey: 'abuzar-item:A',
+    mrpMinor: 4500n,
+    costMinor: 2000n,
+    packFactor: 10n,
+    rawPayload: { Shelf: 'S1', LegacyCode: '10', Class: 'NARCOTICS' },
+  });
+  expect(profile.rows[1]).toMatchObject({ sourceKey: 'abuzar-item:B', mrpMinor: null });
+});

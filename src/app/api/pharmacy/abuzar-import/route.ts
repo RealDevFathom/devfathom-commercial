@@ -1,3 +1,4 @@
+import { can, subjectFromSession } from '@/lib/abac';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { trustedRequestOrigin } from '@/lib/http-origin';
@@ -55,6 +56,14 @@ export async function POST(request: Request) {
     const { branchId, confirmed, ...options } = parsed.data;
     if (!branches.some((b) => b.id === branchId))
       return message(403, 'Choose an active branch in this workspace.');
+    if (
+      options.step === 'catalogue' &&
+      !(await can(subjectFromSession(session.user), 'pharmacy:catalogue-edit', undefined, {
+        db: ctx.db,
+        source: 'REST',
+      }))
+    )
+      return message(403, 'Catalogue edit permission required.');
     let data;
     try {
       data = await parsePreparedExport(async (name, limit) => {
