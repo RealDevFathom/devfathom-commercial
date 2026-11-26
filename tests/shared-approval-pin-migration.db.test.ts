@@ -9,6 +9,25 @@ const migration = readFileSync(
   'utf8'
 );
 
+async function createHistoricalSchema(db: Client) {
+  await db.query(`
+      CREATE TEMP TABLE organizations(id text primary key, "packageId" text, "isDemo" boolean default false);
+      CREATE TEMP TABLE platform_modules(id text, key text, active boolean, band text);
+      CREATE TEMP TABLE organization_modules(id text, "organizationId" text, "moduleId" text, status text, "startsAt" timestamp default '2025-01-01', "expiresAt" timestamp);
+      CREATE TEMP TABLE platform_package_modules("packageId" text, "moduleId" text, enabled boolean);
+      CREATE TEMP TABLE platform_contracts(id text, "organizationId" text, status text, "startDate" timestamp, "endDate" timestamp, "graceUntil" timestamp);
+      CREATE TEMP TABLE platform_contract_modules("contractId" text, "moduleId" text);
+      INSERT INTO platform_modules VALUES ('restaurant','restaurant-core',true,'VERTICAL_CORE');
+      INSERT INTO platform_package_modules VALUES ('food','restaurant',true);
+      CREATE TEMP TABLE restaurant_staff_profiles(id text, "organizationId" text, "userId" text);
+      CREATE TEMP TABLE restaurant_operator_credentials(id text, "organizationId" text, "staffProfileId" text, type text,
+        "deviceId" text, "revokedAt" timestamp, "createdAt" timestamp default '2026-01-01', "updatedAt" timestamp default '2026-01-02', "credentialHash" text default 'unchanged');
+      CREATE TEMP TABLE audit_logs("organizationId" text, source text default 'TRPC', outcome text default 'SUCCESS', "actorType" text default 'USER',
+        action text, "actorId" text, "targetType" text, "targetId" text, metadata jsonb, "createdAt" timestamp default '2026-01-03');
+      CREATE TEMP TABLE notifications(id text, "organizationId" text, "userId" text, type text, title text, message text);
+  `);
+}
+
 it.runIf(url)('flags unknown or third-party setters and tells each member once', async () => {
   const db = new Client({ connectionString: url });
   await db.connect();
@@ -17,16 +36,9 @@ it.runIf(url)('flags unknown or third-party setters and tells each member once',
       (await db.query('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname=current_user'))
         .rows
     ).toEqual([{ rolsuper: false, rolbypassrls: false }]);
-    // These session-local tables shadow only the inputs of the real migration.
+    await createHistoricalSchema(db);
     await db.query(`
-      CREATE TEMP TABLE organizations(id text primary key);
-      CREATE TEMP TABLE restaurant_staff_profiles(id text, "organizationId" text, "userId" text);
-      CREATE TEMP TABLE restaurant_operator_credentials(id text, "organizationId" text, "staffProfileId" text, type text,
-        "deviceId" text, "revokedAt" timestamp, "updatedAt" timestamp default '2026-01-02', "credentialHash" text default 'unchanged');
-      CREATE TEMP TABLE audit_logs("organizationId" text, source text default 'TRPC', outcome text default 'SUCCESS', "actorType" text default 'USER',
-        action text, "actorId" text, "targetType" text, "targetId" text, metadata jsonb, "createdAt" timestamp default '2026-01-03');
-      CREATE TEMP TABLE notifications(id text, "organizationId" text, "userId" text, type text, title text, message text);
-      INSERT INTO organizations VALUES ('a'),('b');
+      INSERT INTO organizations (id,"packageId") VALUES ('a','food'),('b','food');
       INSERT INTO restaurant_staff_profiles VALUES ('p','a','member'),('q','b','other'),('n','a',NULL),('s','a','self');
       INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type,"deviceId","revokedAt") VALUES
         ('delegated','a','p','PIN',NULL,NULL),('unknown','a','p','PIN',NULL,NULL),
@@ -89,3 +101,77 @@ it.runIf(url)('flags unknown or third-party setters and tells each member once',
     await db.end();
   }
 });
+
+it.runIf(url)(
+  'uses the latest set event for the exact PIN and falls back to effective restaurant modules only for missing history',
+  async () => {
+    const db = new Client({ connectionString: url });
+    await db.connect();
+    try {
+      await createHistoricalSchema(db);
+      await db.query(`
+      INSERT INTO organizations VALUES
+        ('mixed','food',false), ('pharmacy',NULL,false), ('demo','food',true),
+        ('contract',NULL,false), ('disabled','food',false), ('trial',NULL,false);
+      INSERT INTO platform_contracts VALUES ('live','contract','ACTIVE',now()-interval '1 year',now()+interval '1 year',NULL);
+      INSERT INTO platform_contract_modules VALUES ('live','restaurant');
+      INSERT INTO organization_modules (id,"organizationId","moduleId",status) VALUES
+        ('disabled-link','disabled','restaurant','DISABLED'),('trial-link','trial','restaurant','TRIAL');
+
+      CREATE TEMP TABLE expected(id text, tenant text, marked boolean);
+      INSERT INTO expected VALUES
+        ('self-last','mixed',false), ('manager-last','mixed',true), ('support-last','pharmacy',true),
+        ('no-restaurant','pharmacy',false), ('restaurant-unknown','mixed',true), ('demo-skip','demo',false),
+        ('purchase-first','mixed',false), ('replacement','mixed',true), ('alias','mixed',false),
+        ('contract-unknown','contract',true), ('disabled-unknown','disabled',false), ('trial-unknown','trial',true);
+      INSERT INTO restaurant_staff_profiles SELECT id,tenant,'member-'||id FROM expected;
+      INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type)
+        SELECT id,tenant,id,'PIN' FROM expected;
+      INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type,"createdAt","revokedAt")
+        VALUES ('old-purchase','mixed','replacement','PIN','2025-10-01','2025-12-01');
+
+      INSERT INTO audit_logs ("organizationId",action,"actorId","targetType","targetId",metadata,"createdAt") VALUES
+        ('mixed','restaurantStaff.issueCredential','manager','RestaurantOperatorCredential','self-last',NULL,'2026-01-02'),
+        ('mixed','pharmacyPin.setMine','member-self-last','User','member-self-last','{"credentialId":"self-last","staffProfileId":"self-last"}','2026-01-03'),
+        ('mixed','pharmacyPin.setMine','member-manager-last','User','member-manager-last','{"credentialId":"manager-last","staffProfileId":"manager-last"}','2026-01-02'),
+        ('mixed','restaurantStaff.rotateCredential','manager','RestaurantOperatorCredential','manager-last',NULL,'2026-01-03'),
+        ('pharmacy','restaurantStaff.rotateCredential','member-support-last','RestaurantOperatorCredential','support-last','{"supportSessionId":"fixture"}','2026-01-03'),
+        ('demo','restaurantStaff.rotateCredential','manager','RestaurantOperatorCredential','demo-skip',NULL,'2026-01-03'),
+        ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-purchase-first',NULL,NULL,NULL,'2026-01-03'),
+        ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-replacement',NULL,NULL,NULL,'2025-10-02'),
+        ('mixed','accountPin.setMine','member-alias','User','member-alias','{"credentialId":"alias","staffProfileId":"alias"}','2026-01-03');
+
+      -- Two successful approval uses wrote bookkeeping after the member changed the PIN.
+      UPDATE restaurant_operator_credentials SET "updatedAt" = '2026-02-01' WHERE id = 'self-last';
+      INSERT INTO audit_logs ("organizationId",action,"actorId","targetType","targetId","createdAt")
+        VALUES ('mixed','restaurantTerminal.coAuthorize','member-self-last','RestaurantOperatorCredential','self-last','2026-02-01');
+      UPDATE restaurant_operator_credentials SET "updatedAt" = '2026-03-01' WHERE id = 'self-last';
+      INSERT INTO audit_logs ("organizationId",action,"actorId","targetType","targetId","createdAt")
+        VALUES ('mixed','restaurantTerminal.coAuthorize','member-self-last','RestaurantOperatorCredential','self-last','2026-03-01');
+    `);
+      await db.query(migration);
+      expect(
+        (
+          await db.query(`
+      SELECT e.id FROM expected e LEFT JOIN restaurant_operator_credentials c ON c.id = e.id
+      WHERE c."approvalPinMustChange" IS DISTINCT FROM e.marked OR c."credentialHash" IS DISTINCT FROM 'unchanged'
+    `)
+        ).rows
+      ).toEqual([]);
+      expect(
+        (await db.query(`SELECT "userId" FROM notifications ORDER BY "userId"`)).rows.map(
+          (row) => row.userId
+        )
+      ).toEqual([
+        'member-contract-unknown',
+        'member-manager-last',
+        'member-replacement',
+        'member-restaurant-unknown',
+        'member-support-last',
+        'member-trial-unknown',
+      ]);
+    } finally {
+      await db.end();
+    }
+  }
+);
