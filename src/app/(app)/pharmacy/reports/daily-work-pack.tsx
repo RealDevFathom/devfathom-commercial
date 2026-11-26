@@ -37,7 +37,7 @@ const sourceNames = copy.workPack.sourceNames;
 
 function Refresh({ fields, retry = false }: { fields: Record<string, string>; retry?: boolean }) {
   return (
-    <form action="/pharmacy/reports#daily-work-pack" method="get">
+    <form action="/pharmacy/reports/operations#daily-work-pack" method="get">
       {Object.entries(fields).map(([name, value]) => (
         <input key={name} type="hidden" name={name} value={value} />
       ))}

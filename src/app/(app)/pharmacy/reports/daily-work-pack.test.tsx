@@ -88,7 +88,7 @@ it('explains failed expiry reads in one plain note and offers a scoped refresh',
   expect(source.queryByText('No eligible stock')).not.toBeInTheDocument();
   expect(source.queryByText('unavailable', { exact: true })).not.toBeInTheDocument();
   const form = screen.getByRole('button', { name: 'Refresh daily work pack' }).closest('form')!;
-  expect(form).toHaveAttribute('action', '/pharmacy/reports#daily-work-pack');
+  expect(form).toHaveAttribute('action', '/pharmacy/reports/operations#daily-work-pack');
   expect(form).toHaveAttribute('method', 'get');
   expect(form.querySelector('input[name="branch"]')).toHaveValue('branch_1');
 });
