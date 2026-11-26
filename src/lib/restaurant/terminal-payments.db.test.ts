@@ -451,4 +451,43 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
     ).toMatchObject({ outcome: 'REJECTED', failureReason: 'AMOUNT_MISMATCH' });
     expect(await db.restaurantTender.count({ where: { billId: tenant.b.billId } })).toBe(0);
   });
+  it('retires shared signing for all sibling terminals even after the first scoped terminal is removed', async () => {
+    const db = deps.createTenantDb(orgA);
+    const distinctSource = 'key-changeover-' + suffix;
+    const data = {
+      branchId: tenant.a.branchId,
+      deviceId: tenant.a.deviceId,
+      mode: 'WEBHOOK' as const,
+      source: distinctSource,
+    };
+    const first = await db.restaurantTerminalProviderConfig.create({
+      data: { ...data, externalTerminalId: 'first' },
+    });
+    const sibling = await db.restaurantTerminalProviderConfig.create({
+      data: { ...data, externalTerminalId: 'sibling' },
+    });
+    const { verifyWebhookProvider } = await import('./webhook-inbox');
+    const { rotateTerminalWebhookKey } = await import('./terminal-webhook-keys');
+    const secret = randomBytes(32).toString('hex');
+    vi.stubEnv('RESTAURANT_TERMINAL_WEBHOOK_SECRET', secret);
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const rawBody = Buffer.from('{}');
+    const signature = createHmac('sha256', secret)
+      .update(timestamp + '.' + distinctSource + '.')
+      .update(rawBody)
+      .digest('hex');
+    const verify = () =>
+      verifyWebhookProvider(db, distinctSource, {
+        configId: sibling.id,
+        terminalId: null,
+        timestamp,
+        rawBody,
+        signature,
+      });
+    await expect(verify()).resolves.toBeUndefined();
+    await rotateTerminalWebhookKey(db, orgA, first.branchId, first.id);
+    await expect(verify()).rejects.toMatchObject({ status: 401 });
+    await db.restaurantTerminalProviderConfig.delete({ where: { id: first.id } });
+    await expect(verify()).rejects.toMatchObject({ status: 401 });
+  });
 });

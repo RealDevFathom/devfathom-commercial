@@ -179,10 +179,14 @@ async function resolveWebhookProvider(
 ) {
   // The tenant id comes only from the host-bound RLS transaction. A terminal
   // payload and an explicit config header must resolve to the same row.
-  const rows = await tx.$queryRaw<(SigningConfig & { organizationId: string })[]>`
+  const rows = await tx.$queryRaw<
+    (SigningConfig & { organizationId: string; legacyRetired: boolean })[]
+  >`
     SELECT id, "organizationId", "encryptedSigningSecret", "previousEncryptedSigningSecret",
-           "previousSigningSecretExpiresAt", "legacySigningCutoff"
-    FROM restaurant_terminal_provider_configs
+           "previousSigningSecretExpiresAt", "legacySigningCutoff",
+           (SELECT provider.source = ANY(org."restaurantRetiredWebhookSources")
+              FROM organizations org WHERE org.id = provider."organizationId") AS "legacyRetired"
+    FROM restaurant_terminal_provider_configs provider
     WHERE "organizationId" = current_setting('app.current_organization_id')
       AND source = ${source} AND mode = 'WEBHOOK'
       ${signed?.configId != null ? Prisma.sql`AND id = ${signed.configId}` : Prisma.empty}
@@ -194,7 +198,11 @@ async function resolveWebhookProvider(
     if (!config) throw new WebhookAdmissionError(404, 'Unknown webhook source.');
     return;
   }
-  if (!config || rows.length !== 1)
+  if (
+    !config ||
+    rows.length !== 1 ||
+    (config.encryptedSigningSecret === null && config.legacyRetired !== false)
+  )
     throw new WebhookAdmissionError(401, 'Invalid webhook signature.');
   const verification = verifyProviderSignature(
     config,
@@ -265,11 +273,11 @@ export async function recordInboundWebhook(
   for (let attempt = 1; ; attempt += 1) {
     try {
       return await runInboxTransaction(db, async (tx) => {
-        await lockAndVerifyProvider(tx, input);
         // Serialize admission across all webhook sources for this tenant.
         await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(
           'restaurant:webhook:' || current_setting('app.current_organization_id'), 0
         ))::text`;
+        await lockAndVerifyProvider(tx, input);
         const existing = await findExistingInbox(tx, input.source, input.externalEventId);
         if (existing && isDuplicate(existing)) return duplicateOf(existing);
         const pending = await tx.restaurantJob.count({

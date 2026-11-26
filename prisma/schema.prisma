@@ -6260,6 +6260,7 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
+  restaurantRetiredWebhookSources String[] @default([])
   pharmacyChurnScoringRuns      PharmacyChurnScoringRun[]
   pharmacyDrapRecallFeedRuns    PharmacyDrapRecallFeedRun[]
   pharmacyMigrationSources      PharmacyMigrationSource[]

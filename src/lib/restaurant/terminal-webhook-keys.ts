@@ -72,11 +72,16 @@ export async function rotateTerminalWebhookKey(
   // A single UPDATE serializes concurrent rotations and moves the actual
   // last committed ciphertext into the overlap slot.
   const updated = await db.$executeRaw`
+    WITH admission_lock AS MATERIALIZED (
+      SELECT pg_advisory_xact_lock(hashtextextended(
+        'restaurant:webhook:' || current_setting('app.current_organization_id'), 0))
+    )
     UPDATE restaurant_terminal_provider_configs
     SET "previousEncryptedSigningSecret" = "encryptedSigningSecret",
         "previousSigningSecretExpiresAt" = CASE WHEN "encryptedSigningSecret" IS NOT NULL
           THEN clock_timestamp() + interval '24 hours' END,
         "encryptedSigningSecret" = ${encryptSecret(secret)}, "updatedAt" = clock_timestamp()
+    FROM admission_lock
     WHERE "organizationId" = ${organizationId} AND "branchId" = ${branchId}
       AND id = ${configId}
   `;

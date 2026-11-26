@@ -95,6 +95,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
               {
                 id: orgId + '-cfg',
                 organizationId: orgId,
+                legacyRetired: false,
                 encryptedSigningSecret: state.scoped ? encryptSecret(orgId + '-key') : null,
                 previousEncryptedSigningSecret: null,
                 previousSigningSecretExpiresAt: null,
