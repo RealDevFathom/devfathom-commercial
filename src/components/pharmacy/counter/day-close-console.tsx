@@ -483,6 +483,18 @@ function DayCloseForm({
                 {formatMinor(row.amountMinor)} · Refunds {formatMinor(row.refundMinor)} · Net{' '}
                 {formatMinor(row.netMinor)} {currency}
               </p>
+              {row.details?.length ? (
+                <ul
+                  aria-label={`${row.type} payment details`}
+                  className="ps-4 text-sm text-text-body"
+                >
+                  {row.details.map((payment) => (
+                    <li key={payment.id}>
+                      {payment.label} · {formatMinor(payment.amountMinor)} {currency}
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
               {row.confirmers?.length ? (
                 <ul
                   className="ps-4 text-sm text-text-muted"

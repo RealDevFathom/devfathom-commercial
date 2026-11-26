@@ -37,6 +37,8 @@ import {
   aggregateTenderTotals,
   MANUAL_CARD_PROVIDER,
   manualCardCaptureSchema,
+  optionalCardCaptureSchema,
+  optionalTransferCaptureSchema,
   bankTransferCaptureSchema,
 } from './manual-payments';
 import { readManualPaymentSettings } from './manual-payment-settings';
@@ -356,10 +358,11 @@ export async function readPharmacyTenderOutcome(
     )
       return unknown;
     if (
-      input.approvalCode !== undefined &&
+      input.type === 'CARD' &&
+      (tender.provider === MANUAL_CARD_PROVIDER || input.approvalCode !== undefined) &&
       (tender.provider !== MANUAL_CARD_PROVIDER ||
-        tender.providerRef !== input.providerRef?.trim() ||
-        tender.approvalCode !== input.approvalCode.trim())
+        (tender.providerRef ?? null) !== (input.providerRef?.trim() ?? null) ||
+        (tender.approvalCode ?? null) !== (input.approvalCode?.trim() ?? null))
     )
       return unknown;
 
@@ -793,6 +796,19 @@ export async function applyPharmacyTender(
   // The integrated provider path runs only when a provider adapter is supplied.
   const manualCard = input.type === 'CARD' && !input.adapter;
   const bankTransfer = input.type === 'BANK_TRANSFER';
+  // Missing evidence is allowed only under the branch policy locked in this transaction.
+  const needsPolicy =
+    (manualCard && (input.providerRef === undefined || input.approvalCode === undefined)) ||
+    (bankTransfer && input.providerRef === undefined) ||
+    (isManualTender(input.type) && !input.leasedReceipt && input.providerRef === undefined);
+  let requireDetails = true;
+  if (needsPolicy) {
+    const [branch] = await db.$queryRaw<
+      { requirePaymentDetails: boolean }[]
+    >(Prisma.sql`SELECT "requirePaymentDetails" FROM pharmacy_branches
+      WHERE id=${scope.branchId} AND "organizationId"=${scope.organizationId} AND active FOR SHARE`);
+    requireDetails = branch?.requirePaymentDetails !== false;
+  }
   if (manualCard || bankTransfer) {
     if (
       input.payerName !== undefined ||
@@ -830,11 +846,17 @@ export async function applyPharmacyTender(
       WHERE id=${scope.branchId} AND "organizationId"=${scope.organizationId} FOR SHARE`);
     const branch = await readManualPaymentSettings(db, scope);
     try {
-      const capture = validateManualTender(branch.settings, {
+      const merchant = branch.settings[input.type];
+      const settings =
+        !requireDetails && merchant
+          ? { ...branch.settings, [input.type]: { ...merchant, allowReferenceSkip: true } }
+          : branch.settings;
+      const capture = validateManualTender(settings, {
         type: input.type,
         providerRef: input.providerRef,
         payerName: input.payerName,
-        referenceSkipped: input.referenceSkipped,
+        referenceSkipped:
+          !requireDetails && input.providerRef === undefined ? true : input.referenceSkipped,
       });
       provider = 'MANUAL_MERCHANT';
       providerRef = capture.providerRef;
@@ -846,7 +868,9 @@ export async function applyPharmacyTender(
       throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     }
   } else if (manualCard) {
-    const capture = manualCardCaptureSchema.safeParse({
+    const capture = (
+      requireDetails ? manualCardCaptureSchema : optionalCardCaptureSchema
+    ).safeParse({
       providerRef: input.providerRef,
       approvalCode: input.approvalCode,
     });
@@ -863,7 +887,9 @@ export async function applyPharmacyTender(
     await assertPrepaidPin(db, scope.organizationId, sale.customerId, options.prepaidPin);
     provider = PREPAID_PROVIDER;
   } else if (bankTransfer) {
-    const capture = bankTransferCaptureSchema.safeParse({ providerRef: input.providerRef });
+    const capture = (
+      requireDetails ? bankTransferCaptureSchema : optionalTransferCaptureSchema
+    ).safeParse({ providerRef: input.providerRef });
     if (!capture.success) throw new PharmacySettlementError('INVALID_MANUAL_CAPTURE');
     providerRef = capture.data.providerRef;
     // The signed-in cashier confirms the transfer reached the bank account.
@@ -1721,7 +1747,15 @@ export async function cutPharmacyDailyClose(
         branchId: scope.branchId,
         businessDate: input.businessDate,
       },
-      select: { id: true, type: true, amountMinor: true, confirmedById: true },
+      select: {
+        id: true,
+        type: true,
+        amountMinor: true,
+        confirmedById: true,
+        provider: true,
+        providerRef: true,
+        approvalCode: true,
+      },
     }),
   ]);
   const reversedRefunds = await reversedTenderRefundIds(

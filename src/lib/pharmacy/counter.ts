@@ -1,3 +1,4 @@
+import { paymentDetailLabel } from './manual-payments';
 import { readPrepaidAccount } from './prepaid-tiers';
 import { pricePrepaidSale } from './prepaid-discount';
 /**
@@ -1315,6 +1316,7 @@ export async function readCounterReceipt(
   const tenders = sale.tenders.map((tender) => ({
     tenderId: tender.id,
     type: tender.type,
+    ...(paymentDetailLabel(tender) ? { paymentDetails: paymentDetailLabel(tender) } : {}),
     amountMinor: tender.amountMinor,
     cashReceivedMinor: tender.cashReceivedMinor,
     changeGivenMinor: tender.changeGivenMinor,

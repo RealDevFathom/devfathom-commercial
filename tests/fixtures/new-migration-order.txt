@@ -63,3 +63,4 @@
 20261121232100_counter_line_discount_allocations
 20261122010000_pharmacy_terminal_refund_events
 20261126020500_counter_default_sale_unit
+20261126020713_counter_payment_details

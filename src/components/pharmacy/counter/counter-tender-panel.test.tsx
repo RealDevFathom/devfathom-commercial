@@ -11,6 +11,7 @@ function setup(overrides: Partial<CounterTenderPanelProps> = {}) {
   const props: CounterTenderPanelProps = {
     balanceMinor: 25000,
     state: 'ready',
+    requirePaymentDetails: true,
     blocked: false,
     onRetry: vi.fn(),
     onTender: vi.fn().mockResolvedValue({ status: 'accepted', message: 'Payment recorded.' }),
@@ -399,6 +400,25 @@ describe('CounterTenderPanel acknowledgement', () => {
       { amount: '125.50', cashReceived: '' }
     );
   });
+});
+
+describe('DEV-1045 optional payment details', () => {
+  it.each(['CARD', 'BANK_TRANSFER'])(
+    'submits %s with empty details when the branch does not require them',
+    async (type) => {
+      const { props } = setup({ requirePaymentDetails: false });
+      chooseTender(type);
+      const pay = screen.getByRole('button', { name: 'Take payment' });
+      expect(pay).toBeEnabled();
+      fireEvent.click(pay);
+      await waitFor(() =>
+        expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+          { type, amountMinor: 25000 },
+          { amount: '', cashReceived: '' }
+        )
+      );
+    }
+  );
 });
 
 describe('DEV-713 manual card tender', () => {

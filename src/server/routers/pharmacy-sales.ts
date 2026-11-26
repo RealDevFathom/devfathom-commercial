@@ -1564,6 +1564,48 @@ export const pharmacySalesRouter = router({
       });
       return { unit: input.unit };
     }),
+  saveCounterPaymentDetails: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          previous: z.boolean(),
+          required: z.boolean(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (
+        ctx.support ||
+        ctx.session.user.isSupportSession ||
+        !(await isOrganizationOwner(ctx.db, scope.organizationId, scope.actorId))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner can change the payment details requirement.',
+        });
+      const saved = await ctx.db.pharmacyBranch.updateMany({
+        where: {
+          id: scope.branchId,
+          organizationId: scope.organizationId,
+          active: true,
+          requirePaymentDetails: input.previous,
+        },
+        data: { requirePaymentDetails: input.required },
+      });
+      if (!saved.count)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'The branch setting changed. Reload before saving.',
+        });
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: scope.branchId,
+        metadata: { previous: input.previous, required: input.required },
+      });
+      return { required: input.required };
+    }),
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))
     .query(async ({ ctx, input }) => {
@@ -5101,6 +5143,7 @@ export const pharmacySalesRouter = router({
           city: true,
           provinceCode: true,
           counterDefaultSaleUnit: true,
+          requirePaymentDetails: true,
           businessDayEndsAtHistory: true,
         },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],

@@ -1200,6 +1200,7 @@ export function ReturnForm({
                     >
                       {row.prepaid ? 'Prepaid balance' : row.type} · PKR{' '}
                       {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                      {row.paymentDetails && ` · ${row.paymentDetails}`}
                     </option>
                   ))}
                   <option value="none">No refund now — record the return only</option>
@@ -1338,6 +1339,7 @@ export function ReturnForm({
                   >
                     {row.prepaid ? 'Prepaid balance' : row.type} · PKR{' '}
                     {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                    {row.paymentDetails && ` · ${row.paymentDetails}`}
                   </option>
                 ))}
               </select>

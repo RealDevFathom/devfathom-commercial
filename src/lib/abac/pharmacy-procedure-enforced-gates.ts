@@ -519,6 +519,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySales.sandboxPayment': ['admin:access'],
   'pharmacySales.saveBillDiscountSetting': ['signed-in'],
   'pharmacySales.saveCounterDefaultSaleUnit': ['signed-in'],
+  'pharmacySales.saveCounterPaymentDetails': ['signed-in'],
   'pharmacySales.saveDayEndHour': ['signed-in'],
   'pharmacySales.saveDiscountMaximum': ['signed-in'],
   'pharmacySales.saveDiscountPolicy': ['admin:access'],

@@ -500,6 +500,37 @@ describe('day-close console', () => {
     expect(screen.queryByRole('list', { name: 'CASH confirmed by' })).not.toBeInTheDocument();
   });
 
+  it('DEV-1045 shows each card and transfer without evidence in its day-close list', () => {
+    mocks.close = {
+      id: 'close',
+      sequence: 1,
+      isFinal: true,
+      grossSalesMinor: 100,
+      refundTotalMinor: 0,
+      netSalesMinor: 100,
+      cashExpectedMinor: 0,
+      cashCountedMinor: 0,
+      cashVarianceMinor: 0,
+      tenderTotals: [
+        ['CARD', 'No slip details'],
+        ['BANK_TRANSFER', 'No transfer details'],
+      ].map(([type, label]) => ({
+        type,
+        amountMinor: 50,
+        netMinor: 50,
+        refundMinor: 0,
+        details: [{ id: type, label, amountMinor: 50 }],
+      })),
+    };
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('list', { name: 'CARD payment details' })).toHaveTextContent(
+      'No slip details'
+    );
+    expect(screen.getByRole('list', { name: 'BANK_TRANSFER payment details' })).toHaveTextContent(
+      'No transfer details'
+    );
+  });
+
   it('DEV-713 lists two confirmers who share a name as separate rows', () => {
     mocks.close = {
       id: 'c1',

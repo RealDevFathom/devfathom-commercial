@@ -25,6 +25,8 @@ import {
   MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
+  optionalCardCaptureSchema,
+  optionalTransferCaptureSchema,
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
@@ -95,6 +97,7 @@ export type CounterTenderPanelProps = {
   tenders?: readonly CounterCartTender[];
   /** Receipt total retained after the parent has verified this bill's settlement. */
   confirmedChangeMinor?: number;
+  requirePaymentDetails?: boolean;
   manualSettings?: ManualPaymentSettings;
   /**
    * This counter's cash drawer: `false` once the server reports none open,
@@ -215,6 +218,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       signUpKhata,
       khataSignupPatient,
       cashMemo = false,
+      requirePaymentDetails = false,
       manualSettings,
       manualSettingsLoading = false,
       manualSettingsError = false,
@@ -346,11 +350,17 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const manual = isManualTender(type);
     const bankTransfer = type === 'BANK_TRANSFER';
     const transferCapture = bankTransfer
-      ? bankTransferCaptureSchema.safeParse({ providerRef })
+      ? (requirePaymentDetails
+          ? bankTransferCaptureSchema
+          : optionalTransferCaptureSchema
+        ).safeParse({ ...(providerRef !== '' ? { providerRef } : {}) })
       : null;
     const manualCard = type === 'CARD';
     const cardCapture = manualCard
-      ? manualCardCaptureSchema.safeParse({ providerRef, approvalCode })
+      ? (requirePaymentDetails ? manualCardCaptureSchema : optionalCardCaptureSchema).safeParse({
+          ...(providerRef !== '' ? { providerRef } : {}),
+          ...(approvalCode !== '' ? { approvalCode } : {}),
+        })
       : null;
     const merchant = manual ? manualSettings?.[type] : undefined;
     useEffect(() => {
@@ -366,7 +376,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       ? manualTenderCaptureSchema.safeParse({
           type,
           payerName,
-          ...(referenceSkipped ? { referenceSkipped: true } : { providerRef }),
+          ...(referenceSkipped || (!requirePaymentDetails && providerRef === '')
+            ? { referenceSkipped: true }
+            : { providerRef }),
         })
       : null;
     const account = accounts.find((row) => row.id === accountId);
@@ -1025,6 +1037,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
               {lockNote}
               <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
+              {!requirePaymentDetails && (
+                <span className="text-sm text-text-muted"> (optional)</span>
+              )}
               <Input
                 id="bank-transfer-reference"
                 ref={providerRefInput}
@@ -1032,7 +1047,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 autoComplete="off"
                 value={providerRef}
                 maxLength={BANK_TRANSFER_REFERENCE_MAX_LENGTH}
-                required
+                required={requirePaymentDetails}
                 disabled={!editable}
                 aria-invalid={providerRef !== '' && !transferCapture?.success}
                 aria-describedby="bank-transfer-help"
@@ -1056,7 +1071,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               <Label htmlFor="manual-card-reference">
                 Card last 4 digits or terminal reference
               </Label>
+              {!requirePaymentDetails && (
+                <span className="text-sm text-text-muted"> (optional)</span>
+              )}
               <Input
+                required={requirePaymentDetails}
                 id="manual-card-reference"
                 className="min-h-11 font-mono"
                 autoComplete="off"
@@ -1068,7 +1087,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 onChange={(event) => setProviderRef(event.target.value)}
               />
               <Label htmlFor="manual-card-approval">Approval code</Label>
+              {!requirePaymentDetails && (
+                <span className="text-sm text-text-muted"> (optional)</span>
+              )}
               <Input
+                required={requirePaymentDetails}
                 id="manual-card-approval"
                 className="min-h-11 font-mono"
                 autoComplete="off"
@@ -1083,7 +1106,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               />
               <p id="manual-card-help" className="text-sm text-text-muted">
                 Letters and digits only: 4–24 for the reference, 2–12 for the approval code. Never
-                enter the full card number.
+                enter the full card number. Slip details help settle disputes.
               </p>
             </div>
           ) : null}
@@ -1150,6 +1173,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   <Label htmlFor="manual-provider-reference">
                     Transaction ID (last 4–6 digits)
                   </Label>
+                  {!requirePaymentDetails && (
+                    <span className="text-sm text-text-muted"> (optional)</span>
+                  )}
                   <Input
                     ref={providerRefInput}
                     id="manual-provider-reference"

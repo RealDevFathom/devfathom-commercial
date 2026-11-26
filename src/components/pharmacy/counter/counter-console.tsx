@@ -4621,7 +4621,12 @@ function ScopedPharmacyCounterConsole({
           className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
         >
           {actionsOpen && branchAuthorized && (
-            <CounterBranchUnitSetting key={branchId} branchId={branchId} value={branchDefault} />
+            <CounterBranchUnitSetting
+              key={branchId}
+              branchId={branchId}
+              value={branchDefault}
+              requirePaymentDetails={configuredBranch?.requirePaymentDetails ?? false}
+            />
           )}
           <CounterPackCheck
             key={`pack:${branchId}:${saleId}`}
@@ -5994,6 +5999,7 @@ function ScopedPharmacyCounterConsole({
           ref={tenderRef}
           prepaidBalanceMinor={currentBill ? cart.prepaidBalanceMinor : undefined}
           confirmedChangeMinor={confirmedChangeMinor}
+          requirePaymentDetails={configuredBranch?.requirePaymentDetails ?? true}
           manualSettings={manualSettings.data?.settings}
           drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}
           manualSettingsLoading={manualSettings.isLoading}

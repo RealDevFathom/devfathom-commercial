@@ -676,7 +676,10 @@ export function CounterReceiptView({
             <p className="text-text-muted">{strings.tenders}</p>
             {receipt.tenders.map((tender) => (
               <div key={tender.tenderId} className="flex justify-between gap-3">
-                <span className="text-text-strong">{tender.type}</span>
+                <span className="text-text-strong">
+                  {tender.type}
+                  {tender.paymentDetails && ` · ${tender.paymentDetails}`}
+                </span>
                 <span className="tabular-nums text-text-strong">
                   {formatMinor(tender.amountMinor, locale)}
                 </span>

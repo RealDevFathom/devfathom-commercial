@@ -60,7 +60,15 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     }),
     db.pharmacyTender.findMany({
       where,
-      select: { id: true, type: true, amountMinor: true, confirmedById: true },
+      select: {
+        id: true,
+        type: true,
+        amountMinor: true,
+        confirmedById: true,
+        provider: true,
+        providerRef: true,
+        approvalCode: true,
+      },
     }),
     // DEV-623: unpaid bills hold their stock whatever their date, so the close
     // warns about every OPEN or HELD bill left in the branch.

@@ -192,6 +192,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterReceiptFormat',
         'counterKeymap',
         'saveCounterDefaultSaleUnit',
+        'saveCounterPaymentDetails',
         'counterSaveKeymap',
         'counterSearch',
         'upsellSuggestions',
