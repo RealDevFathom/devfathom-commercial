@@ -107,7 +107,7 @@ export const STARTER_CSV_HEADERS = [
 ] as const;
 
 // RFC-style quoted cells, including escaped quotes and embedded CR/LF; never trim cells.
-function csvRecords(text: string): string[][] {
+export function csvRecords(text: string): string[][] {
   const records: string[][] = [];
   let row: string[] = [],
     cell = '',
