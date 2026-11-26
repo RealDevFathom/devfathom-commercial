@@ -1,4 +1,5 @@
 import 'server-only';
+import { counterBranchAssignmentDenial } from './counter-capability';
 import { can } from '@/lib/abac';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import {
@@ -24,21 +25,31 @@ export async function branchAllowsControlledSelfApproval(
   return branch?.requireSecondPharmacist === false;
 }
 
-export function confirmControlledSale(
+export function confirmControlledApproval(
   db: ScopedDb,
   scope: LedgerScope,
-  authorization: Confirmation
+  authorization: Confirmation,
+  action: 'pharmacySales.controlledAuthorization' | 'pharmacy.controlledRestorationWitness'
 ) {
   // Own credential attempts commit separately so an outer transaction rollback cannot erase a strike.
   return authorization.selfApproval
-    ? withTenantDb(scope.organizationId, (tx) => verifyCredential(tx, scope, authorization), {
-        userId: scope.actorId,
-        skipDrain: true,
-      })
-    : verifyCredential(db, scope, authorization);
+    ? withTenantDb(
+        scope.organizationId,
+        (tx) => verifyCredential(tx, scope, authorization, action),
+        {
+          userId: scope.actorId,
+          skipDrain: true,
+        }
+      )
+    : verifyCredential(db, scope, authorization, action);
 }
 
-async function verifyCredential(db: ScopedDb, scope: LedgerScope, authorization: Confirmation) {
+async function verifyCredential(
+  db: ScopedDb,
+  scope: LedgerScope,
+  authorization: Confirmation,
+  action: string
+) {
   // Serialize credential attempts; returning a denial commits durable lockout counters.
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
@@ -64,12 +75,17 @@ async function verifyCredential(db: ScopedDb, scope: LedgerScope, authorization:
   )
     return null;
   if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return null;
+  if (
+    authorization.selfApproval &&
+    (await counterBranchAssignmentDenial(db, pharmacist, scope.organizationId, scope.branchId))
+  )
+    return null;
   const method = await verifyApprovalSecret(db, {
     organizationId: scope.organizationId,
     approverUserId: pharmacist.id,
     credentialHash: credential.credentialHash,
     secret: authorization.pin,
-    action: 'pharmacySales.controlledAuthorization',
+    action,
     approverRight: 'pharmacy:dispense',
     requestedById: scope.actorId,
     now,

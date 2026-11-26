@@ -108,7 +108,7 @@ import {
 } from '@/lib/pharmacy/vouchers';
 import {
   branchAllowsControlledSelfApproval,
-  confirmControlledSale,
+  confirmControlledApproval,
   NO_CONTROLLED_SALE_WITNESS,
   writeControlledReviewApproval,
 } from '@/lib/pharmacy/controlled-sale-approval';
@@ -311,6 +311,12 @@ const maximumWords = (bps: number) =>
 const counterApprovalPin = z
   .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
   .strict();
+const boundedControlledWitnessPin = counterApprovalPin.extend({
+  selfApproval: z.literal(true).optional(),
+});
+const controlledWitnessPin = boundedControlledWitnessPin.extend({
+  staffProfileId: z.string().min(1),
+});
 const tenderInput = z
   .object({
     branchId,
@@ -3465,7 +3471,12 @@ export const pharmacySalesRouter = router({
                 blocked: 'This branch requires a second pharmacist for controlled medicines.',
               };
           }
-          const pharmacist = await confirmControlledSale(db, scope, authorization);
+          const pharmacist = await confirmControlledApproval(
+            db,
+            scope,
+            authorization,
+            'pharmacySales.controlledAuthorization'
+          );
           if (!pharmacist || pharmacist.method === 'BADGE')
             return authorization.selfApproval
               ? { blocked: 'Your PIN or approval code was not accepted.' }
@@ -3930,10 +3941,7 @@ export const pharmacySalesRouter = router({
           reason: z.string().trim().min(1).max(500).optional(),
           // DEV-508: a counter void must say why, from the fixed reason codes.
           voidReason: saleVoidReasonSchema.optional(),
-          controlledWitness: z
-            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-            .strict()
-            .optional(),
+          controlledWitness: controlledWitnessPin.optional(),
         })
         .strict()
         .superRefine((value, issue) => {
@@ -4113,7 +4121,7 @@ export const pharmacySalesRouter = router({
           requestId: z.uuid(),
           reason: z.string().trim().min(1).max(500),
           managerPin: z.string().regex(/^\d{4,8}$/),
-          controlledWitness: counterApprovalPin.optional(),
+          controlledWitness: boundedControlledWitnessPin.optional(),
           lines: z
             .array(
               z
@@ -4216,10 +4224,7 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
-          controlledWitness: z
-            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-            .strict()
-            .optional(),
+          controlledWitness: controlledWitnessPin.optional(),
           // Omitted legacy/unknown lot is accepted only into unidentified quarantine custody.
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
@@ -4285,10 +4290,7 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
-          controlledWitness: z
-            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
-            .strict()
-            .optional(),
+          controlledWitness: controlledWitnessPin.optional(),
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),

@@ -748,6 +748,7 @@ function ScopedPharmacyCounterConsole({
   const [packApproval, setPackApproval] = useState<{
     medicineName: string;
     discount?: string;
+    controlledVoid?: boolean;
   } | null>(null);
   const finishPackApproval = useCallback((approval: CounterApprovalPin | null) => {
     const resolve = packApprovalResolver.current;
@@ -3016,6 +3017,33 @@ function ScopedPharmacyCounterConsole({
     return () => window.clearTimeout(timer);
   }, [drainScanQueue, scanSettles]);
 
+  const loadControlledVoidApprovers = useCallback(async () => {
+    const rows = await utils.client.pharmacySafety.controlledPharmacists.query({ branchId });
+    return rows.map((row) => ({ id: row.id, name: row.name, self: row.ownApproval === true }));
+  }, [branchId, utils]);
+
+  const transitionWithControlledApproval = useCallback(
+    async (input: Parameters<typeof transition.mutateAsync>[0]) => {
+      const result = await transition.mutateAsync(input);
+      if (input.action !== 'void' || !result || !('blocked' in result)) return result;
+      const approval = await new Promise<CounterApprovalPin | null>((resolve) => {
+        packApprovalResolver.current = resolve;
+        setPackApproval({ medicineName: 'Controlled medicine', controlledVoid: true });
+      });
+      if (!approval) return result;
+      return transition.mutateAsync({
+        ...input,
+        controlledWitness: {
+          ...approval,
+          ...(approval.staffProfileId === ownControlledProfileId
+            ? { selfApproval: true as const }
+            : {}),
+        },
+      });
+    },
+    [transition, ownControlledProfileId]
+  );
+
   const runTransition = useCallback(
     async (action: 'hold' | 'resume' | 'void', voidReason?: SaleVoidReason) => {
       const target = action === 'resume' ? heldSaleId : saleId;
@@ -3023,12 +3051,16 @@ function ScopedPharmacyCounterConsole({
       setPending(action);
       setNotice(null);
       try {
-        await transition.mutateAsync({
+        const result = await transitionWithControlledApproval({
           branchId,
           saleId: target,
           action,
           ...(action === 'void' ? { voidReason } : {}),
         });
+        if (result && 'blocked' in result) {
+          setNotice({ tone: 'warning', message: String(result.blocked) });
+          return;
+        }
         if (action === 'hold') {
           setHeldSaleId(target);
           setActiveSale(null);
@@ -3062,7 +3094,7 @@ function ScopedPharmacyCounterConsole({
       refreshCart,
       saleId,
       setActiveSale,
-      transition,
+      transitionWithControlledApproval,
     ]
   );
 
@@ -3109,7 +3141,7 @@ function ScopedPharmacyCounterConsole({
       setPending('void');
       setNotice(null);
       try {
-        const result = await transition.mutateAsync({
+        const result = await transitionWithControlledApproval({
           branchId,
           saleId: bill.saleId,
           action: 'void',
@@ -3132,7 +3164,16 @@ function ScopedPharmacyCounterConsole({
         void refetchOpenBills();
       }
     },
-    [branchId, busy, heldSaleId, refetchOpenBills, refreshCart, saleId, setActiveSale, transition]
+    [
+      branchId,
+      busy,
+      heldSaleId,
+      refetchOpenBills,
+      refreshCart,
+      saleId,
+      setActiveSale,
+      transitionWithControlledApproval,
+    ]
   );
 
   const loadKhataAccounts = useCallback(async () => {
@@ -5643,17 +5684,29 @@ function ScopedPharmacyCounterConsole({
           {packApproval ? (
             <CounterPackApprovalDialog
               medicineName={packApproval.medicineName}
+              controlled={packApproval.controlledVoid}
               copy={
-                packApproval.discount
+                packApproval.controlledVoid
                   ? {
-                      title: 'Approve this discount?',
-                      description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
-                      confirm: 'Approve discount',
+                      title: 'Confirm this controlled stock restoration',
+                      description:
+                        'Select a pharmacist and enter a fresh PIN or approval code to void this bill and record its stock restoration.',
+                      confirm: 'Confirm void',
                     }
-                  : undefined
+                  : packApproval.discount
+                    ? {
+                        title: 'Approve this discount?',
+                        description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
+                        confirm: 'Approve discount',
+                      }
+                    : undefined
               }
               loadApprovers={
-                packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
+                packApproval.controlledVoid
+                  ? loadControlledVoidApprovers
+                  : packApproval.discount
+                    ? loadDiscountApprovers
+                    : loadScannedPackApprovers
               }
               onCancel={() => finishPackApproval(null)}
               onConfirm={finishPackApproval}

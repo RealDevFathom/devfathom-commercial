@@ -24,12 +24,14 @@ export type CounterApprovalDialogCopy = { title: string; description: string; co
 export function CounterPackApprovalDialog({
   medicineName,
   copy,
+  controlled = false,
   loadApprovers,
   onCancel,
   onConfirm,
 }: {
   medicineName: string;
   copy?: CounterApprovalDialogCopy;
+  controlled?: boolean;
   loadApprovers: () => Promise<Approver[]>;
   onCancel: () => void;
   onConfirm: (approval: CounterApprovalPin) => void;
@@ -81,7 +83,9 @@ export function CounterPackApprovalDialog({
               `${medicineName}: this pack is not from the earliest-expiry batch. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`}
           </DialogDescription>
           <div className="grid gap-2">
-            <Label htmlFor="pack-approver">Approving manager or owner</Label>
+            <Label htmlFor="pack-approver">
+              {controlled ? 'Approving pharmacist' : 'Approving manager or owner'}
+            </Label>
             <select
               id="pack-approver"
               className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
@@ -92,7 +96,9 @@ export function CounterPackApprovalDialog({
                 setPin('');
               }}
             >
-              <option value="">Select manager or owner</option>
+              <option value="">
+                {controlled ? 'Select pharmacist' : 'Select manager or owner'}
+              </option>
               {(failed ? [] : (rows ?? [])).map((row) => (
                 <option key={row.id} value={row.id}>
                   {row.self ? `${row.name} (you)` : row.name}
@@ -120,8 +126,10 @@ export function CounterPackApprovalDialog({
               <p role="status">Loading approvers…</p>
             ) : rows.length === 0 ? (
               <p role="status">
-                No manager or owner has an active staff PIN. A manager or owner creates their own
-                under Settings, Your PIN. <OwnPinLink />
+                {controlled
+                  ? 'No eligible pharmacist has an active approval credential.'
+                  : 'No manager or owner has an active staff PIN. A manager or owner creates their own under Settings, Your PIN.'}{' '}
+                <OwnPinLink />
               </p>
             ) : null}
             <Label htmlFor="pack-approver-pin">{approvalCopy.approverLabel}</Label>

@@ -2122,6 +2122,10 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   await reason.focus();
   await reason.press('Space');
   await pressControl(voidDialog.getByRole('button', { name: 'Void bill' }));
+  const restore = page.getByRole('dialog', { name: 'Confirm this controlled stock restoration' });
+  await restore.getByLabel('Approving pharmacist').selectOption(PHARMACY_E2E.adminStaffProfileId);
+  await restore.locator('input[type=password]').fill(PHARMACY_E2E.adminPin);
+  await pressControl(restore.getByRole('button', { name: 'Confirm void' }));
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
   });
@@ -2797,7 +2801,6 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
     organizationId,
     branchId,
     adminId,
-    patientId,
     prescriberId,
     medicines,
     adminPinCredentialId,
@@ -2806,12 +2809,22 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
   } = PHARMACY_E2E;
   const med = medicines.controlled;
   const rx = randomUUID();
+  const patientId = randomUUID();
+  const patientName = 'Synthetic solo ' + patientId.slice(0, 8);
   const address = '103 Synthetic Test Street';
   await db.connect();
   try {
     await db.query(
       "SELECT set_config('app.current_organization_id',$1,false), set_config('app.current_branch_id',$2,false)",
       [organizationId, branchId]
+    );
+    await db.query(
+      'INSERT INTO pharmacy_patients(id,"organizationId","displayName","updatedAt") VALUES ($1,$2,$3,now())',
+      [patientId, organizationId, patientName]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_patient_consents(id,"organizationId","patientId",purpose,channel,version,granted,"recordedByUserId") VALUES ($1,$2,$3,'DISPENSING','IN_PERSON',1,true,$4)`,
+      [randomUUID(), organizationId, patientId, adminId]
     );
     await db.query(
       `INSERT INTO pharmacy_prescriptions(id,"organizationId","patientId","prescriberId","sourceKind","sourceFileRef","validFrom","validUntil","capturedByUserId")
@@ -2832,9 +2845,9 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
     await pressControl(sheet.getByRole('button', { name: 'Find the patient' }));
     const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
     const find = checks.getByLabel('Find patient');
-    await find.fill(PHARMACY_E2E.patientName);
+    await find.fill(patientName);
     await find.press('Enter');
-    await pressControl(checks.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+    await pressControl(checks.getByRole('button', { name: new RegExp(patientName) }));
     await pressControl(checks.getByRole('button', { name: /^Authorise Fathomadol/ }));
     await sheet.getByLabel('Patient address').fill(address);
     await sheet.getByLabel('Prescription line', { exact: true }).selectOption(rx + '-line');
@@ -2852,6 +2865,7 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
           )
         ).rows[0].failedAttempts
       );
+    await qaShots(page, 'controlled-own-confirmation', { focus: pin, widths: QA_STATE_WIDTHS });
     const before = await strikes();
     await pin.fill('0000');
     await pressControl(submit);

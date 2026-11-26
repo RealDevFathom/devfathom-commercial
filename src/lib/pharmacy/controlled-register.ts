@@ -663,6 +663,32 @@ export async function appendControlledRestorations(
     });
     if (runningBalance !== sellable) throw new Error('BALANCE');
     const serial = await nextSerial(db, input.organizationId, input.branchId);
+    const method = input.witness.counterSelfApproval;
+    const approval = method
+      ? await db.auditLog.create({
+          data: {
+            organizationId: input.organizationId,
+            actorId: input.recordedByUserId,
+            source: 'TRPC',
+            category: 'PHARMACY',
+            operation: 'EXECUTE',
+            action: 'pharmacySales.controlledRestorationSelfApproval',
+            outcome: 'SUCCESS',
+            targetType: 'PharmacyStockMovement',
+            targetId: line.restorationMovementId,
+            metadata: {
+              selfApproved: true,
+              approvalMethod: method,
+              pinVerified: method === 'PIN',
+              authenticatorVerified: method === 'AUTHENTICATOR',
+              branchId: input.branchId,
+              correctsEntryId: source.id,
+              restorationMovementId: line.restorationMovementId,
+            },
+          },
+          select: { id: true },
+        })
+      : null;
     await createRegisterRow(db, {
       organizationId: input.organizationId,
       branchId: input.branchId,
@@ -685,8 +711,9 @@ export async function appendControlledRestorations(
       balanceDelta,
       runningBalance,
       recordedByUserId: input.recordedByUserId,
-      witnessedByUserId: input.witness.witnessedByUserId,
-      signatureRef: input.witness.signatureRef,
+      witnessedByUserId: approval ? null : input.witness.witnessedByUserId,
+      signatureRef: approval?.id ?? input.witness.signatureRef,
+      ...(approval ? { witnessStatement: 'No witness' } : {}),
       rxSerialWritten: source.rxSerialWritten,
       emergency: source.emergency,
       counterpartyName: source.counterpartyName,

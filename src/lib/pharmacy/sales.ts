@@ -1,3 +1,7 @@
+import {
+  branchAllowsControlledSelfApproval,
+  confirmControlledApproval,
+} from './controlled-sale-approval';
 import { reversedTenderRefundIds } from './card-terminal/provider-refunds';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PREPAID_PROVIDER } from './prepaid-tiers';
@@ -97,6 +101,23 @@ export async function controlledSaleRestorationWitness(
   scope: LedgerScope,
   input?: ControlledRestorationPin
 ): Promise<ControlledRestorationWitness> {
+  if (input?.selfApproval) {
+    if (!(await branchAllowsControlledSelfApproval(db, scope)))
+      throw new ControlledRestorationDenied();
+    const confirmed = await confirmControlledApproval(
+      db,
+      scope,
+      input,
+      'pharmacy.controlledRestorationWitness'
+    );
+    if (!confirmed || confirmed.method === 'BADGE')
+      throw new ControlledRestorationDenied(false, true);
+    return {
+      witnessedByUserId: scope.actorId,
+      signatureRef: '',
+      counterSelfApproval: confirmed.method,
+    };
+  }
   try {
     return await authorizeControlledRestoration(db, scope, input);
   } catch (error) {
