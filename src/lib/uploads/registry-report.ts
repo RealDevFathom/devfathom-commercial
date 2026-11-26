@@ -15,7 +15,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * - `unregisteredReferences`: records that still reference an `/api/files`
  *   object the registry does not know. These are refused by `/api/files`.
  *
- * Stored objects that no record references at all cannot be counted from the
+ * Unregistered stored objects that no record references at all cannot be counted from the
  * database; the report says so instead of guessing.
  */
 export type UploadRegistryCount = { recordType: string; count: number };
@@ -23,6 +23,7 @@ export type UploadRegistryCount = { recordType: string; count: number };
 export type UploadRegistryReport = {
   tombstoned: UploadRegistryCount[];
   unregisteredReferences: UploadRegistryCount[];
+  unattached: { count: number; oldest: Date | null; newest: Date | null; withoutUploader: number };
   note: string;
 };
 
@@ -43,6 +44,16 @@ const TOMBSTONED = Prisma.sql`
                 AND EXISTS (SELECT 1 FROM "project_files" r WHERE r."id" = b."ownerId"))
            OR (b."ownerType" = 'TASK_ATTACHMENT'
                 AND EXISTS (SELECT 1 FROM "task_attachments" r WHERE r."id" = b."ownerId"))
+           OR (b."ownerType" = 'CLIENT_LOGO' AND EXISTS (
+                 SELECT 1 FROM clients r
+                  WHERE r.id = b."ownerId" AND r.logo = '/api/files/' || u.name))
+           OR (b."ownerType" = 'CHAT_ATTACHMENT' AND EXISTS (
+                 SELECT 1 FROM message_attachments a JOIN messages m ON m.id = a."messageId"
+                  WHERE a.id = b."ownerId" AND a.url = '/api/files/' || u.name AND m."deletedAt" IS NULL))
+           OR (b."ownerType" IN ('PHARMACY_LICENCE_EVIDENCE','PHARMACY_COVERAGE_ROSTER') AND EXISTS (
+                 SELECT 1 FROM pharmacy_branch_regulatory_profiles r
+                  WHERE r."branchId"=b."ownerId"
+                    AND CASE b."ownerType" WHEN 'PHARMACY_LICENCE_EVIDENCE' THEN r."licenceEvidenceFileRef" ELSE r."qualifiedPersonCoverageRosterRef" END='/api/files/' || u.name))
            OR (b."ownerType" = 'CONTRACT'
                 AND EXISTS (SELECT 1 FROM "contracts" r WHERE r."id" = b."ownerId"))
      )
@@ -87,9 +98,14 @@ export async function readUploadRegistryReport(
 ): Promise<UploadRegistryReport> {
   const tombstoned = await db.$queryRaw<UploadRegistryCount[]>(TOMBSTONED);
   const unregisteredReferences = await db.$queryRaw<UploadRegistryCount[]>(UNREGISTERED_REFERENCES);
+  const [unattached] = await db.$queryRaw<UploadRegistryReport['unattached'][]>(Prisma.sql`
+    SELECT count(*)::int AS count, min("createdAt") AS oldest, max("createdAt") AS newest,
+      count(*) FILTER (WHERE "uploadedById" IS NULL)::int AS "withoutUploader"
+    FROM "uploaded_files" WHERE "ownerType" IS NULL`);
   return {
+    unattached,
     tombstoned,
     unregisteredReferences,
-    note: 'Stored objects that no record references are not counted; nothing is deleted from storage.',
+    note: 'Unregistered stored objects that no record references are not counted; nothing is deleted from storage.',
   };
 }

@@ -17,7 +17,7 @@ import {
   pharmacySopEvidenceReadDecision,
 } from '@/lib/pharmacy/sop-evidence';
 import { isOwnerDataExportObjectName } from '@/lib/pharmacy/owner-data-export-object';
-import { canReadUpload } from '@/lib/uploads/registry';
+import { registeredReadDecision, mayReadPharmacyDocument } from '@/lib/uploads/registry';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -84,7 +84,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   const organization = actor.organization;
   const fileRef = '/api/files/' + name;
 
-  // Pharmacy licence evidence belongs to the admin-only regulatory profile.
+  // Pharmacy licence evidence requires an admin or an admitted branch manager.
   // Look it up inside the tenant scope before touching storage, and use a 404
   // for denials so a member cannot confirm that a guessed file reference exists.
   const licenceEvidence = await withTenantDb(organization.id, (db) =>
@@ -93,8 +93,23 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       select: { id: true },
     })
   );
-  if (licenceEvidence && session.user.role !== 'ADMIN') {
-    return new Response('Not found', { status: 404 });
+  const readDecision = () =>
+    withTenantDb(organization.id, (db) => registeredReadDecision(db, session.user, name));
+  let decision: Awaited<ReturnType<typeof readDecision>> | undefined;
+  const licenceDenied =
+    !!licenceEvidence &&
+    !(await withTenantDb(organization.id, (db) =>
+      mayReadPharmacyDocument(
+        db,
+        session.user,
+        { regulatoryProfiles: { some: { licenceEvidenceFileRef: fileRef } } },
+        true
+      )
+    ));
+  if (licenceDenied) {
+    // A grandfathered upload may also have an independently readable typed record.
+    decision = await readDecision();
+    if (decision !== 'TYPED') return new Response('Not found', { status: 404 });
   }
 
   const sopCaptureName = isSopCaptureName(name);
@@ -125,6 +140,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     sopEvidenceRow && (sopEvidenceRow.serverCaptured === true || sopCaptureName)
       ? sopEvidenceRow
       : null;
+  if (licenceDenied && sopEvidence) return new Response('Not found', { status: 404 });
   if (sopCaptureName && !sopEvidence) return new Response('Not found', { status: 404 });
   // DEV-751: proof on a pharmacy SOP site is governed by pharmacy branch
   // assignment and SOP capability, not by restaurant branch membership.
@@ -161,34 +177,22 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // bind or re-bind an object. An object the registry does not know (a legacy
   // file nothing references any more) is unresolved and is never served.
   if (!sopEvidence) {
-    const upload = await withTenantDb(organization.id, (db) =>
-      db.uploadedFile.findFirst({
-        where: { name },
-        select: { ownerType: true, ownerId: true, uploadedById: true },
-      })
-    );
-    if (!upload) return new Response('Not found', { status: 404 });
-    const ownerType = upload.ownerType;
-    if (ownerType === null && upload.uploadedById !== session.user.id) {
-      return new Response('Not found', { status: 404 });
-    }
-    if (ownerType !== null) {
-      const allowed = await withTenantDb(organization.id, (db) =>
-        canReadUpload(db, session.user, { name, ownerType, ownerId: upload.ownerId })
-      );
-      if (!allowed) return new Response('Not found', { status: 404 });
-    }
+    decision ??= await readDecision();
+    if (decision === 'DENY') return new Response('Not found', { status: 404 });
   }
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
   // leaks a private-channel/DM file to any signed-in user.
-  const attachment = await withTenantDb(organization.id, (db) =>
-    db.messageAttachment.findFirst({
-      where: { url: fileRef },
-      select: { message: { select: { channelId: true } } },
-    })
-  );
+  const attachment =
+    decision === 'TYPED'
+      ? null
+      : await withTenantDb(organization.id, (db) =>
+          db.messageAttachment.findFirst({
+            where: { url: fileRef },
+            select: { message: { select: { channelId: true } } },
+          })
+        );
   if (attachment) {
     const member = await withTenantDb(organization.id, (db) =>
       db.channelMember.findUnique({

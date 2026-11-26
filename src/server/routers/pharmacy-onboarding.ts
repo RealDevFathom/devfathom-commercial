@@ -1,3 +1,4 @@
+import { claimUploadOrThrow } from '../upload-claims';
 /**
  * PLAT-02 / PLAT-03 tenant surfaces — the twelve-step onboarding checklist, the
  * branch regulatory profile, and the activation status the operator reads when
@@ -945,6 +946,14 @@ export const pharmacyOnboardingRouter = router({
               controlledRegisterYears: input.retentionControlledRegisterYears,
             },
           },
+        });
+        await claimUploadOrThrow(tx, input.licenceEvidenceFileRef, ctx.session.user.id, {
+          type: 'PHARMACY_LICENCE_EVIDENCE',
+          id: branch.id,
+        });
+        await claimUploadOrThrow(tx, input.qualifiedPersonCoverageRosterRef, ctx.session.user.id, {
+          type: 'PHARMACY_COVERAGE_ROSTER',
+          id: branch.id,
         });
       });
 

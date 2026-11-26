@@ -32,6 +32,7 @@ beforeEach(() => {
       branchRegulatoryProfile: { findFirst: m.licence },
       restaurantSopEvidence: { findFirst: m.sop },
       restaurantBranchAssignment: { findUnique: m.branch },
+      pharmacyBranchAssignment: { findFirst: async () => null },
       pharmacySopSite: { findFirst: m.site },
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },

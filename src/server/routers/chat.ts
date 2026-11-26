@@ -1,3 +1,4 @@
+import { claimUploadOrThrow } from '../upload-claims';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
@@ -290,29 +291,38 @@ export const chatRouter = router({
             .filter((id) => id !== me)
         : [];
 
-      const created = await ctx.db.message.create({
-        data: {
-          content,
-          contentJson: input.contentJson ?? undefined,
-          channelId: input.channelId,
-          senderId: me,
-          parentId: input.parentId,
-          attachments: input.attachments?.length
-            ? {
-                create: input.attachments.map((a) => ({
-                  name: a.name,
-                  url: a.url,
-                  type: a.type ?? null,
-                  size: a.size ?? null,
-                  duration: a.duration ?? null,
-                })),
-              }
-            : undefined,
-          mentions: validMentions.length
-            ? { create: validMentions.map((userId) => ({ userId })) }
-            : undefined,
-        },
-        include: msgIncludeFor(me),
+      const created = await ctx.db.$transaction(async (tx) => {
+        const message = await tx.message.create({
+          data: {
+            content,
+            contentJson: input.contentJson ?? undefined,
+            channelId: input.channelId,
+            senderId: me,
+            parentId: input.parentId,
+            attachments: input.attachments?.length
+              ? {
+                  create: input.attachments.map((a) => ({
+                    name: a.name,
+                    url: a.url,
+                    type: a.type ?? null,
+                    size: a.size ?? null,
+                    duration: a.duration ?? null,
+                  })),
+                }
+              : undefined,
+            mentions: validMentions.length
+              ? { create: validMentions.map((userId) => ({ userId })) }
+              : undefined,
+          },
+          include: msgIncludeFor(me),
+        });
+        for (const attachment of message.attachments) {
+          await claimUploadOrThrow(tx, attachment.url, me, {
+            type: 'CHAT_ATTACHMENT',
+            id: attachment.id,
+          });
+        }
+        return message;
       });
       // Fire-and-forget: bumping updatedAt only re-sorts the sidebar; don't make
       // the sender wait an extra DB round-trip for it.
