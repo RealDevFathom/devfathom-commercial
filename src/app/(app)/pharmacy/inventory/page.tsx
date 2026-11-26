@@ -1560,7 +1560,7 @@ export default async function PharmacyInventoryPage({
                     <p className="mt-2 text-xs text-text-muted">
                       Stock checked {when(signal.sourceObservedAt)} using records from{' '}
                       {when(signal.dataWindowStart)} to {when(signal.dataWindowEnd)}.
-                      {signal.confidence === 'LOW' ? ' Some records may be incomplete.' : ''}
+                      {signal.confidence === 'PARTIAL' ? ' Some records may be incomplete.' : ''}
                     </p>
                   </div>
                   <StatusPill status={label(signal.status)} tone={tone(signal.status)} />

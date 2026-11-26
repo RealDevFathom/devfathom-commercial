@@ -344,7 +344,7 @@ describe('DEV-682 daily cycle count', () => {
     await show();
     expect(mocks.cycleList).toHaveBeenCalledWith({ branchId: branch.id });
     const card = cycleCard();
-    expect(card.getByText('Fast mover')).toBeVisible();
+    expect(card.getByText('Sells often')).toBeVisible();
     expect(card.getByText('High value')).toBeVisible();
     const sealed = card.getAllByRole('spinbutton', { name: /Counted sealed packs/ });
     const loose = card.getAllByRole('spinbutton', { name: /Counted loose units/ });
@@ -707,7 +707,7 @@ describe('Inventory pack-action integration', () => {
     );
     expect(screen.getByText('34 units · 3 sealed + 4 loose')).toBeVisible();
     expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
-    expect(screen.getByRole('link', { name: 'Imported stock references' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Past stock imports' })).toHaveAttribute(
       'href',
       '/pharmacy/inventory/imports'
     );
@@ -754,10 +754,13 @@ describe('Inventory pack-action integration', () => {
     );
   });
 
-  it.each(['RECALLED', 'QUARANTINED'])('disables batch state %s', async (state) => {
+  it.each([
+    ['RECALLED', 'Batch is recalled.'],
+    ['QUARANTINED', 'Batch is set aside.'],
+  ])('disables batch state %s', async (state, reason) => {
     lots.mockResolvedValue([{ ...lot, batch: { ...lot.batch, state } }]);
     await show();
-    expect(mocks.form.mock.calls[0][0].unavailableReason).toBe(`Batch is ${state.toLowerCase()}.`);
+    expect(mocks.form.mock.calls[0][0].unavailableReason).toBe(reason);
   });
 
   it('excludes held and zero-unit balances from actions', async () => {
