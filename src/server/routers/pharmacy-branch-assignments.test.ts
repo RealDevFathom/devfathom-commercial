@@ -108,6 +108,21 @@ beforeEach(() => {
 });
 
 describe('pharmacy branch assignments', () => {
+  it('requires another administrator to change the acting member’s own branch access', async () => {
+    const f = fixture();
+    f.context.session.user.id = 'cashier-1';
+    const refusal = {
+      code: 'FORBIDDEN',
+      message: 'Another administrator must change your branch access.',
+    };
+    await expect(
+      f.caller.assign({ branchId: 'branch-a', userId: 'cashier-1' })
+    ).rejects.toMatchObject(refusal);
+    await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject(refusal);
+    expect(f.db.pharmacyBranchAssignment.upsert).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+  });
+
   it('lists active pharmacy members and their assignments', async () => {
     const f = fixture();
     await expect(f.caller.list()).resolves.toEqual({

@@ -99,6 +99,15 @@ async function isOwner(
   return Boolean(actor && hasAllCapabilityAccess(actor));
 }
 
+function requireDifferentMember(ctx: TRPCContext, memberId: string) {
+  if (ctx.session?.user.id === memberId) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Another administrator must change your branch access.',
+    });
+  }
+}
+
 export const pharmacyBranchAssignmentsRouter = router({
   cashModes: adminProcedure.query(async ({ ctx }) => {
     assertModuleLicensed(ctx, 'pharmacy-core');
@@ -307,6 +316,7 @@ export const pharmacyBranchAssignmentsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);
+      requireDifferentMember(ctx, input.userId);
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { id: input.branchId, organizationId, active: true },
         select: { id: true },
@@ -355,6 +365,7 @@ export const pharmacyBranchAssignmentsRouter = router({
         select: { id: true, branchId: true, userId: true },
       });
       if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Assignment was not found.' });
+      requireDifferentMember(ctx, row.userId);
       await ctx.db.pharmacyBranchAssignment.update({
         where: { id: row.id },
         data: { active: false },
