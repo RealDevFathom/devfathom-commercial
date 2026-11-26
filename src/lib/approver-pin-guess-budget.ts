@@ -1,6 +1,12 @@
 import 'server-only';
 
-import { clearRateLimit, rateLimit, refundRateLimit, type RateLimitResult } from '@/lib/rate-limit';
+import {
+  clearRateLimit,
+  rateLimitHasCapacity,
+  rateLimit,
+  refundRateLimit,
+  type RateLimitResult,
+} from '@/lib/rate-limit';
 import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/operator-credentials';
 
 /**
@@ -16,6 +22,10 @@ import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/opera
  */
 function budgetKey(organizationId: string, approverId: string) {
   return `approver-pin-typed-by-another:${organizationId}:${approverId}`;
+}
+
+export function approverGuessBudgetAvailable(organizationId: string, approverId: string) {
+  return rateLimitHasCapacity(budgetKey(organizationId, approverId), MAX_FAILED_ATTEMPTS);
 }
 
 /** Spends one guess. `ok: false` once the approver's budget for this window is gone. */

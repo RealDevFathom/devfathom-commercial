@@ -2150,8 +2150,6 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
       const { MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS } =
         await import('@/lib/restaurant/operator-credentials');
       const { rateLimitStorageKey } = await import('@/lib/rate-limit');
-      const { spendApproverPinGuessTypedByAnother } =
-        await import('@/lib/approver-pin-guess-budget');
       const budgetKeys = [s.manager, other].map((id) =>
         rateLimitStorageKey(`approver-pin-typed-by-another:${scope.organizationId}:${id}`)
       );
@@ -2176,11 +2174,10 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
           db.$queryRaw<{ count: number }[]>`SELECT count FROM rate_limit_buckets
           WHERE key IN (${budgetKeys[0]}, ${budgetKeys[1]})`
       );
-      expect(budgets.map(({ count }) => count)).toEqual([MAX_FAILED_ATTEMPTS, MAX_FAILED_ATTEMPTS]);
-      for (const id of [s.manager, other])
-        expect((await spendApproverPinGuessTypedByAnother(scope.organizationId, id)).ok).toBe(
-          false
-        );
+      expect(budgets.map(({ count }) => count)).toEqual([
+        MAX_FAILED_ATTEMPTS - 1,
+        MAX_FAILED_ATTEMPTS - 1,
+      ]);
       for (let i = 0; i < MAX_FAILED_ATTEMPTS; i++)
         await rateLimit(
           JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),
@@ -2205,6 +2202,60 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     } finally {
       vi.unstubAllEnvs();
       vi.useRealTimers();
+    }
+  });
+
+  it('DEV-961: one capped cashier and one exhausted approver do not block another eligible approval', async () => {
+    const s = await shop('independent_caps', { shifts: true, approvalAuthenticator: true });
+    const { authorizeCounterApproval, CounterApprovalDenied } =
+      await import('./counter-line-approval');
+    const { establishToken, issueApprovalDeviceProof } = await import('./counter-terminal-session');
+    const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const second = await addMember(s, s.owner.organizationId + '_second', ['pharmacy:manage'], {
+      pin: MANAGER_PIN,
+    });
+    const seed = generateTotpSecret();
+    const { device, secret } = await tenant(s.owner, async (db) => {
+      for (const userId of [s.manager, second])
+        await db.approvalAuthenticator.create({
+          data: { userId, encryptedSecret: encryptSecret(seed), enabledAt: new Date() },
+        });
+      return devices.enrollPharmacyCounter(db, s.owner, { name: 'Shared counter fixture' });
+    });
+    async function prime(key: string) {
+      await tenant(
+        s.owner,
+        (db) => db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+        VALUES (${rateLimitStorageKey(key)}, 5, now() + interval '15 minutes')
+        ON CONFLICT (key) DO UPDATE SET count = EXCLUDED.count, "resetAt" = EXCLUDED."resetAt"`
+      );
+    }
+    const forCashier = (actorId: string) => {
+      const scope = s.as(actorId);
+      const sessionToken = establishToken({ scope, deviceId: device.id, deviceSecret: secret });
+      return tenant(scope, (db) =>
+        authorizeCounterApproval(db, scope, 'DISCOUNT', {
+          pin: codeAt(seed, new Date()),
+          counter: {
+            deviceId: device.id,
+            sessionToken,
+            deviceProof: issueApprovalDeviceProof(sessionToken),
+          },
+        })
+      );
+    };
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    try {
+      await prime(
+        JSON.stringify(['pharmacy-approval-requester', s.owner.organizationId, s.cashier])
+      );
+      await prime(`approver-pin-typed-by-another:${s.owner.organizationId}:${s.manager}`);
+      await expect(forCashier(s.cashier)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      await expect(forCashier(s.cashier2)).resolves.toMatchObject({ approvedByUserId: second });
+    } finally {
+      vi.unstubAllEnvs();
     }
   });
 

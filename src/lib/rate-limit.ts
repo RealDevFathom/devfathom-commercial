@@ -208,6 +208,25 @@ export async function rateLimit(
   return postgresRateLimit(stored, limit, windowMs);
 }
 
+/** Read eligibility without charging an attempt to an unidentified person. */
+export async function rateLimitHasCapacity(key: string, limit: number): Promise<boolean> {
+  const stored = rateLimitStorageKey(key);
+  if (rateLimitBackend() === 'memory') {
+    const bucket = buckets.get(stored);
+    return !bucket || bucket.resetAt <= Date.now() || bucket.count < limit;
+  }
+  const query = rateLimitQuery.current ?? defaultQuery;
+  try {
+    const rows = await query(
+      'SELECT count FROM rate_limit_buckets WHERE key = $1 AND "resetAt" > NOW()',
+      [stored]
+    );
+    return !rows.length || Number(rows[0]!.count) < limit;
+  } catch {
+    return false;
+  }
+}
+
 export async function clearRateLimit(key: string): Promise<void> {
   const stored = rateLimitStorageKey(key);
   if (rateLimitBackend() === 'memory') {

@@ -25,6 +25,7 @@ import {
 } from './counter-terminal-session';
 import { pharmacyDeviceSecretExpired } from './device-secret-expiry';
 import {
+  approverGuessBudgetAvailable,
   spendApproverPinGuessTypedByAnother,
   refundApproverPinGuessTypedByAnother,
 } from '@/lib/approver-pin-guess-budget';
@@ -541,19 +542,6 @@ async function identifyCounterApprover(
     select: { id: true, userId: true, encryptedSecret: true, lastUsedStep: true },
     orderBy: { userId: 'asc' },
   });
-  const reservations = new Map<string, RateLimitResult>();
-  const releaseReservations = async () => {
-    for (const [id, reservation] of reservations)
-      await refundApproverPinGuessTypedByAnother(scope.organizationId, id, reservation);
-  };
-  for (const { userId } of authenticators) {
-    const budget = await spendApproverPinGuessTypedByAnother(scope.organizationId, userId);
-    if (!budget.ok || !budget.windowStartedAt) {
-      await releaseReservations();
-      return null;
-    }
-    reservations.set(userId, budget);
-  }
   const matches: Array<{
     userId: string;
     staffProfileId: string;
@@ -564,7 +552,8 @@ async function identifyCounterApprover(
   let used = false;
   for (const auth of authenticators) {
     const step = matchingApprovalStep(auth.encryptedSecret, pin, now);
-    if (step === null) continue;
+    if (step === null || !(await approverGuessBudgetAvailable(scope.organizationId, auth.userId)))
+      continue;
     if (auth.lastUsedStep !== null && step <= auth.lastUsedStep) used = true;
     matches.push({
       userId: auth.userId,
@@ -582,7 +571,6 @@ async function identifyCounterApprover(
     // subsequent named or code-only verification must consume a later step.
     for (const match of matches)
       if (!(await retireApprovalStep(db, match.authenticatorId, match.step))) return null;
-    await releaseReservations();
     return new CounterApprovalChoice(
       matches.map((match) => match.staffProfileId),
       matches.map((match) => proofFor(match, match.step))
@@ -601,15 +589,21 @@ async function identifyCounterApprover(
     if (!timingSafeEqual(Buffer.from(choiceProof, 'hex'), Buffer.from(expected, 'hex')))
       return null;
   }
-  const result = await verifyApproverPin(
-    db,
-    scope,
-    kind,
-    { staffProfileId: match.staffProfileId, pin },
-    { matchedUserId: match.userId }
-  );
-  if (result) await releaseReservations();
-  return result;
+  // Atomically recheck the one identified person's shared budget before use.
+  // Unattributed failures spend only the cashier and verified-till allowances.
+  const reservation = await spendApproverPinGuessTypedByAnother(scope.organizationId, match.userId);
+  if (!reservation.ok || !reservation.windowStartedAt) return null;
+  try {
+    return await verifyApproverPin(
+      db,
+      scope,
+      kind,
+      { staffProfileId: match.staffProfileId, pin },
+      { matchedUserId: match.userId }
+    );
+  } finally {
+    await refundApproverPinGuessTypedByAnother(scope.organizationId, match.userId, reservation);
+  }
 }
 
 /**
