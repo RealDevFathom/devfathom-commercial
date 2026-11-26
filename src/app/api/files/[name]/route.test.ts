@@ -39,8 +39,8 @@ const db = {
   projectMember: { findUnique: vi.fn() },
   task: { findUnique: vi.fn() },
 };
-function actor(role = 'EMPLOYEE') {
-  return { session: { user: { id: 'user_1', role } }, organization: { id: 'org_a' } };
+function actor(role = 'EMPLOYEE', id = 'user_1') {
+  return { session: { user: { id, role } }, organization: { id: 'org_a' } };
 }
 const read = (name: string) =>
   GET(new Request(`https://example.invalid/api/files/${name}`), {
@@ -56,7 +56,11 @@ beforeEach(() => {
   db.messageAttachment.findFirst.mockResolvedValue(null);
   db.pharmacySopSite.findFirst.mockResolvedValue(null);
   // A registered upload no record has bound yet (DEV-837).
-  db.uploadedFile.findFirst.mockResolvedValue({ ownerType: null, ownerId: null });
+  db.uploadedFile.findFirst.mockResolvedValue({
+    ownerType: null,
+    ownerId: null,
+    uploadedById: 'user_1',
+  });
   db.uploadedFileLegacyBinding.findMany.mockResolvedValue([]);
   db.projectFile.findUnique.mockResolvedValue(null);
   db.taskAttachment.findUnique.mockResolvedValue(null);
@@ -320,14 +324,29 @@ describe('private attachment delivery', () => {
 
   describe('DEV-837: server-recorded upload ownership at download (F15)', () => {
     const bound = (ownerType: string, ownerId: string) =>
-      db.uploadedFile.findFirst.mockResolvedValue({ ownerType, ownerId });
+      db.uploadedFile.findFirst.mockResolvedValue({ ownerType, ownerId, uploadedById: 'user_1' });
 
-    it('looks the object up in the upload registry by name', async () => {
+    it('serves an unattached upload to its uploader and hides it from another member', async () => {
       expect((await read('plan.pdf')).status).toBe(200);
       expect(db.uploadedFile.findFirst).toHaveBeenCalledWith({
         where: { name: 'plan.pdf' },
-        select: { ownerType: true, ownerId: true },
+        select: { ownerType: true, ownerId: true, uploadedById: true },
       });
+      mocks.getUpload.mockClear();
+      mocks.actor.mockResolvedValue(actor('EMPLOYEE', 'user_2'));
+      expect((await read('plan.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('denies a registration with neither an owner nor a known uploader', async () => {
+      db.uploadedFile.findFirst.mockResolvedValue({
+        ownerType: null,
+        ownerId: null,
+        uploadedById: null,
+      });
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read('orphan.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
 
     it('denies an object the registry does not know, even to admins', async () => {
@@ -354,6 +373,7 @@ describe('private attachment delivery', () => {
         select: { role: true },
       });
 
+      mocks.actor.mockResolvedValue(actor('EMPLOYEE', 'user_2'));
       db.projectMember.findUnique.mockResolvedValue({ role: 'MEMBER' });
       expect((await read('plan.pdf')).status).toBe(200);
 

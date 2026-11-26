@@ -36,7 +36,9 @@ beforeEach(() => {
       messageAttachment: { findFirst: m.attachment },
       channelMember: { findUnique: m.member },
       // DEV-837: a registered upload that no record has bound.
-      uploadedFile: { findFirst: async () => ({ ownerType: null, ownerId: null }) },
+      uploadedFile: {
+        findFirst: async () => ({ ownerType: null, ownerId: null, uploadedById: 'user-a' }),
+      },
       uploadedFileLegacyBinding: { findMany: async () => [] },
     })
   );

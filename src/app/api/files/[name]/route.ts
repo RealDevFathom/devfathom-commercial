@@ -164,11 +164,14 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     const upload = await withTenantDb(organization.id, (db) =>
       db.uploadedFile.findFirst({
         where: { name },
-        select: { ownerType: true, ownerId: true },
+        select: { ownerType: true, ownerId: true, uploadedById: true },
       })
     );
     if (!upload) return new Response('Not found', { status: 404 });
     const ownerType = upload.ownerType;
+    if (ownerType === null && upload.uploadedById !== session.user.id) {
+      return new Response('Not found', { status: 404 });
+    }
     if (ownerType !== null) {
       const allowed = await withTenantDb(organization.id, (db) =>
         canReadUpload(db, session.user, { name, ownerType, ownerId: upload.ownerId })
@@ -179,8 +182,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
-  // leaks a private-channel/DM file to any signed-in user. Uploads no record has
-  // bound (client logos, licence evidence) keep their existing rules.
+  // leaks a private-channel/DM file to any signed-in user.
   const attachment = await withTenantDb(organization.id, (db) =>
     db.messageAttachment.findFirst({
       where: { url: fileRef },
