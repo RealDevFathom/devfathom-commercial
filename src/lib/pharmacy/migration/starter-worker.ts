@@ -3,7 +3,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { loadStarterBatch, starterProductCount } from './starter-loader';
 
-export async function processStarterImports() {
+export async function processStarterImports(newOrganizationId?: string) {
   const result = { processed: 0, failed: 0 };
   if (!starterProductCount) return result;
   const deadline = Date.now() + 90_000;
@@ -13,7 +13,13 @@ export async function processStarterImports() {
   while (Date.now() < deadline) {
     const next = await withPlatformDb((db) =>
       db.pharmacyStarterImport.findFirst({
-        where: { completedAt: null, organizationId: { notIn: [...deferred] } },
+        where: {
+          completedAt: null,
+          organizationId: {
+            ...(newOrganizationId ? { equals: newOrganizationId } : {}),
+            notIn: [...deferred],
+          },
+        },
         orderBy: [{ progressedAt: 'asc' }, { organizationId: 'asc' }],
         select: { organizationId: true },
       })
