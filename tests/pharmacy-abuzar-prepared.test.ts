@@ -149,3 +149,11 @@ it('keeps local catalogue edits visible with both the current and prepared value
     { field: 'Pack selling price (paisa)', existing: '4200', source: '4500' },
   ]);
 });
+
+it('reports a missing or zero selling price and accepts a valid pack price with ordinary loose-unit rounding', async () => {
+  const data = await readPreparedExport(await syntheticExport());
+  data.tables.products[0]!.SalePrice = '45.01';
+  data.tables.products[1]!.SalePrice = '0';
+  const issues = sourceReport(data).issues.filter((i) => i.table === 'products');
+  expect(issues).toEqual([{ table: 'products', row: 3, reason: 'missing selling price' }]);
+});

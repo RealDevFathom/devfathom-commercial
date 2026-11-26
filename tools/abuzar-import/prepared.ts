@@ -164,13 +164,14 @@ export function sourceReport({ manifest, tables, checksum }: Prepared) {
   tables.products.forEach((p, i) => {
     const pack = packUnits(p.PackUnits);
     if (!pack) issues.push({ table: 'products', row: i + 2, reason: 'invalid pack size' });
-    if (!p.SalePrice)
+    const price = amountMinor(p.SalePrice);
+    if (!p.SalePrice || price === BigInt(0))
       issues.push({ table: 'products', row: i + 2, reason: 'missing selling price' });
-    else if (unitMinor(p.SalePrice, pack) === null)
+    else if (price === null || price < BigInt(0) || price > BigInt(2147483647))
       issues.push({
         table: 'products',
         row: i + 2,
-        reason: 'invalid or inexact unit selling price',
+        reason: 'invalid pack selling price',
       });
   });
   tables.stock.forEach((s, i) => {
