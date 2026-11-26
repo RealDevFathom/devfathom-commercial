@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
 import { expect, it, vi } from 'vitest';
@@ -239,6 +240,111 @@ it.runIf(url)(
         'member-support-last',
         'member-trial-unknown',
       ]);
+    } finally {
+      await db.end();
+    }
+  }
+);
+
+it.runIf(url)(
+  'backfills manager-set and member-set PINs on real tenant tables and rolls back',
+  async () => {
+    const body = /^BEGIN;\s*([\s\S]+)\s+COMMIT;\s*$/.exec(migration)?.[1];
+    if (!body) throw new Error('Expected one transaction around the migration.');
+    const db = new Client({ connectionString: url });
+    const prefix = 'shared_pin_' + randomUUID();
+    const tenants = [prefix + '_delegated', prefix + '_self'];
+    await db.connect();
+    try {
+      await db.query('BEGIN');
+      try {
+        const {
+          rows: [role],
+        } = await db.query(
+          'SELECT current_database() AS database, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
+        );
+        expect(role.database).toMatch(/(^|[_-])(test|e2e|tmp|disposable)([_-]|$)/);
+        expect(role).toMatchObject({ rolsuper: false, rolbypassrls: false });
+        await db.query("SET LOCAL lock_timeout = '5s'");
+        await db.query("SET LOCAL app.is_platform_admin = 'true'");
+        // Keep the installed column and its data. Its original name must be absent
+        // for the unmodified migration body to exercise its first-deployment path.
+        await db.query(
+          'ALTER TABLE public.restaurant_operator_credentials RENAME COLUMN "approvalPinMustChange" TO dev934_saved_marker'
+        );
+        for (const tenant of tenants) {
+          await db.query("SELECT set_config('app.current_organization_id', $1, true)", [tenant]);
+          await db.query(
+            `INSERT INTO organizations (id,slug,"legalName","displayName","updatedAt")
+          VALUES ($1,$1,$1,$1,now())`,
+            [tenant]
+          );
+          await db.query(
+            `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt")
+          VALUES ($1,$2,'OPERATIONS','Operations',now())`,
+            [tenant + '_department', tenant]
+          );
+          const member = tenant + '_member';
+          const manager = tenant + '_manager';
+          for (const id of [member, manager]) {
+            await db.query(
+              `INSERT INTO users (id,name,email,department,title,"updatedAt")
+            VALUES ($1,$1,$2,'OPERATIONS','Staff',now())`,
+              [id, id + '@test.invalid']
+            );
+          }
+          await db.query(
+            `INSERT INTO restaurant_staff_profiles (id,"userId","displayName","updatedAt")
+          VALUES ($1,$2,'Synthetic member',now())`,
+            [tenant + '_profile', member]
+          );
+          await db.query(
+            `INSERT INTO restaurant_operator_credentials (id,"staffProfileId",type,"credentialHash","updatedAt")
+          VALUES ($1,$2,'PIN','unused-fixture-hash',now())`,
+            [tenant + '_pin', tenant + '_profile']
+          );
+          await db.query(
+            `INSERT INTO audit_logs (id,"actorId",source,category,operation,action,"targetType","targetId")
+          VALUES ($1,$2,'TRPC','STAFF','CREATE','restaurantStaff.issueCredential','RestaurantOperatorCredential',$3)`,
+            [tenant + '_issue', tenant === tenants[0] ? manager : member, tenant + '_pin']
+          );
+        }
+        await db.query(body);
+        await db.query("SET LOCAL app.is_platform_admin = 'false'");
+        for (const tenant of tenants) {
+          await db.query("SELECT set_config('app.current_organization_id', $1, true)", [tenant]);
+          const flagged = tenant === tenants[0];
+          expect(
+            (
+              await db.query(
+                `SELECT "approvalPinMustChange","credentialHash" FROM restaurant_operator_credentials
+          WHERE "organizationId"=$1 AND id=$2`,
+                [tenant, tenant + '_pin']
+              )
+            ).rows
+          ).toEqual([{ approvalPinMustChange: flagged, credentialHash: 'unused-fixture-hash' }]);
+          expect(
+            (
+              await db.query(
+                `SELECT "userId" FROM notifications WHERE "organizationId"=$1 AND type='approval_pin_must_change'`,
+                [tenant]
+              )
+            ).rows
+          ).toEqual(flagged ? [{ userId: tenant + '_member' }] : []);
+        }
+      } finally {
+        await db.query('ROLLBACK');
+      }
+      await db.query("SET app.is_platform_admin = 'true'");
+      expect(
+        (await db.query('SELECT id FROM organizations WHERE id=ANY($1::text[])', [tenants])).rows
+      ).toEqual([]);
+      expect(
+        (
+          await db.query(`SELECT attname FROM pg_attribute WHERE attrelid='public.restaurant_operator_credentials'::regclass
+      AND NOT attisdropped AND attname IN ('approvalPinMustChange','dev934_saved_marker')`)
+        ).rows
+      ).toEqual([{ attname: 'approvalPinMustChange' }]);
     } finally {
       await db.end();
     }
