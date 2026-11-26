@@ -207,6 +207,13 @@ export async function stockDecision(
     },
     select: { id: true, controlled: true, presentations: { select: { packLevels: true } } },
   });
+  const activePrices = await db.$queryRaw<
+    { packLevelId: string; mrpMinor: number; sellingPriceMinor: number | null }[]
+  >`
+    SELECT DISTINCT ON ("packLevelId") "packLevelId","mrpMinor","sellingPriceMinor"
+    FROM pharmacy_pack_prices WHERE "organizationId"=${scope.organizationId} AND ("branchId" IS NULL OR "branchId"=${scope.branchId}) AND "effectiveFrom"<=CURRENT_TIMESTAMP
+    ORDER BY "packLevelId",("branchId" IS NOT NULL) DESC,"effectiveFrom" DESC,id`;
+  const currentPrices = new Map(activePrices.map((p) => [p.packLevelId, p]));
   const byMedicine = new Map(medicines.map((m) => [m.id, m]));
   const rows = data.tables.stock.map((row, i) => {
     const product = source.get(row.ICode),
@@ -223,6 +230,7 @@ export async function stockDecision(
             p.packLevels.some((l) => l.id === c.packLevelId && !l.parentPackLevelId)
         )
       ) ?? [];
+    const localPrice = currentPrices.get(candidates[0]?.packLevelId ?? '');
     const old = prior.get(row.RowID),
       rowHash = hash([
         row,
@@ -247,6 +255,12 @@ export async function stockDecision(
         reason = 'catalogue approval or matching pack required';
       else if (reviewedPrices.get(row.ICode) !== medicine.id)
         reason = 'complete the prices step first';
+      else if (
+        !localPrice ||
+        localPrice.mrpMinor !== Number(mrp) ||
+        (localPrice.sellingPriceMinor !== null && localPrice.sellingPriceMinor !== Number(mrp))
+      )
+        reason = 'local pack price differs or is unavailable; review stock before posting';
       else if (medicine.controlled && Number(row.Quantity) > 0 && !witness)
         reason = 'controlled opening requires a witnessed register entry';
       else if (

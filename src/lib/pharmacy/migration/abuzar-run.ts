@@ -2,6 +2,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { lockPrices } from '../pricing';
 import { priceDecision } from './abuzar-prices';
 import { stockDecision, balanceDecision } from './abuzar-openings';
 import { catalogueDecision } from './abuzar-catalogue';
@@ -35,6 +36,8 @@ export async function runAbuzarStep(
   await assertReviewBranch(db, organizationId, branchId);
   if (confirmed)
     await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'pharmacy-abuzar:' + organizationId},0))`;
+  if (confirmed && (options.step === 'prices' || options.step === 'stock'))
+    await lockPrices(db, scope);
   const postedSales = await db.pharmacySale.count({
     where: { organizationId, status: { in: ['COMPLETED', 'VOID'] } },
   });
@@ -83,8 +86,12 @@ export async function runAbuzarStep(
     customerBalanceMinor: String(effect.customerBalanceMinor),
     supplierBalanceMinor: String(effect.supplierBalanceMinor),
   };
+  const catalogueReview = decision.rows.flatMap((d) =>
+    'review' in d ? d.review.map((change) => ({ row: d.index, ...change })) : []
+  );
   const confirmation = digest({
     effects,
+    catalogueReview,
     scope,
     options,
     source: data.checksum,
@@ -105,6 +112,7 @@ export async function runAbuzarStep(
   const receipt = digest({ scope, options, source: data.checksum });
   const report = {
     step: options.step,
+    catalogueReview,
     effects,
     source,
     create,

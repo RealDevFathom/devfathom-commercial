@@ -43,6 +43,7 @@ type Report = {
   expected?: Totals;
   actual?: Totals;
   differences?: unknown[];
+  catalogueReview?: { row: number; field: string; existing: string; source: string }[];
   effects?: { stockValueMinor: string; customerBalanceMinor: string; supplierBalanceMinor: string };
 };
 type HistoryRow = {
@@ -324,6 +325,17 @@ export function AbuzarImportForm() {
             <p role="alert">Posted sales found. The owner must choose Add to existing.</p>
           )}
           {report.differences && <p>{report.differences.length} row differences.</p>}
+          {Boolean(report.catalogueReview?.length) && (
+            <div>
+              <h3 className="font-semibold">Local catalogue edits retained</h3>
+              {report.catalogueReview?.slice(0, 10).map((d) => (
+                <p key={d.row + '-' + d.field}>
+                  Row {d.row} · {d.field} · Local {d.existing} · Export {d.source}
+                </p>
+              ))}
+              <p>Download the report for all differences.</p>
+            </div>
+          )}
           {report.skipped?.slice(0, 10).map((s) => (
             <p key={s.row}>
               Row {s.row} · {s.reason}

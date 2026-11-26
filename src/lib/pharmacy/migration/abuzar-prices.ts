@@ -1,7 +1,34 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { packConversions } from '../pack-conversion';
 import { deriveLooseUnitPrice } from '../medicine';
-import { amountMinor, packUnits, type Prepared } from '../../../../tools/abuzar-import/prepared';
+import {
+  amountMinor,
+  packUnits,
+  type Prepared,
+  type Row,
+} from '../../../../tools/abuzar-import/prepared';
+export function catalogueDifferences(
+  row: Row<'products'>,
+  local: { name: string; packSizes: number[]; mrpMinor: number | null }
+) {
+  const changes: { field: string; existing: string; source: string }[] = [];
+  if (local.name !== row.Name)
+    changes.push({ field: 'Name', existing: local.name, source: row.Name });
+  if (!local.packSizes.includes(Number(row.PackUnits)))
+    changes.push({
+      field: 'Pack size (units)',
+      existing: local.packSizes.join(', ') || 'Unrecorded',
+      source: row.PackUnits,
+    });
+  const amount = amountMinor(row.SalePrice);
+  if (local.mrpMinor !== null && BigInt(local.mrpMinor) !== amount)
+    changes.push({
+      field: 'Pack selling price (paisa)',
+      existing: String(local.mrpMinor),
+      source: amount?.toString() ?? 'Unrecorded',
+    });
+  return changes;
+}
 export async function priceDecision(db: ScopedDb, org: string, data: Prepared) {
   const links = await db.$queryRaw<
     {
@@ -20,14 +47,24 @@ export async function priceDecision(db: ScopedDb, org: string, data: Prepared) {
   const source = new Map(links.map((l) => [l.sourceKey, l]));
   const meds = await db.medicine.findMany({
     where: { organizationId: org, id: { in: links.map((l) => l.medicineId) } },
-    select: { id: true, presentations: { select: { id: true, packLevels: true } } },
+    select: {
+      id: true,
+      productName: true,
+      presentations: { select: { id: true, packLevels: true } },
+    },
   });
   const byId = new Map(meds.map((m) => [m.id, m]));
   const prices = await db.pharmacyPackPrice.findMany({
     where: { organizationId: org, branchId: null },
-    select: { packLevelId: true },
+    orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+    select: { packLevelId: true, mrpMinor: true, sellingPriceMinor: true, effectiveFrom: true },
   });
   const existingPrices = new Set(prices.map((p) => p.packLevelId));
+  const latest = new Map<string, number>();
+  const now = new Date();
+  for (const p of prices)
+    if (p.effectiveFrom <= now && !latest.has(p.packLevelId))
+      latest.set(p.packLevelId, p.sellingPriceMinor ?? p.mrpMinor);
   const details = await db.$queryRaw<
     { sourceId: string }[]
   >`SELECT "sourceId" FROM pharmacy_abuzar_product_fields WHERE "organizationId"=${org}`;
@@ -59,7 +96,21 @@ export async function priceDecision(db: ScopedDb, org: string, data: Prepared) {
     )
       reason = 'source differs from approved catalogue';
     else if (!pack || packs.length !== 1) reason = 'review the local pack size';
-    return { row, index: i + 2, reason, link, pack, level: packs[0], mrp, cost };
+    const roots =
+      med?.presentations.flatMap((p) =>
+        packConversions(p.packLevels).filter((c) =>
+          p.packLevels.some((l) => l.id === c.packLevelId && !l.parentPackLevelId)
+        )
+      ) ?? [];
+    const review = med
+      ? catalogueDifferences(row, {
+          name: med.productName,
+          packSizes: roots.map((c) => c.canonicalUnitsPerPack),
+          mrpMinor:
+            latest.get(packs[0]?.id ?? (roots.length === 1 ? roots[0]!.packLevelId : '')) ?? null,
+        })
+      : [];
+    return { row, index: i + 2, reason, link, pack, level: packs[0], mrp, cost, review };
   });
   return {
     rows,

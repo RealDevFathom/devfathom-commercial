@@ -133,3 +133,19 @@ it('packages long history into numbered uploads without repeating operational ro
   expect(result.historyPackages.length).toBeGreaterThan(1);
   expect(history).toEqual(data.tables.history);
 });
+
+it('keeps local catalogue edits visible with both the current and prepared values', async () => {
+  const { catalogueDifferences } = await import('@/lib/pharmacy/migration/abuzar-prices');
+  const data = await readPreparedExport(await syntheticExport());
+  expect(
+    catalogueDifferences(data.tables.products[0]!, {
+      name: 'Locally edited',
+      packSizes: [12],
+      mrpMinor: 4200,
+    })
+  ).toEqual([
+    { field: 'Name', existing: 'Locally edited', source: 'Fixture A' },
+    { field: 'Pack size (units)', existing: '12', source: '10' },
+    { field: 'Pack selling price (paisa)', existing: '4200', source: '4500' },
+  ]);
+});
