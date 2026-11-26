@@ -792,16 +792,22 @@ export const pharmacyReportsRouter = router({
     .input(pharmacyReplenishmentReportInput)
     .query(async ({ ctx, input }) => {
       // Existing capability middleware denies before report reads; scope enforces licensing.
-      const available = await reportScope(ctx, ctx.reportBranches);
+      const available = await reportScope(
+        ctx,
+        await financeBoundReportBranches(ctx, ctx.reportBranches)
+      );
       if (!available.branches.some((branch) => branch.id === input.branchId))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
-      const financial =
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+      const financial = await can(
+        subjectFromSession(ctx.session!.user),
+        'reports:financial',
+        undefined,
+        {
           db: ctx.db,
           source: 'TRPC',
           ip: ctx.requestMeta.ip,
-        }));
+        }
+      );
       const readAt = new Date();
       // The caller's own organisation's days; the screen offers the same days. DEV-958A: each
       // ends at the branch's "day ends at" hour.

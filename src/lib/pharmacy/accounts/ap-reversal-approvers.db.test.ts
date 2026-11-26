@@ -1113,30 +1113,28 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
     ).rejects.toMatchObject(forbidden);
     await expect(
       organization.updateBrand({
-        logoUrl: null,
-        markUrl: null,
-        faviconUrl: null,
+        logoUrl: '',
+        markUrl: '',
+        faviconUrl: '',
         primaryColor: '#000000',
         accentColor: '#ffffff',
-        supportEmail: null,
+        supportEmail: '',
         fromName: null,
       })
     ).rejects.toMatchObject(forbidden);
     await expect(
-      pharmacyInventoryRouter
-        .createCaller(ctx)
-        .createCount({
-          branchId,
-          varianceThreshold: 0,
-          readings: [
-            {
-              inventoryLotId: id('lot'),
-              stockLocationId: id('location'),
-              countedSealedPacks: 1,
-              countedLooseUnits: 0,
-            },
-          ],
-        })
+      pharmacyInventoryRouter.createCaller(ctx).createCount({
+        branchId,
+        varianceThreshold: 0,
+        readings: [
+          {
+            inventoryLotId: id('lot'),
+            stockLocationId: id('location'),
+            countedSealedPacks: 1,
+            countedLooseUnits: 0,
+          },
+        ],
+      })
     ).rejects.toMatchObject(forbidden);
     await expect(pharmacyMedicineRouter.createCaller(ctx).catalogueEdits()).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -1144,14 +1142,12 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
         'Your role cannot open the catalogue queue. Ask a catalogue editor to submit the change or a catalogue reviewer to decide it.',
     });
     await expect(
-      pharmacySalesRouter
-        .createCaller(ctx)
-        .openDrawer({
-          branchId,
-          deviceId: id('device'),
-          businessDate: new Date(),
-          openingFloatMinor: 0,
-        })
+      pharmacySalesRouter.createCaller(ctx).openDrawer({
+        branchId,
+        deviceId: id('device'),
+        businessDate: new Date(),
+        openingFloatMinor: 0,
+      })
     ).rejects.toMatchObject(forbidden);
   });
   it.each(excludedEmployees)('refuses $orgRole at their assigned branch', async (candidate) => {

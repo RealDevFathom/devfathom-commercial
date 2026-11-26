@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   reportCreate: vi.fn(),
   reportUpdate: vi.fn(),
   reportUpdateManyAndReturn: vi.fn(),
+  replenishment: vi.fn(),
   stockDashboard: vi.fn(),
   stockDigest: vi.fn(),
   anomalyRead: vi.fn(),
@@ -54,6 +55,11 @@ vi.mock('@/lib/approval-authenticator', async () => {
       (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
   };
 });
+vi.mock('@/lib/pharmacy/replenishment-report', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/replenishment-report')>()),
+  readPharmacyReplenishmentReport: mocks.replenishment,
+}));
+
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
 }));
@@ -224,6 +230,33 @@ describe('normal Reports daily work pack', () => {
     await expect(
       caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'other' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+  });
+
+  it('shows replenishment costs only within the financial reader’s admitted branches', async () => {
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'other', name: 'Other' },
+    ]);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    const input = {
+      branchId: 'branch_1',
+      medicineId: 'medicine',
+      historyStartDate: '2026-02-01',
+      originDate: '2026-02-12',
+      horizonDays: 5,
+      method: 'RECENT_MEAN' as const,
+    };
+    const api = caller('EMPLOYEE');
+    await api.replenishment(input);
+    expect(mocks.replenishment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ financial: true, authorizedBranchIds: ['branch_1'] }),
+      expect.any(Date)
+    );
+    await expect(api.replenishment({ ...input, branchId: 'other' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your report scope.',
+    });
   });
 
   it('works with Ask Fathom disabled and repeated normal caller reads create zero actions', async () => {

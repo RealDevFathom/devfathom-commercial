@@ -42,7 +42,7 @@ export default async function ReplenishmentPage({
     scopedProps = {
       organizationId: scope.organizationId,
       branches: scope.branches,
-      financial: ctx.session?.user?.role === 'ADMIN' && catalog.permissions.financial,
+      financial: catalog.permissions.financial,
       initialBranchId: invalidBranch ? '' : branchId,
       invalidInitialBranch: invalidBranch,
       // The shop's own day: the replenishment reader counts the history and demand coverage
