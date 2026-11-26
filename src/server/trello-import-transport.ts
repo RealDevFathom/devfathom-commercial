@@ -7,7 +7,15 @@ import {
   trelloRecordLimit,
 } from '@/types/trello-import-limits';
 
+import { rateLimit } from '@/lib/rate-limit';
+
 const IMPORT_PATH = 'trelloImport.importBoard';
+const IMPORTS_PER_WINDOW = 5;
+const IMPORT_WINDOW_MS = 10 * 60_000;
+
+export function admitTrelloImport(userId: string) {
+  return rateLimit(`trello-import:user:${userId}`, IMPORTS_PER_WINDOW, IMPORT_WINDOW_MS);
+}
 
 function oversized(message = TRELLO_LIMIT_MESSAGE): never {
   throw new TRPCError({ code: 'PAYLOAD_TOO_LARGE', message });
@@ -22,18 +30,26 @@ function record(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-/** Preflight Trello POSTs before authentication, tenant lookup, or the request transaction. */
-export async function preflightTrelloImport(req: Request, paths: string[]) {
-  if (req.method !== 'POST' || !paths.includes(IMPORT_PATH)) return;
-
+/** Path-only validation is safe before authentication. It never opens the body. */
+export function trelloImportIndex(req: Request, paths: string[]): number | null {
+  if (req.method !== 'POST') return null;
   const index = paths.indexOf(IMPORT_PATH);
+  if (index === -1) return null;
   // PostgreSQL advisory locks are reentrant on the same request transaction.
   if (index !== paths.lastIndexOf(IMPORT_PATH)) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Send one Trello import per request.' });
   }
+  return index;
+}
+
+/** Reject malformed headers without reading the body or spending an attempt. */
+export function checkTrelloImportHeaders(req: Request) {
   if (Number(req.headers.get('content-length')) > MAX_TRELLO_REQUEST_BYTES) oversized();
   if (req.headers.get('content-type')?.split(';')[0]?.trim() !== 'application/json') invalid();
+}
 
+/** Check the signed-in, rate-limited import before opening its tenant transaction. */
+export async function preflightTrelloImport(req: Request, index: number) {
   const reader = req.body?.getReader();
   if (!reader) invalid();
   const chunks: Uint8Array[] = [];

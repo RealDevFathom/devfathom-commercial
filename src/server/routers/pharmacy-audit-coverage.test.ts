@@ -38,8 +38,6 @@ vi.mock('@/server/audit', async (importOriginal) => ({
 const MUTATION_EXEMPTIONS: Readonly<Record<string, string>> = {
   'pharmacySupplierLinks.submit':
     'An outside supplier answering a signed one-time link: there is no workspace user to name. The submission row records it, and staff accept or reject it through audited procedures.',
-  'pharmacySupplierLinks.uploadDocument':
-    'An outside supplier uploading to a signed one-time link: no workspace user. The document row records it; staff review is audited.',
 };
 
 /**
@@ -514,6 +512,10 @@ const REST_ROUTES: Readonly<
     audited: /createCaller\(ctx\)\.pharmacySales\./,
     how: 'Calls the audited pharmacySales procedure through the tRPC caller.',
   },
+  'supplier-documents/upload/route.ts': {
+    audited: /recordAudit\(\{/,
+    how: 'The upload records the signed-in actor, branch and new document without the link token or file contents.',
+  },
   'sop/evidence/route.ts': {
     audited: /createCaller\(ctx\)\.pharmacySop\.evidenceTarget/,
     how: 'Authorizes through pharmacySop.evidenceTarget, an audited read naming the person; the evidence receipt row records the file.',
@@ -528,6 +530,10 @@ const REST_ROUTES: Readonly<
   'portal/[action]/route.ts': {
     exempt:
       'The patient portal: a customer, not a workspace member, acting on their own records; consent changes are stored on the patient record.',
+  },
+  'portal/prescription-upload/route.ts': {
+    exempt:
+      'The patient portal: a customer, not a workspace member, submits a prescription for their own record.',
   },
   'sms/webhook/route.ts': {
     exempt: 'Signed delivery receipts and replies from the SMS provider; no person acts.',

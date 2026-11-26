@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 
-const MAX_BYTES = 10 * 1024 * 1024;
-export const SUPPLIER_DOCUMENT_TYPES = ['application/pdf', 'image/png', 'image/jpeg'] as const;
+import { SUPPLIER_DOCUMENT_MAX_BYTES, SUPPLIER_DOCUMENT_TYPES } from './supplier-document-contract';
 export type SupplierDocumentType = (typeof SUPPLIER_DOCUMENT_TYPES)[number];
 export type SupplierFileScanMode = 'STRUCTURAL' | 'MALWARE_SCANNED';
 
@@ -32,7 +31,7 @@ function sniff(content: Buffer): SupplierDocumentType | null {
  */
 export const structuralSupplierFileScanner: FileScanner = {
   async scan({ content, declaredMimeType }) {
-    if (!content.length || content.length > MAX_BYTES)
+    if (!content.length || content.length > SUPPLIER_DOCUMENT_MAX_BYTES)
       throw new SupplierFileScanError('Supplier document size is outside the allowed range.');
     const actual = sniff(content);
     if (!actual || actual !== declaredMimeType)

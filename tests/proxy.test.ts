@@ -154,7 +154,7 @@ describe('private upload paths', () => {
 
 it('bounds the Next proxy body clone before requests reach route-specific readers', async () => {
   const { default: config } = await import('../next.config');
-  expect(config.experimental?.proxyClientMaxBodySize).toBe('8mb');
+  expect(config.experimental?.proxyClientMaxBodySize).toBe('4mb');
 });
 
 it('excludes exactly the three multipart routes from body cloning', async () => {

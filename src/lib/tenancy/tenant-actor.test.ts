@@ -76,6 +76,20 @@ describe('resolveTenantActor', () => {
     await expect(resolveTenantActor({ request: request(), session })).resolves.toBeNull();
   });
 
+  it('preserves a host denial for the supplier document upload route', async () => {
+    const denial = new TenantHostError('This session belongs to a different workspace.', 409);
+    mocks.requireOrganizationForRequest.mockRejectedValue(denial);
+
+    await expect(
+      resolveTenantActor({
+        request: new Request(
+          'http://devfathom.localhost:3000/api/pharmacy/supplier-documents/upload'
+        ),
+        session,
+      })
+    ).rejects.toBe(denial);
+  });
+
   it('does not hide unexpected resolution failures', async () => {
     mocks.requireOrganizationForRequest.mockRejectedValue(new Error('Database unavailable'));
 

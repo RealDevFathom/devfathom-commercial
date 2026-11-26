@@ -84,6 +84,8 @@ const NO_MEMBER_SESSION: Record<string, string> = {
   'api/live/route.ts': PUBLIC,
   'api/ready/route.ts': PUBLIC,
   'api/pharmacy/portal/[action]/route.ts': PUBLIC,
+  'api/pharmacy/portal/prescription-upload/route.ts':
+    'Uses the patient portal session, not a workspace member session',
   'api/restaurant/checkout/comp/route.ts': PUBLIC,
   'api/wallet/apple/v1/devices/[deviceLibraryIdentifier]/registrations/[passTypeIdentifier]/[serialNumber]/route.ts':
     PUBLIC,
