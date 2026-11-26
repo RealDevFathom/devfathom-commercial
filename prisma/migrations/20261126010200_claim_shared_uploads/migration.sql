@@ -53,6 +53,7 @@ WHERE u.id = r.id AND u."ownerType" IS NULL;
 
 -- Only the migration role may insert during this transaction. The table
 -- lock spans policy creation and removal; the runtime role stays read-only.
+DROP POLICY IF EXISTS dev1018_backfill ON uploaded_file_legacy_bindings;
 CREATE POLICY dev1018_backfill ON uploaded_file_legacy_bindings FOR INSERT
   TO CURRENT_USER WITH CHECK (current_setting('app.is_platform_admin', true) = 'true');
 INSERT INTO uploaded_file_legacy_bindings (id, "organizationId", name, "ownerType", "ownerId")
