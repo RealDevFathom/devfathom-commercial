@@ -549,4 +549,110 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       expect(rows.find((r) => r.label === 'Card payments unresolved')?.value).toBe(oldDay);
     });
   });
+  it('reconciles a second branch bill discount and partial refund with the same single- and whole-business reports', async () => {
+    const second = id + '_discount';
+    await scoped.withTenantDb(org, async (db) => {
+      await db.pharmacyBranch.create({
+        data: {
+          id: second,
+          organizationId: org,
+          code: 'DISC',
+          name: 'Discount',
+          addressLine: 'Synthetic',
+          city: 'Test',
+          provinceCode: 'PB',
+        },
+      });
+      const day = new Date(periods[0]!.today);
+      const sale = await db.pharmacySale.create({
+        data: {
+          organizationId: org,
+          branchId: second,
+          status: 'COMPLETED',
+          createdByUserId: 'synthetic',
+          businessDate: day,
+          completedAt: at,
+          receiptNumber: 2,
+        },
+      });
+      await db.pharmacySaleLine.create({
+        data: {
+          organizationId: org,
+          branchId: second,
+          saleId: sale.id,
+          medicineId: org,
+          presentationId: org,
+          packLevelId: org,
+          saleUnit: 'PACK',
+          quantity: 2,
+          canonicalUnitsPerSaleUnit: 1,
+          canonicalUnits: 2,
+          unitPriceMinor: 500,
+          grossMinor: 1000,
+          proRataCeilingMinor: 500,
+          unitCostMinor: 100,
+          discountMinor: 120,
+          billDiscountMinor: 100,
+          discountKind: 'DISCOUNT',
+          approvalPolicy: 'synthetic',
+          approvedByUserId: 'synthetic',
+          idempotencyKey: second,
+        },
+      });
+      const tender = await db.pharmacyTender.create({
+        data: {
+          organizationId: org,
+          branchId: second,
+          saleId: sale.id,
+          type: 'CARD',
+          amountMinor: 880,
+          businessDate: day,
+          actorId: 'synthetic',
+          deviceId: 'synthetic',
+        },
+      });
+      await db.pharmacyRefund.create({
+        data: {
+          organizationId: org,
+          branchId: second,
+          saleId: sale.id,
+          originalTenderId: tender.id,
+          amountMinor: 180,
+          businessDate: day,
+          reason: 'Synthetic partial refund',
+          actorId: 'synthetic',
+        },
+      });
+      for (const [ids, sales, refunds, bills] of [
+        [[id], 925, 0, 1],
+        [[second], 880, 180, 1],
+        [[id, second], 1805, 180, 2],
+      ] as const) {
+        const scope = dashboardPeriods(
+          ids.map((id) => ({ id, name: id })),
+          'Asia/Karachi',
+          at
+        );
+        const report = await readPharmacyOwnerCommandCentre(db, {
+          branchIds: [...ids],
+          from: scope[0]!.today,
+          to: scope[0]!.today,
+          timeZone: 'Asia/Karachi',
+        });
+        const summary = await readOwnerTrading(db, org, scope, 'summary', true);
+        expect(report.metrics).toMatchObject({ salesMinor: sales, refundsMinor: refunds });
+        expect(summary.find((p) => p.label === 'Sales')?.value).toBe(report.metrics.salesMinor);
+        expect(summary.find((p) => p.label === 'Bills')?.value).toBe(bills);
+        expect(summary.find((p) => p.label === 'Average bill')?.value).toBe(
+          Math.round(sales / bills)
+        );
+        expect(
+          (await readOwnerTrading(db, org, scope, 'branches', true)).reduce(
+            (n, p) => n + (p.value ?? 0),
+            0
+          )
+        ).toBe(report.metrics.salesMinor);
+      }
+    });
+  });
 });
