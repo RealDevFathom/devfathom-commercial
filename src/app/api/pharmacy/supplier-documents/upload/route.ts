@@ -3,20 +3,29 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { z } from 'zod';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { SUPPLIER_LINK_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
+import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
+import { clientIp } from '@/lib/rate-limit';
 import { trustedRequestOrigin } from '@/lib/http-origin';
 import {
   assertSupplierDocumentPermission,
+  supplierLinkId,
   SupplierLinkError,
   uploadSupplierDocument,
 } from '@/lib/pharmacy/supplier-action-links';
 import {
+  SUPPLIER_ACCESS_HEADER,
   SUPPLIER_DOCUMENT_MAX_BYTES,
   SUPPLIER_DOCUMENT_SIZE_MESSAGE,
   SUPPLIER_DOCUMENT_TOKEN_HEADER,
   SUPPLIER_DOCUMENT_TYPES,
 } from '@/lib/pharmacy/supplier-document-contract';
 import { StorageUnavailableError } from '@/lib/storage';
-import { TenantHostError } from '@/lib/tenancy/host';
+import {
+  isTenantLifecycleAccessible,
+  resolveOrganizationById,
+  TenantHostError,
+} from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { uploadPost } from '@/lib/uploads/multipart-request';
@@ -39,21 +48,37 @@ function message(status: number, body: string) {
 export const POST = uploadPost(async (request, readUploadForm) => {
   try {
     const actor = await resolveTenantActor({ request });
-    if (!actor?.session.user.id) return message(401, 'Sign in to upload a supplier document.');
+    const user = actor?.session.user;
+    const outside = !user?.id && request.headers.get(SUPPLIER_ACCESS_HEADER) === 'order-link';
+    if (!user?.id && !outside) return message(401, 'Sign in to upload a supplier document.');
+    if (request.headers.get('origin') !== trustedRequestOrigin(request))
+      return message(403, 'Forbidden.');
 
-    const origin = request.headers.get('origin');
-    if (origin !== trustedRequestOrigin(request)) return message(403, 'Forbidden.');
-
-    // The token grants permission for exactly this purchase order in the signed-in
-    // user's workspace. It belongs in a header, not a URL or the multipart body.
     const token = request.headers.get(SUPPLIER_DOCUMENT_TOKEN_HEADER)?.trim();
     if (!token || token.length > 200) return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
-    const userId = actor.session.user.id;
-    const organizationId = actor.organization.id;
+    let organizationId = actor?.organization.id;
+    let linkId: string | null = null;
+    if (outside) {
+      const gate = await admitAnonymousRequest({ kind: 'token', token, ip: clientIp(request) });
+      if (!gate.ok) {
+        const response = message(429, 'Too many tries. Please try again later.');
+        response.headers.set('Retry-After', String(gate.retryAfter));
+        return response;
+      }
+      linkId = supplierLinkId(token);
+      const id = linkId && (await organizationForAnonymousToken(token));
+      const org = id && (await resolveOrganizationById(id));
+      if (!org || !isTenantLifecycleAccessible(org.status))
+        return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
+      organizationId = org.id;
+    }
+    if (!organizationId) return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
+    const userId = user?.id;
     const branchAudit = await withTenantDb(
       organizationId,
       async (db) => {
         const branchId = await assertSupplierDocumentPermission(db, token);
+        if (!actor) return { actionLinkId: linkId };
         if (
           !(await can(subjectFromSession(actor.session.user), 'pharmacy:procurement', undefined, {
             db,
@@ -80,7 +105,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     let form: FormData;
     try {
       const result = await readUploadForm(
-        userId,
+        userId ?? `supplier-link:${linkId}`,
         organizationId,
         'text',
         SUPPLIER_DOCUMENT_MAX_BYTES
@@ -107,39 +132,42 @@ export const POST = uploadPost(async (request, readUploadForm) => {
 
     const content = Buffer.from(await file.arrayBuffer());
     // Check the token again when writing under the existing link lock.
-    const document = await withTenantDb(
+    await withTenantDb(
       organizationId,
-      (db) => uploadSupplierDocument(db, { token, ...input.data, content }),
+      async (db) => {
+        const document = await uploadSupplierDocument(db, { token, ...input.data, content });
+        const action = 'pharmacySupplierLinks.uploadDocument';
+        const auditRow = {
+          organizationId,
+          actorType: user ? 'USER' : 'ANONYMOUS',
+          actorId: userId,
+          actorName: user?.name,
+          actorEmail: user?.email,
+          actorRole: user?.role,
+          source: 'REST_API',
+          category: categoryForPath(action),
+          operation: 'CREATE',
+          action,
+          targetType: 'PharmacySupplierDocument',
+          targetId: document.id,
+          outcome: 'SUCCESS',
+          metadata: {
+            ...branchAudit,
+            branchId: document.branchId,
+            ...(user?.isSupportSession
+              ? {
+                  supportSessionId: user.supportSessionId,
+                  platformUserId: user.platformUserId,
+                  actingAsTenantUserId: userId,
+                }
+              : {}),
+          },
+        } satisfies Parameters<typeof recordAudit>[0];
+        if (outside) await recordAudit(auditRow, db);
+        else recordAudit(auditRow);
+      },
       { userId, timeout: 60_000 }
     );
-    const user = actor.session.user;
-    const action = 'pharmacySupplierLinks.uploadDocument';
-    recordAudit({
-      organizationId,
-      actorType: 'USER',
-      actorId: userId,
-      actorName: user.name,
-      actorEmail: user.email,
-      actorRole: user.role,
-      source: 'REST_API',
-      category: categoryForPath(action),
-      operation: 'CREATE',
-      action,
-      targetType: 'PharmacySupplierDocument',
-      targetId: document.id,
-      outcome: 'SUCCESS',
-      metadata: {
-        ...branchAudit,
-        branchId: document.branchId,
-        ...(user.isSupportSession
-          ? {
-              supportSessionId: user.supportSessionId,
-              platformUserId: user.platformUserId,
-              actingAsTenantUserId: userId,
-            }
-          : {}),
-      },
-    });
     return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);

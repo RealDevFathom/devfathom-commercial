@@ -6,6 +6,7 @@ import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import {
+  SUPPLIER_ACCESS_HEADER,
   SUPPLIER_DOCUMENT_MAX_BYTES,
   SUPPLIER_DOCUMENT_MAX_MB,
   SUPPLIER_DOCUMENT_SIZE_MESSAGE,
@@ -190,7 +191,10 @@ export function SupplierPoActionForm({ token }: { token: string }) {
               form.set('idempotencyKey', browserUuid());
               const response = await fetch(SUPPLIER_DOCUMENT_UPLOAD_URL, {
                 method: 'POST',
-                headers: { [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token },
+                headers: {
+                  [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+                  [SUPPLIER_ACCESS_HEADER]: 'order-link',
+                },
                 body: form,
               });
               if (response.ok) setMessage('Document recorded as evidence.');

@@ -44,6 +44,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.scope }));
 vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.slot }));
 vi.mock('@/lib/pharmacy/supplier-action-links', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/supplier-action-links')>()),
+  supplierLinkId: publicAccess.linkId,
   assertSupplierDocumentPermission: mocks.permission,
   uploadSupplierDocument: mocks.store,
 }));
@@ -219,3 +220,65 @@ it('returns the wrong-workspace host error as plain text without reading the bod
   expect(mocks.permission).not.toHaveBeenCalled();
   expect(mocks.store).not.toHaveBeenCalled();
 });
+
+const publicAccess = vi.hoisted(() => ({
+  admit: vi.fn(),
+  resolve: vi.fn(),
+  organization: vi.fn(),
+  linkId: vi.fn(),
+}));
+vi.mock('@/lib/auth/anonymous-rate-limit', () => ({ admitAnonymousRequest: publicAccess.admit }));
+vi.mock('@/lib/auth/anonymous-tenant', () => ({
+  organizationForAnonymousToken: publicAccess.resolve,
+}));
+vi.mock('@/lib/tenancy/host', async (original) => ({
+  ...(await original<typeof import('@/lib/tenancy/host')>()),
+  resolveOrganizationById: publicAccess.organization,
+}));
+
+function outsideUpload() {
+  mocks.actor.mockResolvedValue(null);
+  publicAccess.admit.mockResolvedValue({ ok: true });
+  publicAccess.resolve.mockResolvedValue('org');
+  publicAccess.organization.mockResolvedValue({ id: 'org', status: 'ACTIVE' });
+  publicAccess.linkId.mockReturnValue('link-id');
+  const request = upload(pdf(9 * 1024 * 1024));
+  request.headers.set('x-devfathom-supplier-access', 'order-link');
+  return request;
+}
+
+it('admits a live outside link before reading and attributes its upload to the link', async () => {
+  const response = await POST(outsideUpload());
+  expect(response.status).toBe(204);
+  expect(await response.text()).toBe('');
+  expect(publicAccess.admit).toHaveBeenCalledWith({ kind: 'token', token, ip: expect.any(String) });
+  expect(mocks.permission.mock.invocationCallOrder[0]).toBeLessThan(
+    mocks.slot.mock.invocationCallOrder[0]!
+  );
+  expect(mocks.slot).toHaveBeenCalledWith('supplier-link:link-id', 'org');
+  expect(mocks.audit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      actorType: 'ANONYMOUS',
+      metadata: expect.objectContaining({ actionLinkId: 'link-id' }),
+    }),
+    db
+  );
+});
+
+it.each(['rate', 'expired', 'origin', 'inactive'] as const)(
+  'refuses %s before consuming the outside upload',
+  async (reason) => {
+    const request = outsideUpload();
+    if (reason === 'rate') publicAccess.admit.mockResolvedValue({ ok: false, retryAfter: 60 });
+    if (reason === 'expired')
+      mocks.permission.mockRejectedValue(new SupplierLinkError('INVALID_LINK'));
+    if (reason === 'origin') request.headers.set('origin', origin + ':444');
+    if (reason === 'inactive') publicAccess.organization.mockResolvedValue({ status: 'SUSPENDED' });
+    expect((await POST(request)).status).toBe(
+      { rate: 429, expired: 404, origin: 403, inactive: 404 }[reason]
+    );
+    expect(request.bodyUsed).toBe(false);
+    expect(mocks.slot).not.toHaveBeenCalled();
+    expect(mocks.store).not.toHaveBeenCalled();
+  }
+);
