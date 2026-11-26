@@ -2142,8 +2142,8 @@ function ScopedPharmacyCounterConsole({
     ]
   );
 
-  // A cart whose query expires has no observer-triggered fetch until focus/remount. Verify
-  // it here as well as in the open sheet. Payment attempts retain their own recovery path.
+  // Verify a changed or initially stale snapshot once. Age alone never locks a verified bill.
+  // Payment attempts retain their own outcome recovery path.
   useEffect(() => {
     if (billState === 'ready' || billState === 'settled') autoRead.current = null;
     if (
@@ -3469,6 +3469,7 @@ function ScopedPharmacyCounterConsole({
       discardReceiptIntent();
       setReceiptSettlement(null);
       let dispatched = false;
+      let printReservation: CounterBrowserPrintReservation | undefined;
       let sentKey: string | null = null;
       let outcome: CounterTenderResult;
       try {
@@ -3479,7 +3480,7 @@ function ScopedPharmacyCounterConsole({
         }
         // Reserve the print window during the gesture, but do not persist or dispatch a
         // payment until an uncached read confirms the exact bill the cashier reviewed.
-        const printReservation = autoPrint ? reserveCounterBrowserPrint() : undefined;
+        printReservation = autoPrint ? reserveCounterBrowserPrint() : undefined;
         let verified;
         try {
           verified = await utils.client.pharmacySales.counterCart.query({ branchId, saleId });
@@ -3593,7 +3594,10 @@ function ScopedPharmacyCounterConsole({
         }
       } catch (error) {
         discardReceiptIntent();
-        if (!dispatched) setStorageError(true);
+        if (!dispatched) {
+          printReservation?.cancel();
+          setStorageError(true);
+        }
         // DEV-631: the day was closed under this bill: re-read it so the counter says so.
         if (error instanceof Error && error.message === 'DAY_CLOSED')
           void utils.pharmacySales.tradingDayStatus.invalidate();

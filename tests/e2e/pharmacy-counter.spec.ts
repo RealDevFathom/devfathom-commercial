@@ -2795,6 +2795,66 @@ test('DEV-1041: a scanned box and typed tablet use their respective server price
   ).toBeEnabled();
 });
 
+test('DEV-1040 keeps a verified cash field focused through expiry and checks the amount before dispatch', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await openCounter(page);
+  await openDrawer(page);
+  const { otc } = PHARMACY_E2E.medicines;
+  await search(page, otc.name);
+  await addFirstResult(page, otc.name);
+  await expect(billLine(page, otc.name)).toContainText('2.50');
+  await page.getByLabel('Scan or search').press('F9');
+  const sheet = page.getByRole('dialog', { name: /^Take payment/ });
+  const cash = sheet.getByLabel('Cash received');
+  await cash.fill('10.00');
+  await cash.focus();
+  const before = await cash.boundingBox();
+  expect(before).not.toBeNull();
+  const height = (await sheet.boundingBox())?.height;
+  const focusLeft = cash.evaluate(
+    (el) =>
+      new Promise<boolean>((resolve) => {
+        el.addEventListener('blur', () => resolve(true), { once: true });
+        // Cross the actual query freshness window with the cashier still entering cash.
+        setTimeout(() => resolve(false), 31000);
+      })
+  );
+  expect(await focusLeft).toBe(false);
+  await expect(cash).toBeFocused();
+  await expect(cash).toBeEnabled();
+  await expect(cash).toHaveValue('10.00');
+  expect(await cash.boundingBox()).toEqual(before);
+  expect((await sheet.boundingBox())?.height).toBe(height);
+  await expect(sheet.getByText('Unavailable', { exact: true })).toHaveCount(0);
+  let payments = 0;
+  page.on('request', (request) => {
+    if (request.method() === 'POST' && /pharmacySales\.tender\b/.test(request.url())) payments++;
+  });
+  // Simulate an intervening server-side bill change on the uncached balance read.
+  await page.route(/\/api\/trpc\/[^?]*pharmacySales\.counterCart/, async (route) => {
+    const response = await route.fetch();
+    const result = await response.json();
+    const index = new URL(route.request().url()).pathname
+      .split('/')
+      .pop()!
+      .split(',')
+      .indexOf('pharmacySales.counterCart');
+    const cart = (Array.isArray(result) ? result[index] : result).result.data.json;
+    cart.totals.netMinor += 250;
+    cart.totals.grossMinor += 250;
+    cart.lines[0].lineTotalMinor += 250;
+    cart.lines[0].quantity += 1;
+    await route.fulfill({ response, json: result });
+  });
+  await pressControl(sheet.getByRole('button', { name: 'Take payment', exact: true }));
+  await expect(
+    sheet.getByText('This bill changed. New balance: Rs 5.00', { exact: true }).first()
+  ).toBeVisible();
+  expect(payments).toBe(0);
+});
+
 test('DEV-1042: unmatched searches leave the bill, totals and keyboard focus in place', async ({
   page,
 }) => {
