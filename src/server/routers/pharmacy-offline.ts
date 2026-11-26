@@ -1659,6 +1659,14 @@ async function quarantineReceipt(
       },
     },
   });
+  if (command.action === 'CASH_OTC_SALE') {
+    await recordRejectedOfflineCash(db, scope, {
+      deviceId,
+      commandId: stored.id,
+      receiptNumber: command.leasedReceipt.receiptNumber,
+      amountMinor: command.amountMinor,
+    });
+  }
   await appendReceiptEvent(
     db,
     { ...receiptEvidence(ctx, command, request), originalHash },

@@ -64,6 +64,7 @@ async function ensureBranch(db: ScopedDb, organizationId: string, branchId: stri
         addressLine: '1 Test Road',
         city: 'Lahore',
         provinceCode: 'PB',
+        cashShiftsEnabled: true,
       },
     ],
     skipDuplicates: true,
@@ -521,6 +522,24 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
         where: { deviceId: counter.fixture.deviceId },
         orderBy: { createdAt: 'asc' },
       });
+      const movement = await db.pharmacyDrawerMovement.findFirstOrThrow({
+        where: {
+          kind: 'REJECTED_OFFLINE_CASH',
+          drawerSession: { deviceId: counter.fixture.deviceId },
+        },
+      });
+      expect(movement.shiftId).toBeTruthy();
+      expect(movement.amountMinor).toBe(failed.amountMinor);
+      const postings = await db.financeJournalLine.findMany({
+        where: { sourceLineId: movement.id },
+        orderBy: { accountCode: 'asc' },
+      });
+      expect(
+        postings.map((row) => [row.accountCode, row.side, Number(row.amountMinor)]).sort()
+      ).toEqual([
+        ['CASH', 'DEBIT', failed.amountMinor],
+        ['OFFLINE_CASH_SUSPENSE', 'CREDIT', failed.amountMinor],
+      ]);
       const audits = await db.auditLog.findMany({
         where: {
           action: 'pharmacyOffline.quarantineOfflineReceipt',
