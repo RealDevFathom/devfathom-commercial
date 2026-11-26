@@ -1,3 +1,5 @@
+import { gunzipSync } from 'node:zlib';
+import { eligibleOpeningWitness } from '@/lib/pharmacy/migration/abuzar-witness';
 import { can, subjectFromSession } from '@/lib/abac';
 import { readReconciliation } from '@/lib/pharmacy/migration/abuzar-reconciliation';
 import { TRPCError } from '@trpc/server';
@@ -21,28 +23,34 @@ const input = phaseInput.extend({
 });
 const message = (status: number, error: string) =>
   Response.json({ error }, { status, headers: { 'Cache-Control': 'no-store' } });
+async function importAccess(request: Request) {
+  const actor = await resolveTenantActor({ request });
+  if (!actor?.session?.user?.id) return message(401, 'Sign in to your pharmacy.');
+  const { session, organization } = actor;
+  if (session.user.isSupportSession || session.user.organizationId !== organization.id)
+    return message(403, 'Pharmacy membership required.');
+  const ctx = await createTRPCContext({
+    req: request,
+    session,
+    organization,
+    support: actor.support,
+  });
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-core') ||
+    ctx.entitlements.organizationId !== organization.id
+  )
+    return message(403, 'Pharmacy access required.');
+  // Reuse the production owner import gate and its active-branch scope before reading private files.
+  const { branches } = await pharmacyOwnerImportRouter.createCaller(ctx).options();
+  return { ctx, organization, session, branches };
+}
 export async function POST(request: Request) {
   try {
     if (request.headers.get('origin') !== trustedRequestOrigin(request))
       return message(403, 'Use the signed-in pharmacy workspace.');
-    const actor = await resolveTenantActor({ request });
-    if (!actor?.session?.user?.id) return message(401, 'Sign in to your pharmacy.');
-    const { session, organization } = actor;
-    if (session.user.isSupportSession || session.user.organizationId !== organization.id)
-      return message(403, 'Pharmacy membership required.');
-    const ctx = await createTRPCContext({
-      req: request,
-      session,
-      organization,
-      support: actor.support,
-    });
-    if (
-      !hasModule(ctx.entitlements, 'pharmacy-core') ||
-      ctx.entitlements.organizationId !== organization.id
-    )
-      return message(403, 'Pharmacy access required.');
-    // Reuse the production owner import gate and its active-branch scope before reading private files.
-    const { branches } = await pharmacyOwnerImportRouter.createCaller(ctx).options();
+    const access = await importAccess(request);
+    if (access instanceof Response) return access;
+    const { ctx, organization, session, branches } = access;
     if (!request.headers.get('content-type')?.startsWith('multipart/form-data;'))
       return message(400, 'Choose the prepared export files.');
     const body = await readBoundedBody(request, 97 * 1024 * 1024);
@@ -69,11 +77,17 @@ export async function POST(request: Request) {
     let data;
     try {
       data = await parsePreparedExport(async (name, limit) => {
+        const compressed = form.get('encoding') === 'gzip';
         const entries = form.getAll(name);
         const file = entries[0];
-        if (entries.length !== 1 || !(file instanceof File) || file.size > limit)
+        if (
+          entries.length !== 1 ||
+          !(file instanceof File) ||
+          file.size > (compressed ? 4 * 1024 * 1024 : limit)
+        )
           throw new Error('Invalid prepared file.');
-        return Buffer.from(await file.arrayBuffer());
+        const bytes = Buffer.from(await file.arrayBuffer());
+        return compressed ? gunzipSync(bytes, { maxOutputLength: limit }) : bytes;
       });
     } catch {
       return message(400, 'Check the export manifest, files, headers, row counts and checksums.');
@@ -119,5 +133,56 @@ export async function POST(request: Request) {
     if (error instanceof SyntaxError || error instanceof TypeError)
       return message(400, 'Invalid prepared export request.');
     return message(409, 'The step could not complete. Review the current dry run and retry.');
+  }
+}
+
+export async function GET(request: Request) {
+  try {
+    const access = await importAccess(request);
+    if (access instanceof Response) return access;
+    const { ctx, organization, session, branches } = access;
+    const query = new URL(request.url).searchParams,
+      branchId = query.get('branch');
+    if (!branchId || !branches.some((b) => b.id === branchId))
+      return message(403, 'Choose an active branch.');
+    if (query.get('list') === 'witnesses') {
+      const assigned = await ctx.db.pharmacyBranchAssignment.findMany({
+        where: { organizationId: organization.id, branchId, active: true },
+        select: { userId: true, user: { select: { name: true } } },
+      });
+      const witnesses = [];
+      for (const member of assigned)
+        if (
+          await eligibleOpeningWitness(
+            ctx.db,
+            { organizationId: organization.id, actorId: session.user.id, branchId },
+            member.userId
+          )
+        )
+          witnesses.push({ id: member.userId, name: member.user.name });
+      return Response.json(witnesses, { headers: { 'Cache-Control': 'no-store' } });
+    }
+    const document = query.get('document')?.trim(),
+      after = query.get('after') ?? '';
+    if (!document || document.length > 512 || after.length > 512)
+      return message(400, 'Enter the original document number.');
+    const rows = await ctx.db.$queryRaw<
+      {
+        sourceId: string;
+        label: string;
+        kind: string;
+        date: string;
+        productCode: string | null;
+        quantity: string | null;
+        unitPrice: string | null;
+        amount: string | null;
+      }[]
+    >`SELECT "sourceId",label,kind,"documentDate"::text AS date, "productCode",quantity,"unitPrice",amount FROM pharmacy_abuzar_history WHERE "organizationId"=${organization.id} AND "branchId"=${branchId} AND "documentNo"=${document} AND "sourceId">${after} ORDER BY "sourceId" LIMIT 101`;
+    return Response.json(
+      { rows: rows.slice(0, 100), next: rows.length > 100 ? rows[99]!.sourceId : null },
+      { headers: { 'Cache-Control': 'no-store' } }
+    );
+  } catch {
+    return message(403, 'Pharmacy administrator access required.');
   }
 }

@@ -66,7 +66,25 @@ export async function runAbuzarStep(
     r.reason ? [{ row: r.index, reason: r.reason }] : []
   );
   const create = decision.rows.length - skipped.length;
+  const effect = {
+    stockValueMinor: BigInt(0),
+    customerBalanceMinor: BigInt(0),
+    supplierBalanceMinor: BigInt(0),
+  };
+  for (const d of decision.rows) {
+    if (d.reason) continue;
+    if ('cost' in d && 'Quantity' in d.row && d.cost !== null)
+      effect.stockValueMinor += BigInt(Number(d.row.Quantity)) * d.cost;
+    if ('party' in d && d.party && d.amount !== null)
+      effect[d.party.customerId ? 'customerBalanceMinor' : 'supplierBalanceMinor'] += d.amount;
+  }
+  const effects = {
+    stockValueMinor: String(effect.stockValueMinor),
+    customerBalanceMinor: String(effect.customerBalanceMinor),
+    supplierBalanceMinor: String(effect.supplierBalanceMinor),
+  };
   const confirmation = digest({
+    effects,
     scope,
     options,
     source: data.checksum,
@@ -74,9 +92,27 @@ export async function runAbuzarStep(
     postedSales,
     skipped,
     create,
+    targets: decision.rows.map((row) =>
+      'medicineId' in row
+        ? row.medicineId
+        : 'link' in row
+          ? row.link?.medicineId
+          : 'party' in row
+            ? (row.party?.customerId ?? row.party?.supplierId)
+            : null
+    ),
   });
   const receipt = digest({ scope, options, source: data.checksum });
-  const report = { step: options.step, source, create, skipped, blocked, confirmation, applied: 0 };
+  const report = {
+    step: options.step,
+    effects,
+    source,
+    create,
+    skipped,
+    blocked,
+    confirmation,
+    applied: 0,
+  };
   if (!confirmed) return report;
   if (blocked)
     throw new AbuzarReviewError('Posted sales require the owner to choose add to existing.');
