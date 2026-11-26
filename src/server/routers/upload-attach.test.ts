@@ -46,7 +46,11 @@ function makeDb() {
     task: { findUnique: vi.fn(async () => ({ column: { board: { projectId: 'project_1' } } })) },
     projectFile: { create: vi.fn(async ({ data }) => ({ id: 'pf_new', ...data })) },
     taskAttachment: { create: vi.fn(async ({ data }) => ({ id: 'ta_new', ...data })) },
-    client: { findMany: vi.fn(async () => [{ id: 'client_1' }]) },
+    client: {
+      findUnique: vi.fn(async () => ({ id: 'client_1', logo: '/api/files/legacy.png' })),
+      update: vi.fn(async () => ({ id: 'client_1' })),
+      findMany: vi.fn(async () => [{ id: 'client_1' }]),
+    },
     project: { findMany: vi.fn(async () => []) },
     contract: {
       create: vi.fn(async ({ data }) => ({ id: 'contract_new', title: 'MSA', ...data })),
@@ -179,4 +183,29 @@ it('a grandfathered binding to another record does not let a new record attach t
     code: 'BAD_REQUEST',
   });
   expect(db.uploadedFile.updateMany).not.toHaveBeenCalled();
+});
+
+it('claims the logo image inside the client update transaction', async () => {
+  db.uploadedFile.findFirst.mockResolvedValue(OWN);
+  const update = (logo: string) =>
+    clientsRouter.createCaller(context('ADMIN')).update({ id: 'client_1', logo });
+  await expect(update('/api/files/logo.pdf')).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  expect(db.client.update).not.toHaveBeenCalled();
+  await update('/api/files/logo.png');
+  expect(db.uploadedFile.updateMany).toHaveBeenCalledWith({
+    where: { id: 'upl_own', ownerType: null },
+    data: { ownerType: 'CLIENT_LOGO', ownerId: 'client_1', boundAt: expect.any(Date) },
+  });
+  expect(db.client.update).toHaveBeenCalledOnce();
+});
+
+it('edits a client when the form resends its unclaimable stored logo', async () => {
+  await clientsRouter
+    .createCaller(context('ADMIN'))
+    .update({ id: 'client_1', name: 'Updated', logo: '/api/files/legacy.png' });
+  expect(db.uploadedFile.findFirst).not.toHaveBeenCalled();
+  expect(db.client.update).toHaveBeenCalledWith({
+    where: { id: 'client_1' },
+    data: { name: 'Updated' },
+  });
 });

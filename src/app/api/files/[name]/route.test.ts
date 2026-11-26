@@ -33,14 +33,15 @@ const db = {
   restaurantSopTemplateVersion: { findFirst: vi.fn() },
   uploadedFile: { findFirst: vi.fn() },
   uploadedFileLegacyBinding: { findMany: vi.fn() },
+  client: { findFirst: vi.fn() },
   projectFile: { findUnique: vi.fn() },
   taskAttachment: { findUnique: vi.fn() },
   contract: { findUnique: vi.fn() },
   projectMember: { findUnique: vi.fn() },
   task: { findUnique: vi.fn() },
 };
-function actor(role = 'EMPLOYEE') {
-  return { session: { user: { id: 'user_1', role } }, organization: { id: 'org_a' } };
+function actor(role = 'EMPLOYEE', id = 'user_1') {
+  return { session: { user: { id, role } }, organization: { id: 'org_a' } };
 }
 const read = (name: string) =>
   GET(new Request(`https://example.invalid/api/files/${name}`), {
@@ -56,7 +57,11 @@ beforeEach(() => {
   db.messageAttachment.findFirst.mockResolvedValue(null);
   db.pharmacySopSite.findFirst.mockResolvedValue(null);
   // A registered upload no record has bound yet (DEV-837).
-  db.uploadedFile.findFirst.mockResolvedValue({ ownerType: null, ownerId: null });
+  db.uploadedFile.findFirst.mockResolvedValue({
+    ownerType: null,
+    ownerId: null,
+    uploadedById: 'user_1',
+  });
   db.uploadedFileLegacyBinding.findMany.mockResolvedValue([]);
   db.projectFile.findUnique.mockResolvedValue(null);
   db.taskAttachment.findUnique.mockResolvedValue(null);
@@ -320,14 +325,29 @@ describe('private attachment delivery', () => {
 
   describe('DEV-837: server-recorded upload ownership at download (F15)', () => {
     const bound = (ownerType: string, ownerId: string) =>
-      db.uploadedFile.findFirst.mockResolvedValue({ ownerType, ownerId });
+      db.uploadedFile.findFirst.mockResolvedValue({ ownerType, ownerId, uploadedById: 'user_1' });
 
-    it('looks the object up in the upload registry by name', async () => {
+    it('serves an unattached upload to its uploader and hides it from another member', async () => {
       expect((await read('plan.pdf')).status).toBe(200);
       expect(db.uploadedFile.findFirst).toHaveBeenCalledWith({
         where: { name: 'plan.pdf' },
-        select: { ownerType: true, ownerId: true },
+        select: { ownerType: true, ownerId: true, uploadedById: true },
       });
+      mocks.getUpload.mockClear();
+      mocks.actor.mockResolvedValue(actor('EMPLOYEE', 'user_2'));
+      expect((await read('plan.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
+    });
+
+    it('denies a registration with neither an owner nor a known uploader', async () => {
+      db.uploadedFile.findFirst.mockResolvedValue({
+        ownerType: null,
+        ownerId: null,
+        uploadedById: null,
+      });
+      mocks.actor.mockResolvedValue(actor('ADMIN'));
+      expect((await read('orphan.pdf')).status).toBe(404);
+      expect(mocks.getUpload).not.toHaveBeenCalled();
     });
 
     it('denies an object the registry does not know, even to admins', async () => {
@@ -354,6 +374,7 @@ describe('private attachment delivery', () => {
         select: { role: true },
       });
 
+      mocks.actor.mockResolvedValue(actor('EMPLOYEE', 'user_2'));
       db.projectMember.findUnique.mockResolvedValue({ role: 'MEMBER' });
       expect((await read('plan.pdf')).status).toBe(200);
 
@@ -493,8 +514,121 @@ describe('private attachment delivery', () => {
     });
   });
 
+  it.each([
+    ['CLIENT_LOGO', 'logo.png'],
+    ['CHAT_ATTACHMENT', 'chat.png'],
+    ['PHARMACY_LICENCE_EVIDENCE', 'licence.pdf'],
+    ['PHARMACY_COVERAGE_ROSTER', 'roster.pdf'],
+  ])('enforces the live %s policy on a legacy upload', async (ownerType, name) => {
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType,
+      ownerId: 'record',
+      uploadedById: null,
+    });
+    const ref = '/api/files/' + name;
+    const profileField =
+      ownerType === 'PHARMACY_LICENCE_EVIDENCE'
+        ? 'licenceEvidenceFileRef'
+        : 'qualifiedPersonCoverageRosterRef';
+    db.branchRegulatoryProfile.findFirst.mockImplementation(async ({ where }) =>
+      where[profileField] === ref && (!where.branchId || where.branchId === 'record')
+        ? { branchId: 'record' }
+        : null
+    );
+    db.messageAttachment.findFirst.mockImplementation(async ({ where }) =>
+      ownerType === 'CHAT_ATTACHMENT' &&
+      where.url === ref &&
+      (!where.id || (where.id === 'record' && where.message.deletedAt === null))
+        ? { message: { channelId: 'channel' } }
+        : null
+    );
+    db.client.findFirst.mockResolvedValue(null);
+    expect((await read(name)).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    db.client.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'record' && where.logo === ref ? { id: 'record' } : null
+    );
+    db.channelMember.findUnique.mockResolvedValue({ id: 'member' });
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment' });
+    if (ownerType === 'PHARMACY_LICENCE_EVIDENCE') {
+      expect((await read(name)).status).toBe(404);
+      mocks.granted.add('pharmacy:manage');
+    }
+    expect((await read(name)).status).toBe(200);
+    if (ownerType === 'CLIENT_LOGO') expect((await read('logo.pdf')).status).toBe(404);
+    if (ownerType === 'CHAT_ATTACHMENT') {
+      db.messageAttachment.findFirst.mockResolvedValue(null);
+      expect((await read(name)).status).toBe(404);
+    }
+    mocks.actor.mockResolvedValue({ ...actor(), organization: { id: 'org_b' } });
+    mocks.tenantDb.mockImplementation(async (org, callback) =>
+      callback(
+        org === 'org_a'
+          ? db
+          : {
+              ...db,
+              branchRegulatoryProfile: { findFirst: async () => null },
+              uploadedFile: { findFirst: async () => null },
+              restaurantSopEvidence: { findFirst: async () => null },
+            }
+      )
+    );
+    mocks.getUpload.mockClear();
+    expect((await read(name)).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
+  it('honours a live grandfathered chat binding when the primary logo was replaced', async () => {
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'CLIENT_LOGO',
+      ownerId: 'client',
+      uploadedById: null,
+    });
+    db.client.findFirst.mockResolvedValue(null);
+    db.uploadedFileLegacyBinding.findMany.mockResolvedValue([
+      { ownerType: 'CHAT_ATTACHMENT', ownerId: 'attachment' },
+    ]);
+    db.messageAttachment.findFirst.mockImplementation(async ({ where }) =>
+      where.id === 'attachment' &&
+      where.url === '/api/files/shared.png' &&
+      where.message.deletedAt === null
+        ? { message: { channelId: 'channel' } }
+        : null
+    );
+    expect((await read('shared.png')).status).toBe(404);
+    db.channelMember.findUnique.mockResolvedValue({ id: 'member' });
+    expect((await read('shared.png')).status).toBe(200);
+  });
+
+  it('requires both channel membership and licence evidence access on a shared file', async () => {
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'CHAT_ATTACHMENT',
+      ownerId: 'attachment',
+      uploadedById: null,
+    });
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile' });
+    db.messageAttachment.findFirst.mockResolvedValue({ message: { channelId: 'private' } });
+    db.channelMember.findUnique.mockResolvedValue({ id: 'member' });
+    expect((await read('shared.pdf')).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    mocks.actor.mockResolvedValue(actor('ADMIN'));
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'PHARMACY_LICENCE_EVIDENCE',
+      ownerId: 'branch',
+      uploadedById: null,
+    });
+    db.channelMember.findUnique.mockResolvedValue(null);
+    expect((await read('shared.pdf')).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
   it('hides pharmacy licence evidence from non-admin tenant members before storage', async () => {
-    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'PHARMACY_LICENCE_EVIDENCE',
+      ownerId: 'branch_a',
+      uploadedById: null,
+    });
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ branchId: 'branch_a' });
 
     const response = await read('licence.pdf');
 
@@ -512,7 +646,12 @@ describe('private attachment delivery', () => {
 
   it('allows admins to read pharmacy licence evidence', async () => {
     mocks.actor.mockResolvedValue(actor('ADMIN'));
-    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile_1' });
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'PHARMACY_LICENCE_EVIDENCE',
+      ownerId: 'branch_a',
+      uploadedById: null,
+    });
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ branchId: 'branch_a' });
 
     expect((await read('licence.pdf')).status).toBe(200);
     expect(mocks.getUpload).toHaveBeenCalledExactlyOnceWith('org_a', 'licence.pdf');
@@ -520,6 +659,11 @@ describe('private attachment delivery', () => {
 
   it('keeps chat membership required even for admins', async () => {
     mocks.actor.mockResolvedValue(actor('ADMIN'));
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'CHAT_ATTACHMENT',
+      ownerId: 'attachment_1',
+      uploadedById: null,
+    });
     db.messageAttachment.findFirst.mockResolvedValue({ message: { channelId: 'private_1' } });
     expect((await read('chat.png')).status).toBe(404);
     expect(mocks.getUpload).not.toHaveBeenCalled();

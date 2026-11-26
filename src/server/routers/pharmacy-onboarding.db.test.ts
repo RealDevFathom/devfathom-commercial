@@ -12,6 +12,7 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
 import { readPharmacyReceiptTaxIdentity } from '@/lib/pharmacy/receipt-print';
 
 const runtimeUrl =
@@ -111,6 +112,13 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     ({ pharmacyOnboardingRouter } = await import('./pharmacy-onboarding'));
     await owner.connect();
     await owner.query(`SET app.is_platform_admin = 'true'`);
+    await withTenantDb(organizationId, (db) =>
+      db.uploadedFile.createMany({
+        data: ['licence.pdf', 'roster.pdf', 'second-licence.pdf', 'second-roster.pdf'].map(
+          (name) => ({ name, uploadedById: userId })
+        ),
+      })
+    );
     for (const id of [organizationId, otherOrganizationId]) {
       await owner.query(
         `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
@@ -157,6 +165,18 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     } finally {
       await owner.end();
     }
+  });
+
+  it('reports unattached registrations and upload times only within the current business', async () => {
+    const report = await withTenantDb(organizationId, (db) => readUploadRegistryReport(db));
+    expect(report.unattached).toEqual({
+      count: 4,
+      oldest: expect.any(Date),
+      newest: expect.any(Date),
+      withoutUploader: 0,
+    });
+    const empty = await withTenantDb(otherOrganizationId, (db) => readUploadRegistryReport(db));
+    expect(empty.unattached).toEqual({ count: 0, oldest: null, newest: null, withoutUploader: 0 });
   });
 
   it('runs on a role that is neither superuser nor RLS-exempt', async () => {
@@ -243,6 +263,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
           caller(db).saveRegulatoryProfile({
             ...profile,
             branchId: secondBranchId,
+
             premisesAddressLine: '9 Link Road',
             provinceCode: 'PK-ZZ',
           })
@@ -310,6 +331,8 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
         branchId: secondBranchId,
+        licenceEvidenceFileRef: '/api/files/second-licence.pdf',
+        qualifiedPersonCoverageRosterRef: '/api/files/second-roster.pdf',
         premisesAddressLine: '9 Link Road',
         licenceValidTo: expiryDate,
       });
@@ -328,6 +351,30 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       );
       expect(identity.phone).toBeNull();
     });
+  });
+
+  it('rolls back the profile and first claim when the roster belongs to another member', async () => {
+    const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+    const db = createTenantDb(organizationId, userId);
+    await db.uploadedFile.create({
+      data: { name: 'foreign-roster.pdf', uploadedById: 'other-' + suffix },
+    });
+    await expect(
+      caller(db).saveRegulatoryProfile({
+        ...profile,
+        qualifiedPersonCoverageRosterRef: '/api/files/foreign-roster.pdf',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Upload this file again to attach it here.',
+    });
+    expect(await db.branchRegulatoryProfile.count({ where: { branchId } })).toBe(0);
+    expect(
+      await db.uploadedFile.findMany({
+        where: { name: { in: ['licence.pdf', 'foreign-roster.pdf'] } },
+        select: { ownerType: true, ownerId: true, boundAt: true },
+      })
+    ).toEqual(Array(2).fill({ ownerType: null, ownerId: null, boundAt: null }));
   });
 
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {

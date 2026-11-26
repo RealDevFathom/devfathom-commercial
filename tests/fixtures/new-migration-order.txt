@@ -64,3 +64,4 @@
 20261122010000_pharmacy_terminal_refund_events
 20261126010000_pharmacy_legacy_pharmacist_day_close
 20261126010100_recurring_expense_cycles
+20261126010200_claim_shared_uploads

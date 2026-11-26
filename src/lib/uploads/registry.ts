@@ -1,5 +1,7 @@
 import 'server-only';
 
+import type { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
 import { canAccessProject, projectIdOfTask } from '@/lib/authz';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -18,7 +20,19 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * neither bind someone else's upload nor re-bind one that already has an owner.
  */
 
-export const UPLOAD_OWNER_TYPES = ['PROJECT_FILE', 'TASK_ATTACHMENT', 'CONTRACT'] as const;
+const SHARED_RECORD_TYPES = [
+  'CLIENT_LOGO',
+  'CHAT_ATTACHMENT',
+  'PHARMACY_LICENCE_EVIDENCE',
+  'PHARMACY_COVERAGE_ROSTER',
+] as const;
+export const UPLOAD_OWNER_TYPES = [
+  'PROJECT_FILE',
+  'TASK_ATTACHMENT',
+  'CONTRACT',
+  ...SHARED_RECORD_TYPES,
+] as const;
+
 export type UploadOwnerType = (typeof UPLOAD_OWNER_TYPES)[number];
 export type UploadOwner = { type: UploadOwnerType; id: string };
 
@@ -94,7 +108,8 @@ export async function claimUploadReference(
   if (!input.ref) return;
   const name = uploadNameFromRef(input.ref);
   if (name === null) return;
-  if (name === undefined) throw new UploadReferenceError();
+  if (name === undefined || (input.owner.type === 'CLIENT_LOGO' && !isLogoImage(name)))
+    throw new UploadReferenceError();
   const upload = await db.uploadedFile.findFirst({
     where: { name },
     select: { id: true, uploadedById: true, ownerType: true, ownerId: true },
@@ -120,17 +135,81 @@ export async function claimUploadReference(
   if (bound.count !== 1) throw new UploadReferenceError();
 }
 
+function isLogoImage(name: string) {
+  return /\.(?:png|jpe?g|gif|webp)$/i.test(name);
+}
+
+type Reader = Parameters<typeof subjectFromSession>[0];
+
+export async function mayReadPharmacyDocument(
+  db: ScopedDb,
+  user: Reader,
+  branch: Prisma.PharmacyBranchWhereInput,
+  licence: boolean
+) {
+  if (user.role === 'ADMIN') return true;
+  const assignment = await db.pharmacyBranchAssignment.findFirst({
+    where: {
+      userId: user.id,
+      active: true,
+      user: { status: 'ACTIVE' },
+      branch: { ...branch, active: true },
+    },
+    select: { id: true },
+  });
+  return (
+    !!assignment &&
+    (!licence ||
+      (await can(subjectFromSession(user), 'pharmacy:manage', undefined, { db, source: 'TRPC' })))
+  );
+}
+
 /**
  * The current read policy of the record a file is bound to. A deleted owner
  * (tombstone) or an unknown owner kind denies.
  */
 export async function canReadBoundUpload(
   db: ScopedDb,
-  user: { id: string; role?: string | null },
-  binding: { ownerType: string; ownerId: string | null }
+  user: Reader,
+  binding: { name: string; ownerType: string; ownerId: string | null }
 ): Promise<boolean> {
   if (!binding.ownerId) return false;
   switch (binding.ownerType) {
+    case 'CLIENT_LOGO':
+      return (
+        isLogoImage(binding.name) &&
+        !!(await db.client.findFirst({
+          where: { id: binding.ownerId, logo: FILE_REF_PREFIX + binding.name },
+          select: { id: true },
+        }))
+      );
+    case 'CHAT_ATTACHMENT': {
+      const attachment = await db.messageAttachment.findFirst({
+        where: {
+          id: binding.ownerId,
+          url: FILE_REF_PREFIX + binding.name,
+          message: { deletedAt: null },
+        },
+        select: { message: { select: { channelId: true } } },
+      });
+      return (
+        !!attachment &&
+        !!(await db.channelMember.findUnique({
+          where: { channelId_userId: { channelId: attachment.message.channelId, userId: user.id } },
+          select: { id: true },
+        }))
+      );
+    }
+    case 'PHARMACY_COVERAGE_ROSTER':
+    case 'PHARMACY_LICENCE_EVIDENCE': {
+      const licence = binding.ownerType === 'PHARMACY_LICENCE_EVIDENCE';
+      const field = licence ? 'licenceEvidenceFileRef' : 'qualifiedPersonCoverageRosterRef';
+      const profile = await db.branchRegulatoryProfile.findFirst({
+        where: { branchId: binding.ownerId, [field]: FILE_REF_PREFIX + binding.name },
+        select: { id: true },
+      });
+      return !!profile && mayReadPharmacyDocument(db, user, { id: binding.ownerId }, licence);
+    }
     case 'PROJECT_FILE': {
       const file = await db.projectFile.findUnique({
         where: { id: binding.ownerId },
@@ -167,7 +246,7 @@ export async function canReadBoundUpload(
  */
 export async function canReadUpload(
   db: ScopedDb,
-  user: { id: string; role?: string | null },
+  user: Reader,
   upload: { name: string; ownerType: string; ownerId: string | null }
 ): Promise<boolean> {
   if (await canReadBoundUpload(db, user, upload)) return true;
@@ -177,7 +256,21 @@ export async function canReadUpload(
   });
   for (const binding of grandfathered) {
     if (binding.ownerType === upload.ownerType && binding.ownerId === upload.ownerId) continue;
-    if (await canReadBoundUpload(db, user, binding)) return true;
+    if (await canReadBoundUpload(db, user, { ...binding, name: upload.name })) return true;
   }
   return false;
+}
+
+/** A new typed owner checks its exact live reference, including channel membership.
+ * Older registrations and SOP captures still require the historical reference guards. */
+export async function registeredReadDecision(db: ScopedDb, user: Reader, name: string) {
+  const upload = await db.uploadedFile.findFirst({
+    where: { name },
+    select: { ownerType: true, ownerId: true, uploadedById: true },
+  });
+  if (!upload) return 'DENY';
+  const { ownerType, ownerId } = upload;
+  if (ownerType === null) return upload.uploadedById === user.id ? 'LEGACY' : 'DENY';
+  if (!(await canReadUpload(db, user, { name, ownerId, ownerType }))) return 'DENY';
+  return SHARED_RECORD_TYPES.some((type) => type === ownerType) ? 'TYPED' : 'LEGACY';
 }

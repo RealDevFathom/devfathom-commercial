@@ -137,7 +137,13 @@ describe('saveRegulatoryProfile province binding (#977)', () => {
     mocks.transaction.mockResolvedValue(undefined);
     const create = vi.fn();
     mocks.transaction.mockImplementation(async (run: (tx: unknown) => Promise<void>) =>
-      run({ branchRegulatoryProfile: { create, update: vi.fn() } })
+      run({
+        uploadedFile: {
+          findFirst: vi.fn(async () => ({ id: 'upload', ownerType: null, uploadedById: 'admin' })),
+          updateMany: vi.fn(async () => ({ count: 1 })),
+        },
+        branchRegulatoryProfile: { create, update: vi.fn() },
+      })
     );
     // readOverview after the save is outside this test's concern.
     await pharmacyOnboardingRouter

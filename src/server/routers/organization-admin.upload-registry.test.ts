@@ -51,7 +51,10 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   mocks.queryRaw
     .mockResolvedValueOnce([{ recordType: 'PROJECT_FILE', count: 2 }])
-    .mockResolvedValueOnce([{ recordType: 'CLIENT_LOGO', count: 1 }]);
+    .mockResolvedValueOnce([{ recordType: 'CLIENT_LOGO', count: 1 }])
+    .mockResolvedValueOnce([
+      { count: 2, oldest: new Date(0), newest: new Date(10), withoutUploader: 1 },
+    ]);
 });
 
 describe('organizationAdmin.uploadRegistryReport', () => {
@@ -59,9 +62,10 @@ describe('organizationAdmin.uploadRegistryReport', () => {
     await expect(caller().uploadRegistryReport()).resolves.toEqual({
       tombstoned: [{ recordType: 'PROJECT_FILE', count: 2 }],
       unregisteredReferences: [{ recordType: 'CLIENT_LOGO', count: 1 }],
+      unattached: { count: 2, oldest: new Date(0), newest: new Date(10), withoutUploader: 1 },
       note: expect.stringContaining('nothing is deleted from storage'),
     });
-    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(3);
     const sql = mocks.queryRaw.mock.calls
       .map(([query]) => (query as { strings: string[] }).strings.join('?'))
       .join('\n');
