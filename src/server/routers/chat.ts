@@ -48,6 +48,9 @@ async function canManageChannel(
   return false;
 }
 
+/** The longest plain-text message body, on send and on edit. */
+const MAX_MESSAGE_LENGTH = 8000;
+
 const attachmentInput = z.object({
   name: z.string(),
   url: z.string(),
@@ -247,7 +250,7 @@ export const chatRouter = router({
     .input(
       z.object({
         channelId: z.string(),
-        content: z.string().max(8000).default(''),
+        content: z.string().max(MAX_MESSAGE_LENGTH).default(''),
         contentJson: z.any().optional(),
         mentionIds: z.array(z.string()).optional(),
         parentId: z.string().optional(),
@@ -362,7 +365,8 @@ export const chatRouter = router({
     .input(
       z.object({
         messageId: z.string(),
-        content: z.string().default(''),
+        // DEV-1055: the same cap as sendMessage, so an edit cannot grow a message.
+        content: z.string().max(MAX_MESSAGE_LENGTH).default(''),
         contentJson: z.any().optional(),
         mentionIds: z.array(z.string()).optional(),
       })
@@ -383,10 +387,20 @@ export const chatRouter = router({
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
       if (existing.senderId !== me)
         throw new TRPCError({ code: 'FORBIDDEN', message: 'You can only edit your own messages' });
+      // DEV-1055: authorship alone is not enough. Someone removed from the channel
+      // can no longer read it, so they may not rewrite what its members see either.
+      await assertChannelMember(ctx, existing.channelId);
       if (existing.deletedAt)
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot edit a deleted message' });
 
       const content = input.contentJson ? tiptapToPlainText(input.contentJson) : input.content;
+      // The rich-text path derives its text on the server, so cap that too.
+      if (content.length > MAX_MESSAGE_LENGTH) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: `A message can be at most ${MAX_MESSAGE_LENGTH} characters.`,
+        });
+      }
       const rawMentions = input.contentJson
         ? extractMentionIds(input.contentJson)
         : (input.mentionIds ?? []);
@@ -474,14 +488,18 @@ export const chatRouter = router({
         select: { senderId: true, channelId: true, channel: { select: { type: true } } },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
-      // Sender can always delete; app admins may moderate non-DM channels, but
-      // never DMs (DM privacy holds even for admins).
+      // App admins may moderate non-DM channels, but never DMs (DM privacy holds
+      // even for admins). Everyone else deletes only their own messages, and only
+      // while they are still a member of the channel (DEV-1055).
       const canModerate = ctx.session.user.role === 'ADMIN' && existing.channel.type !== 'DM';
-      if (existing.senderId !== me && !canModerate) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'You can only delete your own messages',
-        });
+      if (!canModerate) {
+        if (existing.senderId !== me) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'You can only delete your own messages',
+          });
+        }
+        await assertChannelMember(ctx, existing.channelId);
       }
       await ctx.db.message.update({
         where: { id: input.messageId },
