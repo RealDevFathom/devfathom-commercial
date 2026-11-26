@@ -242,6 +242,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyOffline.preparationPlan': ['admin:access'],
   'pharmacyOffline.receiptNumberGaps': ['admin:access'],
   'pharmacyOffline.recordUnsentOfflineSale': ['admin:access'],
+  'pharmacyOffline.refusedReceipts': ['admin:access'],
   'pharmacyOffline.revoke': ['admin:access'],
   'pharmacyOffline.rotate': ['admin:access'],
   'pharmacyOffline.setOfflineCashSelling': ['admin:access'],
