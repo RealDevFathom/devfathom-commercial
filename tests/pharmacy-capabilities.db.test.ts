@@ -37,16 +37,20 @@ const ownerPvSafetyMigration = readFileSync(
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+const pharmacistCloseMigration = readFileSync(
+  'prisma/migrations/20261126010000_pharmacy_legacy_pharmacist_day_close/migration.sql',
+  'utf8'
+)
+  .replace(/^BEGIN;$/m, '')
+  .replace(/^COMMIT;$/m, '');
 // Template grants added after these migrations, which never reach a legacy role through them.
 // Some have backfills of their own: the Manager's `pharmacy:procurement-approve`
 // (20261106200200_pharmacy_purchasing_authz) and `pharmacy:inventory`
 // (20261116130400_pharmacy_manager_inventory), and the Finance role's `reports:operational`
 // (20261115220200_pharmacy_finance_role_operational_reports). The DEV-751 SOP grants are for
-// new tenants only, and #654 (#925) added `pharmacy:close` to the Pharmacist template with no
-// backfill for existing tenants (reported under DEV-948).
+// new tenants only. DEV-952 brings legacy Pharmacist day-close grants up to date.
 const laterTemplateGrants: Record<string, readonly string[]> = {
   ...PHARMACY_SOP_TEMPLATE_GRANTS,
-  pharmacist: [...(PHARMACY_SOP_TEMPLATE_GRANTS.pharmacist ?? []), 'pharmacy:close'],
   manager: [
     ...(PHARMACY_SOP_TEMPLATE_GRANTS.manager ?? []),
     'pharmacy:procurement-approve',
@@ -55,7 +59,7 @@ const laterTemplateGrants: Record<string, readonly string[]> = {
   finance: [
     ...(PHARMACY_SOP_TEMPLATE_GRANTS.finance ?? []),
     'reports:operational',
-    // DEV-969 backfills these in 20261118127200, after the four migrations replayed here.
+    // DEV-969 backfills these in 20261118127200, after the original migrations replayed here.
     'finance:read',
     'finance:manage',
   ],
@@ -190,12 +194,39 @@ const legacy: Record<string, string[]> = {
       `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','RESTAURANT',now(),now())`,
       [restaurant]
     );
-    for (const key of ['owner', 'admin']) {
+    for (const key of ['owner', 'admin', 'pharmacist']) {
       await client.query(
         `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,true,now())`,
         [id(`restaurant_${key}`), restaurant, key]
       );
     }
+    // Existing shops from before the Pharmacist template gained day close.
+    await client.query(
+      `UPDATE organizations SET "createdAt" = '2026-10-28 23:59:59.999' WHERE id = ANY($1)`,
+      [[org, other, third, restaurant]]
+    );
+    await client.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt")
+       VALUES ($1,$2,'pharmacist','Custom pharmacist',false,now()),
+              ($3,$4,'pharmacist','Senior pharmacist',true,now())`,
+      [id('custom_pharmacist'), other, id('denied_pharmacist'), third]
+    );
+    await client.query(
+      `INSERT INTO organization_role_permissions
+       (id,"organizationId","organizationRoleId",capability,effect)
+       VALUES ($1,$2,$3,'pharmacy:close','DENY')`,
+      [id('pharmacist_close_deny'), third, id('denied_pharmacist')]
+    );
+    await client.query(
+      `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt")
+       VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY','2026-10-29',now())`,
+      [id('new_shop')]
+    );
+    await client.query(
+      `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt")
+       VALUES ($1,$2,'pharmacist','Pharmacist',true,now())`,
+      [id('new_pharmacist'), id('new_shop')]
+    );
     // #479: an existing explicit pharmacy:safety DENY on a system bootstrap admin must
     // survive the PV safety backfill; a non-pharmacy tenant's system owner/admin is never
     // touched.
@@ -207,6 +238,7 @@ const legacy: Record<string, string[]> = {
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
     await client.query(ownerPvSafetyMigration);
+    await client.query(pharmacistCloseMigration);
   }, 60_000);
   afterAll(async () => {
     await client.query('ROLLBACK');
@@ -220,7 +252,7 @@ const legacy: Record<string, string[]> = {
         [id(template.key)]
       );
       // Owner's redundant explicit order grant remains harmless and is not removed.
-      // A legacy role holds what these four migrations map it to. Grants that joined its
+      // A legacy role holds what these migrations map it to. Grants that joined its
       // template later are not theirs to add (see laterTemplateGrants).
       const later = new Set(laterTemplateGrants[template.key] ?? []);
       const expected = [
@@ -293,6 +325,16 @@ const legacy: Record<string, string[]> = {
       [restaurant]
     );
     expect(restaurantRoles.rows).toEqual([]);
+    const pharmacistGrants = await client.query(
+      `SELECT "organizationRoleId", effect FROM organization_role_permissions
+       WHERE capability='pharmacy:close' AND "organizationRoleId" = ANY($1)
+       ORDER BY "organizationRoleId"`,
+      [[id('pharmacist'), id('custom_pharmacist'), id('denied_pharmacist'), id('new_pharmacist')]]
+    );
+    expect(pharmacistGrants.rows).toEqual([
+      { organizationRoleId: id('denied_pharmacist'), effect: 'DENY' },
+      { organizationRoleId: id('pharmacist'), effect: 'ALLOW' },
+    ]);
     const customAdministrator = await client.query(
       `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
       [id('custom_administrator')]
@@ -333,6 +375,7 @@ const legacy: Record<string, string[]> = {
     await client.query(managerProcurementMigration);
     await client.query(administratorReportsMigration);
     await client.query(ownerPvSafetyMigration);
+    await client.query(pharmacistCloseMigration);
     expect(
       (
         await client.query(
@@ -388,6 +431,7 @@ const legacy: Record<string, string[]> = {
     expect(await can(subject('pharmacist'), 'pharmacy:dispense', undefined, { db })).toBe(true);
     expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
+    expect(await can(subject('pharmacist'), 'pharmacy:close', undefined, { db })).toBe(true);
     // #479: the default Owner role's exact grant lets it file and review PV.
     expect(await can(subject('owner'), 'pharmacy:safety', undefined, { db })).toBe(true);
     expect(await can(subject('manager'), 'pharmacy:procurement', undefined, { db })).toBe(true);

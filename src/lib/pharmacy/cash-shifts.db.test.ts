@@ -442,6 +442,84 @@ async function asMember<T>(
 // Each test seeds its own organization and runs many transactions as the restricted role; under
 // the full pharmacy database run they can pass vitest's 5 s default.
 describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_000 }, () => {
+  it('uses the owner’s choice for newly opened drawers and preserves both modes already open', async () => {
+    const s = await shop('mode', { shifts: false });
+    const { organizationId, branchId } = s.owner;
+    const userId = `${organizationId}_owner`;
+    await tenant(s.owner, async (db) => {
+      const role = await db.organizationRole.create({
+        data: { key: 'owner', name: 'Owner', isSystem: true },
+      });
+      await db.user.create({
+        data: {
+          id: userId,
+          name: 'Owner',
+          email: `${userId}@example.test`,
+          role: 'ADMIN',
+          department: 'LEADERSHIP',
+          title: 'Owner',
+          organizationRoleId: role.id,
+        },
+      });
+    });
+    const { pharmacyBranchAssignmentsRouter } =
+      await import('@/server/routers/pharmacy-branch-assignments');
+    const change = (enabled: boolean) =>
+      tenant(s.as(userId), (db) =>
+        pharmacyBranchAssignmentsRouter
+          .createCaller({
+            db,
+            entitlements: { organizationId, enabledModules: ['pharmacy-core'], modules: [] },
+            session: {
+              expires: 'later',
+              user: {
+                id: userId,
+                role: 'ADMIN',
+                status: 'ACTIVE',
+                organizationId,
+                department: 'LEADERSHIP',
+              },
+            },
+            organization: { id: organizationId, vertical: 'PHARMACY' },
+            support: null,
+            requestMeta: { ip: null, userAgent: null },
+            audit: { detail: {} },
+          } as never)
+          .setCashMode({ branchId, enabled })
+      );
+    const dayDrawer = await openDrawer(s, randomUUID(), 90);
+    await change(true);
+    const shiftDrawer = await openDrawer(s, randomUUID(), 120);
+    await change(false);
+    const nextDrawer = await openDrawer(s, randomUUID(), 150);
+    for (const [id, cashShifts] of [
+      [dayDrawer.id, false],
+      [shiftDrawer.id, true],
+      [nextDrawer.id, false],
+    ] as const) {
+      const drawer = await tenant(s.owner, (db) =>
+        db.pharmacyDrawerSession.findUniqueOrThrow({ where: { id }, select: { cashShifts: true } })
+      );
+      expect(drawer.cashShifts).toBe(cashShifts);
+    }
+    expect(await shiftsOf(s, dayDrawer.id)).toHaveLength(0);
+    expect(await shiftsOf(s, shiftDrawer.id)).toEqual([
+      expect.objectContaining({ openingFloatMinor: 120, status: 'OPEN' }),
+    ]);
+    expect(await shiftsOf(s, nextDrawer.id)).toHaveLength(0);
+    const changes = await tenant(s.owner, (db) =>
+      db.auditLog.findMany({
+        where: { organizationId, targetId: branchId, action: 'pharmacy.branch.cashMode' },
+        orderBy: { createdAt: 'asc' },
+        select: { actorId: true, changes: true },
+      })
+    );
+    expect(changes).toEqual([
+      { actorId: userId, changes: { cashShiftsEnabled: { before: false, after: true } } },
+      { actorId: userId, changes: { cashShiftsEnabled: { before: true, after: false } } },
+    ]);
+  });
+
   it('leaves a branch without shifts exactly as before: no shift, no attribution, the same close', async () => {
     const s = await shop('single', { shifts: false });
     const device = `device-${randomUUID()}`;

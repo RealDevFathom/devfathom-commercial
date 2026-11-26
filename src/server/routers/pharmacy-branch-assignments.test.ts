@@ -189,3 +189,79 @@ describe('pharmacy branch assignments', () => {
     await expect(f.caller.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
+
+describe('branch cash mode', () => {
+  function cashModeFixture() {
+    const f = fixture();
+    const branch = { id: 'branch-a', name: 'Counter A', cashShiftsEnabled: false };
+    const updateMany = vi.fn(async () => ({ count: 1 }));
+    const create = vi.fn(async () => ({}));
+    const tx = {
+      pharmacyBranch: { findFirst: vi.fn(async () => branch), updateMany },
+      auditLog: { create },
+      user: {
+        findFirst: vi.fn(async () => ({
+          id: 'admin-1',
+          organizationId: 'org-a',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+          permissionOverrides: [],
+        })),
+      },
+      $queryRaw: vi.fn(async () => []),
+    };
+    Object.assign(f.db, { $transaction: (work: (db: typeof tx) => unknown) => work(tx) });
+    return { ...f, tx, updateMany, create };
+  }
+
+  it('saves the chosen mode on the active branch and audits who changed it', async () => {
+    const f = cashModeFixture();
+    await expect(f.caller.setCashMode({ branchId: 'branch-a', enabled: true })).resolves.toEqual({
+      enabled: true,
+    });
+    expect(f.updateMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', id: 'branch-a', active: true, cashShiftsEnabled: false },
+      data: { cashShiftsEnabled: true },
+    });
+    expect(f.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'admin-1',
+        organizationId: 'org-a',
+        targetId: 'branch-a',
+        changes: { cashShiftsEnabled: { before: false, after: true } },
+      }),
+    });
+  });
+
+  it('hides modes from a non-owner and refuses a support session before writing', async () => {
+    const f = cashModeFixture();
+    await expect(f.caller.cashModes()).resolves.toBeNull();
+    expect(f.db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+    Object.assign(f.context.session.user, { isSupportSession: true });
+    await expect(
+      f.caller.setCashMode({ branchId: 'branch-a', enabled: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.tx.user.findFirst).not.toHaveBeenCalled();
+    expect(f.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps a repeat save idempotent, and refuses an administrator without owner authority', async () => {
+    const f = cashModeFixture();
+    await f.caller.setCashMode({ branchId: 'branch-a', enabled: false });
+    expect(f.create).not.toHaveBeenCalled();
+    expect(f.updateMany).not.toHaveBeenCalled();
+    f.tx.user.findFirst.mockResolvedValueOnce({
+      id: 'admin-1',
+      organizationId: 'org-a',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: { key: 'manager', isSystem: true, permissions: [] },
+      permissionOverrides: [],
+    });
+    await expect(
+      f.caller.setCashMode({ branchId: 'branch-a', enabled: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.updateMany).not.toHaveBeenCalled();
+  });
+});
