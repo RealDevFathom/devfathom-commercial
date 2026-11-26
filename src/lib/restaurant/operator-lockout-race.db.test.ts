@@ -29,10 +29,10 @@ const compares = vi.hoisted(() => ({ count: 0 }));
 // Count every real bcrypt compare; the compare itself is unchanged.
 vi.mock('bcryptjs', async (importOriginal) => {
   const actual = await importOriginal<typeof import('bcryptjs')>();
-  const compare = (async (...args: Parameters<typeof actual.compare>) => {
+  const compare = (secret: string, hash: string): Promise<boolean> => {
     compares.count += 1;
-    return actual.compare(...args);
-  }) as typeof actual.compare;
+    return actual.compare(secret, hash);
+  };
   return { ...actual, compare, default: { ...actual, compare } };
 });
 
