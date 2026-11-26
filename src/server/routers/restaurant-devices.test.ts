@@ -17,6 +17,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { expectNoPersistedPin } from '@/lib/test-support/persisted-pin';
 
 const mocks = vi.hoisted(() => ({
   annotateAudit: vi.fn(),
@@ -704,7 +705,7 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         metadata: expect.objectContaining({ coAuthorizationId: result.coAuthorizationId }),
       })
     );
-    expect(JSON.stringify(mocks.annotateAudit.mock.calls)).not.toContain(APPROVING_PIN);
+    expectNoPersistedPin(mocks.annotateAudit.mock.calls, APPROVING_PIN);
     expect(JSON.stringify(mocks.annotateAudit.mock.calls)).not.toContain(result.secret);
   });
 
