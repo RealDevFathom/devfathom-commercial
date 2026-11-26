@@ -1776,6 +1776,104 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     ).resolves.toEqual({ verified: true });
   });
 
+  it('DEV-961: a verified till resolves a unique previous-step code, refuses replay and asks which person on collision', async () => {
+    const s = await shop('detect', { shifts: true, approvalAuthenticator: true });
+    const { authorizeCounterApproval, CounterApprovalDenied } =
+      await import('./counter-line-approval');
+    const { CounterApprovalChoice } = await import('./counter-approval-choice');
+    const { establishToken } = await import('./counter-terminal-session');
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const scope = s.as(s.cashier);
+    const secret = generateTotpSecret();
+    const { device, secret: deviceSecret } = await tenant(s.owner, (db) =>
+      devices.enrollPharmacyCounter(db, s.owner, { name: 'Approval till' })
+    );
+    const enroll = (userId: string) =>
+      tenant(s.owner, (db) =>
+        db.approvalAuthenticator.create({
+          data: { userId, encryptedSecret: encryptSecret(secret), enabledAt: new Date() },
+        })
+      );
+    await enroll(s.manager);
+    const sessionFor = (actor: Scope) => ({
+      deviceId: device.id,
+      sessionToken: establishToken({ scope: actor, deviceId: device.id, deviceSecret }),
+    });
+    const counter = sessionFor(scope);
+    const at = new Date();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(at);
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    try {
+      const submit = (pin: string, staffProfileId?: string) =>
+        tenant(scope, (db) =>
+          authorizeCounterApproval(db, scope, 'DISCOUNT', { pin, staffProfileId, counter })
+        );
+      const previous = codeAt(secret, new Date(at.getTime() - 30_000));
+      await expect(submit(previous)).resolves.toMatchObject({
+        approvedByUserId: s.manager,
+        selfApproved: false,
+      });
+      await expect(submit(previous)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      const other = await addMember(s, s.owner.organizationId + '_other', ['pharmacy:manage'], {
+        pin: MANAGER_PIN,
+      });
+      await enroll(other);
+      const current = codeAt(secret, at);
+      const profiles = await tenant(s.owner, (db) =>
+        db.restaurantStaffProfile.findMany({
+          where: { userId: { in: [other, s.manager] } },
+          select: { id: true, userId: true },
+        })
+      );
+      const choice: unknown = await submit(current).catch((error: unknown) => error);
+      expect(choice).toBeInstanceOf(CounterApprovalChoice);
+      expect(
+        (choice as InstanceType<typeof CounterApprovalChoice>).staffProfileIds.toSorted()
+      ).toEqual(profiles.map((p) => p.id).toSorted());
+      const second = profiles.find((p) => p.userId === other)!;
+      await expect(submit(current, second.id)).resolves.toMatchObject({ approvedByUserId: other });
+      const audit = await tenant(s.owner, (db) =>
+        db.auditLog.findMany({
+          where: { action: 'pharmacy.counterApproval.DISCOUNT' },
+          select: { actorId: true, metadata: true, description: true },
+        })
+      );
+      expect(audit.map((row) => row.actorId).sort()).toEqual([s.manager, other].sort());
+      for (const value of [previous, current, secret, deviceSecret, counter.sessionToken])
+        expect(JSON.stringify(audit).includes(value)).toBe(false);
+      // Prime the live, independent counters directly. No attempt exercises an unpatched security control.
+      const { rateLimit } = await import('@/lib/rate-limit');
+      const { MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS } =
+        await import('@/lib/restaurant/operator-credentials');
+      for (let i = 0; i < MAX_FAILED_ATTEMPTS; i++)
+        await rateLimit(
+          JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),
+          MAX_FAILED_ATTEMPTS,
+          LOCKOUT_DURATION_MS
+        );
+      const secondRequester = s.as(s.cashier2);
+      await expect(
+        tenant(secondRequester, (db) =>
+          authorizeCounterApproval(db, secondRequester, 'DISCOUNT', {
+            pin: current,
+            counter: sessionFor(secondRequester),
+            staffProfileId: profiles.find((p) => p.userId === s.manager)!.id,
+          })
+        )
+      ).rejects.toBeInstanceOf(CounterApprovalDenied);
+      expect(
+        await tenant(s.owner, (db) =>
+          db.auditLog.count({ where: { action: 'pharmacy.counterApproval.DISCOUNT' } })
+        )
+      ).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
   it('DEV-961: the variance approval and its solo self-approval follow the approval setting; app codes typed by someone else spend the same guess budget as PINs', async () => {
     const { encryptSecret } = await import('@/lib/secret-crypto');
     const { generateTotpSecret } = await import('@/lib/totp');

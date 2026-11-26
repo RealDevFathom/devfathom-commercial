@@ -9,6 +9,7 @@ import {
   mayApproveCounterLine,
 } from './counter-line-approval';
 import { can } from '@/lib/abac';
+import { clearRateLimit } from '@/lib/rate-limit';
 import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -28,6 +29,8 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: vi.fn() }));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'dummy-hash') }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
+  LOCKOUT_DURATION_MS: 900_000,
+  MAX_FAILED_ATTEMPTS: 5,
   OPERATOR_CREDENTIAL_BCRYPT_COST: 12,
   verifyOperatorCredential: vi.fn(),
   isLockedOut: vi.fn(() => false),
@@ -77,7 +80,12 @@ function expectDummyCompareOnly(db: ReturnType<typeof fixture>) {
   expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await Promise.all(
+    ['cashier', 'manager', 'owner'].map((id) =>
+      clearRateLimit(JSON.stringify(['pharmacy-approval-requester', scope.organizationId, id]))
+    )
+  );
   vi.clearAllMocks();
   vi.mocked(isLockedOut).mockReturnValue(false);
 });

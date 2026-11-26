@@ -1,21 +1,27 @@
 import Link from 'next/link';
 
+import {
+  APPROVAL_AUTHENTICATOR_SETUP_MESSAGE,
+  APPROVAL_AUTHENTICATOR_SETUP_PATH,
+} from '@/lib/auth/session-state';
 import { isNoPinSetMessage, OWN_PIN_PATH } from '@/lib/pharmacy/own-pin-policy';
 
 /**
  * DEV-931 — a refusal as the server worded it. When it is the shared "no PIN set" refusal,
  * it also links to "Your PIN", so the person can create their PIN and come back.
  */
-export function PinAwareMessage({ message }: { message: string }) {
-  if (!isNoPinSetMessage(message)) return <>{message}</>;
+export function PinAwareMessage({ message, prefix = '' }: { message: string; prefix?: string }) {
+  const refusal = prefix && message.startsWith(prefix) ? message.slice(prefix.length) : message;
+  const authenticator = refusal === APPROVAL_AUTHENTICATOR_SETUP_MESSAGE;
+  if (!authenticator && !isNoPinSetMessage(refusal)) return <>{message}</>;
   return (
     <>
       {message}{' '}
       <Link
-        href={OWN_PIN_PATH}
+        href={authenticator ? APPROVAL_AUTHENTICATOR_SETUP_PATH : OWN_PIN_PATH}
         className="font-medium underline underline-offset-2 focus-visible:outline-2 focus-visible:outline-ring"
       >
-        Set up your PIN
+        {authenticator ? 'Set up your authenticator app' : 'Set up your PIN'}
       </Link>
     </>
   );

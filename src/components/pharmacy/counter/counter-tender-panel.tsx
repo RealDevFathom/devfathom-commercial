@@ -1,6 +1,6 @@
 'use client';
 
-import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
+import { OwnPinLink, PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
@@ -279,6 +279,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const focusCaptureRef = useRef<'payer' | 'reference' | null>(null);
     const takingPayment = pending || submitting;
     const displayedOutcome = recoveryOutcome ?? outcome;
+    const outcomeMessage =
+      displayedOutcome?.status === 'rejected' ? (
+        <PinAwareMessage message={displayedOutcome.message} prefix="Payment was not accepted. " />
+      ) : (
+        displayedOutcome?.message
+      );
     const unknown = displayedOutcome?.status === 'unknown';
     const balanceKnown =
       balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
@@ -843,7 +849,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   : 'Taking payment… Keep this bill open.'
                 : checkingOutcome
                   ? 'Checking payment outcome… No payment is being sent.'
-                  : (displayedOutcome?.message ??
+                  : (outcomeMessage ??
                     (state === 'idle'
                       ? 'Open a bill before taking payment.'
                       : state === 'loading'

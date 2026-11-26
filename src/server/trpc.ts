@@ -1,3 +1,4 @@
+import { CounterApprovalChoice } from '@/lib/pharmacy/counter-approval-choice';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
@@ -156,6 +157,9 @@ const t = initTRPC
         ...shape.data,
         validation: validation?.fields ?? null,
         ...(reason ? { reason } : {}),
+        ...(error.code === 'FORBIDDEN' && error.cause instanceof CounterApprovalChoice
+          ? { matchingStaffProfileIds: error.cause.staffProfileIds }
+          : {}),
       };
       delete data.stack;
       return {

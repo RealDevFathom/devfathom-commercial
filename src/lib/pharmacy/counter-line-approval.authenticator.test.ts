@@ -14,6 +14,8 @@ vi.mock('@/lib/approval-authenticator-gate', () => ({
   ),
 }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
+  LOCKOUT_DURATION_MS: 900_000,
+  MAX_FAILED_ATTEMPTS: 5,
   OPERATOR_CREDENTIAL_BCRYPT_COST: 12,
   verifyOperatorCredential: vi.fn(),
   isLockedOut: vi.fn(() => false),
@@ -24,6 +26,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 import { authorizeCounterApproval, CounterApprovalDenied } from './counter-line-approval';
 import { verifyRefundPin } from './refund-authorization';
 import { can } from '@/lib/abac';
+import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -117,12 +120,38 @@ function fixture(options: {
   return db;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await Promise.all(
+    ['cashier', 'manager', 'owner'].map((id) =>
+      clearRateLimit(JSON.stringify(['pharmacy-approval-requester', scope.organizationId, id]))
+    )
+  );
   vi.clearAllMocks();
   vi.mocked(isLockedOut).mockReturnValue(false);
 });
 
 describe('DEV-879 counter approvals with an authenticator code', () => {
+  it('checks the requester lock across counter actions and branches before credential verification', async () => {
+    const db = fixture({ enrolled: ['manager'] });
+    const key = JSON.stringify([
+      'pharmacy-approval-requester',
+      scope.organizationId,
+      scope.actorId,
+    ]);
+    for (let i = 0; i < 5; i++) await rateLimit(key, 5, 900_000);
+    const approval = { staffProfileId: 'staff-manager', pin: currentCode() };
+    await expect(
+      authorizeCounterApproval(
+        db as never,
+        { ...scope, branchId: 'another-branch' },
+        'KHATA_OVER_LIMIT',
+        approval
+      )
+    ).rejects.toBeInstanceOf(CounterApprovalDenied);
+    expect(db.approvalAuthenticator.findFirst).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
   it('approves a discount with the manager’s current code and audits the code use', async () => {
     const db = fixture({ enrolled: ['manager'] });
     await expect(

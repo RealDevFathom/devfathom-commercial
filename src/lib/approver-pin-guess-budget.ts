@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, rateLimit, refundRateLimit } from '@/lib/rate-limit';
 import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/operator-credentials';
 
 /**
@@ -26,4 +26,13 @@ export function spendApproverPinGuessTypedByAnother(organizationId: string, appr
 /** A correct PIN restores the approver's budget, as a correct PIN clears their strikes. */
 export function clearApproverPinGuessesTypedByAnother(organizationId: string, approverId: string) {
   return clearRateLimit(budgetKey(organizationId, approverId));
+}
+
+/** Release only the reservation whose multi-person comparison did not need to spend it. */
+export function refundApproverPinGuessTypedByAnother(
+  organizationId: string,
+  approverId: string,
+  window: Date
+) {
+  return refundRateLimit(budgetKey(organizationId, approverId), LOCKOUT_DURATION_MS, window);
 }
