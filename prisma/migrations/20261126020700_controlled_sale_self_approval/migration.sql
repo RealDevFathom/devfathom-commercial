@@ -1,26 +1,34 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
-ALTER TABLE pharmacy_controlled_register_entries ADD COLUMN "witnessStatement" text;
-ALTER TABLE pharmacy_controlled_register_entries
-  DROP CONSTRAINT IF EXISTS pharmacy_controlled_register_independent_witness;
-ALTER TABLE pharmacy_controlled_register_entries
-  ADD CONSTRAINT pharmacy_controlled_register_independent_witness CHECK (
-    ("witnessedByUserId" IS NOT NULL AND (
-      "recordedByUserId" <> "witnessedByUserId"
-      OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL
-          AND COALESCE("signatureRef", '') LIKE 'solo-pin:%')
-      OR (COALESCE("signatureRef", '') LIKE 'pharmacist-check-off:%'
-          AND ("entryKind" = 'SALE' OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL)))
-      OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" IS NULL
-          AND COALESCE("signatureRef",'') ~ '^solo-(pin|authenticator):')
-    ))
-    OR ("entryKind" = 'SALE' AND "witnessedByUserId" IS NULL
-        AND "witnessStatement" IS NOT DISTINCT FROM 'No witness: dispensed by one pharmacist'
-        AND NOT emergency AND "signatureRef" IS NOT NULL)
-    OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" IS NOT NULL
-        AND "witnessedByUserId" IS NULL AND COALESCE("signatureRef",'') ~ '^late-owner-(pin|authenticator):')
-  );
+ALTER TABLE pharmacy_controlled_register_entries ADD COLUMN IF NOT EXISTS "witnessStatement" text;
+-- A later migration admits audited counter stock restorations. Replaying this
+-- migration must retain that constraint when corrections already exist.
+DO $guard$
+BEGIN
+  IF to_regprocedure('pharmacy_check_controlled_counter_restoration_witness()') IS NULL THEN
+    ALTER TABLE pharmacy_controlled_register_entries
+      DROP CONSTRAINT IF EXISTS pharmacy_controlled_register_independent_witness;
+    ALTER TABLE pharmacy_controlled_register_entries
+      ADD CONSTRAINT pharmacy_controlled_register_independent_witness CHECK (
+        ("witnessedByUserId" IS NOT NULL AND (
+          "recordedByUserId" <> "witnessedByUserId"
+          OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL
+              AND COALESCE("signatureRef", '') LIKE 'solo-pin:%')
+          OR (COALESCE("signatureRef", '') LIKE 'pharmacist-check-off:%'
+              AND ("entryKind" = 'SALE' OR ("entryKind" = 'CORRECTION' AND "restorationMovementId" IS NOT NULL)))
+          OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" IS NULL
+              AND COALESCE("signatureRef",'') ~ '^solo-(pin|authenticator):')
+        ))
+        OR ("entryKind" = 'SALE' AND "witnessedByUserId" IS NULL
+            AND "witnessStatement" IS NOT DISTINCT FROM 'No witness: dispensed by one pharmacist'
+            AND NOT emergency AND "signatureRef" IS NOT NULL)
+        OR ("entryKind"::text = 'RETURN_TO_SUPPLIER' AND "lateDispatchAt" IS NOT NULL
+            AND "witnessedByUserId" IS NULL AND COALESCE("signatureRef",'') ~ '^late-owner-(pin|authenticator):')
+      );
+  END IF;
+END
+$guard$;
 
 CREATE OR REPLACE FUNCTION pharmacy_rx_reject_review_self_approval() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE requester text; review_sale_line text;
@@ -87,7 +95,7 @@ END $$;
 
 -- The decision is unique per approval audit. Split-batch entries share the decision
 -- only through distinct allocations of that exact sale line.
-CREATE FUNCTION pharmacy_check_controlled_sale_witness() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION pharmacy_check_controlled_sale_witness() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NEW."witnessStatement" IS NULL THEN RETURN NEW; END IF;
   IF NEW."witnessStatement" <> 'No witness: dispensed by one pharmacist'
@@ -112,11 +120,12 @@ BEGIN
   END IF;
   RETURN NEW;
 END $$;
+DROP TRIGGER IF EXISTS pharmacy_check_controlled_sale_witness ON pharmacy_controlled_register_entries;
 CREATE TRIGGER pharmacy_check_controlled_sale_witness BEFORE INSERT ON pharmacy_controlled_register_entries
-  FOR EACH ROW EXECUTE FUNCTION pharmacy_check_controlled_sale_witness();
+  FOR EACH ROW WHEN (NEW."entryKind" <> 'CORRECTION') EXECUTE FUNCTION pharmacy_check_controlled_sale_witness();
 
 -- A solo decision also requires a complete register entry for every allocation at commit.
-CREATE FUNCTION pharmacy_require_solo_dispense_register() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION pharmacy_require_solo_dispense_register() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE line_id text;
 BEGIN
   IF NEW."selfApprovalAuditId" IS NULL OR NOT EXISTS (
@@ -134,6 +143,7 @@ BEGIN
     ) THEN RAISE EXCEPTION 'controlled dispensation requires its full register' USING ERRCODE='23514'; END IF;
   RETURN NULL;
 END $$;
+DROP TRIGGER IF EXISTS pharmacy_require_solo_dispense_register ON pharmacy_pharmacist_review_decisions;
 CREATE CONSTRAINT TRIGGER pharmacy_require_solo_dispense_register AFTER INSERT ON pharmacy_pharmacist_review_decisions
   DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION pharmacy_require_solo_dispense_register();
 

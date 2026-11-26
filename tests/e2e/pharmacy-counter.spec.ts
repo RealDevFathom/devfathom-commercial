@@ -2819,8 +2819,8 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
       [organizationId, branchId]
     );
     await db.query(
-      'INSERT INTO pharmacy_patients(id,"organizationId","displayName","updatedAt") VALUES ($1,$2,$3,now())',
-      [patientId, organizationId, patientName]
+      'INSERT INTO pharmacy_patients(id,"organizationId","displayName",cnic,"updatedAt") VALUES ($1,$2,$3,$4,now())',
+      [patientId, organizationId, patientName, '0000000000000']
     );
     await db.query(
       `INSERT INTO pharmacy_patient_consents(id,"organizationId","patientId",purpose,channel,version,granted,"recordedByUserId") VALUES ($1,$2,$3,'DISPENSING','IN_PERSON',1,true,$4)`,

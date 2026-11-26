@@ -24,11 +24,9 @@ ALTER TABLE pharmacy_controlled_register_entries
         AND "witnessedByUserId" IS NULL AND COALESCE("signatureRef",'') ~ '^late-owner-(pin|authenticator):')
   );
 
-CREATE OR REPLACE FUNCTION pharmacy_check_controlled_sale_witness() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION pharmacy_check_controlled_counter_restoration_witness() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  IF NEW."witnessStatement" IS NULL THEN RETURN NEW; END IF;
-  IF NEW."entryKind" = 'CORRECTION' AND NEW."witnessStatement"='No witness' THEN
-    IF NEW."witnessedByUserId" IS NOT NULL OR NOT EXISTS (
+  IF NEW."witnessStatement" <> 'No witness' OR NEW."witnessedByUserId" IS NOT NULL OR NOT EXISTS (
       SELECT 1 FROM audit_logs a JOIN pharmacy_branches b ON b."organizationId"=a."organizationId"
        WHERE a.id=NEW."signatureRef" AND a."organizationId"=NEW."organizationId"
          AND a."actorId"=NEW."recordedByUserId" AND a.xmin=pg_current_xact_id()::xid
@@ -41,29 +39,12 @@ BEGIN
            OR a.metadata @> '{"approvalMethod":"AUTHENTICATOR","authenticatorVerified":true}')
        FOR SHARE OF b
     ) THEN RAISE EXCEPTION 'controlled restoration requires its verified self-approval' USING ERRCODE='23514'; END IF;
-    RETURN NEW;
-  END IF;
-  IF NEW."witnessStatement" <> 'No witness: dispensed by one pharmacist'
-    OR NEW."entryKind" <> 'SALE' OR NEW.emergency OR NEW."witnessedByUserId" IS NOT NULL
-    OR NULLIF(btrim(NEW."patientAddress"),'') IS NULL OR NOT EXISTS (
-      SELECT 1 FROM pharmacy_pharmacist_review_decisions d
-      JOIN pharmacy_pharmacist_review_items i ON i.id=d."reviewItemId" AND i."organizationId"=d."organizationId"
-      JOIN pharmacy_sale_lines l ON l.id=i."saleLineId" AND l."organizationId"=i."organizationId"
-      JOIN pharmacy_sale_line_allocations al ON al."organizationId"=l."organizationId" AND al."saleLineId"=l.id
-      JOIN audit_logs a ON a.id=d."selfApprovalAuditId" AND a."organizationId"=d."organizationId"
-      JOIN pharmacy_prescription_lines rx ON rx.id=i."prescriptionLineId" AND rx."organizationId"=i."organizationId"
-      JOIN pharmacy_prescriptions p ON p.id=rx."prescriptionId" AND p."organizationId"=rx."organizationId"
-      WHERE d.id=NEW."signatureRef" AND d."organizationId"=NEW."organizationId"
-        AND d.kind='SIGN' AND d."actorUserId"=NEW."recordedByUserId" AND i."requestedByUserId"=d."actorUserId"
-        AND a.action='pharmacySales.controlledSelfApproval' AND a.xmin=pg_current_xact_id()::xid
-        AND al."stockMovementId"=NEW."stockMovementId" AND l."branchId"=NEW."branchId"
-        AND l."medicineId"=NEW."medicineId" AND rx."medicineId"=l."medicineId"
-        AND rx.id=NEW."prescriptionLineId" AND p.id=NEW."prescriptionId"
-        AND p."patientId"=NEW."patientId" AND p."prescriberId"=NEW."prescriberId"
-    ) THEN
-    RAISE EXCEPTION 'controlled register requires its verified self-approval' USING ERRCODE='23514';
-  END IF;
   RETURN NEW;
 END $$;
+
+DROP TRIGGER IF EXISTS pharmacy_check_controlled_counter_restoration_witness ON pharmacy_controlled_register_entries;
+CREATE TRIGGER pharmacy_check_controlled_counter_restoration_witness BEFORE INSERT ON pharmacy_controlled_register_entries
+  FOR EACH ROW WHEN (NEW."entryKind" = 'CORRECTION' AND NEW."witnessStatement" IS NOT NULL)
+  EXECUTE FUNCTION pharmacy_check_controlled_counter_restoration_witness();
 
 COMMIT;
