@@ -459,7 +459,7 @@ async function requireStagedReviewBranch(ctx: TRPCContext, reorderBranchId?: str
 }
 
 /** The reorder branch an approved bulk creation request carries; null for none or an older one. */
-function approvedReorderBranch(changes: Prisma.JsonValue): string | null {
+export function approvedReorderBranch(changes: Prisma.JsonValue): string | null {
   const json =
     changes && typeof changes === 'object' && !Array.isArray(changes) ? changes.json : null;
   const value =

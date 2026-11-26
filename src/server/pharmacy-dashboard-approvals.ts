@@ -6,6 +6,7 @@ import {
   isOwnerWithoutOtherReviewer,
   pendingCatalogueEdits,
 } from '@/lib/pharmacy/catalogue-approvals';
+import { STAGED_CREATION_OPERATION } from '@/lib/pharmacy/migration/staged-creation';
 import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import type { WatchRow } from '@/lib/pharmacy/owner-watch';
 import { soloOwnerApprovalAllowed } from '@/lib/pharmacy/purchase-approval';
@@ -14,7 +15,7 @@ import { purchaseOrderScopeWhere } from '@/lib/pharmacy/purchasing-console';
 import { reachableProcurementBranchIds, isSoloOwner } from './pharmacy-procurement-scope';
 import { clinicalReviewScope } from './routers/pharmacy-dispensing';
 import { admittedInventoryBranchIds } from './routers/pharmacy-inventory';
-import { catalogueAccess } from './routers/pharmacy-medicine';
+import { approvedReorderBranch, catalogueAccess } from './routers/pharmacy-medicine';
 import type { TRPCContext } from './trpc';
 
 export async function readDashboardApprovals(
@@ -105,13 +106,21 @@ export async function readDashboardApprovals(
         { organizationId, actorId: user.id, actorOrganizationId: user.organizationId },
         { countOtherOwners: true }
       ));
-    const eligible = edits.filter(
-      (edit) =>
-        (edit.editorId !== user.id || ownAllowed) &&
-        commandIds(edit.operation, edit.changes).branches.every((branch) =>
-          branchIds.includes(branch)
-        )
-    );
+    const stagedBranches = edits.some((edit) => edit.operation === STAGED_CREATION_OPERATION)
+      ? await admittedInventoryBranchIds(ctx)
+      : new Set<string>();
+    const eligible = edits.filter((edit) => {
+      if (edit.editorId === user.id && !ownAllowed) return false;
+      if (edit.operation === STAGED_CREATION_OPERATION) {
+        const reorderBranch = approvedReorderBranch(edit.changes);
+        return branchIds.some(
+          (id) => stagedBranches.has(id) && (!reorderBranch || id === reorderBranch)
+        );
+      }
+      return commandIds(edit.operation, edit.changes).branches.every((branch) =>
+        branchIds.includes(branch)
+      );
+    });
     const price = eligible.filter((edit) => edit.operation === 'setPackPrice').length;
     add(
       'Catalogue edits',

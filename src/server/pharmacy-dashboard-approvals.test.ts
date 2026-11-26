@@ -22,7 +22,10 @@ vi.mock('@/lib/abac', () => ({
 }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: () => true }));
 vi.mock('@/lib/pharmacy/procurement-access', () => ({ actorIsPharmacyOwner: async () => false }));
-vi.mock('./routers/pharmacy-medicine', () => ({ catalogueAccess: m.catalogue }));
+vi.mock('./routers/pharmacy-medicine', async (load) => ({
+  ...(await load<typeof import('./routers/pharmacy-medicine')>()),
+  catalogueAccess: m.catalogue,
+}));
 vi.mock('./routers/pharmacy-dispensing', () => ({ clinicalReviewScope: m.clinical }));
 vi.mock('./routers/pharmacy-inventory', () => ({ admittedInventoryBranchIds: m.inventory }));
 vi.mock('./pharmacy-procurement-scope', () => ({
@@ -33,7 +36,6 @@ vi.mock('@/lib/pharmacy/controlled-register', () => ({ assignedRegisterBranchIds
 vi.mock('@/lib/pharmacy/purchase-approval', () => ({ soloOwnerApprovalAllowed: m.solo }));
 vi.mock('@/lib/pharmacy/catalogue-approvals', async (load) => ({
   ...(await load<typeof import('@/lib/pharmacy/catalogue-approvals')>()),
-  listPendingCatalogueEdits: m.edits,
   isOwnerWithoutOtherReviewer: m.self,
 }));
 import { readDashboardApprovals } from './pharmacy-dashboard-approvals';
@@ -116,6 +118,20 @@ it('separates pack prices from other catalogue edits and excludes own and out-of
     ['Price-change proposals', 1],
   ]);
   expect(rows.every((r) => r.href.includes('branch=admitted'))).toBe(true);
+});
+it('counts imported catalogue edits only where their existing inventory review gate admits the reviewer', async () => {
+  m.catalogue.mockResolvedValue({ reviewer: true });
+  m.edits.mockResolvedValue(
+    ['admitted', 'elsewhere', null].map((reorderBranchId) => ({
+      operation: 'createStagedMedicines',
+      editorId: 'other',
+      changes: { json: { reorderBranchId } },
+    }))
+  );
+  const read = async (ids: string[]) =>
+    (await readDashboardApprovals(ctx, ids)).find((r) => r.label === 'Catalogue edits')?.value;
+  expect(await read(['admitted', 'elsewhere'])).toBe(2);
+  expect(await read(['elsewhere'])).toBe(0);
 });
 it('applies each clinical, inventory and register branch gate independently', async () => {
   for (const action of ['pharmacy:safety', 'pharmacy:dispense', 'pharmacy:inventory'])
