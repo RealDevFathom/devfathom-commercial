@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   branch: vi.fn(),
+  assignments: vi.fn(),
   raw: vi.fn(),
   journal: vi.fn(),
   count: vi.fn(),
@@ -59,6 +60,7 @@ function context(change: Record<string, unknown> = {}) {
     db: {
       $queryRaw: mocks.raw,
       pharmacyBranch: { findFirst: mocks.branch },
+      pharmacyBranchAssignment: { findMany: mocks.assignments },
       financeJournalEntry: { findMany: mocks.journal, count: mocks.count },
     },
     entitlements: { organizationId: 'org_1', enabledModules: ['pharmacy-reports'], modules: [] },
@@ -81,6 +83,7 @@ beforeEach(() => {
   mocks.can.mockResolvedValue(true);
   vi.mocked(hasModule).mockReturnValue(true);
   mocks.branch.mockResolvedValue({ id: 'branch_1' });
+  mocks.assignments.mockResolvedValue([]);
   mocks.raw.mockResolvedValueOnce(totals).mockResolvedValue([]);
   mocks.journal.mockResolvedValue([]);
   mocks.count.mockResolvedValue(77);
@@ -127,6 +130,19 @@ it.each(['EMPLOYEE', 'HR', 'MANAGER'])('denies %s despite mocked capabilities', 
     }).financialStatements(input)
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   expect(mocks.raw).not.toHaveBeenCalled();
+});
+it('reads profit and loss with financial permissions at the employee’s admitted branch', async () => {
+  mocks.assignments.mockResolvedValue([{ branchId: input.branchId }]);
+  const report = await caller({
+    session: {
+      user: { id: 'finance-member', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org_1' },
+    },
+  }).financialStatements(input);
+  expect(mocks.assignments).toHaveBeenCalledWith({
+    where: { organizationId: 'org_1', userId: 'finance-member', active: true },
+    select: { branchId: true },
+  });
+  expect(report.profitAndLoss[0].netProfitMinor).toBe('2000');
 });
 it('denies unauthenticated access', async () => {
   await expect(caller({ session: null }).financialStatements(input)).rejects.toMatchObject({
