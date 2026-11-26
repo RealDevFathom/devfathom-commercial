@@ -92,6 +92,9 @@ export async function POST(request: Request) {
       );
       return Response.json(report, { headers: { 'Cache-Control': 'no-store' } });
     }
+    const secret = form.get('witnessSecret');
+    if (secret !== null && (typeof secret !== 'string' || secret.length > 128))
+      return message(400, 'Invalid witness approval.');
     const selected = phaseInput.parse(options);
     const report = await ctx.db.$transaction(
       (db) =>
@@ -100,7 +103,8 @@ export async function POST(request: Request) {
           { organizationId: organization.id, branchId, actorId: session.user.id },
           data,
           selected,
-          confirmed
+          confirmed,
+          secret ?? undefined
         ),
       { isolationLevel: 'Serializable', timeout: 180000 }
     );

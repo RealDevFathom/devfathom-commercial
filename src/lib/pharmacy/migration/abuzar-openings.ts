@@ -1,4 +1,9 @@
 import 'server-only';
+import {
+  eligibleOpeningWitness,
+  verifyOpeningWitness,
+  appendOpeningRegister,
+} from './abuzar-witness';
 import { createHash } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { assertPostingPeriodsOpen } from '@/lib/finance/journal';
@@ -20,7 +25,12 @@ import {
   type Prepared,
 } from '../../../../tools/abuzar-import/prepared';
 
-type Options = { sourceBranch: string; cutover?: string; stockLocationId?: string };
+type Options = {
+  sourceBranch: string;
+  cutover?: string;
+  witnessId?: string;
+  stockLocationId?: string;
+};
 const hash = (v: unknown) => createHash('sha256').update(JSON.stringify(v)).digest('hex');
 async function openingContext(
   db: ScopedDb,
@@ -149,9 +159,14 @@ export async function stockDecision(
   db: ScopedDb,
   scope: LedgerScope,
   options: Options,
-  data: Prepared
+  data: Prepared,
+  witnessSecret?: string
 ) {
   const { at, period, prior } = await openingContext(db, scope, options, 'stock');
+  const witness =
+    options.witnessId && (await eligibleOpeningWitness(db, scope, options.witnessId))
+      ? options.witnessId
+      : null;
   const location =
     options.stockLocationId &&
     (await db.pharmacyStockLocation.findFirst({
@@ -224,7 +239,7 @@ export async function stockDecision(
       if (!period || !location) reason = 'choose an open period and active stock location';
       else if (!medicine || !link || !units || candidates.length !== 1)
         reason = 'catalogue approval or matching pack required';
-      else if (medicine.controlled)
+      else if (medicine.controlled && Number(row.Quantity) > 0 && !witness)
         reason = 'controlled opening requires a witnessed register entry';
       else if (
         !mrp ||
@@ -249,6 +264,7 @@ export async function stockDecision(
       units,
       cost,
       mrp,
+      controlled: medicine?.controlled === true,
       medicineId: medicine?.id,
       packId: candidates[0]?.packLevelId,
       reason,
@@ -258,6 +274,15 @@ export async function stockDecision(
     rows,
     apply: async () => {
       await assertPostingPeriodsOpen(db, scope.organizationId, at, scope.branchId);
+      const needsWitness = rows.some(
+        (d) => !d.reason && d.controlled && Number(d.row.Quantity) > 0
+      );
+      if (
+        needsWitness &&
+        (!witness || !witnessSecret || !(await verifyOpeningWitness(scope, witness, witnessSecret)))
+      )
+        throw new Error('Independent pharmacist approval required.');
+      const heldLines = new Set<string>();
       const session = await createOpeningSession(db, scope, { openingAt: at });
       for (const d of rows) {
         if (d.reason) continue;
@@ -302,12 +327,15 @@ export async function stockDecision(
           expectedUnits: Number(d.row.Quantity),
           countedUnits: Number(d.row.Quantity),
         });
+        if (d.held) heldLines.add(line.id);
         await db.$executeRaw`INSERT INTO pharmacy_abuzar_openings ("organizationId","branchId","sourceBranch",step,"sourceId","rowHash","openingLineId","unverifiedBatch") VALUES (${scope.organizationId},${scope.branchId},${options.sourceBranch},'stock',${d.row.RowID},${d.rowHash},${line.id},${d.held})`;
       }
       const { total } = await postOpeningSession(db, scope, {
         sessionId: session.id,
         idempotencyKeyPrefix: session.id,
+        quarantinedLineIds: heldLines,
       });
+      if (needsWitness && witness) await appendOpeningRegister(db, scope, session.id, witness);
       if (total.totalValueMinor > BigInt(0))
         await postOpeningStockEntry(db, scope, { sessionId: session.id, at });
     },

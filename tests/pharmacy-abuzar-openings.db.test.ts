@@ -22,3 +22,16 @@ describe.runIf(process.env.TEST_DATABASE_URL)('Abuzar opening row references', (
     expect(state).toEqual([{ rls: true, forced: true }]);
   });
 });
+
+it.runIf(process.env.TEST_DATABASE_URL)(
+  'has a dedicated controlled opening entry kind distinct from a purchase or sale',
+  async () => {
+    const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
+    await expect(
+      withTenantDb(
+        'synthetic-scope',
+        (db) => db.$queryRaw`SELECT 'OPENING'::"PharmacyControlledRegisterKind"::text AS kind`
+      )
+    ).resolves.toEqual([{ kind: 'OPENING' }]);
+  }
+);

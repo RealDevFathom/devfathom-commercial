@@ -15,6 +15,7 @@ export const phaseInput = z.strictObject({
   step: z.enum(['catalogue', 'parties', 'prices', 'stock', 'balances', 'history']),
   sourceBranch: z.string().trim().min(1).max(128),
   addToExisting: z.boolean(),
+  witnessId: z.string().min(1).max(128).optional(),
   cutover: z.iso.date().optional(),
   stockLocationId: z.string().min(1).max(128).optional(),
 });
@@ -27,7 +28,8 @@ export async function runAbuzarStep(
   scope: Scope,
   data: Prepared,
   options: z.infer<typeof phaseInput>,
-  confirmed?: string
+  confirmed?: string,
+  witnessSecret?: string
 ) {
   const { organizationId, branchId, actorId } = scope;
   await assertReviewBranch(db, organizationId, branchId);
@@ -46,7 +48,7 @@ export async function runAbuzarStep(
       : options.step === 'balances'
         ? await balanceDecision(db, scope, options, data)
         : options.step === 'stock'
-          ? await stockDecision(db, scope, options, data)
+          ? await stockDecision(db, scope, options, data, witnessSecret)
           : options.step === 'catalogue'
             ? await catalogueDecision(db, organizationId, data)
             : options.step === 'parties'

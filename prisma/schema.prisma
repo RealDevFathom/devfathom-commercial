@@ -14175,6 +14175,7 @@ model PharmacySubstitutionRecord {
 }
 
 enum PharmacyControlledRegisterKind {
+  OPENING
   RETURN_TO_SUPPLIER
   SALE
   PURCHASE

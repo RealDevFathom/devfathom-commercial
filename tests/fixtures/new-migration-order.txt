@@ -68,3 +68,4 @@
 20261127030000_pharmacy_abuzar_export
 20261127030100_pharmacy_abuzar_openings
 20261127030200_pharmacy_abuzar_product_fields
+20261127030300_pharmacy_abuzar_controlled_opening
