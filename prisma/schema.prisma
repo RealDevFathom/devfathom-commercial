@@ -203,6 +203,7 @@ model PharmacyBranch {
   aiUsages                        AIUsage[]
   receiptLayout                   Json?
   receiptLayoutRevision           Int                          @default(0)
+  offlineReconnectHours           Int                          @default(72)
   manualPaymentSettings           Json?
   manualPaymentRevision           Int                          @default(0)
   /// DEV-76 owner-configured khata collection reminder schedule.

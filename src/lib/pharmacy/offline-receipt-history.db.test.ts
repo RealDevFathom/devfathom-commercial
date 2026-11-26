@@ -28,6 +28,21 @@ it.runIf(url)(
       VALUES($1,$2,$1,'Test branch','Fixture','Lahore','PB',now())`,
         [branch, org]
       );
+      const limit = await client.query(
+        'SELECT "offlineReconnectHours" AS hours FROM pharmacy_branches WHERE id=$1',
+        [branch]
+      );
+      expect(limit.rows).toEqual([{ hours: 72 }]);
+      await client.query('UPDATE pharmacy_branches SET "offlineReconnectHours"=4 WHERE id=$1', [
+        branch,
+      ]);
+      await client.query('SAVEPOINT reconnect_limit');
+      await expect(
+        client.query('UPDATE pharmacy_branches SET "offlineReconnectHours"=73 WHERE id=$1', [
+          branch,
+        ])
+      ).rejects.toMatchObject({ code: '23514' });
+      await client.query('ROLLBACK TO SAVEPOINT reconnect_limit');
       await client.query(
         `INSERT INTO pharmacy_registered_devices(id,"organizationId","branchId",name,"deviceSecretHash","enrolledByActorId","updatedAt")
       VALUES($1,$2,$3,'Counter',encode(sha256(convert_to($1,'UTF8')),'hex'),'fixture',now())`,

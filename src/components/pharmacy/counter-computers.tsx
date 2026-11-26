@@ -53,7 +53,7 @@ function errorText(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function when(value: string | null, empty: string): string {
+function when(value: Date | string | null, empty: string): string {
   if (!value) return empty;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? empty : date.toLocaleString();
@@ -770,6 +770,7 @@ function BranchCounters({
       </p>
       <NoticeLine notice={notice} />
       <OfflineCashSellingSwitch branchId={branchId} />
+      <ReconnectLimit key={branchId} branchId={branchId} />
       <RefusedReceipts branchId={branchId} />
       <ReceiptNumberGaps branchId={branchId} />
     </div>
@@ -837,6 +838,71 @@ function OfflineCashSellingSwitch({ branchId }: { branchId: string }) {
  * DEV-957 phase 2: receipt numbers a revoked counter, or one whose credential expired,
  * reserved and never printed. They are never reused; this explains each gap.
  */
+function ReconnectLimit({ branchId }: { branchId: string }) {
+  const limit = trpc.pharmacyOffline.reconnectLimit.useQuery({ branchId }, { retry: false });
+  const save = trpc.pharmacyOffline.setReconnectLimit.useMutation({ retry: false });
+  const [edit, setEdit] = useState<string | null>(null);
+  const value = edit ?? String(limit.data?.hours ?? '');
+  return (
+    <section className="space-y-2 border-t border-border-subtle pt-4">
+      <h3 className="text-sm font-semibold text-text-strong">Time before reconnecting</h3>
+      {limit.isLoading ? (
+        <p role="status">Loading reconnect limit…</p>
+      ) : !limit.data ? (
+        <p role="alert">Reconnect limit could not be loaded.</p>
+      ) : (
+        <form
+          className="space-y-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            await save
+              .mutateAsync({ branchId, hours: Number(value) })
+              .then(async () => {
+                await limit.refetch();
+                setEdit(null);
+              })
+              .catch(() => undefined);
+          }}
+        >
+          <Label htmlFor="offline-reconnect-hours">Maximum hours offline</Label>
+          <Input
+            id="offline-reconnect-hours"
+            className="min-h-11 max-w-32"
+            type="number"
+            min={1}
+            max={72}
+            step={1}
+            required
+            value={value}
+            disabled={!limit.data.canChange || save.isPending}
+            onChange={(e) => setEdit(e.target.value)}
+          />
+          <p className="text-sm text-text-muted">
+            Applies when the counter next connects. An earlier stock safety or price list expiry
+            still stops sales.
+          </p>
+          {limit.data.canChange && (
+            <Button
+              className="min-h-11"
+              variant="outline"
+              type="submit"
+              disabled={save.isPending || edit === null}
+            >
+              {save.isPending ? 'Saving…' : 'Save limit'}
+            </Button>
+          )}
+          {save.isError && (
+            <p role="alert" className="text-destructive">
+              The limit could not be saved. Your entry is kept here.
+            </p>
+          )}
+          {save.isSuccess && edit === null && <p role="status">Reconnect limit saved.</p>}
+        </form>
+      )}
+    </section>
+  );
+}
+
 function RefusedReceipts({ branchId }: { branchId: string }) {
   const history = trpc.pharmacyOffline.refusedReceipts.useQuery({ branchId }, { retry: false });
   return (

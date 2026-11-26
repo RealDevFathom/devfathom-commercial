@@ -159,6 +159,37 @@ export const pharmacyOfflineRouter = router({
    * DEV-957: the branch's counters for the enrolment screen. Only identifiers,
    * status and runway counts: never a secret hash, a snapshot or a payload.
    */
+  reconnectLimit: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      const branch = await db.pharmacyBranch.findFirstOrThrow({
+        where: { organizationId, id: input.branchId },
+        select: { offlineReconnectHours: true },
+      });
+      return {
+        hours: branch.offlineReconnectHours,
+        canChange: await isPharmacistCheckPolicyOwner(db, organizationId, ctx.session.user.id),
+      };
+    })
+  ),
+  setReconnectLimit: adminProcedure
+    .input(branchInput.extend({ hours: z.number().int().min(1).max(72) }))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        if (!(await isPharmacistCheckPolicyOwner(db, organizationId, ctx.session.user.id)))
+          throw new TRPCError({ code: 'FORBIDDEN' });
+        await db.pharmacyBranch.update({
+          where: { organizationId_id: { organizationId, id: input.branchId } },
+          data: { offlineReconnectHours: input.hours },
+        });
+        return { hours: input.hours };
+      })
+    ),
   refusedReceipts: adminProcedure.input(branchInput).query(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const db = tx as ScopedDb;
@@ -1963,7 +1994,18 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             take: 20,
           });
           const now = new Date();
-          const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+          const branch = await db.pharmacyBranch.findFirstOrThrow({
+            where: { id: device.branchId, organizationId: ctx.scope.organizationId },
+            select: { name: true, offlineReconnectHours: true },
+          });
+          const reconnectBy = new Date(
+            Math.min(
+              device.secretExpiresAt.getTime(),
+              now.getTime() + branch.offlineReconnectHours * 3_600_000
+            )
+          );
+          // A shorter signed safety lease still ends selling sooner.
+          const expiry = new Date(Math.min(reconnectBy.getTime(), now.getTime() + 8 * 3_600_000));
           const safetyLease = {
             issuedAt: now.toISOString(),
             expiresAt: expiry.toISOString(),
@@ -1976,10 +2018,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // DEV-957 phase 2 (review B1): the owner's offline cash selling switch, signed into
           // the rules. Off (and not available) in this phase, so a counter checks prices only.
           const cashSelling = await readOfflineCashSelling(db, ctx.scope.organizationId);
-          const branchName = await db.pharmacyBranch.findFirst({
-            where: { id: device.branchId, organizationId: ctx.scope.organizationId },
-            select: { name: true },
-          });
           const payloads = {
             CATALOG: catalog,
             PRICES: pricedLots,
@@ -1993,7 +2031,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               // under this list are attributed to them on the receipt and in the replay audit.
               operator: { userId: ctx.scope.actorId, name: actor.session.user.name ?? null },
               // The branch name the on-screen offline receipt shows.
-              branchName: branchName?.name ?? null,
+              branchName: branch.name,
+              reconnectBy: reconnectBy.toISOString(),
               // When the server stops issuing this counter new price lists.
               // (Never a key named like a credential: the counter's local store refuses those.)
               deviceAccessUntil: device.secretExpiresAt.toISOString(),
