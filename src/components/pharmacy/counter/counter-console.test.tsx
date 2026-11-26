@@ -6413,7 +6413,7 @@ describe('DEV-618 counter composition', () => {
   });
 
   it.each(['name', 'scan'])(
-    'DEV-1042: an unmatched %s only records the deliberate Unknown choice',
+    'DEV-1042: an unmatched %s records one automatic Unknown and updates that row on choice',
     async (source) => {
       const word = source === 'name' ? 'panadol' : '123456';
       mocks.queries.counterSearch = query({ rows: [], truncated: false });
@@ -6431,6 +6431,7 @@ describe('DEV-618 counter composition', () => {
         await new Promise((resolve) => setTimeout(resolve, 350));
       });
       expect(prompt()).not.toBeInTheDocument();
+      expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
       type(word);
       enter();
       expect(
@@ -6438,7 +6439,13 @@ describe('DEV-618 counter composition', () => {
       ).toBeVisible();
       expect(field).toHaveFocus();
       expect(prompt()?.closest('[data-counter-results]')).toBeTruthy();
-      expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          requestedText: word,
+          outcome: 'UNKNOWN',
+          inventoryRuleSnapshot: { source: 'COUNTER_NO_MATCH_AUTOMATIC' },
+        })
+      );
       fireEvent.keyDown(field, { key: 'Escape' });
       expect(prompt()).not.toBeInTheDocument();
       type('nextword');
@@ -6450,13 +6457,13 @@ describe('DEV-618 counter composition', () => {
       enter();
       await act(async () => {});
       expect(prompt()).not.toBeInTheDocument();
-      expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledTimes(2);
       type('newterm');
       enter();
       await screen.findByText(/Was the customer asking/);
       fireEvent.keyDown(field, { key: '5', altKey: true });
       await waitFor(() =>
-        expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+        expect(mocks.mutations.captureDemand).toHaveBeenLastCalledWith(
           expect.objectContaining({
             outcome: 'UNKNOWN',
             requestedText: 'newterm',
@@ -6464,7 +6471,12 @@ describe('DEV-618 counter composition', () => {
           })
         )
       );
-      expect(mocks.mutations.setDemandOutcome).not.toHaveBeenCalled();
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledTimes(3);
+      await waitFor(() =>
+        expect(mocks.mutations.setDemandOutcome).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ demandId: 'choice', outcome: 'UNKNOWN' })
+        )
+      );
     }
   );
 

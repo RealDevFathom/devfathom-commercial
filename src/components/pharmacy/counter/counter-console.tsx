@@ -909,7 +909,8 @@ function ScopedPharmacyCounterConsole({
   // DEV-81: the short line whose optional outcome chips are showing.
   const [lostSaleCapture, setLostSaleCapture] = useState<{
     branchId: string;
-    demandId?: string;
+    demandId: Promise<string>;
+    unmatched?: boolean;
     requested: string;
   } | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
@@ -2338,16 +2339,34 @@ function ScopedPharmacyCounterConsole({
 
   const offerMissingItem = useCallback(
     (requested: string) => {
-      if (currentSaleId.current !== saleId) return;
+      if (!branchAuthorized || currentSaleId.current !== saleId) return;
       const term = normalizeMedicineText(requested);
       const terms = promptedTerms.current.get(billScope) ?? new Set<string>();
       if (!term || terms.has(term)) return;
       terms.add(term);
       promptedTerms.current.set(billScope, terms);
       setResultsDismissed(false);
-      setLostSaleCapture({ branchId, requested });
+      const captured = captureDemand
+        .mutateAsync({
+          branchId,
+          ...(demandSaleId ? { saleId: demandSaleId } : {}),
+          ...(deviceId ? { terminalId: deviceId } : {}),
+          requestedText: requested,
+          requestedQty: 1,
+          quantity: 1,
+          saleUnit: 'UNIT',
+          reason: 'NOT_CARRIED',
+          outcome: 'UNKNOWN',
+          inventoryRuleSnapshot: { source: 'COUNTER_NO_MATCH_AUTOMATIC' },
+        })
+        .then((row) => row.id);
+      void captured.catch((error: unknown) => {
+        setLostSaleCapture((current) => (current?.demandId === captured ? null : current));
+        setNotice({ tone: 'warning', message: messageFrom(error) });
+      });
+      setLostSaleCapture({ branchId, requested, demandId: captured, unmatched: true });
     },
-    [billScope, branchId, saleId]
+    [billScope, branchAuthorized, branchId, captureDemand, demandSaleId, deviceId, saleId]
   );
 
   // DEV-705, DEV-977B: Enter that beats the search debounce runs the search now and highlights
@@ -3966,7 +3985,7 @@ function ScopedPharmacyCounterConsole({
       });
       if (demand?.id) {
         setResultsDismissed(false);
-        setLostSaleCapture({ branchId, demandId: demand.id, requested });
+        setLostSaleCapture({ branchId, demandId: Promise.resolve(demand.id), requested });
       }
       focusSearch();
     } catch (error) {
@@ -3998,36 +4017,15 @@ function ScopedPharmacyCounterConsole({
       const capture = lostSaleCapture;
       setLostSaleCapture(null);
       if (!capture || capture.branchId !== branchId || !branchAuthorized || busy) return;
-      const save = capture.demandId
-        ? setDemandOutcome.mutateAsync({ branchId, demandId: capture.demandId, ...choice })
-        : captureDemand.mutateAsync({
-            branchId,
-            ...(demandSaleId ? { saleId: demandSaleId } : {}),
-            ...(deviceId ? { terminalId: deviceId } : {}),
-            requestedText: capture.requested,
-            requestedQty: 1,
-            quantity: 1,
-            saleUnit: 'UNIT',
-            reason: 'NOT_CARRIED',
-            inventoryRuleSnapshot: { source: 'COUNTER_NO_MATCH_CHOICE' },
-            ...choice,
-          });
+      const save = capture.demandId.then((demandId) =>
+        setDemandOutcome.mutateAsync({ branchId, demandId, ...choice })
+      );
       void save.catch((error: unknown) =>
         setNotice({ tone: 'warning', message: messageFrom(error) })
       );
       focusSearch();
     },
-    [
-      branchAuthorized,
-      branchId,
-      busy,
-      captureDemand,
-      demandSaleId,
-      deviceId,
-      focusSearch,
-      lostSaleCapture,
-      setDemandOutcome,
-    ]
+    [branchAuthorized, branchId, busy, focusSearch, lostSaleCapture, setDemandOutcome]
   );
   const dismissLostSaleChips = useCallback(() => setLostSaleCapture(null), []);
 
@@ -5357,9 +5355,9 @@ function ScopedPharmacyCounterConsole({
               <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
                 {lostSaleCapture?.branchId === branchId ? (
                   <CounterLostSaleChips
-                    key={lostSaleCapture.demandId ?? lostSaleCapture.requested}
+                    key={lostSaleCapture.requested}
                     requested={lostSaleCapture.requested}
-                    unmatched={!lostSaleCapture.demandId}
+                    unmatched={lostSaleCapture.unmatched}
                     onChoose={chooseLostSaleOutcome}
                     onDismiss={dismissLostSaleChips}
                   />
