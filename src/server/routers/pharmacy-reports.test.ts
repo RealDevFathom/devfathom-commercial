@@ -56,13 +56,11 @@ vi.mock('@/lib/approval-authenticator', async () => {
 });
 vi.mock('@/lib/pharmacy/owner-watch', async (load) => ({
   ...(await load<typeof import('@/lib/pharmacy/owner-watch')>()),
-  readSupplierPosition: vi
-    .fn()
-    .mockResolvedValue({
-      balances: [{ currency: 'AED', total: 1200, overdue: 400 }],
-      due: 1,
-      complete: true,
-    }),
+  readSupplierPosition: vi.fn().mockResolvedValue({
+    balances: [{ currency: 'AED', total: 1200, overdue: 400 }],
+    due: 1,
+    complete: true,
+  }),
 }));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
@@ -1913,6 +1911,21 @@ describe('owner dashboard effective access', () => {
         expect(rows[0]).toMatchObject({ label: 'Owed to suppliers', currency: 'AED', value: 1200 });
     }
   );
+  it('uses the organization currency on both customer balance figures', async () => {
+    mocks.can.mockImplementation(async (_subject, action) =>
+      ['reports:operational', 'reports:financial'].includes(action)
+    );
+    const ctx = context('EMPLOYEE');
+    const api = pharmacyReportsRouter.createCaller({
+      ...ctx,
+      organization: { ...ctx.organization!, currency: 'AED' },
+    });
+    const rows = await api.ownerWatch({ section: 'customers', branchId: 'assigned' });
+    expect(rows.filter((r) => r.group === 'owed').map((r) => [r.value, r.currency])).toEqual([
+      [1500, 'AED'],
+      [200, 'AED'],
+    ]);
+  });
   it('admits an effective admin:access holder to all active tenant branches without conferring ownership or finance', async () => {
     mocks.can.mockImplementation(
       async (_subject, action) => action === 'reports:operational' || action === 'admin:access'

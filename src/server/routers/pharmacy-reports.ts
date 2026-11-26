@@ -1171,7 +1171,7 @@ export const pharmacyReportsRouter = router({
         {
           label: 'Owed by customers',
           value: r?.total ?? null,
-          currency: 'PKR',
+          currency: ctx.organization?.currency ?? undefined,
           period: 'Outstanding khata balances now',
           href,
           group: 'owed',
@@ -1179,7 +1179,7 @@ export const pharmacyReportsRouter = router({
         {
           label: 'Overdue from customers',
           value: r?.overdue ?? null,
-          currency: 'PKR',
+          currency: ctx.organization?.currency ?? undefined,
           period: 'Unsettled past-due credit now',
           href,
           group: 'owed',
