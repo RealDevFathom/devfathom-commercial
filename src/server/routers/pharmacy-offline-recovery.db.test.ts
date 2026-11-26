@@ -846,6 +846,19 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
     try {
       await counter.establish();
       expect(await (await counter.replay(command)).json()).toEqual({ error: 'DAY_CLOSED' });
+      const sign = (data: unknown) =>
+        signPharmacyCommand(scope, counter.fixture.deviceId, data, counter.fixture.deviceSecret);
+      const retry = () =>
+        counter.call(
+          'retry',
+          { command, reason: 'Approved prior business day' },
+          {
+            'idempotency-key': command.idempotencyKey,
+            'x-command-signature': sign(command),
+            'x-receipt-signature': sign(command.leasedReceipt),
+          }
+        );
+      expect(await (await retry()).json()).toEqual({ error: 'DRAWER_NOT_OPEN' });
       await inOrg(ORG_A, (db) =>
         openPharmacyDrawer(db, scope, {
           deviceId: counter.fixture.deviceId,
@@ -853,17 +866,7 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
           openingFloatMinor: 0,
         })
       );
-      const sign = (data: unknown) =>
-        signPharmacyCommand(scope, counter.fixture.deviceId, data, counter.fixture.deviceSecret);
-      const response = await counter.call(
-        'retry',
-        { command, reason: 'Approved prior business day' },
-        {
-          'idempotency-key': command.idempotencyKey,
-          'x-command-signature': sign(command),
-          'x-receipt-signature': sign(command.leasedReceipt),
-        }
-      );
+      const response = await retry();
       const result = await response.json();
       expect(response.status, JSON.stringify(result)).toBe(200);
       await inOrg(ORG_A, async (db) => {

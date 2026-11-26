@@ -1244,8 +1244,20 @@ export async function replayCounterCommand(
   await lockPharmacyDay(db, scope, soldDay);
   const bookOnCurrentDay =
     reviewed &&
-    priorRefusal?.reason === 'DAY_CLOSED' &&
-    (await pharmacyDayClosedForTrading(db, scope, soldDay));
+    (await pharmacyDayClosedForTrading(db, scope, soldDay)) &&
+    (priorRefusal?.reason === 'DAY_CLOSED' ||
+      !!(await db.pharmacyOfflineReceiptEvent.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId,
+          commandKey: command.idempotencyKey,
+          commandHash: recorded.command.payloadHash,
+          kind: 'REFUSED',
+          reason: 'DAY_CLOSED',
+        },
+        select: { id: true },
+      })));
   const businessDate = bookOnCurrentDay ? pharmacyBusinessDate(clock) : soldDay;
   // DEV-631: take the sale's day lock before any stock lock, the same order the online
   // counter uses (day, then stock), so a replay and a counter line cannot deadlock.
