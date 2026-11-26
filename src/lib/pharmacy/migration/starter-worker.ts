@@ -1,4 +1,5 @@
 import 'server-only';
+import { setTimeout as wait } from 'node:timers/promises';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { loadStarterBatch, starterProductCount } from './starter-loader';
 
@@ -25,6 +26,11 @@ export async function processStarterImports() {
       );
       result.processed += processed;
       if (!processed) deferred.add(next.organizationId);
+      else {
+        // Give foreground transactions time between writes, outside both the connection
+        // and the tenant row lock. The committed cursor survives a worker timeout here.
+        await wait(500);
+      }
     } catch (error) {
       deferred.add(next.organizationId);
       result.failed++;
