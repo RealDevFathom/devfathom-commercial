@@ -158,11 +158,7 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
   }
 
   const needsPrescription = medicine.rx || medicine.controlled || medicine.restricted;
-  if (
-    needsPrescription &&
-    context.pharmacistCheckOff === true &&
-    !(medicine.controlled && context.requireControlledWitness)
-  ) {
+  if (needsPrescription && context.pharmacistCheckOff === true && !medicine.controlled) {
     push(alerts, {
       key: `pharmacist-check-off:${line.ref}`,
       severity: 'CLINICAL_ADVICE',

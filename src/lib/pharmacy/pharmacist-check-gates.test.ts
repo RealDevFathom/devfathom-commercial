@@ -162,9 +162,11 @@ describe('a controlled line added while the check was off', () => {
     }
   );
 
-  it('is paid as recorded while the check is still off', async () => {
+  it('refuses the unchecked controlled line even while the check is off', async () => {
     const { db } = registerDb('OFF', true);
-    await expect(assertRxLinesPrescribed(db, lines, CASHIER)).resolves.toBeUndefined();
+    await expect(assertRxLinesPrescribed(db, lines, CASHIER)).rejects.toMatchObject({
+      reason: 'CONTROLLED_LINE_UNCHECKED',
+    });
   });
 
   it('leaves a controlled line a pharmacist authorized untouched', async () => {
@@ -212,7 +214,7 @@ describe('counter alerts follow the owner setting', () => {
   });
   const at = new Date('2026-11-18T09:00:00.000Z');
 
-  it.each([{ rx: true }, { controlled: true }, { restricted: true }])(
+  it.each([{ rx: true }, { restricted: true }])(
     'shows the plain note instead of the prescription block while off (%o)',
     (medicine) => {
       const alerts = counterAlertsFor([line(medicine)], { at, pharmacistCheckOff: true });
@@ -227,6 +229,14 @@ describe('counter alerts follow the owner setting', () => {
       ]);
     }
   );
+
+  it('keeps the controlled prescription block with both switches off', () => {
+    expect(
+      hasBlockingAlert(
+        counterAlertsFor([line({ controlled: true })], { at, pharmacistCheckOff: true })
+      )
+    ).toBe(true);
+  });
 
   it('keeps the prescription block when the setting is on or unknown', () => {
     for (const pharmacistCheckOff of [false, undefined]) {
@@ -320,15 +330,17 @@ describe('every pharmacist-verification gate consults the owner setting', () => 
     );
   });
 
-  it('the controlled sale path reads the setting before it refuses a cashier', () => {
+  it('the controlled sale refuses an unqualified dispenser before allocating any stock', () => {
     const router = files.find((file) =>
       file.path.endsWith(join('server', 'routers', 'pharmacy-sales.ts'))
     )!.text;
-    const read = router.indexOf('readPharmacistCheckPolicy(db, scope.organizationId)');
-    const refusal = router.indexOf(
-      "message: 'You do not have permission to dispense a controlled medicine.'"
+    const gate = router.slice(router.indexOf('const mayDispense ='));
+    expect(gate.indexOf('if (!mayDispense)')).toBeGreaterThan(0);
+    expect(gate.indexOf('A pharmacist must approve this controlled medicine.')).toBeLessThan(
+      gate.indexOf('await addSaleLine(')
     );
-    expect(read).toBeGreaterThan(0);
-    expect(refusal).toBeGreaterThan(read);
+    expect(
+      gate.slice(0, gate.indexOf('const pharmacist = await confirmControlledApproval'))
+    ).not.toContain('pharmacistCheckOffSignature');
   });
 });

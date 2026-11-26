@@ -26,7 +26,6 @@ import {
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import { readPharmacistCheckPolicy } from '@/lib/pharmacy/pharmacist-check-policy';
-import { pharmacistCheckOffSignature } from '@/lib/pharmacy/pharmacist-check';
 import { PharmacyDispensingError } from '@/lib/pharmacy/dispensing';
 import {
   PharmacyRxReferenceError,
@@ -3404,57 +3403,12 @@ export const pharmacySalesRouter = router({
             { db }
           );
           const authorization = input.controlledAuthorization;
-          // DEV-911: the pharmacist check at each sale is on unless the owner switched it off.
-          // It is read only where today's gate would refuse (no dispense grant, or no
-          // pharmacist authorization), so with the check on nothing below changes. While it is
-          // off the line sells like any other item, and the controlled register still gets its
-          // entry, marked as written with the check switched off by the owner.
-          if ((!mayDispense || !authorization) && !authorization?.selfApproval) {
-            const pharmacistCheck = await readPharmacistCheckPolicy(db, scope.organizationId);
-            if (!pharmacistCheck.enabled && (await branchAllowsControlledSelfApproval(db, scope))) {
-              await requirePharmacyTodayOpenForTrading(db, scope);
-              const replay = await replaySaleLine(db, scope, lineInput);
-              if (replay) return replay;
-              for (const { kind, approval } of approvals)
-                await confirmCounterApproval(db, scope, kind, approval);
-              // DEV-825: the sale row is a document lock, so it precedes the register lock.
-              await lockSaleForControlledLine(db, scope, input.saleId);
-              await lockRegister(db, scope.organizationId, scope.branchId);
-              const result = await addSaleLine(db, scope, lineInput, COUNTER_LINE_PRICING);
-              await appendControlledSaleEntries(db, {
-                organizationId: scope.organizationId,
-                branchId: scope.branchId,
-                movementIds: result.allocation.movementIds,
-                patientId: null,
-                patientAddress: null,
-                medicineId: medicine.id,
-                manufacturer: medicine.manufacturer,
-                prescriberId: null,
-                prescriberName: null,
-                prescriberRegNo: null,
-                prescriptionId: null,
-                prescriptionLineId: null,
-                emergency: false,
-                rxSerialWritten: false,
-                refEntryId: null,
-                recordedByUserId: scope.actorId,
-                witnessedByUserId: scope.actorId,
-                signatureRef: pharmacistCheckOffSignature(pharmacistCheck.version),
-              });
-              annotateAudit(ctx, {
-                metadata: {
-                  pharmacistCheck: 'SWITCHED_OFF_BY_OWNER',
-                  pharmacistCheckPolicyVersion: pharmacistCheck.version,
-                  controlledSaleLineId: result.line.id,
-                },
-              });
-              return result;
-            }
-          }
           if (!mayDispense) {
             throw new TRPCError({
               code: 'FORBIDDEN',
-              message: 'You do not have permission to dispense a controlled medicine.',
+              message: authorization
+                ? 'You do not have permission to dispense a controlled medicine.'
+                : 'A pharmacist must approve this controlled medicine.',
             });
           }
           const blocked = {

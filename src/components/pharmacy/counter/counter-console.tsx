@@ -409,8 +409,7 @@ function controlledNotice(
   const needs = copy.controlledNeeds;
   if (block === 'NO_SAFETY_MODULE')
     return `${needs} This counter cannot take that authorisation: it needs Pharmacy Safety, which is not switched on for this business. Ask the owner.`;
-  if (block === 'NOT_DISPENSER')
-    return `${needs} Only a pharmacist can authorise it at this till: ask the pharmacist on duty.`;
+  if (block === 'NOT_DISPENSER') return 'A pharmacist must approve this controlled medicine.';
   return online
     ? `${needs} Fill in the three steps to complete the authorization panel, then press Authorise line.`
     : `${needs} Connect online, then complete the authorization panel and press Authorise line.`;
@@ -1282,18 +1281,15 @@ function ScopedPharmacyCounterConsole({
   const pharmacistCheckOff =
     (saleReadiness.data as { pharmacistCheckOff?: boolean } | undefined)?.pharmacistCheckOff ===
     true;
-  const requireControlledWitness =
-    (saleReadiness.data as { requireControlledWitness?: boolean } | undefined)
-      ?.requireControlledWitness === true;
   // Read at call time: a scan or shortcut can finish after the drawer closed.
   const drawerRequiredRef = useRef(drawerRequired);
   const dayClosedRef = useRef(dayClosed);
-  const pharmacistCheckOffRef = useRef({ pharmacistCheckOff, requireControlledWitness });
+  const pharmacistCheckOffRef = useRef(pharmacistCheckOff);
   useEffect(() => {
     drawerRequiredRef.current = drawerRequired || shiftRequired;
     dayClosedRef.current = dayClosed;
-    pharmacistCheckOffRef.current = { pharmacistCheckOff, requireControlledWitness };
-  }, [drawerRequired, shiftRequired, dayClosed, pharmacistCheckOff, requireControlledWitness]);
+    pharmacistCheckOffRef.current = pharmacistCheckOff;
+  }, [drawerRequired, shiftRequired, dayClosed, pharmacistCheckOff]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1535,9 +1531,8 @@ function ScopedPharmacyCounterConsole({
       at: new Date(),
       timeZone: workspaceZone,
       pharmacistCheckOff,
-      requireControlledWitness,
     });
-  }, [cart, patient, workspaceZone, pharmacistCheckOff, requireControlledWitness]);
+  }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
   const packBlocked = cart?.lines.some((line) => line.packCheckBlocked) === true;
   const blocked = hasBlockingAlert(alerts) || packBlocked;
@@ -2326,12 +2321,8 @@ function ScopedPharmacyCounterConsole({
         const freshBill = replaceClosedBill || activeSaleId !== saleId;
         // Creating a bill can outlive this scan or the mounted counter.
         if (!scanIsCurrent()) return;
-        // DEV-911: with the owner's pharmacist check off, nothing is asked for a controlled or
-        // prescription-only line; the server writes the controlled register entry itself.
         const controlled = row.restriction.controlled;
-        const policy = pharmacistCheckOffRef.current;
-        const checkOff =
-          policy.pharmacistCheckOff && !(controlled && policy.requireControlledWitness);
+        const checkOff = pharmacistCheckOffRef.current && !controlled;
         const patient = billPatient;
         if (
           controlled &&
@@ -6111,9 +6102,7 @@ function ScopedPharmacyCounterConsole({
           if (!open) returnToControlled.current = false;
         }}
         summary={
-          controlledTarget &&
-          controlledFields &&
-          (!pharmacistCheckOff || requireControlledWitness) ? (
+          controlledTarget && controlledFields ? (
             <CounterNote tone="warning">
               <p>
                 {controlledTarget.displayName} is a controlled medicine. It is added once it is

@@ -108,43 +108,15 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine with the owner’s pharmacist check', () => {
-  it('lets a cashier add a controlled line with no pharmacist step while it is off', async () => {
+  it('refuses an unapproved controlled line with both switches off', async () => {
     const f = cashierCaller('OFF');
-    vi.mocked(addSaleLine).mockResolvedValue({
-      line: { id: 'sale-line-1' },
-      allocation: { movementIds: ['movement-1', 'movement-2'] },
-    } as never);
-
-    await expect(f.caller.addLine(line)).resolves.toMatchObject({ line: { id: 'sale-line-1' } });
-
-    expect(f.policy).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { organizationId: 'org-1' } })
-    );
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'A pharmacist must approve this controlled medicine.',
+    });
     expect(f.credential).not.toHaveBeenCalled();
-    expect(addSaleLine).toHaveBeenCalledTimes(1);
-    // The register still gets its entry for the controlled sale, marked with the policy
-    // version that switched the check off. Nobody else witnessed it.
-    expect(appendControlledSaleEntries).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        organizationId: 'org-1',
-        branchId: 'branch-1',
-        movementIds: ['movement-1', 'movement-2'],
-        medicineId: 'medicine-1',
-        patientId: null,
-        prescriptionLineId: null,
-        emergency: false,
-        recordedByUserId: 'cashier-1',
-        witnessedByUserId: 'cashier-1',
-        signatureRef: 'pharmacist-check-off:v4',
-      })
-    );
-    expect(annotateAudit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        metadata: expect.objectContaining({ pharmacistCheck: 'SWITCHED_OFF_BY_OWNER' }),
-      })
-    );
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(appendControlledSaleEntries).not.toHaveBeenCalled();
   });
 
   it.each<Stored>(['ON', 'MISSING'])(
@@ -153,7 +125,7 @@ describe('pharmacySales.addLine with the owner’s pharmacist check', () => {
       const f = cashierCaller(stored);
       await expect(f.caller.addLine(line)).rejects.toMatchObject({
         code: 'FORBIDDEN',
-        message: 'You do not have permission to dispense a controlled medicine.',
+        message: 'A pharmacist must approve this controlled medicine.',
       });
       expect(addSaleLine).not.toHaveBeenCalled();
       expect(appendControlledSaleEntries).not.toHaveBeenCalled();
@@ -199,12 +171,12 @@ describe('pharmacySales.addLine with the owner’s pharmacist check', () => {
       line: { id: 'sale-line-1' },
       allocation: { movementIds: ['movement-1'] },
     } as never);
-    await f.caller.addLine(line);
+    await expect(f.caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     f.policy.mockResolvedValue({ pharmacistCheckEnabled: true, pharmacistCheckPolicyVersion: 5 });
     await expect(
       f.caller.addLine({ ...line, idempotencyKey: 'counter:sale-1:controlled-2' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(addSaleLine).toHaveBeenCalledTimes(1);
+    expect(addSaleLine).not.toHaveBeenCalled();
   });
 });
 

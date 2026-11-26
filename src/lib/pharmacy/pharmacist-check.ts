@@ -9,9 +9,9 @@
  * the accepted text, so once this ships, changing any of the wording needs a new version.
  */
 export const PHARMACIST_CHECK_DISCLAIMER = Object.freeze({
-  version: 'pharmacist-check-off@1',
+  version: 'pharmacist-check-off@2',
   title: 'Turn off the pharmacist check and prescription record at each sale?',
-  text: 'With this turned off, the app will no longer ask a pharmacist to check prescription-only and controlled medicines at the sale, and will no longer ask for a prescription to be recorded. Keeping to the drug laws, including pharmacist supervision and prescription records, is then entirely your responsibility as the owner. DevFathom does not check it for you.',
+  text: 'With this turned off, the app will no longer ask a pharmacist to check non-controlled prescription medicines at the sale or ask for their prescription to be recorded. Controlled medicines still require pharmacist approval and a controlled register entry. Keeping to the drug laws, including pharmacist supervision and prescription records, is then entirely your responsibility as the owner. DevFathom does not check it for you.',
   acknowledgement:
     'I have read this. Keeping to the drug laws at the sale is my responsibility as the owner.',
 });

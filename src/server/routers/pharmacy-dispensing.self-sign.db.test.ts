@@ -95,6 +95,8 @@ let controlledPrescriptionLineId: string;
 type Medicine = { medicineId: string; presentationId: string; packLevelId: string };
 let rx: Medicine;
 let laterControlled: Medicine;
+let controlledAtSale: Medicine;
+let checkedRxLineId: string;
 
 function context(userId: string) {
   return {
@@ -397,7 +399,29 @@ beforeAll(async () => {
     };
     rx = await stocked('Amoxicillin');
     laterControlled = await stocked('Tramadol');
-    const patient = await tx.pharmacyPatient.create({ data: { displayName: 'Synthetic patient' } });
+    controlledAtSale = await stocked('Synthetic controlled test');
+    await tx.medicine.update({
+      where: { id: controlledAtSale.medicineId },
+      data: { controlled: true },
+    });
+    const patient = await tx.pharmacyPatient.create({
+      data: {
+        displayName: 'Synthetic patient',
+        address: '12 Synthetic Street',
+        cnic: '0000000000000',
+      },
+    });
+    await tx.patientConsent.create({
+      data: {
+        patientId: patient.id,
+        purpose: 'DISPENSING',
+        channel: 'IN_PERSON',
+        granted: true,
+        version: 1,
+        recordedByUserId: ids.solo,
+      },
+    });
+
     patientId = patient.id;
     const prescriber = await tx.pharmacyPrescriber.create({
       data: { name: 'Dr Synthetic', registrationNumber: `PMDC-${suffix}` },
@@ -413,7 +437,7 @@ beforeAll(async () => {
         authorizedRepeats: 100,
         capturedByUserId: ids.solo,
         lines: {
-          create: [rx, laterControlled].map((medicine, index) => ({
+          create: [rx, laterControlled, controlledAtSale].map((medicine, index) => ({
             lineNumber: index + 1,
             medicineId: medicine.medicineId,
             presentationId: medicine.presentationId,
@@ -426,6 +450,7 @@ beforeAll(async () => {
     });
     prescriptionLineId = prescription.lines[0]!.id;
     controlledPrescriptionLineId = prescription.lines[1]!.id;
+    checkedRxLineId = prescription.lines[2]!.id;
   });
   for (const userId of [ids.solo, ids.cashier])
     await sales(userId, (api) =>
@@ -444,6 +469,96 @@ afterAll(async () => {
 });
 
 describeIfDatabase('solo pharmacist self-signs a prescription review (DEV-950)', () => {
+  it('requires a pharmacist for the controlled item on the same cashier bill with both switches OFF', async () => {
+    const owner = 'owner_' + suffix;
+    await tenant(async (db) => {
+      const role = await db.organizationRole.create({
+        data: { key: 'owner', name: 'Synthetic owner', isSystem: true },
+      });
+      await db.user.create({
+        data: {
+          id: owner,
+          name: owner,
+          email: owner + '@example.test',
+          department: 'LEADERSHIP',
+          title: 'Owner',
+          organizationRoleId: role.id,
+        },
+      });
+    });
+    const { writePharmacistCheckPolicy } = await import('@/lib/pharmacy/pharmacist-check-policy');
+    const { PHARMACIST_CHECK_DISCLAIMER } = await import('@/lib/pharmacy/pharmacist-check');
+    const setPolicy = (enabled: boolean, expectedVersion: number) =>
+      withTenantDb(
+        ids.org,
+        (db) =>
+          writePharmacistCheckPolicy(
+            db,
+            { organizationId: ids.org, actorId: owner },
+            {
+              enabled,
+              expectedVersion,
+              disclaimer: { accepted: true, version: PHARMACIST_CHECK_DISCLAIMER.version },
+            }
+          ),
+        { userId: owner }
+      );
+    const off = await setPolicy(false, 0);
+    try {
+      const sale = await sales(ids.cashier, (api) =>
+        api.create({ branchId: ids.branch, deviceId: deviceFor(ids.cashier) })
+      );
+      const base = {
+        branchId: ids.branch,
+        saleId: sale.id,
+        saleUnit: 'STRIP',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+      };
+      const ordinary = await sales(ids.cashier, (api) =>
+        api.addLine({ ...base, ...rx, idempotencyKey: key() })
+      );
+      expect(ordinary.line.id).toBeTruthy();
+      const controlled = { ...base, ...controlledAtSale, idempotencyKey: key() };
+      await expect(sales(ids.cashier, (api) => api.addLine(controlled))).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'A pharmacist must approve this controlled medicine.',
+      });
+      const own = await tenant((db) =>
+        db.restaurantStaffProfile.findFirstOrThrow({ where: { userId: ids.solo } })
+      );
+      const approved = await sales(ids.solo, (api) =>
+        api.addLine({
+          ...controlled,
+          controlledAuthorization: {
+            selfApproval: true,
+            staffProfileId: own.id,
+            pin: PINS.solo,
+            patientId,
+            patientAddress: 'Synthetic address for approval',
+            prescriptionLineId: checkedRxLineId,
+            emergency: false,
+            rxSerialWritten: true,
+          },
+        })
+      );
+      const reg = await tenant((db) =>
+        db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+          where: { prescriptionLineId: checkedRxLineId },
+        })
+      );
+      expect(reg).toMatchObject({
+        recordedByUserId: ids.solo,
+        witnessedByUserId: null,
+        witnessStatement: 'No witness: dispensed by one pharmacist',
+        patientId,
+      });
+      expect(approved.line.id).toBeTruthy();
+    } finally {
+      await setPolicy(true, off.policy.version);
+    }
+  });
+
   it('still refuses payment until the line is signed', async () => {
     const sale = await ringUp();
     expect(sale.requestedByUserId).toBe(ids.solo);
