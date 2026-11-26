@@ -862,7 +862,8 @@ export class PharmacyCounterRuntime {
   resolveConflict(
     commandId: string,
     send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>,
-    sign: CounterReplaySigner
+    sign: CounterReplaySigner,
+    quarantineReason?: string
   ): Promise<void> {
     return this.exclusive(async () => {
       const queue = this.queue();
@@ -870,6 +871,24 @@ export class PharmacyCounterRuntime {
       if (head?.commandId !== commandId || head.status !== 'QUARANTINED')
         throw new Error('Refresh the queue before reviewing this receipt.');
       const request = await buildCounterReplayRequest(queue, head, sign);
+      if (quarantineReason !== undefined) {
+        if (!head.sealHash)
+          throw new Error(
+            'The original seal fingerprint is missing. Keep this receipt for review.'
+          );
+        const review = {
+          action: 'quarantine',
+          command: request.body,
+          reason: quarantineReason,
+          originalHash: head.sealHash,
+        };
+        const signatures = await sign(
+          review,
+          request.body.leasedReceipt as Record<string, unknown>
+        );
+        request.body = review;
+        request.headers['X-Command-Signature'] = signatures.command;
+      }
       let result: CounterReplayResponse;
       try {
         result = await send(request);

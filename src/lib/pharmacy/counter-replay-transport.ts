@@ -5,6 +5,14 @@ import {
 import type { CounterReplayRequest } from './counter-command-queue';
 import type { CounterReplayResponse } from './counter-offline-runtime';
 
+export function canQuarantineOfflineReceipt(code?: string) {
+  return (
+    code === 'offline_chain_broken' ||
+    code === 'INVALID_COMMAND_SIGNATURE' ||
+    code === 'invalid_snapshot'
+  );
+}
+
 export function canRetryOfflineReceipt(code?: string): boolean {
   switch (code) {
     case 'DAY_CLOSED':
@@ -81,7 +89,7 @@ export async function sendCounterReplay(
   token: string,
   request: CounterReplayRequest,
   rejectionReason?: string,
-  reviewAction: 'reject' | 'retry' = 'reject'
+  reviewAction: 'reject' | 'retry' | 'quarantine' = 'reject'
 ): Promise<CounterReplayResponse> {
   const reviewing = rejectionReason !== undefined;
   const rejecting = reviewing && reviewAction === 'reject';
@@ -97,7 +105,9 @@ export async function sendCounterReplay(
       'x-terminal-session': token,
     },
     body: JSON.stringify(
-      reviewing ? { command: request.body, reason: rejectionReason } : request.body
+      reviewing && reviewAction !== 'quarantine'
+        ? { command: request.body, reason: rejectionReason }
+        : request.body
     ),
   });
   const body = await response.json().catch(() => null);
@@ -107,7 +117,12 @@ export async function sendCounterReplay(
       serverMessage: typeof body?.error === 'string' ? body.error : undefined,
       retryAfter: response.headers.get('retry-after'),
     };
-  const ref = rejecting ? body?.status === 'REJECTED' && body.commandId : body?.saleId;
+  const ref =
+    reviewAction === 'quarantine'
+      ? body?.status === 'QUARANTINED' && body.commandId
+      : rejecting
+        ? body?.status === 'REJECTED' && body.commandId
+        : body?.saleId;
   return typeof ref === 'string' && ref.length > 0
     ? { status: response.status, serverRef: ref }
     : { status: 503 };

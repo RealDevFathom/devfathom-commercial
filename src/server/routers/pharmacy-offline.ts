@@ -857,12 +857,24 @@ export async function verifyOfflineSaleChain(
       sequence: { lt: command.sequence },
     },
     orderBy: { sequence: 'desc' },
-    select: { sequence: true, payload: true },
+    select: { sequence: true, payload: true, status: true, idempotencyKey: true },
   });
   let previousHash: string | null = null;
   if (previous) {
     const parsed = counterReplaySchema.safeParse(previous.payload);
     previousHash = parsed.success ? recordedSaleSealHash(sealScope, parsed.data) : null;
+    if (previous.status === 'DEAD') {
+      await scopeReceiptHistory(db, scope.branchId);
+      const quarantine = await db.pharmacyOfflineReceiptEvent.findFirst({
+        where: { ...sealScope, commandKey: previous.idempotencyKey, kind: 'QUARANTINED' },
+        select: { evidence: true },
+      });
+      if (quarantine)
+        previousHash = z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .parse(field(quarantine.evidence, 'originalHash'));
+    }
   }
   const refusal = chainRefusal(
     { sequence: command.sequence, previousHash: command.seal.previousHash },
@@ -1247,7 +1259,15 @@ function verifyToken(
     throw new CounterTransportError('invalid_terminal_session', 401);
 }
 export type CounterOperation =
-  'establish' | 'snapshot' | 'retry' | 'replay' | 'lease' | 'quota' | 'reject' | 'renew';
+  | 'establish'
+  | 'snapshot'
+  | 'quarantine'
+  | 'retry'
+  | 'replay'
+  | 'lease'
+  | 'quota'
+  | 'reject'
+  | 'renew';
 
 /** DEV-957 phase 2: what an expired device secret may no longer be used for. */
 const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set([
@@ -1309,7 +1329,7 @@ function text(value: unknown): string | null {
  * session token, signatures or signed payloads.
  */
 export function counterAuditEntry(
-  operation: Exclude<CounterOperation, 'reject'>,
+  operation: Exclude<CounterOperation, 'reject' | 'quarantine'>,
   body: unknown,
   outcome: unknown
 ): CounterAuditEntry | null {
@@ -1408,7 +1428,10 @@ function withCounterAudit<T>(
 ) {
   return async (db: ScopedDb): Promise<T> => {
     const outcome = await work(db);
-    const entry = operation === 'reject' ? null : counterAuditEntry(operation, body, outcome);
+    const entry =
+      operation === 'reject' || operation === 'quarantine'
+        ? null
+        : counterAuditEntry(operation, body, outcome);
     if (entry && target.scope) {
       await db.auditLog.create({
         data: {
@@ -1474,6 +1497,93 @@ async function reportChainBreak(operation: CounterOperation, error: CounterChain
   }
 }
 
+async function retireReviewedReceipt(ctx: PharmacyCounterContext, command: CounterReplay) {
+  const { leaseId, receiptNumber, originalSaleAt } = command.leasedReceipt;
+  const retired = await ctx.db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            UPDATE pharmacy_receipt_number_leases AS lease
+            SET "nextNumber" = ${receiptNumber} + 1
+            WHERE lease.id = ${leaseId}
+              AND lease."organizationId" = ${ctx.scope.organizationId}
+              AND lease."branchId" = ${ctx.scope.branchId}
+              AND lease."deviceId" = ${ctx.deviceId}
+              AND lease."nextNumber" = ${receiptNumber}
+              AND ${receiptNumber} BETWEEN lease."blockStart" AND lease."blockEnd"
+              AND lease."issuedAt" <= ${new Date(originalSaleAt)}
+            RETURNING lease.id`);
+  if (!retired[0]) throw new CounterTransportError('INVALID_RECEIPT_LEASE', 409);
+}
+
+const quarantineSchema = counterRejectSchema.extend({
+  action: z.literal('quarantine'),
+  originalHash: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+async function quarantineReceipt(
+  ctx: PharmacyCounterContext,
+  review: z.infer<typeof quarantineSchema>,
+  request: Request
+) {
+  const { db, scope, deviceId } = ctx;
+  const { command, reason, originalHash } = review;
+  await db.$queryRaw`SELECT id FROM pharmacy_registered_devices WHERE id=${deviceId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+  // Authenticate a separate review, including the independently retained chain fingerprint.
+  // The failed receipt and its original signatures remain evidence and never authorize a sale.
+  await authenticatePharmacyCommand(db, scope, deviceId, review, {
+    deviceSecret: ctx.deviceSecret,
+    signature: request.headers.get('x-command-signature') ?? '',
+  });
+  await scopeReceiptHistory(db, scope.branchId);
+  const identity = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    deviceId,
+    commandKey: command.idempotencyKey,
+    commandHash: snapshotPayloadHash(command),
+  };
+  const refusal = await db.pharmacyOfflineReceiptEvent.findFirst({
+    where: {
+      ...identity,
+      kind: 'REFUSED',
+      reason: { in: ['offline_chain_broken', 'INVALID_COMMAND_SIGNATURE', 'invalid_snapshot'] },
+    },
+  });
+  if (!refusal) throw new CounterTransportError('quarantine_requires_refused_receipt', 409);
+  const { command: stored } = await recordOfflineCommand(db, scope, {
+    deviceId,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    payload: command as Prisma.InputJsonValue,
+    clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
+    receiptNumber: command.leasedReceipt.receiptNumber,
+  });
+  if (stored.status === 'DEAD') {
+    const prior = await db.pharmacyOfflineReceiptEvent.findFirst({
+      where: { ...identity, kind: 'QUARANTINED' },
+    });
+    if (prior && prior.reason === reason && field(prior.evidence, 'originalHash') === originalHash)
+      return { commandId: stored.id, status: 'QUARANTINED', replayed: true };
+  }
+  if (stored.status !== 'PENDING') throw new CounterTransportError('command_already_settled', 409);
+  await retireReviewedReceipt(ctx, command);
+  await db.pharmacyOfflineCommand.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: stored.id } },
+    data: {
+      status: 'DEAD',
+      settledAt: new Date(),
+      attempts: { increment: 1 },
+      rejectionReason: reason,
+    },
+  });
+  await appendReceiptEvent(
+    db,
+    { ...receiptEvidence(ctx, command, request), originalHash },
+    'QUARANTINED',
+    reason
+  );
+  return { commandId: stored.id, status: 'QUARANTINED', replayed: false };
+}
+
 async function scopeReceiptHistory(db: ScopedDb, branchId: string) {
   await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branchId}, true)`;
 }
@@ -1484,6 +1594,7 @@ type ReceiptEvidence = {
   command: CounterReplay;
   commandSignature: string;
   receiptSignature: string;
+  originalHash?: string;
 };
 
 function receiptEvidence(
@@ -1508,7 +1619,12 @@ async function appendReceiptEvent(
 ) {
   const { scope, deviceId, command, commandSignature, receiptSignature } = receipt;
   await scopeReceiptHistory(db, scope.branchId);
-  const evidence = { command, commandSignature, receiptSignature };
+  const evidence = {
+    command,
+    commandSignature,
+    receiptSignature,
+    ...(receipt.originalHash ? { originalHash: receipt.originalHash } : {}),
+  };
   const id = snapshotPayloadHash([
     scope.organizationId,
     scope.branchId,
@@ -1595,7 +1711,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         // below (live counter grant and assignment to this terminal's branch),
         // capped at one renewal block. Quota and reject stay manager-only.
         const leasingManager = operation === 'lease' && (await allows('admin:access'));
-        const manager = leasingManager || operation === 'quota' || operation === 'reject';
+        const manager =
+          leasingManager ||
+          operation === 'quota' ||
+          operation === 'reject' ||
+          operation === 'quarantine';
         if (!leasingManager && !(await allows(manager ? 'admin:access' : 'pharmacy:orders')))
           throw new CounterTransportError('forbidden', 403);
         const device = await resolvePharmacyCounterBySecret(db, secret);
@@ -1880,11 +2000,17 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           return { snapshots, publicKey: snapshotPublicKey(), catalogLimit: 1000 };
         }
         const rejection = operation === 'reject' ? counterRejectSchema.parse(body) : null;
+        const quarantine = operation === 'quarantine' ? quarantineSchema.parse(body) : null;
         const retry = operation === 'retry' ? counterRejectSchema.parse(body) : null;
-        const command = rejection?.command ?? retry?.command ?? counterReplaySchema.parse(body);
+        const command =
+          quarantine?.command ??
+          rejection?.command ??
+          retry?.command ??
+          counterReplaySchema.parse(body);
         const key = request.headers.get('idempotency-key');
         if (!key || key !== command.idempotencyKey)
           throw new CounterTransportError('invalid_idempotency_key');
+        if (quarantine) return quarantineReceipt(ctx, quarantine, request);
         if (rejection) {
           // Explicit manager recovery for a command whose failed sale rolled
           // back its log entry. Never skip a position or commit sale effects.
@@ -1918,19 +2044,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // The receipt was already printed. Retire exactly the next number
           // under the same lease checks as settlement, so recovery preserves
           // the remaining printed receipts and never makes this one reusable.
-          const { leaseId, receiptNumber, originalSaleAt } = command.leasedReceipt;
-          const retired = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-            UPDATE pharmacy_receipt_number_leases AS lease
-            SET "nextNumber" = ${receiptNumber} + 1
-            WHERE lease.id = ${leaseId}
-              AND lease."organizationId" = ${ctx.scope.organizationId}
-              AND lease."branchId" = ${ctx.scope.branchId}
-              AND lease."deviceId" = ${device.id}
-              AND lease."nextNumber" = ${receiptNumber}
-              AND ${receiptNumber} BETWEEN lease."blockStart" AND lease."blockEnd"
-              AND lease."issuedAt" <= ${new Date(originalSaleAt)}
-            RETURNING lease.id`);
-          if (!retired[0]) throw new CounterTransportError('INVALID_RECEIPT_LEASE', 409);
+          await retireReviewedReceipt(ctx, command);
           // Review round 2: nor can a sale taken while offline selling was off be settled
           // this way: only one its verified signed RULES allowed (the receipt checks above
           // run first, and a refusal here rolls the retirement back).

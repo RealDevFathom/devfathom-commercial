@@ -23,7 +23,10 @@ import {
   formatReceiptIssuedAt,
   type CounterReceipt,
 } from '@/lib/pharmacy/counter-receipt';
-import { canRetryOfflineReceipt } from '@/lib/pharmacy/counter-replay-transport';
+import {
+  canQuarantineOfflineReceipt,
+  canRetryOfflineReceipt,
+} from '@/lib/pharmacy/counter-replay-transport';
 import { buildCounterReceiptPreview } from '@/lib/pharmacy/counter-receipt-presentation';
 import type { CounterQueuedCommand } from '@/lib/pharmacy/counter-command-queue';
 
@@ -468,7 +471,7 @@ export function OfflineQueue({
   resolveConflict?: (
     commandId: string,
     reason: string,
-    action?: 'reject' | 'retry'
+    action?: 'reject' | 'retry' | 'quarantine'
   ) => Promise<void>;
 }) {
   return (
@@ -551,7 +554,11 @@ function OfflineReceiptReview({
   resolve,
 }: {
   sale: CounterQueuedCommand;
-  resolve?: (commandId: string, reason: string, action?: 'reject' | 'retry') => Promise<void>;
+  resolve?: (
+    commandId: string,
+    reason: string,
+    action?: 'reject' | 'retry' | 'quarantine'
+  ) => Promise<void>;
 }) {
   const [note, setNote] = useState('');
   const [pending, setPending] = useState(false);
@@ -578,7 +585,9 @@ function OfflineReceiptReview({
             setError('');
             try {
               const submitter = (event.nativeEvent as SubmitEvent).submitter;
-              if (submitter?.getAttribute('value') === 'retry') {
+              if (submitter?.getAttribute('value') === 'quarantine') {
+                await resolve(sale.commandId, note.trim(), 'quarantine');
+              } else if (submitter?.getAttribute('value') === 'retry') {
                 await resolve(sale.commandId, note.trim(), 'retry');
               } else {
                 await resolve(sale.commandId, note.trim());
@@ -610,6 +619,17 @@ function OfflineReceiptReview({
             Record how you handled the cash. Confirming closes this receipt as rejected without
             booking a sale or issuing a refund.
           </p>
+          {canQuarantineOfflineReceipt(sale.refusalCode) && (
+            <Button
+              type="submit"
+              value="quarantine"
+              variant="outline"
+              className="min-h-11"
+              disabled={pending || !note.trim()}
+            >
+              Quarantine receipt
+            </Button>
+          )}
           {canRetryOfflineReceipt(sale.refusalCode) && (
             <Button
               type="submit"

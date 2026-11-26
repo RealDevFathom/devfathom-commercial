@@ -86,7 +86,11 @@ export type OfflinePayResult =
 
 /** DEV-957 phase 2: what the counter can do with its offline bills and queue. */
 export type CounterOfflineActions = {
-  resolveConflict?(commandId: string, reason: string, action?: 'reject' | 'retry'): Promise<void>;
+  resolveConflict?(
+    commandId: string,
+    reason: string,
+    action?: 'reject' | 'retry' | 'quarantine'
+  ): Promise<void>;
   saveDraft(draft: CounterDraft): Promise<boolean>;
   discardDraft(draftId: string): Promise<void>;
   /** Write the sale to this computer; "Paid" only once this resolves ok. */
@@ -462,7 +466,11 @@ export function useCounterOffline(input: {
     return {
       ...(canResolveConflict
         ? {
-            async resolveConflict(commandId: string, reason: string, action?: 'reject' | 'retry') {
+            async resolveConflict(
+              commandId: string,
+              reason: string,
+              action?: 'reject' | 'retry' | 'quarantine'
+            ) {
               const runtime = runtimeRef.current;
               const token = sessionTokenRef.current;
               const signer = signerRef.current;
@@ -471,7 +479,8 @@ export function useCounterOffline(input: {
               await runtime.resolveConflict(
                 commandId,
                 (request) => sendCounterReplay(token, request, reason, action),
-                signer
+                signer,
+                action === 'quarantine' ? reason : undefined
               );
               refresh();
               setAttempt((value) => value + 1);
