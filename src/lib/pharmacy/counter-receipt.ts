@@ -467,7 +467,6 @@ export class PharmacyCounterReceiptError extends Error {
   }
 }
 
-/** Sum recorded cash only; legacy receipts may not retain the amount handed over. */
 export function missingReceiptPaymentDetails(type: string, label: string | null | undefined) {
   return (type === 'CARD' && label === 'No slip details') ||
     (type === 'BANK_TRANSFER' && label === 'No transfer details')
@@ -481,6 +480,7 @@ export function receiptTenderLine(tender: CounterReceiptTender, locale: CounterR
   return `${name}: ${formatMinor(tender.amountMinor, locale)}${label ? ' (' + label + ')' : ''}`;
 }
 
+/** Sum recorded cash only; legacy receipts may not retain the amount handed over. */
 export function receiptCashReceived(tenders: CounterReceipt['tenders']): number | null {
   const cash = tenders.filter((tender) => tender.type === 'CASH');
   for (const tender of cash) {

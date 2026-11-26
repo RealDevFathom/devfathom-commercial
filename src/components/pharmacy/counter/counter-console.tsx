@@ -2561,7 +2561,7 @@ function ScopedPharmacyCounterConsole({
         const voucher = heldVoucher;
         let discountApproval: CounterApprovalPin | undefined;
         const attemptKeys: string[] = [];
-        const postedOption = option;
+        let postedOption = option;
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
             lineSaleId,
@@ -2732,6 +2732,27 @@ function ScopedPharmacyCounterConsole({
           if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
           if (!scanIsCurrent()) return;
           clearBill();
+          if (unitOption && !scannedPack) {
+            const nextOption = counterAddOption(row, branchDefault);
+            if (nextOption && nextOption.kind !== postedOption.kind) {
+              if (
+                manualDiscount ||
+                voucher ||
+                !counterSelectionPreview(row, nextOption, units)?.sufficient
+              ) {
+                stageRow(row, false);
+                setSaleUnit(nextOption.kind);
+                setQuantityText(String(units));
+                setNotice({
+                  tone: 'warning',
+                  message:
+                    'The previous bill closed. Review the stock and price for this item on the new bill.',
+                });
+                return;
+              }
+              postedOption = nextOption;
+            }
+          }
           startedNextBill = true;
           activeSaleId = await openSale();
           if (!scanIsCurrent()) return;
@@ -2817,7 +2838,7 @@ function ScopedPharmacyCounterConsole({
     [
       activeRow,
       addLine,
-      addUnitFor,
+      branchDefault,
       heldVoucher,
       heldDiscount,
       catalogueCache,

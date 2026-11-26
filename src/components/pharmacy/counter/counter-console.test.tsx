@@ -5229,6 +5229,34 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     ]);
   });
 
+  it('DEV-1041: resets a typed addition to the branch unit when another counter closes this bill', async () => {
+    const row = barcodeRow({
+      onHandUnits: 50,
+      unitsPerPack: 10,
+      dosageForm: 'Tablet',
+      saleUnits: [
+        { kind: 'STRIP', levelLabel: 'Strip', packLevelId: 'strip', canonicalUnitsPerSaleUnit: 10 },
+        { kind: 'UNIT', levelLabel: 'Unit', packLevelId: 'unit', canonicalUnitsPerSaleUnit: 1 },
+      ],
+    });
+    mocks.searchQuery.mockResolvedValue({ rows: [row], truncated: false });
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F4' });
+    act(() => mocks.searchProps.mock.lastCall![0].onAdd!(row));
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    expect(
+      mocks.mutations.addLine.mock.calls.map(([input]) => [input.saleId, input.saleUnit])
+    ).toEqual([
+      ['sale-a', 'STRIP'],
+      ['sale-b', 'UNIT'],
+    ]);
+  });
+
   it('links a loyalty card scanned after payment to a new bill, not the paid one (DEV-748)', async () => {
     openTheDrawer();
     Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
