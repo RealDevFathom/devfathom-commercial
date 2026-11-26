@@ -62,9 +62,12 @@ const base = {
   businessDate: () => new Date('2026-09-29'),
 };
 const props = { ...base, refundAuthorized: true };
-// Keep PIN substring assertions independent of generated command IDs.
-function mockFixedReturnId() {
-  vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa');
+// Keep PIN substring assertions deterministic without hiding a regenerated retry ID.
+function mockFixedReturnIds() {
+  let sequence = 0;
+  vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
+    () => `aaaaaaaa-aaaa-4aaa-aaaa-${(++sequence).toString(16).padStart(12, 'a')}`
+  );
 }
 function chooseReceipt() {
   fireEvent.click(screen.getByRole('button', { name: /Receipt 12/ }));
@@ -896,7 +899,7 @@ describe('controlled medicine returns', () => {
   });
 
   it('requires a fresh witness PIN and sends it without persisting it', async () => {
-    mockFixedReturnId();
+    mockFixedReturnIds();
     controlledHistory();
     const setItem = vi.spyOn(Storage.prototype, 'setItem');
     render(<ReturnForm {...props} />);
@@ -1057,7 +1060,7 @@ describe('DEV-647 refund access', () => {
       expect(screen.queryByRole('button', { name: /refunds/ })).not.toBeInTheDocument();
   });
   it('needs the manager PIN and never saves it with the attempt', async () => {
-    mockFixedReturnId();
+    mockFixedReturnIds();
     let saved = '';
     mocks.refund.mockImplementationOnce(async () => {
       saved = localStorage.getItem('pharmacy-return:o:a:b') ?? '';
@@ -1425,7 +1428,7 @@ describe('DEV-501 returns in six steps or fewer', () => {
   });
 
   it('restores an ambiguous return and refund with the same payload and no PIN', async () => {
-    mockFixedReturnId();
+    mockFixedReturnIds();
     singleLineReceipt();
     mocks.returnAndRefund.mockRejectedValueOnce(new Error('Disconnected'));
     const view = render(<ReturnForm {...props} />);
@@ -1469,7 +1472,7 @@ describe('DEV-501 returns in six steps or fewer', () => {
   });
 
   it('sends a controlled witness with the combined confirm without persisting it', async () => {
-    mockFixedReturnId();
+    mockFixedReturnIds();
     singleLineReceipt();
     const history = mocks.history as { data: { lines: Array<Record<string, unknown>> } };
     history.data.lines[0].controlled = true;
