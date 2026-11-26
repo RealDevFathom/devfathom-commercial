@@ -56,6 +56,7 @@ vi.mock('@/lib/approval-authenticator', async () => {
 });
 vi.mock('@/lib/pharmacy/owner-watch', async (load) => ({
   ...(await load<typeof import('@/lib/pharmacy/owner-watch')>()),
+  readCustomerPosition: vi.fn().mockResolvedValue({ total: 1500, overdue: 200, count: 1 }),
   readSupplierPosition: vi.fn().mockResolvedValue({
     balances: [{ currency: 'AED', total: 1200, overdue: 400 }],
     due: 1,
