@@ -32,7 +32,6 @@ vi.mock('@/lib/pharmacy/offline-cash-selling', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
   authenticatePharmacyCommand: vi.fn(async () => undefined),
-  validateLeasedReceiptReplay: vi.fn(() => undefined),
   createSale: mocks.createSale,
   addSaleLine: mocks.addSaleLine,
 }));
@@ -196,6 +195,16 @@ beforeEach(() => {
 });
 
 describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
+  it('identifies a failed receipt envelope signature for supervisor quarantine', async () => {
+    const body = command(10);
+    body.leasedReceipt.signature = Buffer.alloc(64).toString('base64');
+    await expect(replay(db(), body)).rejects.toMatchObject({
+      code: 'invalid_snapshot',
+      status: 403,
+    });
+    expect(mocks.createSale).not.toHaveBeenCalled();
+  });
+
   it('books the signed cashier on the sale and line when a different operator reconnects', async () => {
     const target = db();
     const cashier = 'cashier_at_sale';

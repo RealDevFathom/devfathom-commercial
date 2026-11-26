@@ -809,6 +809,29 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
     }
   );
 
+  it('keeps the new cause when a reviewed retry discovers a different refusal', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.enqueue(cashSale(1), MATRIX);
+    await counter.replay(
+      async () => ({ status: 409, serverMessage: 'DRAWER_NOT_OPEN' }),
+      replaySigner
+    );
+    const head = counter.snapshot().queue!.commands[0]!;
+    await expect(
+      counter.resolveConflict(
+        head.commandId,
+        async () => ({ status: 403, serverMessage: 'invalid_snapshot' }),
+        replaySigner,
+        { action: 'retry', reason: 'Drawer is open' }
+      )
+    ).rejects.toThrow('sealed sale');
+    expect(counter.snapshot().queue!.commands[0]).toMatchObject({
+      commandId: head.commandId,
+      status: 'QUARANTINED',
+      refusalCode: 'invalid_snapshot',
+    });
+  });
+
   it('retries the same refused drawer receipt once after manager review', async () => {
     const counter = await readyCounter(createMemoryDriver());
     await counter.enqueue(cashSale(1), MATRIX);

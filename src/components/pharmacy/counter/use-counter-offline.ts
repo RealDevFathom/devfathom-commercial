@@ -476,13 +476,16 @@ export function useCounterOffline(input: {
               const signer = signerRef.current;
               if (!runtime || !token || !signer)
                 throw new Error('Reconnect and sign in as a manager to review this receipt.');
-              await runtime.resolveConflict(
-                commandId,
-                (request) => sendCounterReplay(token, request, reason, action),
-                signer,
-                action === 'quarantine' ? reason : undefined
-              );
-              refresh();
+              try {
+                await runtime.resolveConflict(
+                  commandId,
+                  (request) => sendCounterReplay(token, request, reason, action),
+                  signer,
+                  { action: action ?? 'reject', reason }
+                );
+              } finally {
+                refresh();
+              }
               setAttempt((value) => value + 1);
             },
           }

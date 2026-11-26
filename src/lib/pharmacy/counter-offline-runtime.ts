@@ -863,7 +863,7 @@ export class PharmacyCounterRuntime {
     commandId: string,
     send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>,
     sign: CounterReplaySigner,
-    quarantineReason?: string
+    review?: { action: 'retry' | 'reject' | 'quarantine'; reason: string }
   ): Promise<void> {
     return this.exclusive(async () => {
       const queue = this.queue();
@@ -871,22 +871,22 @@ export class PharmacyCounterRuntime {
       if (head?.commandId !== commandId || head.status !== 'QUARANTINED')
         throw new Error('Refresh the queue before reviewing this receipt.');
       const request = await buildCounterReplayRequest(queue, head, sign);
-      if (quarantineReason !== undefined) {
+      if (review?.action === 'quarantine') {
         if (!head.sealHash)
           throw new Error(
             'The original seal fingerprint is missing. Keep this receipt for review.'
           );
-        const review = {
+        const quarantine = {
           action: 'quarantine',
           command: request.body,
-          reason: quarantineReason,
+          reason: review.reason,
           originalHash: head.sealHash,
         };
         const signatures = await sign(
-          review,
+          quarantine,
           request.body.leasedReceipt as Record<string, unknown>
         );
-        request.body = review;
+        request.body = quarantine;
         request.headers['X-Command-Signature'] = signatures.command;
       }
       let result: CounterReplayResponse;
@@ -896,6 +896,25 @@ export class PharmacyCounterRuntime {
         throw new Error(
           'The review could not be confirmed. Reconnect and try again. The receipt is kept here.'
         );
+      }
+      if (review?.action === 'retry' && result.serverMessage) {
+        const outcome = classifyCounterReplay(result);
+        const receiptRefused =
+          result.status === 409 ||
+          (result.status === 401 && result.serverMessage === 'INVALID_COMMAND_SIGNATURE') ||
+          (result.status === 403 &&
+            ['invalid_snapshot', 'invalid_pack', 'medicine_not_offline_otc'].includes(
+              result.serverMessage
+            ));
+        if (receiptRefused && (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE')) {
+          const { snapshot } = applyCounterReplayOutcome(queue, {
+            commandId,
+            outcome,
+            refusalCode: result.serverMessage,
+          });
+          await this.commit({ ...this.state, queue: snapshot });
+          throw new Error(outcome.message);
+        }
       }
       if (result.status === 403 || result.status === 401)
         throw new Error(

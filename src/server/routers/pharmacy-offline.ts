@@ -954,7 +954,17 @@ export async function replayCounterCommand(
     deviceSecret,
     signature: receiptSignature,
   });
-  validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
+  try {
+    validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
+  } catch (error) {
+    if (
+      error instanceof PharmacySaleError &&
+      error.reason === 'INVALID_SAFETY_LEASE' &&
+      !verifySnapshotSignature(command.leasedReceipt.envelope, command.leasedReceipt.signature)
+    )
+      throw new CounterTransportError('invalid_snapshot', 403);
+    throw error;
+  }
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
   const snapshots = command.snapshots.map((snapshot) => {
     if (
