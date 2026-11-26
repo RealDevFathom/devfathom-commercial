@@ -34,6 +34,7 @@ import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
+import { TradingOverview } from './trading-overview';
 import { BusinessChart, reportMoney } from './business-chart';
 
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
@@ -293,7 +294,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
       <PageHeader
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
-        description="Live operational signals with visible source, freshness and permission boundaries."
+        description="Today’s trading, stock and outstanding work across your pharmacy."
       />
       <SectionCard
         eyebrow="Pharmacy Reports"
@@ -326,7 +327,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
 function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const { enabledModules, timeZone } = useEntitlements();
   const utils = trpc.useUtils();
-  const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
+  const branches = trpc.pharmacyReports.branches.useQuery({ dashboard: true }, { retry: false });
   const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
   const preferences = trpc.pharmacyReports.getPreferences.useQuery(undefined, { retry: false });
   const update = trpc.pharmacyReports.updatePreferences.useMutation();
@@ -342,8 +343,14 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     selected.map((branch) => branch.businessDayEndsAtHistory)
   );
   const today = pharmacyBusinessDay({ timeZone, dayEnd });
-  const input = { ...(branchId ? { branchId } : {}), from: today, to: today };
+  const input = {
+    dashboard: true as const,
+    ...(branchId ? { branchId } : {}),
+    from: today,
+    to: today,
+  };
   const command = trpc.pharmacyReports.commandCentre.useQuery(input, {
+    trpc: { context: { independentSection: true } },
     enabled: Boolean(branches.data?.branches.length),
     retry: false,
   }) as unknown as CommandQuery;
@@ -394,7 +401,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       <PageHeader
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
-        description="Live operational signals with visible source, freshness and permission boundaries."
+        description="Today’s trading, stock and outstanding work across your pharmacy."
         actions={
           canEdit ? (
             <Button variant="outline" onClick={begin}>
@@ -439,6 +446,14 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                   : 'Loading today’s figures…'}
         </p>
       </SectionCard>
+      {branches.data?.branches.length && catalog.data && !branches.error ? (
+        <TradingOverview
+          branchId={branchId || undefined}
+          branches={selected.length}
+          financial={catalog.data.permissions.financial}
+          currency={catalog.data.currency}
+        />
+      ) : null}
       {catalog.data && !branchesDenied ? (
         <AiAdviceCard
           owner={catalog.data.permissions.owner}

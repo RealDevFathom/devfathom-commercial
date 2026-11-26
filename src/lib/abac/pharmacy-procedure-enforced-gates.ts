@@ -388,6 +388,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyReports.branches': ['signed-in'],
   'pharmacyReports.catalog': ['signed-in'],
   'pharmacyReports.categoryGrowth': ['reports:operational'],
+  'pharmacyReports.ownerTrading': ['signed-in'],
   'pharmacyReports.commandCentre': ['signed-in'],
   'pharmacyReports.createPharmacovigilanceReport': ['signed-in'],
   'pharmacyReports.dailyWorkPack': ['signed-in'],
