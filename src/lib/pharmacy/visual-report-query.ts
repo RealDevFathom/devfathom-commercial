@@ -8,7 +8,8 @@ import {
   type ReportPeriod,
   type ReportPreset,
 } from './visual-report-period';
-import { chartValue, type ChartId } from './visual-chart';
+import { profitFacts } from './visual-profit-query';
+import { REPORT_CHARTS, chartValue, type ChartId } from './visual-chart';
 import { completedLineRevenue } from './visual-report-sales-basis';
 
 type Branch = { id: string; businessDayEndsAtHistory?: unknown };
@@ -20,7 +21,14 @@ type ChartInput = {
   bucket?: string;
   offset?: number;
 };
-type Row = { key: string; label: string; amount: bigint; base: bigint; excluded: bigint };
+type Row = {
+  included: bigint;
+  key: string;
+  label: string;
+  amount: bigint;
+  base: bigint;
+  excluded: bigint;
+};
 const sql = Prisma.sql;
 
 // Imported history extension point: a future source supplies separate, labelled series with
@@ -116,14 +124,18 @@ export async function readVisualChart(
       .sort()
       .at(-1)!,
   };
+  const profit = REPORT_CHARTS.Profit.some((id) => id === input.chart);
+  const facts = profit
+    ? profitFacts(input.chart, windows, branches, zone)
+    : chartFacts(input.chart, zone);
   const drill = input.bucket !== undefined;
   const groups = drill ? sql`ref,detail` : sql`key,label`;
   const rows = await db.$queryRaw<Row[]>(sql`WITH bounds AS (
     SELECT * FROM jsonb_to_recordset(${JSON.stringify(windows)}::jsonb)
     AS b(id text,first date,stop date,start_at timestamp,stop_at timestamp)
-  ), facts AS (${chartFacts(input.chart, zone)})
+  ), facts AS (${facts})
   SELECT ${drill ? sql`ref AS key,detail AS label` : sql`key,label`},
-  SUM(amount)::bigint AS amount,SUM(base)::bigint AS base,SUM(excluded)::bigint AS excluded
+  COUNT(*) FILTER (WHERE excluded=0) AS included, SUM(amount)::bigint AS amount,SUM(base)::bigint AS base,SUM(excluded)::bigint AS excluded
   FROM facts ${drill ? sql`WHERE key=${input.bucket}` : Prisma.empty}
   GROUP BY ${groups} ORDER BY ${drill ? sql`ref` : sql`key`}
   ${drill ? sql`LIMIT 51 OFFSET ${input.offset ?? 0}` : Prisma.empty}`);
@@ -144,7 +156,7 @@ export async function readVisualChart(
         amount,
         base,
         excluded: number(row.excluded),
-        value: chartValue(input.chart, amount, base),
+        value: profit && Number(row.included) === 0 ? null : chartValue(input.chart, amount, base),
       };
     }),
   };

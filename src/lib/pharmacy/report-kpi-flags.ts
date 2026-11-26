@@ -19,6 +19,10 @@ type KpiMetrics = {
 const known = (value: number | null): value is number =>
   value != null && Number.isSafeInteger(value);
 
+export function reportRatePercent(amount: number, base: number) {
+  return base > 0 ? Math.round((amount * 10_000) / base) / 100 : null;
+}
+
 export function pharmacyReportKpiFlags(
   metrics: KpiMetrics,
   policy = CASH_CLOSE_CHECK_POLICY
@@ -30,7 +34,7 @@ export function pharmacyReportKpiFlags(
     if (salesMinor <= 0) {
       flags.refundsMinor = { detail: 'Refunds recorded with no completed sales in this period.' };
     } else {
-      const rateBps = Math.round((refundsMinor * 10_000) / salesMinor);
+      const rateBps = Math.round(reportRatePercent(refundsMinor, salesMinor)! * 100);
       if (rateBps >= policy.refundRate.minimumRateBps) {
         flags.refundsMinor = {
           detail: `Refunds are ${(rateBps / 100).toFixed(2)}% of sales, at or above the ${(

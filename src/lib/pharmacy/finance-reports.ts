@@ -172,9 +172,11 @@ export async function grossMargin(
 export function grossMarginQuery(
   scope: JournalReportScope,
   /** `where` narrows the journal legs (aliases `line`, `lot`); it must start with AND. */
-  input: { from: Date; to: Date; by: MarginDimension; where?: Prisma.Sql }
+  input: { from: Date; to: Date; by: MarginDimension | 'postingLot'; where?: Prisma.Sql }
 ) {
   const key = {
+    // Internal grain for verified-cost charts. Each allocation must have lot and cost evidence.
+    postingLot: Prisma.sql`jsonb_build_array(entry.id, line."branchId",line."productId",line."sourceLineId",lot.id)`,
     line: Prisma.sql`line."sourceLineId"`,
     batch: Prisma.sql`lot."manufacturingBatchId"`,
     product: Prisma.sql`line."productId"`,
@@ -208,6 +210,7 @@ export function grossMarginQuery(
          ${input.where ?? Prisma.empty}
     )
     SELECT "key",
+           ${input.by === 'postingLot' ? Prisma.sql`BOOL_OR("accountCode"='COST_OF_GOODS_SOLD') AS "hasPostedCost",` : Prisma.empty}
            -- Revenue is a credit account: a credit increases it, so its signed
            -- debit total is negated to read as earned revenue.
            COALESCE(SUM(CASE WHEN "accountCode" = 'SALES_REVENUE' THEN -"debitMinor" ELSE 0 END), 0)::int AS "revenueMinor",
