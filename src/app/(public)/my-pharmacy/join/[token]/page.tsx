@@ -4,7 +4,11 @@ import { SectionCard } from '@/components/ui/section-card';
 import { PORTAL_LINK_PATTERN } from '@/lib/pharmacy/customer-portal';
 import { portalSyntheticSender, portalWhatsAppReady } from '@/lib/pharmacy/portal-delivery';
 import { portalSignInMessages } from '@/lib/pharmacy/portal-sign-in-messages';
-import { resolveOrganizationForRequest, requestHost, isTenantLifecycleAccessible } from '@/lib/tenancy/host';
+import {
+  resolveOrganizationForRequest,
+  requestHost,
+  isTenantLifecycleAccessible,
+} from '@/lib/tenancy/host';
 
 import { PortalSignInForm } from './sign-in-form';
 
@@ -23,7 +27,8 @@ export default async function MyPharmacyJoinPage({
   const message =
     !available || !PORTAL_LINK_PATTERN.test(token)
       ? portalSignInMessages.invalidLink
-      : !portalWhatsAppReady(organization.id) && !portalSyntheticSender(organization, requestHost(request))
+      : !portalWhatsAppReady(organization.id) &&
+          !portalSyntheticSender(organization, requestHost(request))
         ? portalSignInMessages.setup
         : null;
 

@@ -80,3 +80,67 @@ it('explains missing WhatsApp setup before looking up any customer link', async 
     message: 'The pharmacy has not finished setting up WhatsApp. Please ask the pharmacy for help.',
   });
 });
+
+describe('anonymous sign-in responses', () => {
+  it('keeps the invalid link and rate-limit explanations actionable', async () => {
+    const { portalResponse } = await import('./customer-portal-http');
+    expect((await portalResponse.notFound().json()).message).toBe(
+      'This link is no longer valid. Ask the pharmacy for a new one.'
+    );
+    const retry = portalResponse.limited(61);
+    expect(retry.status).toBe(429);
+    expect(retry.headers.get('Retry-After')).toBe('61');
+    expect((await retry.json()).message).toBe('Too many tries. Please wait 2 minutes.');
+  });
+
+  it('accepts the request before checking the link or contacting the provider', async () => {
+    const { after } = await import('next/server');
+    const { startPortalSignIn, PharmacyPortalError } = await import('./customer-portal');
+    const start = vi.mocked(startPortalSignIn);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const config = {
+      PHARMACY_WHATSAPP_PROVIDER: 'meta',
+      PHARMACY_WHATSAPP_ORGANIZATION_ID: 'org',
+      PHARMACY_WHATSAPP_PHONE_NUMBER_ID: 'fixture',
+      PHARMACY_WHATSAPP_ACCESS_TOKEN: 'fixture',
+      PHARMACY_WHATSAPP_TEMPLATE_PORTAL_SIGN_IN_CODE: 'fixture',
+      PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
+    };
+    Object.entries(config).forEach(([key, value]) => vi.stubEnv(key, value));
+    try {
+      for (const failure of [null, 'LINK_INVALID', 'SEND_FAILED'] as const) {
+        vi.clearAllMocks();
+        if (failure) start.mockRejectedValueOnce(new PharmacyPortalError(failure));
+        else start.mockResolvedValueOnce({ sentTo: 'private destination' });
+        resolveTenant.mockResolvedValue({ id: 'org', status: 'ACTIVE' });
+        moduleEnabled.mockReturnValue(true);
+        const context = await portalContext(new Request('http://pharmacy.localhost'));
+        const response = await context!.handle('start', { token: 'pcl_' + '1'.repeat(26) });
+        expect(response.status).toBe(202);
+        expect(await response.json()).toEqual({ ok: true });
+        expect(start).not.toHaveBeenCalled();
+        const work = vi.mocked(after).mock.calls[0]![0];
+        expect(typeof work).toBe('function');
+        if (typeof work === 'function') await work();
+        expect(start).toHaveBeenCalledTimes(1);
+        if (failure === 'SEND_FAILED') {
+          expect(log.mock.calls).toEqual([
+            ['pharmacy.portal', { reason: 'SEND_FAILED', reference: expect.any(String) }],
+          ]);
+        }
+      }
+    } finally {
+      vi.unstubAllEnvs();
+      log.mockRestore();
+    }
+  });
+});
+
+vi.mock('next/server', async (original) => ({
+  ...(await original<typeof import('next/server')>()),
+  after: vi.fn(),
+}));
+vi.mock('./customer-portal', async (original) => ({
+  ...(await original<typeof import('./customer-portal')>()),
+  startPortalSignIn: vi.fn(),
+}));

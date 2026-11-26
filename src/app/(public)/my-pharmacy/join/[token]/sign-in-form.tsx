@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
+import { portalSignInMessages } from '@/lib/pharmacy/portal-sign-in-messages';
 import { Button } from '@/components/ui/button';
 
 type Step = 'send' | 'code';
@@ -11,7 +12,6 @@ export function PortalSignInForm({ token }: { token: string }) {
   const router = useRouter();
   const [step, setStep] = useState<Step>('send');
   const [otp, setOtp] = useState('');
-  const [sentTo, setSentTo] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
 
@@ -20,14 +20,14 @@ export function PortalSignInForm({ token }: { token: string }) {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
-    });
+    }).catch(() => null);
+    if (!response) throw new Error(portalSignInMessages.unexpected);
     const result = (await response.json().catch(() => ({}))) as {
       ok?: boolean;
       message?: string;
-      sentTo?: string | null;
     };
     if (!response.ok || !result.ok)
-      throw new Error(result.message ?? 'This request could not be completed.');
+      throw new Error(result.message ?? portalSignInMessages.unexpected);
     return result;
   }
 
@@ -35,12 +35,11 @@ export function PortalSignInForm({ token }: { token: string }) {
     setPending(true);
     setError('');
     try {
-      const result = await post('start', { token });
-      setSentTo(result.sentTo ?? null);
+      await post('start', { token });
       setOtp('');
       setStep('code');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'This request could not be completed.');
+      setError(cause instanceof Error ? cause.message : portalSignInMessages.unexpected);
     } finally {
       setPending(false);
     }
@@ -54,7 +53,7 @@ export function PortalSignInForm({ token }: { token: string }) {
       await post('verify', { token, otp });
       router.replace('/my-pharmacy');
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'This request could not be completed.');
+      setError(cause instanceof Error ? cause.message : portalSignInMessages.unexpected);
       setPending(false);
     }
   }
@@ -82,7 +81,7 @@ export function PortalSignInForm({ token }: { token: string }) {
         <label htmlFor="portal-otp" className="block text-sm font-semibold text-text-strong">
           Six-digit code
         </label>
-        {sentTo ? <p className="text-sm text-text-muted">Sent on WhatsApp to {sentTo}.</p> : null}
+        <p className="text-sm text-text-muted">If you receive a code, enter it here.</p>
         <input
           id="portal-otp"
           type="text"
@@ -97,6 +96,21 @@ export function PortalSignInForm({ token }: { token: string }) {
           className="min-h-11 w-full rounded-sm border border-border bg-surface-raised px-3 text-text-strong outline-none transition focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 disabled:opacity-60"
         />
       </div>
+      <details className="text-sm text-text-muted">
+        <summary className="cursor-pointer focus-visible:outline-ring">
+          Didn’t receive a code?
+        </summary>
+        <dl className="mt-3 space-y-2">
+          <div>
+            <dt className="font-semibold">If the link expired</dt>
+            <dd>{portalSignInMessages.invalidLink}</dd>
+          </div>
+          <div>
+            <dt className="font-semibold">If delivery failed</dt>
+            <dd>{portalSignInMessages.delivery}</dd>
+          </div>
+        </dl>
+      </details>
       {errorText}
       <div className="flex flex-wrap gap-3">
         <Button type="submit" size="touch" disabled={pending || otp.length !== 6}>

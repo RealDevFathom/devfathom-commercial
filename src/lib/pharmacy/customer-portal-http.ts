@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { randomUUID } from 'node:crypto';
+import { after } from 'next/server';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -41,15 +43,37 @@ type Json = Record<string, unknown>;
 const json = (body: Json, status = 200, headers: HeadersInit = {}) =>
   Response.json(body, { status, headers: { 'Cache-Control': 'private, no-store', ...headers } });
 
+function reportPortalFailure(reason: 'SEND_FAILED' | 'UNEXPECTED') {
+  const reference = randomUUID();
+  console.error('pharmacy.portal', { reason, reference });
+  return reference;
+}
+
 export const portalResponse = {
   tooLarge: () => json({ ok: false, message: 'Request body too large.' }, 413),
-  notFound: () => json({ ok: false, message: 'Not found.' }, 404),
+  notFound: () => json({ ok: false, message: portalSignInMessages.invalidLink }, 404),
   invalid: (message = 'This request could not be completed.') => json({ ok: false, message }, 400),
   signedOut: () => json({ ok: false, message: 'Please sign in again.' }, 401),
-  limited: (retryAfter: number) =>
-    json({ ok: false, message: 'Please wait before trying again.' }, 429, {
-      'Retry-After': String(Math.max(1, retryAfter)),
-    }),
+  unexpected: () =>
+    json(
+      {
+        ok: false,
+        message: portalSignInMessages.unexpected,
+        reference: reportPortalFailure('UNEXPECTED'),
+      },
+      500
+    ),
+  limited: (retryAfter: number) => {
+    const minutes = Math.max(1, Math.ceil(retryAfter / 60));
+    return json(
+      {
+        ok: false,
+        message: `Too many tries. Please wait ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}.`,
+      },
+      429,
+      { 'Retry-After': String(Math.max(1, retryAfter)) }
+    );
+  },
 };
 
 const tokenSchema = z.string().regex(PORTAL_LINK_PATTERN);
@@ -76,12 +100,12 @@ const requestSchema = z.discriminatedUnion('kind', [
 ]);
 
 const PORTAL_ERROR_MESSAGES: Record<PharmacyPortalError['reason'], string> = {
-  CUSTOMER_NOT_FOUND: 'This link is no longer active.',
-  PHONE_REQUIRED: 'Ask the pharmacy to add your phone number first.',
-  LINK_INVALID: 'This link is no longer active.',
-  LINK_LOCKED: 'Too many wrong codes. Ask the pharmacy to send you a new link.',
+  CUSTOMER_NOT_FOUND: portalSignInMessages.invalidLink,
+  PHONE_REQUIRED: portalSignInMessages.invalidLink,
+  LINK_INVALID: portalSignInMessages.invalidLink,
+  LINK_LOCKED: portalSignInMessages.invalidLink,
   CODE_INVALID: 'That code is not valid. Request a new code.',
-  SEND_FAILED: 'We could not send a code right now. Try again shortly.',
+  SEND_FAILED: portalSignInMessages.delivery,
   SALE_NOT_FOUND: 'Choose one of your receipts.',
   ACCOUNT_NOT_FOUND: 'Choose one of your khata accounts.',
   RAAST_NOT_CONFIGURED: 'This pharmacy does not accept Raast payments yet.',
@@ -153,7 +177,7 @@ export async function portalContext(request: Request) {
     try {
       if (action === 'start') {
         const parsed = z.object({ token: tokenSchema }).strict().safeParse(body);
-        if (!parsed.success) return portalResponse.invalid();
+        if (!parsed.success) return portalResponse.invalid(portalSignInMessages.invalidLink);
         const fingerprint = hashPortalSecret(parsed.data.token).slice(0, 32);
         const blocked = await gate([
           [`ip:${ip}`, 30],
@@ -166,10 +190,16 @@ export async function portalContext(request: Request) {
           return portalResponse.invalid(portalSignInMessages.setup);
         const send =
           synthetic ?? portalCodeSender(config, createWhatsAppProvider(config), organizationId);
-        const sent = await inTenant((db) =>
-          startPortalSignIn(db, organizationId, parsed.data.token, send)
-        );
-        return json({ ok: true, sentTo: sent.sentTo });
+        // The HTTP response cannot depend on a private lookup, phone or provider latency.
+        after(async () => {
+          try {
+            await inTenant((db) => startPortalSignIn(db, organizationId, parsed.data.token, send));
+          } catch (error) {
+            if (!(error instanceof PharmacyPortalError)) reportPortalFailure('UNEXPECTED');
+            else if (error.reason === 'SEND_FAILED') reportPortalFailure('SEND_FAILED');
+          }
+        });
+        return json({ ok: true }, 202);
       }
       if (action === 'verify') {
         const parsed = z
@@ -183,9 +213,18 @@ export async function portalContext(request: Request) {
           [`verify:${fingerprint}`, 10],
         ]);
         if (blocked) return portalResponse.limited(blocked);
-        const result = await inTenant((db) =>
-          verifyPortalSignIn(db, organizationId, parsed.data.token, parsed.data.otp)
-        );
+        // Missing, inactive and incorrect codes have different database work. Bound
+        // that work and release all unauthenticated results on the same clock.
+        const release = new Promise<void>((resolve) => setTimeout(resolve, 2500));
+        const result = await withTenantDb(
+          organizationId,
+          (db) => verifyPortalSignIn(db, organizationId, parsed.data.token, parsed.data.otp),
+          { maxWait: 500, timeout: 1500 }
+        ).catch(() => {
+          reportPortalFailure('UNEXPECTED');
+          return { ok: false } as const;
+        });
+        await release;
         if (!result.ok) return portalResponse.invalid(PORTAL_ERROR_MESSAGES.CODE_INVALID);
         return json({ ok: true }, 200, {
           'Set-Cookie': sessionCookie(request, result.sessionToken, result.expiresAt),
@@ -260,7 +299,7 @@ export async function portalContext(request: Request) {
         return portalResponse.invalid(PORTAL_ERROR_MESSAGES[error.reason]);
       if (error instanceof TRPCError && error.code === 'BAD_REQUEST')
         return portalResponse.invalid(error.message);
-      throw error;
+      return portalResponse.unexpected();
     }
   }
 
