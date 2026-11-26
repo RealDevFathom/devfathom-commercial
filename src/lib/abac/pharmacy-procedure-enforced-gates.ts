@@ -483,6 +483,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySales.drawerCashiers': ['signed-in'],
   'pharmacySales.drawerMovement': ['signed-in'],
   'pharmacySales.drawerStatus': ['signed-in'],
+  'pharmacySales.fefoOverrideApprovers': ['signed-in'],
   'pharmacySales.handoverDrawer': ['signed-in'],
   'pharmacySales.higherMarginBrandMix': ['signed-in'],
   'pharmacySales.khataAccounts': ['signed-in'],
