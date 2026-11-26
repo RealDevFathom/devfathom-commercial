@@ -1865,3 +1865,23 @@ describe('DEV-74 branch seasonal calendar', () => {
     );
   });
 });
+
+describe('visual chart read boundary', () => {
+  const input = { chart: 'salesDay' as const, preset: 'today' as const };
+  it('refuses money and drilldown records without reports:financial', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    for (const selection of [{}, { bucket: '2026-11-26' }]) {
+      await expect(
+        caller('EMPLOYEE').visualChart({ ...input, ...selection })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+  });
+  it('refuses a branch outside the available active branches', async () => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'b1', name: 'Main' }]);
+    await expect(caller().visualChart({ ...input, branchId: 'foreign' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+  });
+});

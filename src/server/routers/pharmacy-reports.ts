@@ -79,6 +79,10 @@ import {
   readPharmacyCategoryGrowthReport,
 } from '@/lib/pharmacy/category-growth-report';
 
+import { CHARTS, type ChartId } from '@/lib/pharmacy/visual-chart';
+import { readVisualChart } from '@/lib/pharmacy/visual-report-query';
+import { MAX_PHARMACY_REPORT_BRANCHES } from '@/lib/pharmacy/reports';
+
 const reports = capabilityProcedure('reports:operational');
 
 /**
@@ -335,6 +339,39 @@ function badRequest(error: unknown, fallback: string): never {
 const seasonalBranch = z.object({ branchId: z.string().trim().min(1).max(128) }).strict();
 
 export const pharmacyReportsRouter = router({
+  visualChart: reports
+    .input(
+      z
+        .object({
+          chart: z.enum(Object.keys(CHARTS) as [ChartId, ...ChartId[]]),
+          preset: z.enum(['today', 'yesterday', 'week', 'month', 'lastMonth', 'year', 'custom']),
+          custom: filters.pick({ from: true, to: true }).optional(),
+          branchId: z.string().min(1).max(128).optional(),
+          previous: z.boolean().optional(),
+          bucket: z.string().max(4096).optional(),
+          offset: z.number().int().nonnegative().max(2147483647).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      const available = await reportScope(ctx, await pharmacyReportAccess(ctx));
+      const branches = available.branches.filter(
+        (branch) => !input.branchId || branch.id === input.branchId
+      );
+      if (!branches.length)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      if (branches.length > MAX_PHARMACY_REPORT_BRANCHES)
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose one branch for this report.' });
+      try {
+        return await readVisualChart(ctx.db, branches, ctx.organization?.timezone, input);
+      } catch (error) {
+        if (error instanceof RangeError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
+    }),
+
   categoryGrowth: reports
     .input(
       filters

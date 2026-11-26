@@ -1877,6 +1877,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
+  'pharmacyReports.visualChart': {
+    gate: 'reports:operational + requireFinancialReports (reports:financial), active branches in report scope',
+    lines: ['financial-reports/see-sales-margin-cash'],
+  },
   'pharmacyReports.commandCentre': {
     gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue hidden for branch-scoped Managers',
     lines: [
