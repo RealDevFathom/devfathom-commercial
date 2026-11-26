@@ -1,6 +1,7 @@
 /** PV boundary and solo-owner approval against PostgreSQL. */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { expectNoPersistedPin } from '@/lib/test-support/persisted-pin';
 import { Client } from 'pg';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -315,7 +316,7 @@ suite('PV security persistence and compatibility', () => {
   });
 
   it('requires PIN for solo readiness and commits a matching audit without changing external submission state', async () => {
-    await fixture(async ({ db, owner, branch, api }) => {
+    await fixture(async ({ db, org, owner, branch, api }) => {
       const report = await reviewable(db, branch, owner);
       const input = { id: report.id, branchId: branch, state: 'READY' as const };
       await expect(api(owner).transitionPharmacovigilanceReport(input)).resolves.toHaveProperty(
@@ -345,7 +346,11 @@ suite('PV security persistence and compatibility', () => {
           reauthenticatedAt: expect.any(String),
         },
       });
-      expect(JSON.stringify(audit)).not.toContain('1234');
+      expectNoPersistedPin(audit, '1234', {
+        organizationId: [org],
+        actorId: [owner],
+        branchId: [branch],
+      });
     });
   });
 
