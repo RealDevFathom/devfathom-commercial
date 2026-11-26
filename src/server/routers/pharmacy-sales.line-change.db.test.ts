@@ -567,15 +567,27 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
       await act(ids.cashier, (api) => api.removeLine(remove({ saleId, saleLineId: lineIds[0]! })));
       expect(await balance(item)).toMatchObject({
         onHandUnits: 40,
-        looseUnits: left + quantity,
-        sealedPacks: 4 - opened / 10 - packs,
+        looseUnits: opened,
+        sealedPacks: 4 - opened / 10,
       });
-      expect((await history(item)).find((m) => m.kind === 'ADJUSTMENT')?.reason).toContain(
-        'Returned as open units'
-      );
+      const afterRemoval = await history(item);
+      for (const original of openedHere) {
+        expect(afterRemoval).toContainEqual(
+          expect.objectContaining({
+            kind: 'ADJUSTMENT',
+            counterSaleId: saleId,
+            reversesMovementId: original.id,
+            quantityUnits: 0,
+            sealedPackDelta: 1,
+            looseUnitDelta: -10,
+            reason: 'Counter pack opening reversed',
+          })
+        );
+      }
+      expect(afterRemoval.filter((m) => m.reversesMovementId)).toHaveLength(1 + packs);
     }
   );
-  it('opens for strips and a prepayment void returns open units', async () => {
+  it('opens for strips and a prepayment void restores exclusive packs', async () => {
     const item = await stock(30);
     const { saleId } = await bill(ids.cashier, [(id) => strip(item, id, 2)]);
     expect(
@@ -589,10 +601,26 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
         voidReason: { code: 'WRONG_ITEMS' },
       })
     );
-    expect(await balance(item)).toMatchObject({ onHandUnits: 30, sealedPacks: 1, looseUnits: 20 });
-    expect((await history(item)).find((m) => m.kind === 'ADJUSTMENT')?.reason).toContain(
-      'Returned as open units'
+    expect(await balance(item)).toMatchObject({ onHandUnits: 30, sealedPacks: 3, looseUnits: 0 });
+    expect(
+      (await history(item)).filter((m) => m.reason === 'Counter pack opening reversed')
+    ).toHaveLength(2);
+  });
+  it('reseals only after the last line drawing from an opening is removed', async () => {
+    const item = await stock(10);
+    const first = await bill(ids.cashier, [(id) => loose(item, id, 1)]);
+    const other = await bill(ids.cashierB, [(id) => loose(item, id, 1)]);
+    await act(ids.cashier, (api) =>
+      api.removeLine(remove({ saleId: first.saleId, saleLineId: first.lineIds[0]! }))
     );
+    expect(await balance(item)).toMatchObject({ sealedPacks: 0, looseUnits: 9 });
+    await act(ids.cashierB, (api) =>
+      api.removeLine(remove({ saleId: other.saleId, saleLineId: other.lineIds[0]! }))
+    );
+    expect(await balance(item)).toMatchObject({ sealedPacks: 1, looseUnits: 0 });
+    expect(
+      (await history(item)).filter((m) => m.reason === 'Counter pack opening reversed')
+    ).toHaveLength(1);
   });
   it('dispenses a ten-tablet strip from a sealed box, leaving the other two strips open', async () => {
     const item = await stockedItem(

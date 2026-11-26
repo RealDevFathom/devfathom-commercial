@@ -3250,6 +3250,7 @@ model PharmacyAllocationOverride {
 /// `looseUnitDelta` carry the physical arrangement so a BREAK_PACK (INV-04) is
 /// an explicit movement with a zero canonical total.
 model PharmacyStockMovement {
+  counterPackDraws     Json?
   counterSaleId        String?
   counterSale          PharmacySale? @relation(fields: [organizationId, branchId, counterSaleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_stock_movements_counter_sale_fkey")
   id                   String                    @id @default(cuid())

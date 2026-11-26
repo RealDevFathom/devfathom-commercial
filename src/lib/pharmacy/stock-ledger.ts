@@ -545,7 +545,7 @@ export async function reverseMovements(
             original.counterSaleId &&
             original.kind === 'SALE' &&
             original.looseUnitDelta === original.quantityUnits
-              ? `${input.reason}. Returned as open units. Packs were not resealed.`
+              ? `${input.reason}. Returned as open units.`
               : input.reason,
           idempotencyKey: `${original.idempotencyKey}:reversal`,
           reversesMovementId: original.id,
@@ -553,6 +553,44 @@ export async function reverseMovements(
         },
       })
     );
+    // Each SALE reversal returns its exact draw to the recorded packs. A pack
+    // opened for a reversed line closes only after all other draws are returned.
+    if (original.kind === 'SALE' && original.counterPackDraws) {
+      const packs = await db.$queryRaw<
+        { id: string; opening_key: string; capacity: number; sale_id: string }[]
+      >(Prisma.sql`
+        SELECT p.id, p.opening_key, p.capacity, opening."counterSaleId" AS sale_id
+        FROM pharmacy_counter_open_packs(${scope.organizationId}, ${scope.branchId},
+          ${original.inventoryLotId}, ${original.stockLocationId}) p
+        JOIN pharmacy_stock_movements opening ON opening.id=p.id AND opening."organizationId"=${scope.organizationId}
+        JOIN pharmacy_stock_movements sale ON sale."organizationId"=opening."organizationId"
+          AND sale."counterSaleId"=opening."counterSaleId" AND sale.kind='SALE'
+          AND sale."idempotencyKey"=regexp_replace(p.opening_key, ':open:[0-9]+$', '')
+        JOIN pharmacy_stock_movements undo ON undo."organizationId"=sale."organizationId" AND undo."reversesMovementId"=sale.id
+        WHERE ${JSON.stringify(original.counterPackDraws)}::jsonb ? p.id AND p.capacity=p.remaining
+        ORDER BY p.id`);
+      for (const pack of packs) {
+        await db.pharmacyStockMovement.create({
+          data: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            actorId: scope.actorId,
+            inventoryLotId: original.inventoryLotId,
+            stockLocationId: original.stockLocationId,
+            kind: 'ADJUSTMENT',
+            disposition: 'AVAILABLE',
+            quantityUnits: 0,
+            sealedPackDelta: 1,
+            looseUnitDelta: -pack.capacity,
+            counterSaleId: pack.sale_id,
+            idempotencyKey: pack.opening_key + ':reversal',
+            reversesMovementId: pack.id,
+            reason: 'Counter pack opening reversed',
+            occurredAt: input.at,
+          },
+        });
+      }
+    }
   }
   return reversals;
 }
