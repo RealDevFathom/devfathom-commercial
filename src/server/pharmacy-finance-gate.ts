@@ -28,6 +28,10 @@ export const pharmacyFinanceMemberProcedure = contextualCapabilityProcedure(
   'Finance permission is required.'
 );
 
+export const pharmacyFinanceMemberMutation = pharmacyFinanceMemberProcedure.use(
+  pharmacyFinanceGate(PHARMACY_FINANCE_MANAGE)
+);
+
 export const pharmacyAccountMutation = adminProcedure.use(
   pharmacyFinanceGate(PHARMACY_FINANCE_MANAGE)
 );

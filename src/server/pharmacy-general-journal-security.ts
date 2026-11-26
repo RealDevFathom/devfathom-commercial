@@ -2,7 +2,7 @@
  * CEO-JVCORE-20261025: authorization and audit for the pharmacy general
  * journal.
  *
- * The router's base procedure already runs the audited `admin:access` ABAC
+ * The router's base procedure already runs the audited member capability
  * check and records an independent tRPC audit row for every call, allowed or
  * denied. This module adds what a prefixless server caller (a page) would
  * otherwise skip, all BEFORE any voucher row is read:
@@ -15,7 +15,10 @@
  * commit or roll back together.
  */
 import { TRPCError } from '@trpc/server';
-import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
+import {
+  requirePharmacyFinance,
+  requireFinanceBranchAssignment,
+} from '@/lib/pharmacy/finance-access';
 import { hasModule } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { recordAudit } from './audit';
@@ -43,7 +46,6 @@ export async function authorizeGeneralJournal(
 ): Promise<GeneralJournalScope> {
   const user = ctx.session?.user;
   if (!user?.id) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  if (user.role !== 'ADMIN') forbidden('Owner finance access is required.');
   const organizationId = ctx.entitlements?.organizationId;
   if (
     !organizationId ||
@@ -57,6 +59,7 @@ export async function authorizeGeneralJournal(
     forbidden('Pharmacy Finance access is required.');
   }
   await requirePharmacyFinance(ctx);
+  await requireFinanceBranchAssignment(ctx, branchId);
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { organizationId, id: branchId, active: true },
     select: { id: true },

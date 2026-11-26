@@ -94,6 +94,7 @@ function caller(context: Partial<TRPCContext> = {}) {
   return pharmacyApInvoicesRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
+      pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyBranch: { findFirst: mocks.branchFindFirst },
       pharmacySupplierCredit: { findMany: mocks.creditFindMany },
       pharmacyApCreditSetOff: { groupBy: mocks.setOffGroupBy },

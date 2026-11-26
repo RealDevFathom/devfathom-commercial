@@ -16,7 +16,7 @@ export type PharmacyProcedureGate =
   { gate: string; lines: readonly string[] } | { gate: string; none: string };
 
 const accountsGate =
-  'adminProcedure (admin:access) + ADMIN role, Pharmacy Finance module, finance:read (a live grant or the system Owner, subject to deny) and an active branch of the organization';
+  'Pharmacy Finance module, finance:read (a live grant or the system Owner, subject to deny) and an admitted active branch of the organization (administrators also require admin:access)';
 const bookkeepingGate =
   'finance:read, Pharmacy Finance licence and admitted active branch (administrators also require admin:access)';
 const ledgerReportGate =
@@ -40,7 +40,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.approveCreditSetOff': {
-    gate: `${accountsGate} + finance:manage + actorMayRefund -> pharmacy:manage + own approval code; a different approver unless no other active ADMIN exists in the organization`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + actorMayRefund -> pharmacy:manage + own approval code; a different approver unless no other active ADMIN exists in the organization`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -68,7 +68,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyApInvoices.rejectCreditSetOff': {
-    gate: `${accountsGate} + finance:manage + actorMayRefund -> pharmacy:manage`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + actorMayRefund -> pharmacy:manage`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -84,7 +84,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.reverseCreditSetOff': {
-    gate: `${accountsGate} + finance:manage + actorMayRefund -> pharmacy:manage + own approval code`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + actorMayRefund -> pharmacy:manage + own approval code`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -96,7 +96,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.reverseInvoice': {
-    gate: `${accountsGate} + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -104,7 +104,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyApInvoices.reverseSettlement': {
-    gate: `${accountsGate} + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',

@@ -1,10 +1,14 @@
-import { pharmacyAccountMutation } from '@/server/pharmacy-finance-gate';
+import {
+  pharmacyFinanceMemberProcedure,
+  pharmacyFinanceMemberMutation,
+  pharmacyAccountMutation,
+} from '@/server/pharmacy-finance-gate';
 import { canManagePharmacyAccounts } from '@/lib/pharmacy/finance-access';
 /**
  * DEV-103: native non-stock AP invoice, settlement and aging procedures.
  *
- * Every procedure authorizes (owner role, Pharmacy Finance licence, canonical
- * `finance:read` ABAC, active branch) before it reads or writes AP data, and
+ * Every procedure authorizes (Pharmacy Finance licence, canonical
+ * `finance:read` ABAC, admitted active branch) before it reads or writes AP data, and
  * every write runs in one business transaction together with its EXECUTE
  * audit row, so the ledger change and its audit evidence commit or roll back
  * together.
@@ -63,7 +67,7 @@ import {
   GENERAL_JOURNAL_AUDIT_CATEGORY,
   type GeneralJournalScope,
 } from '../pharmacy-general-journal-security';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { router, type TRPCContext } from '../trpc';
 
 const CONFLICT_REASONS = new Set([
   'ALREADY_REVERSED',
@@ -251,7 +255,7 @@ async function recordApAudit(
 }
 
 export const pharmacyApInvoicesRouter = router({
-  list: adminProcedure.input(listApInvoicesSchema).query(async ({ ctx, input }) => {
+  list: pharmacyFinanceMemberProcedure.input(listApInvoicesSchema).query(async ({ ctx, input }) => {
     const scope = await authorizeGeneralJournal(ctx, input.branchId);
     return {
       scope: { organizationId: scope.organizationId, branchId: scope.branchId },
@@ -260,7 +264,7 @@ export const pharmacyApInvoicesRouter = router({
     };
   }),
 
-  aging: adminProcedure.input(apAgingSchema).query(async ({ ctx, input }) => {
+  aging: pharmacyFinanceMemberProcedure.input(apAgingSchema).query(async ({ ctx, input }) => {
     const scope = await authorizeGeneralJournal(ctx, input.branchId);
     try {
       return {
@@ -282,7 +286,7 @@ export const pharmacyApInvoicesRouter = router({
   }),
 
   /** DEV-694: read-only reminders plus payment and credit set-off DRAFTS. */
-  payablesDrafts: adminProcedure
+  payablesDrafts: pharmacyFinanceMemberProcedure
     .input(
       apAgingSchema
         .extend({
@@ -413,17 +417,19 @@ export const pharmacyApInvoicesRouter = router({
     }),
 
   /** DEV-694: set-off requests for one branch, oldest first. */
-  creditSetOffs: adminProcedure.input(listApCreditSetOffsSchema).query(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
-    return {
-      scope: { organizationId: scope.organizationId, branchId: scope.branchId },
-      setOffs: await listApCreditSetOffs(ctx.db, scope, input),
-      retrievedAt: new Date(),
-    };
-  }),
+  creditSetOffs: pharmacyFinanceMemberProcedure
+    .input(listApCreditSetOffsSchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      return {
+        scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+        setOffs: await listApCreditSetOffs(ctx.db, scope, input),
+        retrievedAt: new Date(),
+      };
+    }),
 
   /** DEV-694: staff choose the bill; this records a PENDING request and moves no money. */
-  requestCreditSetOff: pharmacyAccountMutation
+  requestCreditSetOff: pharmacyFinanceMemberMutation
     .input(requestApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -460,6 +466,11 @@ export const pharmacyApInvoicesRouter = router({
    * approver is the organization's only owner-level user.
    */
   approveCreditSetOff: pharmacyAccountMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
+      return next();
+    })
     .input(approveApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -515,6 +526,11 @@ export const pharmacyApInvoicesRouter = router({
 
   /** DEV-694: a manager or owner closes a request without touching money. */
   rejectCreditSetOff: pharmacyAccountMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
+      return next();
+    })
     .input(rejectApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -547,6 +563,11 @@ export const pharmacyApInvoicesRouter = router({
    * unless they are the only owner-level user.
    */
   reverseCreditSetOff: pharmacyAccountMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
+      return next();
+    })
     .input(reverseApCreditSetOffSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -600,34 +621,36 @@ export const pharmacyApInvoicesRouter = router({
       }
     }),
 
-  record: pharmacyAccountMutation.input(recordApInvoiceSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
-    try {
-      return await ctx.db.$transaction(async (tx) => {
-        const db = txDb(tx);
-        const result = await recordApInvoice(db, scope, input);
-        await recordApAudit(db, ctx, scope, {
-          action: 'pharmacyApInvoices.record',
-          description: `Recorded supplier expense invoice ${result.invoice.reference}`,
-          targetType: 'PharmacyApInvoice',
-          targetId: result.invoice.id,
-          targetLabel: result.invoice.reference,
-          commandKey: input.createKey,
-          replayed: result.replayed,
-          result: {
-            status: result.invoice.status,
-            amountMinor: result.invoice.amountMinor,
-            entryId: result.invoice.journalEntryId,
-          },
+  record: pharmacyFinanceMemberMutation
+    .input(recordApInvoiceSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await recordApInvoice(db, scope, input);
+          await recordApAudit(db, ctx, scope, {
+            action: 'pharmacyApInvoices.record',
+            description: `Recorded supplier expense invoice ${result.invoice.reference}`,
+            targetType: 'PharmacyApInvoice',
+            targetId: result.invoice.id,
+            targetLabel: result.invoice.reference,
+            commandKey: input.createKey,
+            replayed: result.replayed,
+            result: {
+              status: result.invoice.status,
+              amountMinor: result.invoice.amountMinor,
+              entryId: result.invoice.journalEntryId,
+            },
+          });
+          return result.invoice;
         });
-        return result.invoice;
-      });
-    } catch (error) {
-      fail(error);
-    }
-  }),
+      } catch (error) {
+        fail(error);
+      }
+    }),
 
-  pay: pharmacyAccountMutation.input(payApInvoiceSchema).mutation(async ({ ctx, input }) => {
+  pay: pharmacyFinanceMemberMutation.input(payApInvoiceSchema).mutation(async ({ ctx, input }) => {
     const scope = await authorizeGeneralJournal(ctx, input.branchId);
     try {
       return await ctx.db.$transaction(async (tx) => {
@@ -661,6 +684,11 @@ export const pharmacyApInvoicesRouter = router({
    * invoice owes that amount again from the reversal instant.
    */
   reverseSettlement: pharmacyAccountMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
+      return next();
+    })
     .input(reverseApSettlementSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -726,6 +754,11 @@ export const pharmacyApInvoicesRouter = router({
    * reversed first, so the payable can never go negative.
    */
   reverseInvoice: pharmacyAccountMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner finance access is required.' });
+      return next();
+    })
     .input(reverseApInvoiceSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -789,30 +822,34 @@ export const pharmacyApInvoicesRouter = router({
    * payee, reference, exact amount and a range of days on the shop's clock, one page at a time.
    * Authorized like every read here; scoped to the authenticated tenant and this branch.
    */
-  reversalSearch: adminProcedure.input(searchApReversalsSchema).query(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
-    return {
-      scope: { organizationId: scope.organizationId, branchId: scope.branchId },
-      ...(await searchApReversals(
-        ctx.db,
-        { organizationId: scope.organizationId, branchId: scope.branchId },
-        input,
-        ctx.organization?.timezone
-      )),
-      retrievedAt: new Date(),
-    };
-  }),
+  reversalSearch: pharmacyFinanceMemberProcedure
+    .input(searchApReversalsSchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      return {
+        scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+        ...(await searchApReversals(
+          ctx.db,
+          { organizationId: scope.organizationId, branchId: scope.branchId },
+          input,
+          ctx.organization?.timezone
+        )),
+        retrievedAt: new Date(),
+      };
+    }),
 
   /**
    * DEV-103: whether the signed-in person may reverse here, for the screen to show the form or
    * a plain line. The reversal procedures check everything again.
    */
-  reversalAccess: adminProcedure
+  reversalAccess: pharmacyFinanceMemberProcedure
     .input(listApInvoicesSchema.pick({ branchId: true }))
     .query(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
       const mayReverse =
-        (await canManagePharmacyAccounts(ctx)) && (await actorMayRefund(ctx.db, ctx.session.user));
+        ctx.session.user.role === 'ADMIN' &&
+        (await canManagePharmacyAccounts(ctx)) &&
+        (await actorMayRefund(ctx.db, ctx.session.user));
       const others = mayReverse ? await otherApReversalApprovers(ctx.db, scope) : [];
       return {
         scope: { organizationId: scope.organizationId, branchId: scope.branchId },

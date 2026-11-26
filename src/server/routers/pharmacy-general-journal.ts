@@ -1,8 +1,11 @@
-import { pharmacyAccountMutation } from '@/server/pharmacy-finance-gate';
+import {
+  pharmacyFinanceMemberProcedure,
+  pharmacyFinanceMemberMutation,
+} from '@/server/pharmacy-finance-gate';
 /**
  * CEO-JVCORE-20261025: pharmacy general-journal voucher commands.
  *
- * Every procedure authorizes (licence, ABAC, active branch) before it reads or
+ * Every procedure authorizes (licence, ABAC, admitted active branch) before it reads or
  * writes a voucher, and every write runs in one business transaction. Posting
  * and reversal also write their EXECUTE audit row inside that transaction.
  */
@@ -36,7 +39,7 @@ import {
   authorizeGeneralJournal,
   recordGeneralJournalExecuteAudit,
 } from '../pharmacy-general-journal-security';
-import { adminProcedure, router } from '../trpc';
+import { router } from '../trpc';
 import { z } from 'zod';
 
 const CONFLICT_REASONS = new Set([
@@ -68,7 +71,7 @@ function txDb(tx: unknown) {
 }
 
 export const pharmacyGeneralJournalRouter = router({
-  catalog: adminProcedure
+  catalog: pharmacyFinanceMemberProcedure
     .input(z.object({ branchId: z.string().trim().min(1).max(128) }).strict())
     .query(async ({ ctx, input }) => {
       await authorizeGeneralJournal(ctx, input.branchId);
@@ -79,25 +82,29 @@ export const pharmacyGeneralJournalRouter = router({
       }));
     }),
 
-  list: adminProcedure.input(listJournalVouchersSchema).query(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
-    return {
-      scope: { organizationId: scope.organizationId, branchId: scope.branchId },
-      vouchers: await listJournalVouchers(ctx.db, scope, input),
-      retrievedAt: new Date(),
-    };
-  }),
+  list: pharmacyFinanceMemberProcedure
+    .input(listJournalVouchersSchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      return {
+        scope: { organizationId: scope.organizationId, branchId: scope.branchId },
+        vouchers: await listJournalVouchers(ctx.db, scope, input),
+        retrievedAt: new Date(),
+      };
+    }),
 
-  get: adminProcedure.input(getJournalVoucherSchema).query(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
-    try {
-      return await getJournalVoucher(ctx.db, scope, input.voucherId);
-    } catch (error) {
-      fail(error);
-    }
-  }),
+  get: pharmacyFinanceMemberProcedure
+    .input(getJournalVoucherSchema)
+    .query(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      try {
+        return await getJournalVoucher(ctx.db, scope, input.voucherId);
+      } catch (error) {
+        fail(error);
+      }
+    }),
 
-  createDraft: pharmacyAccountMutation
+  createDraft: pharmacyFinanceMemberMutation
     .input(createJournalVoucherDraftSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -108,7 +115,7 @@ export const pharmacyGeneralJournalRouter = router({
       }
     }),
 
-  updateDraft: pharmacyAccountMutation
+  updateDraft: pharmacyFinanceMemberMutation
     .input(updateJournalVoucherDraftSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -119,7 +126,7 @@ export const pharmacyGeneralJournalRouter = router({
       }
     }),
 
-  cancelDraft: pharmacyAccountMutation
+  cancelDraft: pharmacyFinanceMemberMutation
     .input(cancelJournalVoucherDraftSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);
@@ -130,27 +137,29 @@ export const pharmacyGeneralJournalRouter = router({
       }
     }),
 
-  post: pharmacyAccountMutation.input(postJournalVoucherSchema).mutation(async ({ ctx, input }) => {
-    const scope = await authorizeGeneralJournal(ctx, input.branchId);
-    try {
-      return await ctx.db.$transaction(async (tx) => {
-        const db = txDb(tx);
-        const result = await postJournalVoucher(db, scope, input);
-        await recordGeneralJournalExecuteAudit(db, ctx, scope, {
-          action: 'pharmacyGeneralJournal.post',
-          voucher: result.voucher,
-          entryId: result.voucher.journalEntryId!,
-          commandKey: input.commandKey,
-          replayed: result.replayed,
+  post: pharmacyFinanceMemberMutation
+    .input(postJournalVoucherSchema)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await authorizeGeneralJournal(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const result = await postJournalVoucher(db, scope, input);
+          await recordGeneralJournalExecuteAudit(db, ctx, scope, {
+            action: 'pharmacyGeneralJournal.post',
+            voucher: result.voucher,
+            entryId: result.voucher.journalEntryId!,
+            commandKey: input.commandKey,
+            replayed: result.replayed,
+          });
+          return result.voucher;
         });
-        return result.voucher;
-      });
-    } catch (error) {
-      fail(error);
-    }
-  }),
+      } catch (error) {
+        fail(error);
+      }
+    }),
 
-  reverse: pharmacyAccountMutation
+  reverse: pharmacyFinanceMemberMutation
     .input(reverseJournalVoucherSchema)
     .mutation(async ({ ctx, input }) => {
       const scope = await authorizeGeneralJournal(ctx, input.branchId);

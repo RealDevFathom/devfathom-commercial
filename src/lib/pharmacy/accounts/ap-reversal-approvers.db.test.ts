@@ -43,7 +43,16 @@ type Candidate = {
   organizationId: string;
   role: 'ADMIN' | 'EMPLOYEE';
   /** The manager and finance roles differ only in the finance grant. */
-  orgRole: 'owner' | 'finance' | 'manager' | 'system_finance' | 'owner-operator' | null;
+  orgRole:
+    | 'owner'
+    | 'finance'
+    | 'manager'
+    | 'system_finance'
+    | 'owner-operator'
+    | 'cashier'
+    | 'inventory'
+    | 'pharmacist'
+    | null;
   status: 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   pin: boolean;
   deny?: string;
@@ -185,6 +194,22 @@ const financeScenarios = (['finance', 'owner-operator'] as const).map((roleKey, 
   const signer: Candidate = { ...maker, key: `${roleKey}_signer` };
   return { roleKey, maker, signer, branch: id(`finance_branch_${index}`) };
 });
+const financeEmployee: Candidate = {
+  ...administratorWithoutFinance,
+  key: 'finance_employee',
+  role: 'EMPLOYEE',
+  orgRole: 'system_finance',
+  pin: false,
+  assignedTo: branchId,
+};
+const excludedRoles = ['cashier', 'pharmacist', 'inventory', 'manager'] as const;
+const excludedEmployees = excludedRoles.map((orgRole): Candidate => ({
+  ...financeEmployee,
+  key: orgRole,
+  orgRole,
+  organizationId: pairOrganizationId,
+  assignedTo: pairBranchId,
+}));
 const userId = (candidate: Candidate) => id(candidate.key);
 const pairRecorder: Candidate = {
   key: 'pair_recorder',
@@ -334,6 +359,20 @@ beforeAll(async () => {
         [branch, org, code]
       );
     }
+    for (const key of excludedRoles) {
+      const roleId = pairOrganizationId + '_' + key;
+      const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+      await client.query(
+        'INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$4,true,now())',
+        [roleId, pairOrganizationId, key, template.name]
+      );
+      for (const capability of template.capabilities) {
+        await client.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
+          [roleId + '_' + capability, pairOrganizationId, roleId, capability]
+        );
+      }
+    }
     const pinHash = await credentials.hashOperatorCredential('PIN', PIN);
     const people: Candidate[] = [
       {
@@ -345,6 +384,8 @@ beforeAll(async () => {
         pin: true,
       },
       ...candidates,
+      financeEmployee,
+      ...excludedEmployees,
       rolelessAdministrator,
       readOnlyAdministrator,
       ownerWithManageDeny,
@@ -978,4 +1019,74 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
       }, 60_000);
     }
   );
+});
+
+describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
+  it('records and pays a supplier bill and reads the branch ledger through the pharmacy routers', async () => {
+    const api = callerFor(financeEmployee);
+    const invoice = await api.record({
+      branchId,
+      createKey: id('employee-bill'),
+      reference: id('employee-bill'),
+      payeeName: 'Synthetic supplier',
+      supplierInvoiceRef: id('invoice'),
+      invoiceDate: day(-2),
+      dueDate: day(1),
+      amountMinor: 2000,
+      currency: 'PKR',
+      description: 'Office supplies',
+      evidenceReference: 'Slip',
+    });
+    const payment = await api.pay({
+      branchId,
+      invoiceId: invoice.id,
+      commandKey: id('employee-payment'),
+      reference: id('employee-payment'),
+      amountMinor: 1000,
+      paidAt: new Date().toISOString(),
+      fundingAccount: 'BANK',
+    });
+    expect(payment.invoiceId).toBe(invoice.id);
+    const { pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance');
+    const finance = pharmacyFinanceRouter.createCaller(contextFor(financeEmployee));
+    const report = await finance.financialStatements({
+      branchId,
+      from: day(-3) + 'T00:00:00Z',
+      to: day(2) + 'T00:00:00Z',
+    });
+    expect(report.scope).toEqual({ organizationId, branchId });
+    expect(
+      (await finance.workspace({ branchId })).transactions.some(
+        (row) => row.id === payment.transactionId
+      )
+    ).toBe(true);
+    await expect(api.list({ branchId: otherBranchId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your finance scope.',
+    });
+    await expect(
+      finance.reopenPeriod({ branchId, periodId: id('locked'), reason: 'Review' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Administrator access is required to reopen a locked period.',
+    });
+  });
+  it.each(excludedEmployees)('refuses $orgRole at their assigned branch', async (candidate) => {
+    const api = callerFor(candidate);
+    await expect(api.list({ branchId: pairBranchId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Finance permission is required.',
+    });
+    await expect(
+      api.pay({
+        branchId: pairBranchId,
+        invoiceId: id('bill'),
+        commandKey: id('denied'),
+        reference: 'Payment',
+        amountMinor: 1000,
+        paidAt: new Date().toISOString(),
+        fundingAccount: 'BANK',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Finance permission is required.' });
+  });
 });
