@@ -8,10 +8,10 @@ export default function PharmacyInventoryLoading() {
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Inventory"
-        description="Loading lots, controls, and ranked stock actions."
+        description="Loading stock levels, expiry dates, and tasks."
       />
       <Skeleton className="h-24 w-full rounded-[var(--radius-md)]" />
-      <SectionCard title="Loading inventory board">
+      <SectionCard title="Loading stock details">
         <Skeleton className="h-72 w-full" />
       </SectionCard>
     </div>

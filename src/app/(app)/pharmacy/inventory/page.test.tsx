@@ -1148,3 +1148,21 @@ it('DEV-1044 keeps the rest of Inventory usable when the stock summary cannot lo
   expect(screen.getByRole('region', { name: 'Pharmacy inventory batches' })).toBeVisible();
   expect(screen.queryByText('Value at cost')).not.toBeInTheDocument();
 });
+
+it('DEV-1044 keeps the loading and retry messages in shop language', async () => {
+  const { default: Loading } = await import('./loading');
+  const { default: ErrorState } = await import('./error');
+
+  const loading = render(<Loading />);
+  expect(screen.getByRole('status', { name: 'Loading pharmacy inventory' })).toBeVisible();
+  expect(screen.getByText('Loading stock levels, expiry dates, and tasks.')).toBeVisible();
+  loading.unmount();
+
+  const reset = vi.fn();
+  render(<ErrorState reset={reset} />);
+  expect(
+    screen.getByText('No stock was changed. Check your connection and try again.')
+  ).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+  expect(reset).toHaveBeenCalledExactlyOnceWith();
+});
