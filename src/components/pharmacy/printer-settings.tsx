@@ -14,7 +14,10 @@ import {
   type PrinterTestFormat,
 } from '@/lib/pharmacy/counter-browser-print';
 import type { CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
-import type { ReceiptLayout } from '@/lib/receipts/configuration';
+import {
+  layoutWithPaper,
+  type PharmacyReceiptLayout as ReceiptLayout,
+} from '@/lib/pharmacy/receipt-layout';
 import { trpc } from '@/lib/trpc';
 
 import { PharmacyPrintBridges } from './print-bridges';
@@ -28,13 +31,7 @@ const PAPER_OPTIONS: { value: PrinterTestFormat; label: string }[] = [
   { value: 'A4', label: 'Standard printer · A4 sheet' },
 ];
 
-/** The saved layout with only the paper fields replaced; every other field is preserved. */
-export function layoutWithPaper(layout: ReceiptLayout, paper: PrinterTestFormat): ReceiptLayout {
-  if (paper === 'A4') return { ...layout, browserPaper: 'A4' };
-  const thermal: ReceiptLayout = { ...layout, paperWidth: paper === 'THERMAL_58' ? 58 : 80 };
-  delete thermal.browserPaper;
-  return thermal;
-}
+export { layoutWithPaper } from '@/lib/pharmacy/receipt-layout';
 
 type Notice = { tone: 'status' | 'alert'; text: string };
 

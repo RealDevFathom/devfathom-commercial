@@ -187,3 +187,15 @@ describe('#708 cash memo facts on reprint', () => {
     expect((await snapshotFixture({ cashMemoIdentity: null })).cashMemoIdentity).toBeNull();
   });
 });
+
+it('uses recorded branch and counter references when an old sale never froze their display names', async () => {
+  const f = fixture();
+  const result = await readCounterReceipt(
+    f.db as never,
+    { organizationId: 'org-a', branchId: 'branch-a' },
+    'sale-a',
+    { name: 'Renamed branch', currency: 'PKR', useRecordedLocation: true }
+  );
+  expect(result.branchName).toBe('Branch branch-a');
+  expect(result.branchName).not.toBe('Renamed branch');
+});

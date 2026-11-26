@@ -459,6 +459,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySales.counterReceiptWhatsApp': ['signed-in'],
   'pharmacySales.counterSaveKeymap': ['signed-in'],
   'pharmacySales.counterSaveReceiptFormat': ['admin:access'],
+  'pharmacySales.counterUploadReceiptLogo': ['admin:access'],
   'pharmacySales.counterSearch': ['signed-in'],
   'pharmacySales.counterVoucher': ['signed-in'],
   'pharmacySales.create': ['signed-in'],

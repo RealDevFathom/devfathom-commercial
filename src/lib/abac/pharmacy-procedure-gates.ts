@@ -2255,6 +2255,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access)',
     none: 'workspace administrators only (admin:access)',
   },
+  'pharmacySales.counterUploadReceiptLogo': {
+    gate: 'adminProcedure (admin:access)',
+    none: 'workspace administrators only (admin:access)',
+  },
   'pharmacySales.counterSearch': {
     gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt',
     lines: [

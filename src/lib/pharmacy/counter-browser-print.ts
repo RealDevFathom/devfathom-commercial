@@ -1,4 +1,9 @@
 import {
+  designedReceiptHtml,
+  escapeReceiptHtml as escapeHtml,
+  receiptHtmlText,
+} from './receipt-branding-html';
+import {
   PrintWindowError,
   closePrintWindow,
   openPrintWindow,
@@ -124,31 +129,6 @@ export async function allocateWhileCounterPrintWindowOpen<T>(
   ]);
 }
 
-function escapeHtml(value: string | number): string {
-  return String(value).replace(/[&<>"']/g, (character) => {
-    const entities: Record<string, string> = {
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      '"': '&quot;',
-      "'": '&#39;',
-    };
-    return entities[character]!;
-  });
-}
-
-/** Keep ASCII identifiers/phone/date groups readable inside Urdu paper. Text
- * stays escaped; bidi controls from source data remain subject to validation. */
-function receiptHtmlText(preview: string, locale: CounterReceiptLocale): string {
-  if (locale !== 'ur') return escapeHtml(preview);
-  return preview
-    .split(/([A-Za-z0-9][\x20-\x7e]*)/g)
-    .map((part, index) =>
-      index % 2 ? `<bdi dir="ltr">${escapeHtml(part)}</bdi>` : escapeHtml(part)
-    )
-    .join('');
-}
-
 /** Allowlisted receipt fields only: never copy the POS DOM or patient panel. */
 export function buildCounterBrowserReceipt(
   receipt: CounterReceipt,
@@ -173,19 +153,18 @@ export function buildCounterBrowserReceipt(
   }
   if (format === 'LABEL_50x30') return buildDispensingLabels(receipt, labelSources);
   const width = format === 'THERMAL_58' ? '58mm' : format === 'THERMAL' ? '80mm' : '190mm';
-  const preview = buildCounterReceiptPreview(
-    receipt,
-    locale,
-    format === 'THERMAL_58' ? 58 : 80,
-    reprint
-  );
+  const paperWidth = format === 'THERMAL_58' ? 58 : 80;
+  const body =
+    receipt.receiptLayout !== undefined
+      ? designedReceiptHtml(receipt, locale, paperWidth, reprint)
+      : `<pre>${receiptHtmlText(buildCounterReceiptPreview(receipt, locale, paperWidth, reprint), locale)}</pre>`;
   // All receipt content is escaped inert text. Physical print styles only.
   return `<!doctype html><html lang="${locale}" dir="${COUNTER_RECEIPT_DIRECTION[locale]}"><head>
 <meta charset="utf-8"><title>${escapeHtml(receiptTitle(receipt, locale))}</title>
 <style>@page { size: ${format === 'A4' ? 'A4' : 'auto'}; margin: ${format === 'A4' ? '10mm' : '0'}; }
 * { box-sizing: border-box; } body { margin: 0; width: ${width}; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
-pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
-</head><body><pre>${receiptHtmlText(preview, locale)}</pre></body></html>`;
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }${receipt.receiptLayout !== undefined ? ' pre.start {text-align:start} pre.center {text-align:center} pre.end {text-align:end} pre.bold {font-weight:bold} pre.large {font-size:1.5em} figure {break-inside:avoid;margin:3mm 0} figure svg {width:24mm;max-width:100%} img {max-width:100%;max-height:24mm;height:auto;object-fit:contain} ' : ''}</style>
+</head><body>${body}</body></html>`;
 }
 
 /**

@@ -921,6 +921,9 @@ export const pharmacyOnboardingRouter = router({
             provinceCode: input.provinceCode,
             jurisdictionRuleSetId: jurisdiction.id,
             premises: {
+              ...(ctx.organization?.legalName
+                ? { registeredName: ctx.organization.legalName }
+                : {}),
               addressLine: input.premisesAddressLine,
               city: input.premisesCity,
               phone: input.premisesPhone?.trim() || null,

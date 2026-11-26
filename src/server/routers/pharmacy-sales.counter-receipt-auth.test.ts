@@ -1,3 +1,4 @@
+import { receiptDesignSample } from '@/lib/pharmacy/receipt-design-sample';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Prisma } from '@/generated/prisma/client';
 
@@ -232,6 +233,7 @@ beforeEach(() => {
   vi.mocked(hasModule).mockReturnValue(true);
   vi.mocked(assertStoredPharmacyMayOperate).mockResolvedValue(undefined);
   vi.mocked(readCounterReceipt).mockResolvedValue({
+    ...receiptDesignSample,
     receiptNumber: 7,
     completedAt: '2026-10-01T00:00:00.000Z',
   } as never);

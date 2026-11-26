@@ -1,4 +1,5 @@
 'use client';
+import { ReceiptPaperPreview } from '../receipt-paper-preview';
 import { receiptTierLines } from '@/lib/pharmacy/counter-receipt';
 
 import { useEffect, useRef, useState } from 'react';
@@ -354,23 +355,22 @@ export function CounterReceiptView({
   // #708: Sindh branches show the r.18 cash memo facts; other branches are unchanged.
   const cashMemo = counterReceiptCashMemo(receipt, receipt.taxIdentity, locale);
 
+  const settled = receipt.receiptNumber !== null && Boolean(receipt.completedAt);
+  const designedPaper =
+    receipt.receiptLayout && settled && format !== 'LABEL_50x30' ? format : null;
   let document: string | null = null;
   let documentError: string | null = null;
   let cashReceived: number | null = null;
   try {
     cashReceived = receiptCashReceived(receipt.tenders);
-    document = buildCounterReceiptPreview(
-      receipt,
-      locale,
-      format === 'THERMAL_58' ? 58 : 80,
-      reprint
-    );
+    document = designedPaper
+      ? buildCounterBrowserReceipt(receipt, locale, designedPaper, reprint)
+      : buildCounterReceiptPreview(receipt, locale, format === 'THERMAL_58' ? 58 : 80, reprint);
   } catch {
     documentError =
       'This receipt cannot be previewed. Reload it or ask support to check its source data.';
   }
 
-  const settled = receipt.receiptNumber !== null && Boolean(receipt.completedAt);
   return (
     <div className="space-y-4">
       {settled && document !== null ? (
@@ -696,9 +696,17 @@ export function CounterReceiptView({
           <summary className="cursor-pointer text-sm font-semibold text-text-strong">
             Shared browser receipt preview (not queued)
           </summary>
-          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-text-body">
-            {document}
-          </pre>
+          {designedPaper ? (
+            <ReceiptPaperPreview
+              title="Browser receipt preview"
+              format={designedPaper}
+              html={document}
+            />
+          ) : (
+            <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-text-body">
+              {document}
+            </pre>
+          )}
         </details>
       ) : null}
       {evidenceError || (evidence && evidence.length > 0) ? (

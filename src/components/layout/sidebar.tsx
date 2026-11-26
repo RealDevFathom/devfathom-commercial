@@ -519,6 +519,7 @@ export const navigation: NavItem[] = [
   {
     label: 'Printer settings',
     href: '/pharmacy/settings/printers',
+    activePrefixes: ['/pharmacy/settings/receipts'],
     icon: Printer,
     adminOnly: true,
     group: 'Pharmacy',

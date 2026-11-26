@@ -126,7 +126,7 @@ describe('#708 cash memo facts in the completion snapshot', () => {
     );
     expect(db.organization.findUnique).toHaveBeenCalledWith({
       where: { id: 'org_a' },
-      select: { timezone: true },
+      select: { timezone: true, legalName: true },
     });
   });
 
@@ -190,5 +190,22 @@ describe('#708 cash memo facts in the completion snapshot', () => {
     db = makeDb();
     const blank = await snapshotFor(sale({ manufacturer: '  ' }));
     expect(blank.lines[0]).not.toHaveProperty('manufacturer');
+  });
+});
+
+it('records the seller, branch and issuing counter on the immutable receipt snapshot', async () => {
+  const issuedSale = { ...sale({}), visibilityAnchor: { name: 'Issued branch' } };
+  Object.assign(db, {
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => ({ name: 'Issued counter' })) },
+  });
+  db.organization.findUnique.mockResolvedValue({
+    ...{ legalName: 'Issued seller' },
+    timezone: 'Asia/Karachi',
+  });
+  const snapshot = await snapshotFor(issuedSale);
+  expect(snapshot.seller).toEqual({
+    branchName: 'Issued branch',
+    registeredName: 'Issued seller',
+    counterLabel: 'Issued counter',
   });
 });

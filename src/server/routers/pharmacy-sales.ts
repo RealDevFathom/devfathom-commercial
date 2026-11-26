@@ -205,7 +205,10 @@ import {
   readPharmacyReceiptTaxIdentity,
   savePharmacyReceiptFormat,
 } from '@/lib/pharmacy/receipt-print';
-import { SaveReceiptLayoutSchema } from '@/lib/receipts/configuration';
+import { counterReceiptFacts } from '@/lib/pharmacy/counter-receipt-presentation';
+import { ReceiptPreviewFactsSchema } from '@/lib/receipts/preview';
+import { receiptDesign, SavePharmacyReceiptLayoutSchema } from '@/lib/pharmacy/receipt-layout';
+import { receiptLogoUpload, uploadReceiptLogo } from '@/lib/pharmacy/receipt-logo';
 import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 import {
   declineSubstitute,
@@ -1074,6 +1077,7 @@ async function loadCounterReceipt(
   ]);
   if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
   return readCounterReceipt(ctx.db, scope, saleId, {
+    useRecordedLocation:true,
     name: branch.name,
     currency: organization?.currency ?? 'PKR',
   });
@@ -1482,7 +1486,7 @@ export async function allocateSettledCounterReceiptPrintJob(
   ]);
   // Validate both variants before writing. ScopedDb may reuse an outer
   // transaction, where returning FALLBACK would commit an allocation.
-  const options = { layout: format.layout, taxIdentity };
+  const options = { layout: receiptDesign(format.layout), taxIdentity };
   const originalJob = buildPharmacyReceiptEscPosJob(receipt, input.locale, {
     ...options,
     reprint: false,
@@ -5370,7 +5374,8 @@ export const pharmacySalesRouter = router({
       const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
-        const [dispensingLabelSources, taxIdentity] = await Promise.all([
+        const [format, dispensingLabelSources, taxIdentity] = await Promise.all([
+          readPharmacyReceiptFormat(ctx.db, scope),
           readDispensingLabelSources(ctx.db, scope, receipt, ctx.organization?.timezone),
           receipt.completedAt
             ? readPharmacyReceiptTaxIdentity(
@@ -5381,9 +5386,22 @@ export const pharmacySalesRouter = router({
               )
             : Promise.resolve({ ntn: null, strn: null }),
         ]);
+        // Construct and validate printable facts on the authorized server read.
+        // No layout value participates in this projection, including the copy counter.
+        const settled = { ...receipt, taxIdentity };
+        const printFacts =
+          receipt.receiptNumber !== null && receipt.completedAt
+            ? {
+                en: ReceiptPreviewFactsSchema.parse(counterReceiptFacts(settled, 'en')),
+                ur: ReceiptPreviewFactsSchema.parse(counterReceiptFacts(settled, 'ur')),
+              }
+            : undefined;
         // F8: sourced Rx label payloads come only from this authorized receipt read.
         return {
           ...receipt,
+          printFacts,
+          receiptLayout: format.layout,
+          receiptLogoPng: format.receiptLogoPng,
           dispensingLabelSources,
           // Completion-time identity keeps browser, A4, and Urdu copies aligned with ESC/POS.
           taxIdentity,
@@ -5625,13 +5643,23 @@ export const pharmacySalesRouter = router({
       readPharmacyReceiptFormat(ctx.db, await requireCounterReceiptAccess(ctx, input.branchId))
     ),
 
+  counterUploadReceiptLogo: adminProcedure
+    .input(receiptLogoUpload)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return uploadReceiptLogo(scope, input);
+    }),
+
   /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
   counterSaveReceiptFormat: adminProcedure
-    .input(SaveReceiptLayoutSchema)
+    .input(SavePharmacyReceiptLayoutSchema)
     .mutation(async ({ ctx, input }) => {
       // Active, in-organization branch or FORBIDDEN (scopeFor checks it).
       const scope = await branchScopeOrForbidden(ctx, input.branchId);
-      return savePharmacyReceiptFormat(ctx.db, scope.organizationId, input);
+      return savePharmacyReceiptFormat(ctx.db, scope.organizationId, {
+        ...input,
+        actorId: ctx.session.user.id,
+      });
     }),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────

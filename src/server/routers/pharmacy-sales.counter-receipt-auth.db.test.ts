@@ -2,6 +2,7 @@
  * Receipt authorization against PostgreSQL as a NOSUPERUSER NOBYPASSRLS role.
  * Skipped unless TEST_DATABASE_URL names that role on a migrated disposable database.
  */
+import { receiptDesign, type PharmacyReceiptLayout } from '@/lib/pharmacy/receipt-layout';
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -58,6 +59,12 @@ const ids = {
 };
 
 type SalesCaller = {
+  counterSaveReceiptFormat: (input: {
+    branchId: string;
+    revision: number;
+    layout: PharmacyReceiptLayout;
+  }) => Promise<{ revision: number }>;
+
   create: (input: { branchId: string; quotation: boolean; deviceId: string }) => Promise<unknown>;
   tender: (input: {
     branchId: string;
@@ -983,5 +990,69 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       }
     );
+  });
+});
+describeIfDatabase('receipt design revision and protected facts', () => {
+  it('saves only the selected branch, audits the revision, and leaves a recorded sale and its copy state intact', async () => {
+    const admin = { id: ids.counterAdmin, role: 'ADMIN' as const, organizationId: ids.orgA };
+    const saleId = ids.printableSale;
+    const facts = () =>
+      withTenantDb(ids.orgA, async (tx) => ({
+        sale: await tx.pharmacySale.findUnique({
+          where: { id: saleId },
+          include: { lines: true, tenders: true },
+        }),
+        copies: await tx.pharmacyReceiptPrintState.findFirst({ where: { saleId } }),
+        events: await tx.pharmacySaleEvent.count({ where: { saleId } }),
+      }));
+    const before = await facts();
+    const savedInput = {
+      branchId: ids.branchA,
+      revision: 0,
+      layout: { ...receiptDesign(null), headerText: 'Branch A only' },
+    };
+    await expect(
+      act(ids.orgA, admin, (api) =>
+        api.counterSaveReceiptFormat({
+          ...savedInput,
+          layout: { ...savedInput.layout, totals: ['sample'] } as typeof savedInput.layout,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      act(ids.orgA, admin, (api) =>
+        api.counterSaveReceiptFormat({ ...savedInput, branchId: ids.branchOther })
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      act(ids.orgA, dispenser, (api) => api.counterSaveReceiptFormat(savedInput))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      act(ids.orgA, admin, (api) => api.counterSaveReceiptFormat(savedInput))
+    ).resolves.toMatchObject({ revision: 1 });
+    await expect(
+      act(ids.orgA, admin, (api) => api.counterSaveReceiptFormat(savedInput))
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    await expect(
+      act(ids.orgA, admin, (api) => api.counterReceiptFormat({ branchId: ids.branchB }))
+    ).resolves.toMatchObject({ revision: 0 });
+    await expect(
+      act(ids.orgA, admin, (api) => api.counterReceiptFormat({ branchId: ids.branchA }))
+    ).resolves.toMatchObject({ revision: 1, layout: savedInput.layout });
+    const audits = await withTenantDb(ids.orgA, (tx) =>
+      tx.auditLog.findMany({
+        where: {
+          targetId: ids.branchA,
+          action: 'pharmacySales.counterSaveReceiptFormat',
+          outcome: 'SUCCESS',
+        },
+        select: { actorId: true, metadata: true },
+      })
+    );
+    expect(audits).toContainEqual({
+      actorId: admin.id,
+      metadata: { oldRevision: 0, newRevision: 1 },
+    });
+    expect(await facts()).toEqual(before);
   });
 });
