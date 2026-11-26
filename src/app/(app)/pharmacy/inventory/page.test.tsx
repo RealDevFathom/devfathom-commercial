@@ -1164,5 +1164,5 @@ it('DEV-1044 keeps the loading and retry messages in shop language', async () =>
     screen.getByText('No stock was changed. Check your connection and try again.')
   ).toBeVisible();
   fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
-  expect(reset).toHaveBeenCalledExactlyOnceWith();
+  expect(reset).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ type: 'click' }));
 });
