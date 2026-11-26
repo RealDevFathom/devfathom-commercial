@@ -5718,6 +5718,10 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
   afterEach(() => vi.useRealTimers());
 
   it('adds 50 consecutive digit bursts as distinct operations with one warm catalogue lookup', async () => {
+    // Keep the simulated scans inside the ten-second catalogue window. performance.now()
+    // still measures the actual component cost, independently of the runner's speed.
+    let scanTime = Date.now();
+    vi.spyOn(Date, 'now').mockImplementation(() => scanTime);
     const row = barcodeRow({ onHandUnits: 100 });
     mocks.searchQuery.mockResolvedValue({ rows: [row], truncated: false });
     const keys = new Set<string>();
@@ -5730,6 +5734,7 @@ describe('PharmacyCounterConsole search latency (DEV-575)', () => {
     const code = '8964000123456';
     const timings: number[] = [];
     for (let scan = 0; scan < 50; scan += 1) {
+      scanTime += 100;
       const start = performance.now();
       for (let length = 1; length <= code.length; length += 1) {
         expect(search).toBeEnabled();
