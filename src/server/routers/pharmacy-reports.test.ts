@@ -54,6 +54,16 @@ vi.mock('@/lib/approval-authenticator', async () => {
       (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
   };
 });
+vi.mock('@/lib/pharmacy/owner-watch', async (load) => ({
+  ...(await load<typeof import('@/lib/pharmacy/owner-watch')>()),
+  readSupplierPosition: vi
+    .fn()
+    .mockResolvedValue({
+      balances: [{ currency: 'AED', total: 1200, overdue: 400 }],
+      due: 1,
+      complete: true,
+    }),
+}));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
 }));
@@ -1881,6 +1891,28 @@ describe('owner dashboard effective access', () => {
       ['assigned', 'other'].map((id) => ({ id, name: id, businessDayEndsAtHistory: [] }))
     );
   });
+  it.each([
+    [true, true, 3],
+    [true, false, 0],
+    [false, true, 0],
+  ] as const)(
+    'requires both report finance %s and finance read %s for an employee’s supplier balances',
+    async (financial, read, count) => {
+      mocks.can.mockImplementation(
+        async (_subject, action) =>
+          action === 'reports:operational' ||
+          (financial && action === 'reports:financial') ||
+          (read && action === 'finance:read')
+      );
+      const rows = await caller('EMPLOYEE').ownerWatch({
+        section: 'suppliers',
+        branchId: 'assigned',
+      });
+      expect(rows).toHaveLength(count);
+      if (count)
+        expect(rows[0]).toMatchObject({ label: 'Owed to suppliers', currency: 'AED', value: 1200 });
+    }
+  );
   it('admits an effective admin:access holder to all active tenant branches without conferring ownership or finance', async () => {
     mocks.can.mockImplementation(
       async (_subject, action) => action === 'reports:operational' || action === 'admin:access'
