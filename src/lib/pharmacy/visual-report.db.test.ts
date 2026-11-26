@@ -1,5 +1,9 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { pharmacyBusinessDayRange } from './business-day';
+import {
+  pharmacyBusinessDayRange,
+  pharmacyCalendarDayOffset,
+  shiftPharmacyDay,
+} from './business-day';
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { grossMargin, ledgerCurrencies } from './finance-reports';
@@ -239,9 +243,9 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
     await scoped.withTenantDb(org, async (db) => {
       const first = org + '_late',
         other = org + '_midnight',
-        earlier = '2026-12-02',
-        later = '2026-12-03';
-      const at = new Date('2026-12-02T23:30:00Z'); // 04:30 locally on December 3.
+        earlier = pharmacyCalendarDayOffset('Asia/Karachi', 7),
+        later = shiftPharmacyDay(earlier, 1);
+      const at = new Date(earlier + 'T23:30:00Z'); // 04:30 locally the next calendar day.
       const scope = await Promise.all(
         (
           [
@@ -257,7 +261,7 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
               addressLine: 'Test',
               city: 'Lahore',
               provinceCode: 'PB',
-              businessDayEndsAtHistory: [{ from: '2026-01-01', hour }],
+              businessDayEndsAtHistory: [{ from: earlier, hour }],
             },
             select: { id: true, businessDayEndsAtHistory: true },
           })

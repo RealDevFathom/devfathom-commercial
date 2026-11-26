@@ -111,12 +111,25 @@ export async function seedVisualReport(
     },
   });
   if (cashMinor) {
+    const drawer = await db.pharmacyDrawerSession.create({
+      data: {
+        branchId: branch,
+        deviceId: prefix,
+        businessDate,
+        openedByActorId: 'sample-cashier',
+        openingFloatMinor: 0,
+      },
+    });
+
     await db.pharmacyTender.create({
       data: {
         branchId: branch,
         saleId: sale.id,
         type: 'CASH',
         amountMinor: cashMinor,
+        drawerSessionId: drawer.id,
+        cashReceivedMinor: cashMinor,
+        changeGivenMinor: 0,
         businessDate,
         actorId: 'sample-cashier',
         deviceId: prefix,
