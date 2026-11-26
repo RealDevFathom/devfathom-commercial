@@ -354,8 +354,7 @@ export async function readPharmacyTenderOutcome(
       (tender.provider !== 'MANUAL_MERCHANT' ||
         tender.providerRef !== (input.providerRef ?? null) ||
         tender.payerName !== input.payerName?.trim() ||
-        tender.referenceSkipped !==
-          (input.providerRef === undefined || input.referenceSkipped === true))
+        tender.referenceSkipped !== (input.referenceSkipped ?? false))
     )
       return unknown;
     if (
@@ -800,8 +799,7 @@ export async function applyPharmacyTender(
   // Missing evidence is allowed only under the branch policy locked in this transaction.
   const needsPolicy =
     (manualCard && (input.providerRef === undefined || input.approvalCode === undefined)) ||
-    (bankTransfer && input.providerRef === undefined) ||
-    (isManualTender(input.type) && !input.leasedReceipt && input.providerRef === undefined);
+    (bankTransfer && input.providerRef === undefined);
   let requireDetails = true;
   if (needsPolicy) {
     const [branch] = await db.$queryRaw<
@@ -847,17 +845,11 @@ export async function applyPharmacyTender(
       WHERE id=${scope.branchId} AND "organizationId"=${scope.organizationId} FOR SHARE`);
     const branch = await readManualPaymentSettings(db, scope);
     try {
-      const merchant = branch.settings[input.type];
-      const settings =
-        !requireDetails && merchant
-          ? { ...branch.settings, [input.type]: { ...merchant, allowReferenceSkip: true } }
-          : branch.settings;
-      const capture = validateManualTender(settings, {
+      const capture = validateManualTender(branch.settings, {
         type: input.type,
         providerRef: input.providerRef,
         payerName: input.payerName,
-        referenceSkipped:
-          !requireDetails && input.providerRef === undefined ? true : input.referenceSkipped,
+        referenceSkipped: input.referenceSkipped,
       });
       provider = 'MANUAL_MERCHANT';
       providerRef = capture.providerRef;

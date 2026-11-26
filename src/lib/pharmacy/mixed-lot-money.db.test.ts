@@ -386,7 +386,7 @@ test.each([
   }
 );
 
-test('DEV-1045 recovers an accepted wallet tender with an omitted optional reference', async () => {
+test('DEV-1045 honours the wallet skip policy and recovers an explicitly skipped reference', async () => {
   await tenant((db) =>
     db.pharmacyBranch.update({
       where: { id: scope.branchId },
@@ -408,10 +408,27 @@ test('DEV-1045 recovers an accepted wallet tender with an omitted optional refer
     payerName: 'Synthetic payer',
     idempotencyKey: randomUUID(),
   };
-  const result = await tenant((db) => applyPharmacyTender(db, scope, input));
+  await expect(tenant((db) => applyPharmacyTender(db, scope, input))).rejects.toMatchObject({
+    reason: 'INVALID_MANUAL_CAPTURE',
+  });
+  const skipped = { ...input, referenceSkipped: true };
+  await expect(tenant((db) => applyPharmacyTender(db, scope, skipped))).rejects.toMatchObject({
+    reason: 'INVALID_MANUAL_CAPTURE',
+  });
+  await tenant((db) =>
+    db.pharmacyBranch.update({
+      where: { id: scope.branchId },
+      data: {
+        manualPaymentSettings: {
+          RAAST: { destination: 'Synthetic test till', allowReferenceSkip: true },
+        },
+      },
+    })
+  );
+  const result = await tenant((db) => applyPharmacyTender(db, scope, skipped));
   expect(result).toMatchObject({ settled: true, replayed: false });
   if (!('tenderId' in result)) throw new Error('Expected a new wallet tender');
-  expect(await tenant((db) => readPharmacyTenderOutcome(db, scope, input))).toEqual({
+  expect(await tenant((db) => readPharmacyTenderOutcome(db, scope, skipped))).toEqual({
     status: 'ACCEPTED',
     replayUnsafe: true,
     result: {
@@ -423,7 +440,7 @@ test('DEV-1045 recovers an accepted wallet tender with an omitted optional refer
   });
   expect(
     await tenant((db) =>
-      readPharmacyTenderOutcome(db, scope, { ...input, payerName: 'Different payer' })
+      readPharmacyTenderOutcome(db, scope, { ...skipped, payerName: 'Different payer' })
     )
   ).toMatchObject({ status: 'UNKNOWN', replayUnsafe: true });
 });

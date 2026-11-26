@@ -24,7 +24,7 @@ BEGIN
       IF settings -> NEW.type::text IS NULL OR settings -> NEW.type::text = 'null'::jsonb THEN
         RAISE EXCEPTION 'manual merchant tender is not configured for this branch' USING ERRCODE = '23514';
       END IF;
-      IF NEW."referenceSkipped" AND (required OR NEW."soldAt" IS NOT NULL)
+      IF NEW."referenceSkipped"
          AND COALESCE(settings -> NEW.type::text ->> 'allowReferenceSkip', 'false') <> 'true' THEN
         RAISE EXCEPTION 'manual merchant tender reference is required' USING ERRCODE = '23514';
       END IF;

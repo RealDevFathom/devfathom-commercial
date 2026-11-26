@@ -380,9 +380,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       ? manualTenderCaptureSchema.safeParse({
           type,
           payerName,
-          ...(referenceSkipped || (!requirePaymentDetails && providerRef === '')
-            ? { referenceSkipped: true }
-            : { providerRef }),
+          ...(referenceSkipped ? { referenceSkipped: true } : { providerRef }),
         })
       : null;
     const account = accounts.find((row) => row.id === accountId);
@@ -1215,7 +1213,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     <Label htmlFor="manual-provider-reference">
                       Transaction ID (last 4–6 digits)
                     </Label>
-                    {!requirePaymentDetails && (
+                    {merchant.allowReferenceSkip && (
                       <span
                         id="manual-provider-reference-optional"
                         className="text-sm text-text-muted"
@@ -1236,7 +1234,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
                     }
                     aria-describedby={
-                      requirePaymentDetails
+                      !merchant.allowReferenceSkip
                         ? 'manual-reference-help'
                         : 'manual-reference-help manual-provider-reference-optional'
                     }
