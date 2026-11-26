@@ -692,6 +692,8 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
         expect(f.db.pharmacyControlledRegisterEntry.findMany).toHaveBeenCalledExactlyOnceWith({
           where: { organizationId: 'org-1', stockMovementId: { in: ['movement-1'] } },
           select: {
+            witnessStatement: true,
+            recordedByUserId: true,
             patientId: true,
             patientAddress: true,
             prescriptionLineId: true,
@@ -761,6 +763,16 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
       'names a different prescription line',
       recordedEntry({ prescriptionLineId: 'rx-line-1', emergency: false }),
       { emergency: false, prescriptionLineId: 'rx-line-2' },
+    ],
+    [
+      'changes a recorded solo approval to an independent countersign',
+      recordedEntry({
+        emergency: false,
+        prescriptionLineId: 'rx-line-1',
+        witnessStatement: 'No witness: dispensed by one pharmacist',
+        recordedByUserId: 'earlier-pharmacist',
+      }),
+      { emergency: false, prescriptionLineId: 'rx-line-1' },
     ],
     ['changes the patient address', recordedEntry({ patientAddress: '7 Canal Road' }), {}],
     ['changes the serial-written flag', recordedEntry(), { rxSerialWritten: false }],

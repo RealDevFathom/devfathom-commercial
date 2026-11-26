@@ -3537,6 +3537,8 @@ export const pharmacySalesRouter = router({
                 stockMovementId: { in: replay.allocation.movementIds },
               },
               select: {
+                witnessStatement: true,
+                recordedByUserId: true,
                 patientId: true,
                 patientAddress: true,
                 prescriptionLineId: true,
@@ -3561,6 +3563,9 @@ export const pharmacySalesRouter = router({
               !patientAddress ||
               recorded.some(
                 (entry) =>
+                  (entry.witnessStatement === NO_CONTROLLED_SALE_WITNESS) !==
+                    Boolean(authorization.selfApproval) ||
+                  (authorization.selfApproval && entry.recordedByUserId !== scope.actorId) ||
                   entry.patientAddress !== patientAddress ||
                   entry.emergency !== emergency ||
                   entry.prescriptionLineId !== prescriptionLineId ||

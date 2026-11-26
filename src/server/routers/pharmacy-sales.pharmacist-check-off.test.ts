@@ -203,3 +203,23 @@ describe('pharmacySales.addLine with the owner’s pharmacist check', () => {
     expect(addSaleLine).toHaveBeenCalledTimes(1);
   });
 });
+
+it('DEV-1043 refuses a cashier requesting solo controlled approval even with the business check OFF', async () => {
+  const { caller } = cashierCaller('OFF');
+  await expect(
+    caller.addLine({
+      ...line,
+      controlledAuthorization: {
+        patientId: 'patient-1',
+        patientAddress: '12 Synthetic Street',
+        staffProfileId: 'cashier-profile',
+        pin: '1234',
+        selfApproval: true,
+        rxSerialWritten: true,
+        emergency: false,
+        prescriptionLineId: 'rx-1',
+      },
+    })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(addSaleLine).not.toHaveBeenCalled();
+});
