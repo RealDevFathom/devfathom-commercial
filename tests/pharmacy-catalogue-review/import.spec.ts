@@ -19,6 +19,7 @@ async function signIn(browser: Browser, workspace: Workspace, role: string) {
   await expect(
     page.getByRole('heading', { name: 'Catalogue edits awaiting approval' })
   ).toBeVisible();
+  if (role.startsWith('owner')) await page.getByRole('link', { name: /^Import history/ }).click();
   return page;
 }
 

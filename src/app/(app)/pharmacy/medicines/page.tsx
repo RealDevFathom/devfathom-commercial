@@ -1,3 +1,9 @@
+import Link from 'next/link';
+import {
+  StarterHistory,
+  cataloguePageNumber,
+} from '@/components/pharmacy/tenant-medicine-catalogue';
+import { buttonVariants } from '@/components/ui/button';
 import { AddMedicineForm } from '@/components/pharmacy/add-medicine-form';
 import { CatalogueApprovalQueue } from '@/components/pharmacy/catalogue-approval-queue';
 import type { Metadata } from 'next';
@@ -31,6 +37,19 @@ export default async function MedicineReferencePage({
       ip: ctx.requestMeta?.ip ?? null,
     }))
   ) {
+    const params = await searchParams;
+    const list = params.list === 'narcotics' ? 'narcotics' : 'conflicts';
+    const page = cataloguePageNumber(
+      typeof params.reviewPage === 'string' ? params.reviewPage : ''
+    );
+    const history =
+      params.view === 'imports'
+        ? await (
+            await import('@/server/routers/pharmacy-staged-review')
+          ).pharmacyStagedReviewRouter
+            .createCaller(ctx)
+            .pharmacyMedicine.starterHistory({ list, page })
+        : null;
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader
@@ -38,6 +57,10 @@ export default async function MedicineReferencePage({
           heading="Catalogue review"
           description="Approve or reject catalogue edits submitted for review."
         />
+        <Link href="?view=imports" className={buttonVariants({ variant: 'outline' })}>
+          Starter catalogue review
+        </Link>
+        {history && <StarterHistory data={history} list={list} page={page} />}
         <CatalogueApprovalQueue reviewerView />
       </div>
     );

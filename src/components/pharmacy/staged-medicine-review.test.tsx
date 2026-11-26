@@ -16,6 +16,21 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
   pharmacyStagedReviewRouter: {
     createCaller: () => ({
       pharmacyMedicine: {
+        catalogueProducts: vi
+          .fn()
+          .mockResolvedValue({
+            products: [
+              {
+                id: 'local',
+                productName: 'QA inactive medicine',
+                manufacturer: null,
+                saleable: false,
+                controlled: true,
+              },
+            ],
+            more: false,
+          }),
+        starterHistory: vi.fn().mockResolvedValue({ run: null, rows: [], more: false }),
         stagedBranches: mocks.branches,
         stagedBatches: mocks.batches,
         stagedRows: mocks.rows,
@@ -71,6 +86,14 @@ describe('staged medicine review UI', () => {
     expect(mocks.batches).toHaveBeenCalledWith({ branchId: 'branch_a', page: 1 });
     expect(screen.getByText('Existing workbench')).toBeTruthy();
     expect(screen.getByText('Catalogue approval queue')).toBeVisible();
+  });
+  it('opens on live tenant products and keeps staged import controls under Import history', async () => {
+    render(await MedicinePage({}));
+    expect(screen.getByText('QA inactive medicine')).toBeVisible();
+    expect(screen.getByText('Inactive', { exact: true })).toBeVisible();
+    expect(screen.getByRole('link', { name: /Import history/ })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Show batches' })).toBeNull();
+    expect(screen.queryByLabelText('Source file')).toBeNull();
   });
   it('builds the request context once and starts explicit-selection loads concurrently', async () => {
     let releaseBranches: (value: unknown) => void = () => undefined;
