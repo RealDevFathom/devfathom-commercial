@@ -172,9 +172,11 @@ export async function grossMargin(
 export function grossMarginQuery(
   scope: JournalReportScope,
   /** `where` narrows the journal legs (aliases `line`, `lot`); it must start with AND. */
-  input: { from: Date; to: Date; by: MarginDimension; where?: Prisma.Sql }
+  input: { from: Date; to: Date; by: MarginDimension | 'postingLine'; where?: Prisma.Sql }
 ) {
   const key = {
+    // Internal chart grain retains the posting and source line for drilldowns.
+    postingLine: Prisma.sql`jsonb_build_array(entry.id, line."branchId",line."productId",line."sourceLineId")`,
     line: Prisma.sql`line."sourceLineId"`,
     batch: Prisma.sql`lot."manufacturingBatchId"`,
     product: Prisma.sql`line."productId"`,

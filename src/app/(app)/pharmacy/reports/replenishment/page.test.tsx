@@ -59,7 +59,7 @@ it('keeps an explicit unauthorized branch invalid and preserves the return filte
   );
   expect(screen.getByRole('link', { name: 'Back to reports' })).toHaveAttribute(
     'href',
-    '/pharmacy/reports?branch=outside'
+    '/pharmacy/reports/operations?branch=outside'
   );
 });
 

@@ -1450,7 +1450,7 @@ export default async function PharmacyInventoryPage({
               {advice.expiry ? (
                 <Link
                   className={buttonVariants({ size: 'sm', variant: 'outline' })}
-                  href={`/pharmacy/reports?${new URLSearchParams({ branch: branch.id })}#expiry-advisor`}
+                  href={`/pharmacy/reports/operations?${new URLSearchParams({ branch: branch.id })}#expiry-advisor`}
                 >
                   Expiry advice
                 </Link>

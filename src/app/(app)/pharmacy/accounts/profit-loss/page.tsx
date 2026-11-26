@@ -1,3 +1,4 @@
+import { operationalReportsHref } from '@/lib/pharmacy/operational-reports-href';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { Metadata } from 'next';
 import Link from 'next/link';
@@ -85,7 +86,7 @@ export default async function ProfitAndLossPage({
       />
       <Link
         className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
-        href="/pharmacy/reports"
+        href={operationalReportsHref(query)}
       >
         Back to reports
       </Link>

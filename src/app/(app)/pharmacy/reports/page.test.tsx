@@ -37,6 +37,7 @@ const commandCentre = vi.fn(async () => ({
 const reportAccess = vi.hoisted(() => ({
   can: vi.fn(async (..._args: unknown[]) => true),
   session: true,
+  financial: true,
 }));
 vi.mock('@/lib/abac', () => ({
   can: reportAccess.can,
@@ -150,7 +151,11 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
         input.supplierId ? null : [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
-        permissions: { operational: true, financial: true, owner: true },
+        permissions: {
+          operational: true,
+          financial: reportAccess.financial,
+          owner: reportAccess.financial,
+        },
         reports: [
           {
             key: 'sales-margin',
@@ -177,7 +182,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
   },
 }));
 
-import PharmacyReportsPage from './page';
+import PharmacyReportsPage from './operations/page';
 
 /** True only when both a Chromium binary and Poppler's pdftotext can run here. Mirrors the
  * browser lookup in tests/helpers/pharmacy-report-print.ts, including Playwright's bundled one. */
@@ -427,7 +432,7 @@ describe('pharmacy report catalog filters', () => {
     expect(detail.closest('[id="sales"]')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Back to overview' })).toHaveAttribute(
       'href',
-      '/pharmacy/reports?branch=b1'
+      '/pharmacy/reports/operations?branch=b1'
     );
   });
 
@@ -890,4 +895,32 @@ describe('pharmacy report catalog filters', () => {
     );
     expect(within(owner).queryByText(/All available branches · ledger source/)).toBeNull();
   });
+});
+
+it('opens the visual reports without reading the legacy command centre', async () => {
+  reportAccess.can.mockResolvedValue(true);
+  reportAccess.session = true;
+  commandCentre.mockClear();
+  const { default: VisualEntry } = await import('./page');
+  const element = await VisualEntry({ searchParams: Promise.resolve({}) });
+  expect(commandCentre).not.toHaveBeenCalled();
+  expect(element).toBeDefined();
+});
+
+it('sends an operational-only reader directly to their scoped operational reports', async () => {
+  const { default: Entry } = await import('./page');
+  reportAccess.financial = false;
+  try {
+    await expect(
+      Entry({
+        searchParams: Promise.resolve({ branch: 'b1', from: '2026-11-23', to: '2026-11-24' }),
+      })
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(
+        '/pharmacy/reports/operations?branch=b1&from=2026-11-23&to=2026-11-24'
+      ),
+    });
+  } finally {
+    reportAccess.financial = true;
+  }
 });

@@ -1,3 +1,4 @@
+import { operationalReportsHref } from '@/lib/pharmacy/operational-reports-href';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import type { ComponentProps } from 'react';
@@ -66,11 +67,7 @@ export default async function ReplenishmentPage({
         description="Inspect recorded consumption and supply, then compare explicit planning assumptions."
       />
       <Link
-        href={
-          typeof query.branch === 'string'
-            ? `/pharmacy/reports?${new URLSearchParams({ branch: query.branch })}`
-            : '/pharmacy/reports'
-        }
+        href={operationalReportsHref(query)}
         className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
       >
         Back to reports

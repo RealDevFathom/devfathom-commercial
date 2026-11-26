@@ -994,7 +994,7 @@ describe('expiry advice in context (DEV-594)', () => {
     await show();
     expect(screen.getByRole('link', { name: 'Expiry advice' })).toHaveAttribute(
       'href',
-      `/pharmacy/reports?branch=${branch.id}#expiry-advisor`
+      `/pharmacy/reports/operations?branch=${branch.id}#expiry-advisor`
     );
     expect(mocks.can).toHaveBeenCalledWith(
       ctx.session.user,

@@ -18,6 +18,13 @@ describe('PH-RPT metric contract', () => {
     }
   });
 
+  it('opens operational sales details and the visual gross profit report', () => {
+    const link = (key: string) =>
+      PHARMACY_METRIC_CONTRACT.find((metric) => metric.key === key)?.drillThrough;
+    expect(link('salesMinor')).toBe('/pharmacy/reports/operations?section=sales');
+    expect(link('marginMinor')).toBe('/pharmacy/reports?section=profit');
+  });
+
   it.each([30, 60, 90, 180])(
     'drills expiry value within %i days into the expiry board filtered to that window',
     (days) => {
