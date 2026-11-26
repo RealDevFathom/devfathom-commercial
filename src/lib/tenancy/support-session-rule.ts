@@ -1,0 +1,67 @@
+/**
+ * DEV-1053: what a platform support session may never do.
+ *
+ * A support session acts inside a business as one of its members for a short, audited
+ * window. Anything that creates or changes a credential, an identity or a privilege would
+ * outlive that window, so it is refused for every support session, whoever it acts as:
+ * members and their status; roles, permissions and sub-roles; passwords, PINs, two-step
+ * verification and authenticators; API tokens, SCIM tokens and SSO connections; webhook and
+ * integration secrets; device enrolment and device credentials; whole-business data export.
+ *
+ * One rule, three surfaces: tRPC procedures carry `.meta(refuseSupportSession)` and are
+ * refused by the central middleware in `src/server/trpc.ts`; REST routes call
+ * `refuseSupportSessionRequest`; the assistant refuses the tools named in
+ * `SUPPORT_REFUSED_ASSISTANT_TOOLS`. Every refusal is audited with the operator's identity.
+ */
+
+/** The one message every surface gives. No internals, no hint of what would have run. */
+export const SUPPORT_SESSION_REFUSED_MESSAGE =
+  'A support session cannot do this. It would create or change sign-in details, staff access, a device or a key, or export the whole business. Ask the business owner to do it from their own account.';
+
+/** The `.meta()` value that puts a procedure under the rule. */
+export const refuseSupportSession = { supportSession: 'refuse' } as const;
+
+type SupportSessionUser = {
+  id?: string;
+  isSupportSession?: boolean;
+  supportSessionId?: string;
+  platformUserId?: string;
+};
+
+export type SupportSessionCarrier = {
+  support?: { supportSessionId: string; platformUserId: string } | null;
+  session?: { user?: SupportSessionUser | null } | null;
+};
+
+/** True for a support session, whichever of the two places says so. */
+export function isSupportSessionActor(carrier: SupportSessionCarrier): boolean {
+  return Boolean(carrier.support || carrier.session?.user?.isSupportSession);
+}
+
+/** Who the operator is, for the audit entry. Null when this is not a support session. */
+export function supportOperatorIdentity(carrier: SupportSessionCarrier): {
+  supportSessionId: string | null;
+  platformUserId: string | null;
+  actingAsTenantUserId: string | null;
+} | null {
+  if (!isSupportSessionActor(carrier)) return null;
+  const user = carrier.session?.user;
+  return {
+    supportSessionId: carrier.support?.supportSessionId ?? user?.supportSessionId ?? null,
+    platformUserId: carrier.support?.platformUserId ?? user?.platformUserId ?? null,
+    actingAsTenantUserId: user?.id ?? null,
+  };
+}
+
+/**
+ * Assistant tools that reach an action under the rule. Each mirrors a refused procedure:
+ * `team.inviteMember`, `team.adminUpdateMember`, `team.adminResetPassword`,
+ * `team.layOffMember`.
+ */
+export const SUPPORT_REFUSED_ASSISTANT_TOOLS: ReadonlySet<string> = new Set([
+  'inviteMember',
+  'updateMember',
+  'setMemberStatus',
+  'layOffMember',
+  'resetMemberPassword',
+]);

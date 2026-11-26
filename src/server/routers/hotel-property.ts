@@ -61,6 +61,7 @@ import {
   requireHotelPropertyScope,
 } from '@/server/hotel-property-scope';
 import { adminProcedure, capabilityProcedure, protectedProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { hotelFunctionSpacesRouter } from './hotel-function-spaces';
 import { hotelInventoryRouter } from './hotel-inventory';
 import { hotelJourneyTemplatesRouter } from './hotel-journey-templates';
@@ -276,6 +277,7 @@ export const hotelPropertyRouter = router({
       .query(({ ctx, input }) => assignedPropertiesByCapability(ctx, input.capabilities)),
 
     assign: adminProcedure
+      .meta(refuseSupportSession)
       .input(
         hotelPropertySelectionInput.extend({
           userId: z.string().trim().min(1).max(128),
@@ -345,6 +347,7 @@ export const hotelPropertyRouter = router({
       }),
 
     revoke: adminProcedure
+      .meta(refuseSupportSession)
       .input(hotelPropertySelectionInput.extend({ userId: z.string().trim().min(1).max(128) }))
       .mutation(async ({ ctx, input }) => {
         if (input.userId === ctx.session.user.id) {

@@ -26,6 +26,7 @@ import {
   loadAccessParty,
 } from '@/lib/team/pharmacy-access-guard';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
 import { readPharmacyRoleAccess, setPharmacyRoleSubRole } from '@/lib/team/role-sub-role-edit';
 import { readPharmacyMemberAccess } from '@/lib/team/member-access';
@@ -238,6 +239,7 @@ export const organizationAdminRouter = router({
     }),
 
   setRoleSubRole: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.strictObject({
         roleId: z.string().trim().min(1).max(128),
@@ -283,6 +285,7 @@ export const organizationAdminRouter = router({
    * exception on top of their role; see `member-sub-role-edit.ts` for every rule enforced.
    */
   setMemberSubRole: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -310,6 +313,7 @@ export const organizationAdminRouter = router({
 
   /** DEV-959B: start a pharmacy member from a ready-made role, clearing their sub-role ticks. */
   applyMemberRoleTemplate: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -569,6 +573,7 @@ export const organizationAdminRouter = router({
     }),
 
   updateEmail: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         provider: z.string().trim().min(2).max(80),
@@ -606,6 +611,7 @@ export const organizationAdminRouter = router({
     }),
 
   upsertRole: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string().optional(),
@@ -730,6 +736,7 @@ export const organizationAdminRouter = router({
     }),
 
   removeRole: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -758,6 +765,7 @@ export const organizationAdminRouter = router({
     }),
 
   updateMember: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),
@@ -868,6 +876,7 @@ export const organizationAdminRouter = router({
     }),
 
   createMember: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         name: z.string().trim().min(1).max(150),
@@ -997,6 +1006,7 @@ export const organizationAdminRouter = router({
     }),
 
   resetMemberPassword: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -1024,6 +1034,7 @@ export const organizationAdminRouter = router({
     }),
 
   addDomain: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({ host: hostname, kind: z.string().trim().min(2).max(30), isPrimary: z.boolean() })
     )
@@ -1087,6 +1098,7 @@ export const organizationAdminRouter = router({
     }),
 
   createScimToken: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         name: z.string().trim().min(2).max(150),
@@ -1123,6 +1135,7 @@ export const organizationAdminRouter = router({
     }),
 
   revokeScimToken: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);

@@ -141,6 +141,7 @@ import {
 } from '@/lib/pharmacy/lost-demand-advice-reader';
 import { annotateAuditBranch } from '../audit-branch';
 import { denyByDefaultProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import type { ProcedureMeta, TRPCContext } from '../trpc';
 import {
   assertOrderBranches,
@@ -597,6 +598,7 @@ const selfVerification = () => new TRPCError({ code: 'FORBIDDEN', message: 'SELF
 const purchasingRouter = router({
   /** Pharmacy-only tenants can establish their own approval PIN without restaurant modules. */
   provisionMyPurchasePin: purchasing
+    .meta(refuseSupportSession)
     .meta(PROCUREMENT_AND_APPROVAL)
     .input(
       z

@@ -43,6 +43,7 @@ import {
 } from '@/lib/restaurant/staff-branch-authorization';
 import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
 const coAuthorizationApprovalCapability = 'coauth:approve' satisfies RestaurantApproverRight;
@@ -127,6 +128,7 @@ async function revocableBranchIds(ctx: RevokeAuthorizationContext): Promise<Set<
 export const restaurantDevicesRouter = router({
   /** Issue a one-use enrollment code only while creating a new bridge. */
   initiatePrintBridgeEnrollment: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -404,6 +406,7 @@ export const restaurantDevicesRouter = router({
 
   /** Enroll a device to a branch; returns the one-time enrollment secret. */
   initiateEnrollment: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         branchId: z.string().min(1),
@@ -486,6 +489,7 @@ export const restaurantDevicesRouter = router({
    * REVOKED. `skipInput` keeps the approving secret out of the audit log (C4).
    */
   revoke: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         deviceId: z.string().min(1),
@@ -599,6 +603,7 @@ export const restaurantDevicesRouter = router({
 
   /** Rotate an active device secret with the same two-person approval as revoke. */
   rotate: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({

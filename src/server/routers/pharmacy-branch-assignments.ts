@@ -9,6 +9,7 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
 
 import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const PHARMACY_ASSIGNABLE_ROLE_KEYS = new Set(PHARMACY_ROLE_TEMPLATES.map((role) => role.key));
 
@@ -297,6 +298,7 @@ export const pharmacyBranchAssignmentsRouter = router({
   }),
 
   assign: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -347,6 +349,7 @@ export const pharmacyBranchAssignmentsRouter = router({
     }),
 
   unassign: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ assignmentId: z.string().trim().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);

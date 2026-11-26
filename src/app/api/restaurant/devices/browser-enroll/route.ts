@@ -18,7 +18,9 @@ import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { isSupportSessionActor } from '@/lib/tenancy/support-session-rule';
 import { ipFromHeaders, recordAudit } from '@/server/audit';
+import { recordSupportSessionRefusal } from '@/server/support-session-refusal';
 
 const inputSchema = z.object({
   name: z.string().trim().min(1).max(120),
@@ -56,7 +58,21 @@ export async function POST(request: Request) {
   if (!actor?.session.user || !evaluateSessionUser(actor.session.user).ok) {
     return reject('A current administrator session is required.', 401);
   }
-  if (actor.support) {
+  // DEV-1053: device enrolment is under the central support-session rule. Refused before
+  // the body is read, and recorded with the operator's identity.
+  if (isSupportSessionActor(actor)) {
+    await recordSupportSessionRefusal({
+      actor: {
+        organizationId: actor.organization.id,
+        user: actor.session.user,
+        support: actor.support,
+        session: actor.session,
+      },
+      source: 'REST_API',
+      category: 'TERMINAL',
+      action: 'restaurant.devices.browserEnroll',
+      request,
+    });
     return reject('Support sessions cannot enroll restaurant terminals.', 403);
   }
   if (actor.organization.isDemo) {

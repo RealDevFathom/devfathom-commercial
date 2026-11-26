@@ -10,6 +10,7 @@ import {
   capabilityProcedure,
   assertModuleLicensed,
 } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { can, subjectFromSession } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
 import { annotateAudit, diffChanges } from '../audit';
@@ -245,6 +246,7 @@ export const teamRouter = router({
   // their profile. The admin never sets (or sees) a password. Re-inviting someone
   // who is still pending just refreshes their details and issues a new link.
   inviteMember: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         name: z.string().min(1),
@@ -884,6 +886,7 @@ export const teamRouter = router({
     }),
 
   changePassword: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         currentPassword: z.string().min(1),
@@ -921,7 +924,7 @@ export const teamRouter = router({
   // IMP-AUTH-03: "sign out everywhere". Bumping the caller's tokenVersion revokes
   // every JWT issued before now (including the current one) on its next jwt()
   // revalidation — the cross-device kill switch after a suspected compromise.
-  signOutEverywhere: protectedProcedure.mutation(async ({ ctx }) => {
+  signOutEverywhere: protectedProcedure.meta(refuseSupportSession).mutation(async ({ ctx }) => {
     await ctx.db.user.update({
       where: { id: ctx.session.user.id },
       data: { tokenVersion: { increment: 1 } },
@@ -972,6 +975,7 @@ export const teamRouter = router({
     }),
 
   adminUpdateMember: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),
@@ -1242,6 +1246,7 @@ export const teamRouter = router({
     }),
 
   adminResetPassword: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),
@@ -1280,6 +1285,7 @@ export const teamRouter = router({
   // INACTIVE) so audit history and FK integrity survive. Captures a mandatory
   // reason, records it in the audit trail, and emails the member a notice.
   layOffMember: hrProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string(), reason: z.string().min(3).max(2000) }))
     .mutation(async ({ ctx, input }) => {
       if (input.id === ctx.session.user.id) {

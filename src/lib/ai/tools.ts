@@ -41,6 +41,11 @@ import { buildInsightsTools } from '@/lib/ai/tools/insights';
 import { buildPharmacyReportTools } from '@/lib/ai/tools/pharmacy-reports';
 import { buildRestaurantReportTools } from '@/lib/ai/tools/restaurant-reports';
 import { withActionLedger, type ActionLedgerContext } from '@/lib/ai/action-ledger';
+import {
+  SUPPORT_REFUSED_ASSISTANT_TOOLS,
+  SUPPORT_SESSION_REFUSED_MESSAGE,
+} from '@/lib/tenancy/support-session-rule';
+import { recordSupportSessionRefusal } from '@/server/support-session-refusal';
 
 export type { AssistantContext } from '@/lib/ai/context';
 
@@ -227,6 +232,42 @@ export function buildAssistantTools(
     delete perDomain.pharmacyReports.askPharmacyCashCloseCheck;
   // WHA-1544 future hook: bind the accepted replenishment-report service here
   // under pharmacyReports only after its contract is accepted; no handler yet.
+
+  // DEV-1053: the central support-session rule. A tool that reaches a member, role or
+  // password change answers a support session with the refusal, records it, and runs
+  // nothing: no approval card, no ledger row, whatever the client's history claims.
+  if (ctx.supportSession === true) {
+    for (const set of Object.values(perDomain)) {
+      for (const name of Object.keys(set)) {
+        if (!SUPPORT_REFUSED_ASSISTANT_TOOLS.has(name)) continue;
+        set[name] = {
+          ...set[name],
+          needsApproval: false,
+          execute: async () => {
+            await recordSupportSessionRefusal({
+              actor: {
+                organizationId: ctx.organizationId,
+                user: { id: ctx.userId, name: ctx.name, email: ctx.email, role: ctx.role },
+                session: {
+                  user: {
+                    id: ctx.userId,
+                    isSupportSession: true,
+                    supportSessionId: ctx.supportOperator?.supportSessionId ?? undefined,
+                    platformUserId: ctx.supportOperator?.platformUserId ?? undefined,
+                  },
+                },
+              },
+              source: 'SYSTEM',
+              category: 'TEAM',
+              action: `assistant.${name}`,
+              metadata: { via: 'assistant' },
+            });
+            return { error: SUPPORT_SESSION_REFUSED_MESSAGE };
+          },
+        } as ToolSet[string];
+      }
+    }
+  }
 
   const selectAll = hint.length === 0;
   const domains = selectAll ? null : selectDomains(hint);

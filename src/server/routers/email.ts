@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import type { Session } from 'next-auth';
 import { router, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { adapterForMailbox } from '@/lib/email/adapter';
 import { syncMailbox } from '@/lib/email/sync';
 import { buildConsentUrl, exchangeCode, isProviderConfigured } from '@/lib/email/oauth';
@@ -94,6 +95,7 @@ export const emailRouter = router({
 
   // Step 1 of connect: hand back a consent URL for the popup. No user config.
   connectStart: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ provider: providerInput }))
     .mutation(async ({ ctx, input }) => {
       const state = `${input.provider}:${randomBytes(32).toString('base64url')}`;
@@ -128,6 +130,7 @@ export const emailRouter = router({
 
   // Step 2: exchange the code, store an encrypted refresh token, kick off sync.
   connectCallback: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         provider: providerInput,
@@ -359,6 +362,7 @@ export const emailRouter = router({
 
   // One-tap disconnect — cascade removes its synced messages.
   disconnect: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ mailboxId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ownedMailbox(ctx.db, ctx.session.user.id, input.mailboxId);

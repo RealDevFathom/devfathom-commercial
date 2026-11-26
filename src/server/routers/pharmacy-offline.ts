@@ -100,6 +100,7 @@ import {
   offlinePreparationPlan,
 } from '@/lib/pharmacy/offline-preparation';
 import { adminProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const id = z.string().min(1).max(160);
 const branchInput = z.object({ branchId: id }).strict();
@@ -217,8 +218,7 @@ export const pharmacyOfflineRouter = router({
         offlineUnitsLeft: quotas
           .filter((quota) => quota.deviceId === device.id)
           .reduce((total, quota) => total + Math.max(0, quota.quotaUnits - quota.consumedUnits), 0),
-        failedOfflineSales:
-          pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
+        failedOfflineSales: pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
       }));
     })
   ),
@@ -424,6 +424,7 @@ export const pharmacyOfflineRouter = router({
       })
     ),
   enroll: adminProcedure
+    .meta(refuseSupportSession)
     .input(branchInput.extend({ name: z.string().trim().min(1).max(100) }))
     .mutation(({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
@@ -441,6 +442,7 @@ export const pharmacyOfflineRouter = router({
       })
     ),
   rotate: adminProcedure
+    .meta(refuseSupportSession)
     .input(branchInput.extend({ deviceId: id, sessionToken: z.string().max(4096).optional() }))
     .mutation(({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
@@ -495,62 +497,65 @@ export const pharmacyOfflineRouter = router({
         return { deviceId: device.id, secret };
       })
     ),
-  revoke: adminProcedure.input(branchInput.extend({ deviceId: id })).mutation(({ ctx, input }) =>
-    ctx.db.$transaction(async (tx) => {
-      const db = tx as ScopedDb;
-      const scope = {
-        organizationId: ctx.entitlements.organizationId,
-        branchId: input.branchId,
-        actorId: ctx.session.user.id,
-      };
-      await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
-      const now = new Date();
-      const device = await revokePharmacyCounter(db, scope, input.deviceId, now).catch(
-        deviceRefusal
-      );
-      // DEV-957: a revoked counter can never sell what it was earmarked, so its
-      // open quotas go back to the branch in the same transaction. The rows stay
-      // (release is final and audited), so nothing is counted twice.
-      const open = await db.pharmacyDeviceLotQuota.findMany({
-        where: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          deviceId: device.id,
-          releasedAt: null,
-        },
-        select: { id: true, quotaUnits: true, consumedUnits: true },
-        orderBy: { id: 'asc' },
-      });
-      for (const quota of open) await releaseDeviceLotQuota(db, scope, quota.id, now);
-      if (open.length) {
-        await db.auditLog.create({
-          data: {
+  revoke: adminProcedure
+    .meta(refuseSupportSession)
+    .input(branchInput.extend({ deviceId: id }))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        const now = new Date();
+        const device = await revokePharmacyCounter(db, scope, input.deviceId, now).catch(
+          deviceRefusal
+        );
+        // DEV-957: a revoked counter can never sell what it was earmarked, so its
+        // open quotas go back to the branch in the same transaction. The rows stay
+        // (release is final and audited), so nothing is counted twice.
+        const open = await db.pharmacyDeviceLotQuota.findMany({
+          where: {
             organizationId: scope.organizationId,
-            actorId: scope.actorId,
-            actorName: ctx.session.user.name ?? null,
-            actorEmail: ctx.session.user.email ?? null,
-            actorRole: ctx.session.user.role ?? null,
-            source: 'TRPC',
-            category: 'PHARMACY',
-            operation: 'UPDATE',
-            action: 'pharmacyOffline.releaseOfflineQuotas',
-            targetType: 'PharmacyRegisteredDevice',
-            targetId: device.id,
-            metadata: {
-              branchId: scope.branchId,
-              deviceId: device.id,
-              quotasReleased: open.length,
-              unitsReleased: open.reduce(
-                (total, quota) => total + quota.quotaUnits - quota.consumedUnits,
-                0
-              ),
-            },
+            branchId: scope.branchId,
+            deviceId: device.id,
+            releasedAt: null,
           },
+          select: { id: true, quotaUnits: true, consumedUnits: true },
+          orderBy: { id: 'asc' },
         });
-      }
-      return { deviceId: device.id, status: device.status, quotasReleased: open.length };
-    })
-  ),
+        for (const quota of open) await releaseDeviceLotQuota(db, scope, quota.id, now);
+        if (open.length) {
+          await db.auditLog.create({
+            data: {
+              organizationId: scope.organizationId,
+              actorId: scope.actorId,
+              actorName: ctx.session.user.name ?? null,
+              actorEmail: ctx.session.user.email ?? null,
+              actorRole: ctx.session.user.role ?? null,
+              source: 'TRPC',
+              category: 'PHARMACY',
+              operation: 'UPDATE',
+              action: 'pharmacyOffline.releaseOfflineQuotas',
+              targetType: 'PharmacyRegisteredDevice',
+              targetId: device.id,
+              metadata: {
+                branchId: scope.branchId,
+                deviceId: device.id,
+                quotasReleased: open.length,
+                unitsReleased: open.reduce(
+                  (total, quota) => total + quota.quotaUnits - quota.consumedUnits,
+                  0
+                ),
+              },
+            },
+          });
+        }
+        return { deviceId: device.id, status: device.status, quotasReleased: open.length };
+      })
+    ),
 });
 
 export type ReceiptNumberGap = {
@@ -610,7 +615,10 @@ export async function receiptNumberGaps(
         lastUnused: lease.blockEnd,
         unused: lease.blockEnd - lease.nextNumber + 1,
         cause: revoked ? ('REVOKED' as const) : ('EXPIRED' as const),
-        since: (revoked ? (device.revokedAt ?? device.secretExpiresAt) : device.secretExpiresAt).toISOString(),
+        since: (revoked
+          ? (device.revokedAt ?? device.secretExpiresAt)
+          : device.secretExpiresAt
+        ).toISOString(),
       };
     });
 }
@@ -1198,16 +1206,14 @@ function verifyToken(
     throw new CounterTransportError('invalid_terminal_session', 401);
 }
 export type CounterOperation =
-  | 'establish'
-  | 'snapshot'
-  | 'replay'
-  | 'lease'
-  | 'quota'
-  | 'reject'
-  | 'renew';
+  'establish' | 'snapshot' | 'replay' | 'lease' | 'quota' | 'reject' | 'renew';
 
 /** DEV-957 phase 2: what an expired device secret may no longer be used for. */
-const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set(['snapshot', 'lease', 'quota']);
+const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set([
+  'snapshot',
+  'lease',
+  'quota',
+]);
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
@@ -1797,9 +1803,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // Review round 2: nor can a sale taken while offline selling was off be settled
           // this way: only one its verified signed RULES allowed (the receipt checks above
           // run first, and a refusal here rolls the retirement back).
-          if (
-            !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id))
-          )
+          if (!signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id)))
             throw new CounterTransportError('offline_selling_off', 409);
           await settleOfflineCommand(
             db,

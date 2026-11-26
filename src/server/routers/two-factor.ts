@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 import type { PrismaClient } from '@/generated/prisma/client';
 import {
@@ -28,7 +29,7 @@ export const twoFactorRouter = router({
 
   // Phase 1: mint a secret and return it (+ otpauth URI) for the authenticator app.
   // Not active until confirmEnrollment succeeds.
-  beginEnrollment: protectedProcedure.mutation(async ({ ctx }) => {
+  beginEnrollment: protectedProcedure.meta(refuseSupportSession).mutation(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.session.user.id },
       select: { email: true, twoFactorEnabledAt: true },
@@ -48,6 +49,7 @@ export const twoFactorRouter = router({
   // Phase 2: verify a code against the stashed secret, then activate 2FA and issue
   // one-time recovery codes (returned ONCE, in plaintext).
   confirmEnrollment: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ token: z.string().min(6).max(10) }))
     .mutation(async ({ ctx, input }) => {
       const user = await ctx.db.user.findUnique({
@@ -85,6 +87,7 @@ export const twoFactorRouter = router({
   // Turn 2FA off — requires a fresh code (or recovery code) to prove possession,
   // so a hijacked session alone can't strip the second factor.
   disable: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ token: z.string().min(6).max(20) }))
     .mutation(async ({ ctx, input }) => {
       const user = await ctx.db.user.findUnique({
