@@ -10,12 +10,14 @@ import { POST } from './route';
 
 const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
+  audit: vi.fn(),
   permission: vi.fn(),
   scope: vi.fn(),
   slot: vi.fn(),
   release: vi.fn(),
   store: vi.fn(),
 }));
+vi.mock('@/server/audit', () => ({ categoryForPath: () => 'pharmacy', recordAudit: mocks.audit }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.scope }));
 vi.mock('@/lib/uploads/large-upload-slot', () => ({ acquireLargeUploadSlot: mocks.slot }));
@@ -53,6 +55,7 @@ beforeEach(() => {
   });
   mocks.scope.mockImplementation(async (_organizationId, run) => run(db));
   mocks.slot.mockResolvedValue(mocks.release);
+  mocks.store.mockResolvedValue({ id: 'doc', branchId: 'branch' });
 });
 
 it('uploads a full 10 MB document through the per-user and per-business slot', async () => {
@@ -69,6 +72,15 @@ it('uploads a full 10 MB document through the per-user and per-business slot', a
     content: expect.any(Buffer),
   });
   expect(mocks.store.mock.calls[0]![1].content.length).toBe(10 * 1024 * 1024);
+  expect(mocks.audit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      action: 'pharmacySupplierLinks.uploadDocument',
+      actorId: 'supplier-user',
+      targetId: 'doc',
+      metadata: { branchId: 'branch' },
+    })
+  );
+  expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain(token);
   expect(mocks.permission.mock.invocationCallOrder[0]).toBeLessThan(
     mocks.slot.mock.invocationCallOrder[0]!
   );

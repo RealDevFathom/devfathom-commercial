@@ -512,6 +512,10 @@ const REST_ROUTES: Readonly<
     audited: /createCaller\(ctx\)\.pharmacySales\./,
     how: 'Calls the audited pharmacySales procedure through the tRPC caller.',
   },
+  'supplier-documents/upload/route.ts': {
+    audited: /recordAudit\(\{/,
+    how: 'The upload records the signed-in actor, branch and new document without the link token or file contents.',
+  },
   'sop/evidence/route.ts': {
     audited: /createCaller\(ctx\)\.pharmacySop\.evidenceTarget/,
     how: 'Authorizes through pharmacySop.evidenceTarget, an audited read naming the person; the evidence receipt row records the file.',

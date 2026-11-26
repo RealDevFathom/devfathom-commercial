@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { unstable_doesProxyMatch } from 'next/experimental/testing/server';
+import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
 import { config, proxy } from './proxy';
 
 const ORIGINAL_BASE_DOMAIN = process.env.PLATFORM_BASE_DOMAIN;
@@ -264,7 +264,7 @@ it('preserves query parameters in the signed-out login callback', async () => {
 });
 
 it('lets only the exact supplier document upload route use the bounded multipart reader', () => {
-  const matches = (url: string) => unstable_doesProxyMatch({ config, nextConfig: {}, url });
+  const matches = (url: string) => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
   expect(matches('/api/pharmacy/supplier-documents/upload')).toBe(false);
   expect(matches('/api/pharmacy/supplier-documents/upload/other')).toBe(true);
   expect(matches('/api/pharmacy/supplier-documents/upload-other')).toBe(true);

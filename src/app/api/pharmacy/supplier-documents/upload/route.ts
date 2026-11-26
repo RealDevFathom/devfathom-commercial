@@ -17,6 +17,7 @@ import { StorageUnavailableError } from '@/lib/storage';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { uploadPost } from '@/lib/uploads/multipart-request';
+import { categoryForPath, recordAudit } from '@/server/audit';
 
 export const runtime = 'nodejs';
 
@@ -78,11 +79,38 @@ export const POST = uploadPost(async (request, readUploadForm) => {
 
     const content = Buffer.from(await file.arrayBuffer());
     // Check the token again when writing under the existing link lock.
-    await withTenantDb(
+    const document = await withTenantDb(
       organizationId,
       (db) => uploadSupplierDocument(db, { token, ...input.data, content }),
       { userId, timeout: 60_000 }
     );
+    const user = actor.session.user;
+    const action = 'pharmacySupplierLinks.uploadDocument';
+    recordAudit({
+      organizationId,
+      actorType: 'USER',
+      actorId: userId,
+      actorName: user.name,
+      actorEmail: user.email,
+      actorRole: user.role,
+      source: 'REST_API',
+      category: categoryForPath(action),
+      operation: 'CREATE',
+      action,
+      targetType: 'PharmacySupplierDocument',
+      targetId: document.id,
+      outcome: 'SUCCESS',
+      metadata: {
+        branchId: document.branchId,
+        ...(user.isSupportSession
+          ? {
+              supportSessionId: user.supportSessionId,
+              platformUserId: user.platformUserId,
+              actingAsTenantUserId: userId,
+            }
+          : {}),
+      },
+    });
     return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);
