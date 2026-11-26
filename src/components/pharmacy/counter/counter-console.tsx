@@ -2528,6 +2528,210 @@ function ScopedPharmacyCounterConsole({
           // DEV-1005: a one-step add (Enter, or a plain barcode) is staged as Shift+Enter stages
           // it, so the authorization panel this notice points to is shown and the line is added
           // once it is complete.
+          if (scannedRow && !scannedPack) {
+            stageRow(scannedRow, false);
+            setSaleUnit(option.kind);
+          }
+          // DEV-977 phase 3: a serialised pack is not staged (that would drop its own lot): it
+          // waits, as scanned, in the authorisation sheet, and is sent with its payload once the
+          // sheet's "Authorise line" is pressed. No line is added before that.
+          if (scannedPack && scannedRow) setPendingPack({ row: scannedRow, pack: scannedPack });
+          setChecksOpen(false);
+          setControlledError(null);
+          setControlledOpen(true);
+          return;
+        }
+        // DEV-629: the server refuses to take payment for an Rx/restricted line without a
+        // prescription reference, so the counter sends the selected patient's current
+        // prescription line for this medicine. Without one the line still shows its safety block.
+        const needsPrescription =
+          !checkOff && !controlled && (row.restriction.rx || row.restriction.restricted);
+        const prescriptionLine = needsPrescription
+          ? patient?.prescriptions
+              .filter((prescription) => prescription.inDate)
+              .flatMap((prescription) => prescription.lines)
+              .find(
+                (line) =>
+                  line.medicineId === row.medicineId &&
+                  line.presentationId === row.presentationId &&
+                  line.remainingAuthorizedUnits >= units * option.canonicalUnitsPerSaleUnit
+              )
+          : undefined;
+        const refSerial = Number(billAuth.refSerial);
+        const voucher = heldVoucher;
+        let discountApproval: CounterApprovalPin | undefined;
+        const attemptKeys: string[] = [];
+        const postedOption = option;
+        const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
+          const selection = JSON.stringify([
+            lineSaleId,
+            row.medicineId,
+            postedOption.packLevelId,
+            postedOption.kind,
+            units,
+            overrideLotId,
+            row.labelLot?.inventoryLotId,
+            scannedPack?.serial.toUpperCase(),
+          ]);
+          // DEV-780: the voucher is not part of the attempt's identity. The held voucher (and its
+          // PIN) is dropped after every add, so a retry after a lost response reuses this key:
+          // the server replays the committed line, or refuses a changed voucher, and never adds
+          // the item a second time.
+          let key = lineAttempts.current.get(selection);
+          if (!key) {
+            key = `counter-add:${browserUuid()}`;
+            lineAttempts.current.set(selection, key);
+          }
+          attemptKeys.push(selection);
+          return addLine.mutateAsync({
+            ...(patient && prescriptionLine
+              ? {
+                  prescription: {
+                    prescriptionLineId: prescriptionLine.prescriptionLineId,
+                    patientId: patient.patientId,
+                  },
+                }
+              : {}),
+            controlledAuthorization:
+              controlled && patient && !checkOff
+                ? {
+                    patientId: patient.patientId,
+                    patientAddress:
+                      patientAddress === null ? { useAddressOnFile: true } : patientAddress.trim(),
+                    staffProfileId: billAuth.staffProfileId,
+                    pin: billAuth.pin,
+                    rxSerialWritten: billAuth.rxSerialWritten,
+                    emergency: billAuth.emergency,
+                    prescriptionLineId: billAuth.prescriptionLineId || undefined,
+                    prescriberName: billAuth.prescriberName.trim() || undefined,
+                    prescriberRegNo: billAuth.prescriberRegNo.trim() || undefined,
+                    refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+                  }
+                : undefined,
+            branchId,
+            saleId: lineSaleId,
+            medicineId: row.medicineId,
+            // DEV-780: the server sets the voucher's amount and re-checks every rule.
+            ...(voucher ? { voucherId: voucher.id, voucherPin: voucher.pin } : {}),
+            // DEV-929: the approver is proven by a PIN the server verifies, never named here.
+            ...(discountMinor > 0
+              ? {
+                  discountKind: 'DISCOUNT' as const,
+                  discountMinor,
+                  ...(discountApproval ? { discountApproval } : {}),
+                }
+              : {}),
+            presentationId: row.presentationId,
+            packLevelId: postedOption.packLevelId,
+            saleUnit: postedOption.kind,
+            quantity: units,
+            canonicalUnitsPerSaleUnit: postedOption.canonicalUnitsPerSaleUnit,
+            ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
+            // Retries keep the key until a confirmed add; the next completed
+            // scanner gesture must allocate another item, even for the same code.
+            idempotencyKey: key,
+            // DEV-92: the raw DataMatrix of one serialized pack; the server re-reads it.
+            ...(scannedPack
+              ? { scannedPack: { payload: scannedPack.payload, ...(approval ? { approval } : {}) } }
+              : {}),
+            ...(overrideLotId && batchOverride
+              ? {
+                  // #520: the server resolves who approved the override; the counter never names one.
+                  override: {
+                    inventoryLotId: overrideLotId,
+                    reason: batchOverride.reason.trim(),
+                  },
+                }
+              : {}),
+          });
+        };
+        let packApprovalUsed = false;
+        const postScannedLine = async (lineSaleId: string) => {
+          try {
+            return await postLine(lineSaleId);
+          } catch (error) {
+            if (
+              !scannedPack ||
+              !(error instanceof Error) ||
+              error.message !== 'SERIAL_FEFO_APPROVAL_REQUIRED'
+            )
+              throw error;
+            if (!scanIsCurrent()) return null;
+            const approval = await new Promise<CounterApprovalPin | null>((resolve) => {
+              packApprovalResolver.current = resolve;
+              setPackApproval({ medicineName: row.displayName });
+            });
+            if (!approval || !scanIsCurrent()) return null;
+            // Approval belongs to this exact bill and physical pack only.
+            packApprovalUsed = true;
+            return postLine(lineSaleId, approval);
+          }
+        };
+        // DEV-929: without the right to discount on their own, the cashier is asked for a
+        // manager's or owner's PIN (a solo owner enters their own), for this one line.
+        const postApprovedLine = async (lineSaleId: string) => {
+          try {
+            return await postScannedLine(lineSaleId);
+          } catch (error) {
+            if (
+              !manualDiscount ||
+              discountApproval ||
+              !(error instanceof Error) ||
+              error.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED
+            )
+              throw error;
+            if (!scanIsCurrent()) return null;
+            const approval = await new Promise<CounterApprovalPin | null>((resolve) => {
+              packApprovalResolver.current = resolve;
+              setPackApproval({
+                medicineName: row.displayName,
+                discount: `Rs ${formatMinor(discountMinor)}`,
+              });
+            });
+            if (!approval || !scanIsCurrent()) return null;
+            discountApproval = approval;
+            try {
+              return await postScannedLine(lineSaleId);
+            } catch (retryError) {
+              if (
+                !(retryError instanceof Error) ||
+                retryError.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED
+              )
+                throw retryError;
+              setNotice({
+                tone: 'warning',
+                message:
+                  'That PIN did not approve the discount, so the item was not added. A manager or owner must enter their own PIN.',
+              });
+              return null;
+            }
+          }
+        };
+        let startedNextBill = replaceClosedBill;
+        let added: Awaited<ReturnType<typeof postApprovedLine>>;
+        try {
+          added = await postApprovedLine(activeSaleId);
+        } catch (error) {
+          // DEV-712: the server says this bill already moved on — paid on another
+          // screen, or this copy was stale. Re-read it and, once it is confirmed
+          // paid or voided, carry the scan onto a new bill. A held bill keeps its
+          // ID so it can still be resumed. A controlled line is never re-sent:
+          // its authorization belonged to the old bill's patient. DEV-629: nor is a line
+          // carrying that patient's prescription reference.
+          if (
+            !counterBillMovedOn(error) ||
+            freshBill ||
+            controlled ||
+            packApprovalUsed ||
+            discountApproval ||
+            prescriptionLine ||
+            attemptRef.current
+          )
+            throw error;
+          const read = await cartQuery.refetch();
+          if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
+          if (!scanIsCurrent()) return;
+          clearBill();
           startedNextBill = true;
           activeSaleId = await openSale();
           if (!scanIsCurrent()) return;
