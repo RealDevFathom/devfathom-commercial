@@ -1,15 +1,43 @@
 import { headers } from 'next/headers';
-import { notFound } from 'next/navigation';
 
 import { SectionCard } from '@/components/ui/section-card';
-import { resolvePortalLink } from '@/lib/pharmacy/customer-portal';
-import { requestHost, resolveOrganizationByHost } from '@/lib/tenancy/host';
-import { isSharedHost } from '@/lib/tenancy/host-routing';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { PORTAL_LINK_PATTERN } from '@/lib/pharmacy/customer-portal';
+import {
+  portalSyntheticSender,
+  portalWhatsAppReady,
+  reportPortalFailure,
+} from '@/lib/pharmacy/portal-delivery';
+import { portalSignInMessages } from '@/lib/pharmacy/portal-sign-in-messages';
+import {
+  resolveOrganizationForRequest,
+  requestHost,
+  isTenantLifecycleAccessible,
+} from '@/lib/tenancy/host';
 
 import { PortalSignInForm } from './sign-in-form';
 
 export const dynamic = 'force-dynamic';
+
+async function joinMessage(request: Request, token: string) {
+  try {
+    const organization = await resolveOrganizationForRequest(request);
+    if (
+      !organization ||
+      !isTenantLifecycleAccessible(organization.status) ||
+      !PORTAL_LINK_PATTERN.test(token)
+    )
+      return portalSignInMessages.invalidLink;
+    if (
+      !portalWhatsAppReady(organization.id) &&
+      !portalSyntheticSender(organization, requestHost(request))
+    )
+      return portalSignInMessages.setup;
+    return null;
+  } catch {
+    reportPortalFailure('UNEXPECTED');
+    return portalSignInMessages.unexpected;
+  }
+}
 
 export default async function MyPharmacyJoinPage({
   params,
@@ -18,39 +46,27 @@ export default async function MyPharmacyJoinPage({
 }) {
   const { token } = await params;
   const requestHeaders = await headers();
-  const host = requestHost(new Request('http://local', { headers: requestHeaders }));
-  if (isSharedHost(host)) notFound();
-  const organization = await resolveOrganizationByHost(host);
-  const link = organization
-    ? await withTenantDb(organization.id, async (db) => {
-        const found = await resolvePortalLink(db, organization.id, token);
-        return found ? { branchName: found.branch.name } : null;
-      })
-    : null;
+  const request = new Request('http://local', { headers: requestHeaders });
+  const message = await joinMessage(request, token);
 
   return (
     <main className="flex min-h-dvh items-center justify-center bg-surface-page px-4 py-10 text-text-body">
       <SectionCard className="w-full max-w-lg rounded-xl p-6 sm:p-8">
         <p className="font-mono text-xs tracking-[0.16em] text-text-muted uppercase">My pharmacy</p>
-        {link ? (
+        <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight text-text-strong sm:text-4xl">
+          Sign in to your pharmacy
+        </h1>
+        {message ? (
+          <p role="status" className="mt-3 leading-7 text-text-muted">
+            {message}
+          </p>
+        ) : (
           <>
-            <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight text-text-strong sm:text-4xl">
-              Sign in to {link.branchName}
-            </h1>
             <p className="mt-3 mb-7 leading-7 text-text-muted">
-              We will send a six-digit code to the phone number the pharmacy has on file for you.
+              Request a six-digit code for the phone number the pharmacy has on file for you.
             </p>
             <PortalSignInForm token={token} />
           </>
-        ) : (
-          <div role="status">
-            <h1 className="mt-3 font-display text-3xl font-semibold tracking-tight text-text-strong">
-              This link is no longer active
-            </h1>
-            <p className="mt-3 leading-7 text-text-muted">
-              Ask the pharmacy to send you a new link.
-            </p>
-          </div>
         )}
       </SectionCard>
     </main>

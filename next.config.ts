@@ -5,6 +5,8 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // A join URL contains a customer's private link, including in local development.
+  logging: { incomingRequests: { ignore: [/^\/my-pharmacy\/join\//] } },
   // Dev-only (WHA-1623). The browser suites serve `next dev` on 127.0.0.1, and
   // Next 16 blocks its dev websocket for any origin not listed here. That
   // socket also carries the React debug channel, so without it the page never

@@ -28,6 +28,7 @@ import {
   type PortalRequestKind,
 } from '@/lib/pharmacy/customer-portal';
 import { actorManagesBranchDrawers } from '@/lib/pharmacy/counter-capability';
+import { portalWhatsAppReady } from '@/lib/pharmacy/portal-delivery';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { PharmacySettlementError } from '@/lib/pharmacy/settlement';
@@ -506,7 +507,12 @@ export const pharmacyOrderingRouter = router({
         await bindBranch(txDb(tx), scope.branchId);
         return listPortalQueue(txDb(tx), scope);
       });
-      return { requests, canVerifyPrescriptions: pharmacist, canConfirmPayments: counter };
+      return {
+        requests,
+        canVerifyPrescriptions: pharmacist,
+        canConfirmPayments: counter,
+        canSendCodes: portalWhatsAppReady(ctx.entitlements.organizationId),
+      };
     }),
 
   portalDecide: protectedProcedure
