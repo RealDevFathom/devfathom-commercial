@@ -69,3 +69,44 @@ it('returns a plain retry message when the slot store is unavailable', async () 
   expect(response.status).toBe(503);
   expect(await response.text()).toBe('Uploads are temporarily unavailable. Try again shortly.');
 });
+
+const handleJsonUpload = uploadPost(async (_, read) => {
+  const result = await read('user', 'business');
+  if (!(result instanceof Response)) throw new Error('expected refusal');
+  return result;
+});
+
+it('times out a stalled body at 270 seconds and releases the slot once', async () => {
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const release = vi.fn(async () => {});
+    acquire.mockResolvedValue(release);
+    const request = new Request('https://tenant.example.test/api/upload', {
+      method: 'POST',
+      headers: { 'content-length': String(10 * 1024 * 1024) },
+      body: new ReadableStream<Uint8Array>({ pull: () => new Promise<void>(() => {}) }),
+      duplex: 'half',
+    } as RequestInit);
+    const pending = handleJsonUpload(request);
+    await vi.advanceTimersByTimeAsync(269_999);
+    expect(release).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(release).toHaveBeenCalledOnce();
+    const response = await pending;
+    expect(response.status).toBe(408);
+    expect(response.headers.get('Content-Type')).toMatch(/^text\/plain\b/);
+    expect(release).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it('returns a plain 429 for business capacity on a JSON route', async () => {
+  acquire.mockResolvedValue('organization-capacity');
+  const request = multipartUpload('/api/upload', 10);
+  request.headers.set('content-length', String(10 * 1024 * 1024));
+  const response = await handleJsonUpload(request);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('Content-Type')).toMatch(/^text\/plain\b/);
+  expect(await response.text()).toBe('Large uploads are busy. Try again shortly.');
+});
