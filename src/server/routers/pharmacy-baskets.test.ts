@@ -1,7 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
 import { hashSync } from 'bcryptjs';
 import type { Prisma } from '@/generated/prisma/client';
 import type { TRPCContext } from '../trpc';
+
+vi.mock('node:crypto', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:crypto')>();
+  return { ...actual, randomUUID: vi.fn(actual.randomUUID) };
+});
 
 // DEV-879: these fixtures model an approver with no approval authenticator, so the PIN is
 // checked exactly as before. approval-authenticator.test.ts covers the authenticator path.
@@ -210,10 +216,16 @@ beforeEach(() => {
   vi.useFakeTimers({ toFake: ['Date'] });
   vi.setSystemTime(new Date('2026-10-31T12:00:00Z'));
 });
-afterEach(() => vi.useRealTimers());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.mocked(randomUUID).mockReset();
+});
 
 describe('reachable pharmacy basket workflow', () => {
   it('reads completed tenant/branch receipts, persists evidence, and lets the solo owner PIN-approve an audited generic draft', async () => {
+    // Keep the full INSERT assertion, but don't let the generated review ID match the PIN.
+    const reviewId = 'aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa';
+    vi.mocked(randomUUID).mockReturnValue(reviewId);
     const { caller, db, ctx, approve, review } = setup();
     expect(await approve()).toEqual({ campaignId: 'campaign-a', replay: false });
     expect(db.pharmacySale.findMany).toHaveBeenCalledWith(
@@ -268,6 +280,7 @@ describe('reachable pharmacy basket workflow', () => {
     const insert = db.$executeRaw.mock.calls.find(([sql]) =>
       sql.text.includes('INSERT INTO pharmacy_growth_reviews')
     )![0];
+    expect(insert.values[0]).toBe(reviewId);
     expect(insert.values).toContain('owner-a');
     expect(JSON.stringify(insert.values)).not.toContain('1234');
     expect(ctx.audit.detail).toMatchObject({ skipInput: true });
