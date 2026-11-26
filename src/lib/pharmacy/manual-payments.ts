@@ -106,7 +106,7 @@ export const manualCardCaptureSchema = z
 
 export const optionalCardCaptureSchema = manualCardCaptureSchema.partial();
 
-/** Bank statement reference, required for every new bank transfer. */
+/** Length limit when a bank statement reference is supplied. */
 export const BANK_TRANSFER_REFERENCE_MAX_LENGTH = 120;
 /** True when the text holds a 13-19 digit run (separators ignored): a possible card number. */
 export function looksLikeCardNumber(text: string): boolean {

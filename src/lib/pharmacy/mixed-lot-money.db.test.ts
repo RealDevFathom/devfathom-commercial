@@ -6,7 +6,11 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { createSale, addSaleLine, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
 import { receiveLot } from '@/lib/pharmacy/stock-ledger';
-import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  applyPharmacyTender,
+  readPharmacyTenderOutcome,
+  refundPharmacyTender,
+} from '@/lib/pharmacy/settlement';
 import { readCounterReceipt, readCounterCart } from '@/lib/pharmacy/counter';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -381,6 +385,41 @@ test.each([
     expect(receipt?.tenders[0]).toMatchObject({ type, amountMinor: 300, paymentDetails: label });
   }
 );
+
+test('DEV-1045 recovers an accepted wallet tender with an omitted optional reference', async () => {
+  await tenant((db) =>
+    db.pharmacyBranch.update({
+      where: { id: scope.branchId },
+      data: {
+        requirePaymentDetails: false,
+        manualPaymentSettings: {
+          RAAST: { destination: 'Synthetic test till', allowReferenceSkip: false },
+        },
+      },
+    })
+  );
+  const sale = await cart();
+  const input = {
+    saleId: sale.sale.id,
+    deviceId: randomUUID(),
+    businessDate: day,
+    type: 'RAAST' as const,
+    amountMinor: 300,
+    payerName: 'Synthetic payer',
+    idempotencyKey: randomUUID(),
+  };
+  const result = await tenant((db) => applyPharmacyTender(db, scope, input));
+  expect(result).toMatchObject({ settled: true });
+  expect(await tenant((db) => readPharmacyTenderOutcome(db, scope, input))).toMatchObject({
+    status: 'ACCEPTED',
+    result,
+  });
+  expect(
+    await tenant((db) =>
+      readPharmacyTenderOutcome(db, scope, { ...input, payerName: 'Different payer' })
+    )
+  ).toMatchObject({ status: 'UNKNOWN', replayUnsafe: true });
+});
 
 test.each([undefined, '   '])(
   'DEV-875 rolls back a transfer without a reference (%j) and records valid evidence',

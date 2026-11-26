@@ -354,7 +354,8 @@ export async function readPharmacyTenderOutcome(
       (tender.provider !== 'MANUAL_MERCHANT' ||
         tender.providerRef !== (input.providerRef ?? null) ||
         tender.payerName !== input.payerName?.trim() ||
-        tender.referenceSkipped !== (input.referenceSkipped ?? false))
+        tender.referenceSkipped !==
+          (input.providerRef === undefined || input.referenceSkipped === true))
     )
       return unknown;
     if (
