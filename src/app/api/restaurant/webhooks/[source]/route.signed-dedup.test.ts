@@ -2,6 +2,7 @@ import { oversizedRequest } from '../../../../../../tests/fixtures/bounded-reque
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { encryptSecret } from '@/lib/secret-crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ClaimedJob } from '@/lib/restaurant/scheduler';
 
@@ -14,6 +15,7 @@ const state = vi.hoisted(() => ({
   jobs: [] as Array<{ inboxId: string }>,
   seq: 0,
   configured: true,
+  scoped: false,
 }));
 
 const mocks = vi.hoisted(() => ({
@@ -26,8 +28,11 @@ vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true, remaining: 1, retryAfter: 0 }),
 }));
 vi.mock('@/lib/tenancy/host', () => ({
-  requestHost: () => 'acme.devfathom.test',
-  resolveExplicitOrganizationByHost: async () => ({ id: 'org_acme', isDemo: false }),
+  requestHost: (request: Request) => new URL(request.url).hostname,
+  resolveExplicitOrganizationByHost: async (host: string) => ({
+    id: host === 'acme.devfathom.test' ? 'org_acme' : 'org_other',
+    isDemo: false,
+  }),
 }));
 vi.mock('@/lib/restaurant/scheduler', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/restaurant/scheduler')>()),
@@ -79,14 +84,28 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       count: state.inbox.delete(where.id) ? 1 : 0,
     }),
   };
-  const db: Record<string, unknown> = {
-    restaurantWebhookInbox,
-    $queryRaw: async (_query: TemplateStringsArray, source?: string) =>
-      state.configured && source === 'card-provider' ? [{ id: 'cfg_1' }] : [],
-    restaurantJob: { count: async () => state.jobs.length },
-  };
-  db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
-  return { createTenantDb: () => db };
+  function createTenantDb(orgId: string) {
+    const db: Record<string, unknown> = {
+      restaurantWebhookInbox,
+      $queryRaw: async (_query: TemplateStringsArray, source?: string) =>
+        state.configured && source === 'card-provider'
+          ? [
+              {
+                id: orgId + '-cfg',
+                organizationId: orgId,
+                encryptedSigningSecret: state.scoped ? encryptSecret(orgId + '-key') : null,
+                previousEncryptedSigningSecret: null,
+                previousSigningSecretExpiresAt: null,
+                legacySigningCutoff: new Date(Date.now() + 60_000),
+              },
+            ]
+          : [],
+      restaurantJob: { count: async () => state.jobs.length },
+    };
+    db.$transaction = async (fn: (tx: unknown) => Promise<unknown>) => fn(db);
+    return db;
+  }
+  return { createTenantDb };
 });
 
 import { processInboundWebhookHandler } from '@/lib/restaurant/webhook-inbox';
@@ -106,9 +125,9 @@ const TERMINAL_PAYLOAD = {
   providerReference: 'provider-ref-1',
 };
 
-function post(rawBody: string, headers: Record<string, string> = {}) {
+function post(rawBody: string, headers: Record<string, string> = {}, host = 'acme.devfathom.test') {
   return POST(
-    new Request(`https://acme.devfathom.test/api/restaurant/webhooks/${SOURCE}`, {
+    new Request(`https://${host}/api/restaurant/webhooks/${SOURCE}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...headers },
       body: rawBody,
@@ -155,10 +174,13 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
     state.jobs.length = 0;
     state.seq = 0;
     state.configured = true;
+    state.scoped = false;
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'isolated-test-key');
     mocks.processTerminalEvent.mockReset();
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     delete process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
   });
 
@@ -202,6 +224,45 @@ describe('terminal webhook: unsigned envelopes cannot suppress a signed event', 
       ]);
     }
   );
+
+  it('accepts a scoped receipt on its own host and refuses the same receipt on a second host', async () => {
+    state.scoped = true;
+    const raw = JSON.stringify({
+      externalEventId: 'scoped-fixture',
+      eventType: 'order.created',
+      payload: {},
+    });
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const headers = {
+      'x-webhook-timestamp': timestamp,
+      'x-webhook-signature': createHmac('sha256', 'org_acme-key')
+        .update(JSON.stringify([timestamp, SOURCE, 'org_acme-cfg']) + '.')
+        .update(raw)
+        .digest('hex'),
+    };
+    expect((await post(raw, headers)).status).toBe(202);
+    expect((await post(raw, headers, 'other.devfathom.test')).status).toBe(401);
+    expect((await post(raw, headers)).status).toBe(200);
+    expect(state.jobs).toHaveLength(1);
+  });
+
+  it('audits every legacy acceptance, including duplicates, and fails closed on an audit error', async () => {
+    const { recordAudit } = await import('@/server/audit');
+    vi.mocked(recordAudit).mockClear();
+    expect((await postSignedTerminal()).status).toBe(202);
+    expect((await postSignedTerminal()).status).toBe(200);
+    expect(recordAudit).toHaveBeenCalledTimes(2);
+    expect(recordAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_acme',
+        action: 'restaurant.webhook.legacy_key_accepted',
+        targetId: 'org_acme-cfg',
+      }),
+      expect.anything()
+    );
+    vi.mocked(recordAudit).mockRejectedValueOnce(new Error('audit unavailable'));
+    await expect(postSignedTerminal()).rejects.toThrow('audit unavailable');
+  });
 
   it('ignores an unsigned envelope that reuses an already-signed event id', async () => {
     expect((await postSignedTerminal()).status).toBe(202);

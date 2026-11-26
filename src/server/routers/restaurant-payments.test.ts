@@ -14,6 +14,7 @@ const D = (v: string) => new Prisma.Decimal(v);
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
+  rotate: vi.fn(),
   tenderFindMany: vi.fn(),
   refundFindMany: vi.fn(),
   paymentFindUnique: vi.fn(),
@@ -51,6 +52,7 @@ import type { TRPCContext } from '../trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
+  $executeRaw: mocks.rotate,
   restaurantTender: { findMany: mocks.tenderFindMany },
   restaurantRefund: { findMany: mocks.refundFindMany },
   restaurantPayment: { findUnique: mocks.paymentFindUnique },
@@ -58,7 +60,7 @@ const db = {
   restaurantTerminalProviderConfig: { findMany: mocks.terminalConfigFindMany },
 } as unknown as ScopedDb;
 
-function caller() {
+function caller(role = 'EMPLOYEE') {
   return restaurantPaymentsRouter.createCaller({
     db,
     entitlements: {
@@ -69,9 +71,15 @@ function caller() {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_gm', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      user: {
+        id: 'user_gm',
+        role,
+        organizationId: 'org-test',
+        department: 'OPERATIONS',
+        status: 'ACTIVE',
+      },
     },
-    organization: null,
+    organization: { id: 'org-test' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -325,5 +333,54 @@ describe('capability gating + strict inputs', () => {
       // @ts-expect-error — surplus field must be rejected, never stripped
       caller().listTenders({ branchId: 'b1', surplus: true })
     ).rejects.toBeDefined();
+  });
+});
+
+describe('terminal webhook key administration', () => {
+  const input = { branchId: 'branch-1', configId: 'cfg-1' };
+  it('requires both the configuration capability and a business administrator', async () => {
+    await expect(caller().rotateTerminalWebhookSecret(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.can.mockResolvedValue(false);
+    await expect(caller('ADMIN').rotateTerminalWebhookSecret(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.rotate).not.toHaveBeenCalled();
+  });
+  it('returns a fresh secret once per rotation and passes only ciphertext to the scoped write', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'test-only-key');
+    try {
+      mocks.requireBranchScope.mockResolvedValue(undefined);
+      mocks.rotate.mockResolvedValue(1);
+      const first = await caller('ADMIN').rotateTerminalWebhookSecret(input);
+      const second = await caller('ADMIN').rotateTerminalWebhookSecret(input);
+      expect(second.secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+      expect(second.secret).not.toBe(first.secret);
+      expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), input.branchId);
+      const { decryptSecret } = await import('@/lib/secret-crypto');
+      expect(decryptSecret(mocks.rotate.mock.calls[1]![1])).toBe(second.secret);
+      expect(mocks.rotate.mock.calls[1]!.slice(2)).toEqual([
+        'org-test',
+        input.branchId,
+        input.configId,
+      ]);
+      await caller('ADMIN').getTerminalConfig({ branchId: input.branchId });
+      expect(mocks.terminalConfigFindMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: {
+            id: true,
+            branchId: true,
+            source: true,
+            externalTerminalId: true,
+            deviceId: true,
+            mode: true,
+            updatedAt: true,
+          },
+        })
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

@@ -9,8 +9,35 @@ import {
   processTerminalEvent,
   simulateTerminalEvent,
   terminalEventSchema,
-  verifyTerminalSignature,
 } from '@/lib/restaurant/terminal-payments';
+
+import { verifyProviderSignature } from '@/lib/restaurant/terminal-webhook-keys';
+
+// Exercise the original wire contract against an explicit rollout configuration.
+function verifyTerminalSignature(
+  source: string,
+  body: string,
+  signature: string,
+  timestamp: string | null,
+  now: number
+) {
+  return verifyProviderSignature(
+    {
+      id: 'legacy-fixture',
+      encryptedSigningSecret: null,
+      previousEncryptedSigningSecret: null,
+      previousSigningSecretExpiresAt: null,
+      legacySigningCutoff: new Date(1_700_000_001_000),
+    },
+    source,
+    body,
+    signature,
+    timestamp,
+    now
+  ) === 'LEGACY'
+    ? 'VERIFIED'
+    : 'FAILED';
+}
 
 const baseEvent = {
   status: 'approved' as const,

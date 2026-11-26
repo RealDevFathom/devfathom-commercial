@@ -1,3 +1,4 @@
+import { rotateTerminalWebhookKey } from '@/lib/restaurant/terminal-webhook-keys';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
@@ -112,6 +113,28 @@ export const restaurantPaymentsRouter = router({
           mode: true,
         },
       });
+    }),
+
+  rotateTerminalWebhookSecret: configureProcedure
+    .input(z.object({ branchId: ID, configId: ID }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const user = ctx.session!.user;
+      if (
+        user.role !== 'ADMIN' ||
+        !user.organizationId ||
+        user.organizationId !== ctx.organization?.id
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      await requireRestaurantBranchScope(ctx, input.branchId);
+      const rotated = await rotateTerminalWebhookKey(
+        ctx.db,
+        user.organizationId,
+        input.branchId,
+        input.configId
+      );
+      if (!rotated) throw new TRPCError({ code: 'NOT_FOUND' });
+      return rotated;
     }),
 
   listTerminalReconciliations: readProcedure

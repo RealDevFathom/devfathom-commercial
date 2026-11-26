@@ -8,10 +8,10 @@
  * race and rejects. After it, the loser waits and returns the committed result
  * as a replay, with no duplicate money rows.
  */
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 
 import pg from 'pg';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
@@ -132,6 +132,7 @@ async function seedTenant(organizationId: string, ctx: (typeof tenant)['a' | 'b'
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
+  vi.stubEnv('PLATFORM_ENCRYPTION_KEY', randomBytes(32).toString('hex'));
   const [scopedDb, terminalPayments] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./terminal-payments'),
@@ -163,6 +164,48 @@ beforeAll(async () => {
   await seedTenant(orgB, tenant.b);
 });
 
+afterAll(() => vi.unstubAllEnvs());
+
+async function admitFixture(
+  organizationId: string,
+  input: Parameters<Deps['processTerminalEvent']>[1]
+) {
+  const { rotateTerminalWebhookKey } = await import('./terminal-webhook-keys');
+  const { recordInboundWebhook } = await import('./webhook-inbox');
+  const db = deps.createTenantDb(organizationId);
+  const config = await db.restaurantTerminalProviderConfig.findFirstOrThrow({
+    where: { source, externalTerminalId: terminalId },
+  });
+  const key = await rotateTerminalWebhookKey(db, organizationId, config.branchId, config.id);
+  expect(key).not.toBeNull();
+  const timestamp = String(Math.floor(Date.now() / 1000));
+  const envelope = {
+    externalEventId: input.externalEventId,
+    eventType: 'terminal.' + input.event.status,
+    payload: input.event,
+  };
+  const rawBody = Buffer.from(JSON.stringify(envelope));
+  const signature = createHmac('sha256', key!.secret)
+    .update(JSON.stringify([timestamp, source, config.id]) + '.')
+    .update(rawBody)
+    .digest('hex');
+  const admit = () =>
+    recordInboundWebhook(db, {
+      ...envelope,
+      source,
+      verificationStatus: 'VERIFIED',
+      providerSignature: { configId: config.id, terminalId, timestamp, signature, rawBody },
+    });
+  const first = await admit();
+  expect(first.deduplicated).toBe(false);
+  expect(await admit()).toMatchObject({
+    deduplicated: true,
+    enqueuedJobId: null,
+    inbox: { id: first.inbox.id },
+  });
+  return first;
+}
+
 describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () => {
   it('serializes two connections and returns one application plus one replay', async () => {
     const externalEventId = `event_${suffix}`;
@@ -181,6 +224,7 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
       },
     };
 
+    await admitFixture(orgA, input);
     const blocker = new pg.Client({ connectionString: TEST_DATABASE_URL! });
     const pending: Promise<unknown>[] = [];
     await blocker.connect();
@@ -318,7 +362,7 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
 
   it('rejects an event whose bill and operator belong to another tenant', async () => {
     const externalEventId = `cross_tenant_${suffix}`;
-    const result = await deps.processTerminalEvent(deps.createTenantDb(orgB), {
+    const input = {
       source,
       externalEventId,
       requiredMode: 'WEBHOOK',
@@ -330,7 +374,9 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
         staffProfileId: tenant.a.staffId,
         providerReference: `cross_ref_${suffix}`,
       },
-    });
+    } as const;
+    await admitFixture(orgB, input);
+    const result = await deps.processTerminalEvent(deps.createTenantDb(orgB), input);
 
     expect(result).toMatchObject({ replayed: false });
     expect(result.reconciliation).toMatchObject({
@@ -347,5 +393,62 @@ describeIfDatabase('terminal payment concurrent replay (real PostgreSQL)', () =>
         await tx.restaurantTerminalReconciliation.count({ where: { source, externalEventId } })
       ).toBe(1);
     });
+  });
+  it('keeps a 24-hour previous key and rejects an authenticated event with the wrong outstanding amount', async () => {
+    const db = deps.createTenantDb(orgB);
+    const input = {
+      source,
+      externalEventId: 'amount-' + suffix,
+      requiredMode: 'WEBHOOK',
+      event: {
+        status: 'approved',
+        terminalId,
+        reference: tenant.b.billId,
+        amount: '24.99',
+        staffProfileId: tenant.b.staffId,
+        providerReference: 'fixture',
+      },
+    } as const;
+    const { rotateTerminalWebhookKey } = await import('./terminal-webhook-keys');
+    const { decryptSecret } = await import('@/lib/secret-crypto');
+    const config = await db.restaurantTerminalProviderConfig.findFirstOrThrow({
+      where: { source, externalTerminalId: terminalId },
+    });
+    const first = await rotateTerminalWebhookKey(db, orgB, config.branchId, config.id);
+    expect(first).not.toBeNull();
+    const before = Date.now();
+    const admitted = await admitFixture(orgB, input);
+    const rotated = await db.restaurantTerminalProviderConfig.findUniqueOrThrow({
+      where: { id: config.id },
+    });
+    expect(rotated.previousEncryptedSigningSecret).not.toBe(first!.secret);
+    expect(decryptSecret(rotated.previousEncryptedSigningSecret!)).toBe(first!.secret);
+    expect(rotated.previousSigningSecretExpiresAt!.getTime()).toBeGreaterThanOrEqual(
+      before + 86_400_000 - 2
+    );
+    expect(rotated.previousSigningSecretExpiresAt!.getTime()).toBeLessThanOrEqual(
+      Date.now() + 86_400_000 + 2
+    );
+    const { processInboundWebhookHandler } = await import('./webhook-inbox');
+    await processInboundWebhookHandler({
+      db,
+      job: {
+        id: admitted.enqueuedJobId!,
+        organizationId: orgB,
+        type: 'webhook.process',
+        payload: { inboxId: admitted.inbox.id },
+        attempts: 1,
+        maxAttempts: 5,
+        claimedBy: 'fixture',
+        claimToken: 'fixture',
+        startedAt: new Date(),
+      },
+    });
+    expect(
+      await db.restaurantTerminalReconciliation.findFirstOrThrow({
+        where: { source, externalEventId: input.externalEventId },
+      })
+    ).toMatchObject({ outcome: 'REJECTED', failureReason: 'AMOUNT_MISMATCH' });
+    expect(await db.restaurantTender.count({ where: { billId: tenant.b.billId } })).toBe(0);
   });
 });
