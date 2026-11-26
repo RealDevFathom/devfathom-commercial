@@ -77,6 +77,10 @@ BEGIN
       FROM history h JOIN writes w ON w.untargeted_provision AND w."actorId" = h."userId"
       WHERE h."revokedAt" IS NULL AND h.issuance = 1 AND h.issued_together = 1
         AND h."createdAt" <= w."createdAt"
+        AND w."createdAt" <= h."createdAt" + interval '5 minutes'
+        AND NOT EXISTS (
+          SELECT 1 FROM writes t WHERE t.credential_id = h.id AND t."createdAt" <= w."createdAt"
+        )
     ), latest AS (
       -- At identical audit times conflicting attribution cannot establish a member set.
       SELECT DISTINCT ON (id) id, member_set FROM setters ORDER BY id, "createdAt" DESC, member_set

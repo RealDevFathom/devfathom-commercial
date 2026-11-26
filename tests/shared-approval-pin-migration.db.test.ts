@@ -128,10 +128,19 @@ it.runIf(url)(
         ('self-last','mixed',false), ('manager-last','mixed',true), ('support-last','pharmacy',true),
         ('no-restaurant','pharmacy',false), ('restaurant-unknown','mixed',true), ('demo-skip','demo',false),
         ('purchase-first','mixed',false), ('replacement','mixed',true), ('alias','mixed',false),
+        ('late-provision','mixed',true), ('prior-issue','mixed',true),
         ('contract-unknown','contract',true), ('disabled-unknown','disabled',false), ('trial-unknown','trial',true);
       INSERT INTO restaurant_staff_profiles SELECT id,tenant,'member-'||id FROM expected;
       INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type)
         SELECT id,tenant,id,'PIN' FROM expected;
+      UPDATE restaurant_operator_credentials SET "createdAt"='2026-01-02 23:59:59' WHERE id='purchase-first';
+      -- Two active profiles now link to the same person. The older PIN was manager-issued.
+      INSERT INTO restaurant_staff_profiles VALUES
+        ('relinked','mixed','member-relinked'), ('own-profile','mixed','member-relinked');
+      INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type,"createdAt") VALUES
+        ('relinked-old','mixed','relinked','PIN','2025-09-01'),
+        ('relinked-own','mixed','own-profile','PIN','2025-10-02');
+      INSERT INTO expected VALUES ('relinked-old','mixed',true), ('relinked-own','mixed',true);
       INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type,"createdAt","revokedAt")
         VALUES ('old-purchase','mixed','replacement','PIN','2025-10-01','2025-12-01');
 
@@ -144,6 +153,11 @@ it.runIf(url)(
         ('demo','restaurantStaff.rotateCredential','manager','RestaurantOperatorCredential','demo-skip',NULL,'2026-01-03'),
         ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-purchase-first',NULL,NULL,NULL,'2026-01-03'),
         ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-replacement',NULL,NULL,NULL,'2025-10-02'),
+        ('mixed','restaurantStaff.issueCredential','manager','RestaurantOperatorCredential','relinked-old',NULL,'2025-09-01'),
+        ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-relinked',NULL,NULL,NULL,'2025-10-02 00:00:01'),
+        ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-late-provision',NULL,NULL,NULL,'2026-01-01 00:05:01'),
+        ('mixed','restaurantStaff.issueCredential','manager','RestaurantOperatorCredential','prior-issue',NULL,'2026-01-01'),
+        ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-prior-issue',NULL,NULL,NULL,'2026-01-01 00:00:01'),
         ('mixed','accountPin.setMine','member-alias','User','member-alias','{"credentialId":"alias","staffProfileId":"alias"}','2026-01-03');
 
     `);
@@ -216,7 +230,10 @@ it.runIf(url)(
         )
       ).toEqual([
         'member-contract-unknown',
+        'member-late-provision',
         'member-manager-last',
+        'member-prior-issue',
+        'member-relinked',
         'member-replacement',
         'member-restaurant-unknown',
         'member-support-last',
