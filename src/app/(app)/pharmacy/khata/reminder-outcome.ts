@@ -6,6 +6,7 @@ import type { KhataReminderRunResult } from '@/lib/pharmacy/whatsapp/khata-remin
  */
 export function reminderOutcome(result: KhataReminderRunResult): string {
   if (result.sent) return 'reminder-sent';
+  if (result.held) return 'reminder-held';
   if (result.prepared) return 'reminder-prepared';
   if (result.sms.sent) return 'reminder-sms-sent';
   if (result.sms.prepared) return 'reminder-sms-prepared';

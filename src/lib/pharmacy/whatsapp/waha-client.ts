@@ -21,6 +21,7 @@ export function wahaMessageId(id: string) {
 const restriction = (value: unknown): 463 | 475 | undefined => {
   const data = z
     .object({
+      exception: z.object({ message: z.string() }).optional(),
       error: z.union([z.string(), z.object({ message: z.string() })]).optional(),
       message: z.string().optional(),
     })
@@ -28,7 +29,9 @@ const restriction = (value: unknown): 463 | 475 | undefined => {
   if (!data.success) return;
   const error = data.data.error;
   const match = /\bserver returned error (463|475)\b/i.exec(
-    typeof error === 'string' ? error : (error?.message ?? data.data.message ?? '')
+    typeof error === 'string'
+      ? error
+      : (error?.message ?? data.data.exception?.message ?? data.data.message ?? '')
   );
   return match?.[1] === '463' ? 463 : match?.[1] === '475' ? 475 : undefined;
 };

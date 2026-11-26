@@ -146,15 +146,23 @@ export async function receiveWahaEvent(
   config: WhatsAppConfig
 ) {
   const organizationId = selectorOrganization(selector);
-  const session = organizationId
-    ? await withTenantDb(organizationId, (db) => readWahaSession(db, organizationId))
-    : null;
-  const bound = session && session.selector === selector;
-  const ok = authenticateWaha(
-    raw,
-    headers,
-    bound ? decryptSecret(session.encryptedWebhookSecret) : dummy
-  );
+  let session = null;
+  let key: string | Buffer = dummy;
+  if (organizationId) {
+    try {
+      const candidate = await withTenantDb(organizationId, (db) =>
+        readWahaSession(db, organizationId)
+      );
+      if (candidate?.selector === selector) {
+        key = decryptSecret(candidate.encryptedWebhookSecret);
+        session = candidate;
+      }
+    } catch {
+      /* Return the same authentication response as an unknown selector. */
+    }
+  }
+  const bound = session !== null;
+  const ok = authenticateWaha(raw, headers, key);
   if (!ok || !bound || !organizationId) return 401;
   const event = parseWahaEvent(raw, session.sessionName);
   if (!event) return 400;

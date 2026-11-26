@@ -25,6 +25,10 @@ const day = (date: Date, timeZone: string | null | undefined) =>
 
 /** Result codes carried on the redirect back to the list. */
 const notices: Record<string, { tone: 'status' | 'alert'; text: string }> = {
+  'reminder-held': {
+    tone: 'status',
+    text: 'WhatsApp held this reminder. Check consent, sending limits and the pharmacy connection.',
+  },
   'reminder-sent': { tone: 'status', text: 'WhatsApp reminder sent.' },
   'reminder-prepared': {
     tone: 'status',

@@ -106,7 +106,7 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
       await withTenantDb(org.id, async (db) => {
         await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${'waha:prepare:' + org.id},0))`;
         if (!(await readWahaSession(db, org.id)))
-          await prepareWahaSession(db, org.id, randomBytes(32).toString('hex'));
+          await prepareWahaSession(db, org.id, 'unissued:' + randomBytes(32).toString('hex'));
       });
     if (cmd.action === 'test') {
       const phone = normalizeWhatsAppNumber(cmd.phone);
@@ -144,11 +144,7 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
         }
         if (!state) await provisioner.start(callback, decryptSecret(row.encryptedWebhookSecret));
         if (state?.status === 'STOPPED' && !state.restriction) await provisioner.activate();
-        try {
-          await client.status();
-        } catch (e) {
-          if (!(e instanceof WahaFailure) || !(e.httpStatus === 401 || e.httpStatus === 403))
-            throw e;
+        if (decryptSecret(row.encryptedApiKey).startsWith('unissued:')) {
           const key = await provisioner.issueSessionKey();
           await db.$executeRaw`UPDATE pharmacy_waha_sessions SET "encryptedApiKey"=${encryptSecret(key)} WHERE "organizationId"=${org.id}`;
           client = new WahaClient(row.sessionName, key);

@@ -97,6 +97,7 @@ export type RefillReminderRunResult = {
   scanned: number;
   sent: number;
   prepared: number;
+  held?: number;
   unknown: number;
   failed: number;
   duplicate: number;
@@ -395,6 +396,7 @@ async function deliverRefillReminder(
       })
   );
   if (outcome === 'SENT') result.sent += 1;
+  else if (outcome === 'PREPARED' && provider.name === 'waha') result.held = (result.held ?? 0) + 1;
   else if (outcome === 'PREPARED') result.prepared += 1;
   else if (outcome === 'UNKNOWN') result.unknown += 1;
   else if (outcome === 'FAILED') result.failed += 1;

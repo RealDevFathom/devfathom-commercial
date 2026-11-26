@@ -663,3 +663,37 @@ describe('inbound SMS STOP / START', () => {
     expect(sms.calls).toEqual([]);
   });
 });
+
+describe('WAHA refill delivery at the reminder entry point', () => {
+  it.each([
+    ['absent', true, 1],
+    ['ambiguous', true, 0],
+    ['absent', false, 0],
+  ] as const)('handles %s with SMS consent %s', async (outcome, allowed, expected) => {
+    const { WahaWhatsAppProvider } = await import('../whatsapp/waha-provider');
+    const send = vi
+      .spyOn(WahaWhatsAppProvider.prototype, 'sendTemplate')
+      .mockRejectedValue(
+        new WhatsAppProviderError(
+          outcome === 'absent' ? 'NOT_ON_WHATSAPP' : 'SEND_FAILED',
+          undefined,
+          outcome === 'absent'
+        )
+      );
+    try {
+      store.captures = [refillCapture];
+      store.customers = [customer(true)];
+      store.consents = [consent('WHATSAPP'), consent('SMS', allowed)];
+      const config = readWhatsAppConfig({
+        PHARMACY_WHATSAPP_PROVIDER: 'waha',
+        PHARMACY_WAHA_REFILL_EN: 'Your refill is due on {{1}}.',
+      });
+      const sms = new MockSmsProvider(smsConfig);
+      await processDueWhatsAppRefillReminders({ now: NOW, config, smsConfig, smsProvider: sms });
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(sms.calls).toHaveLength(expected);
+    } finally {
+      send.mockRestore();
+    }
+  });
+});

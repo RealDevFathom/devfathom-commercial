@@ -72,7 +72,10 @@ export async function POST(request: Request) {
   }
 
   const config = readWhatsAppConfig();
-  const rawBody = await readBoundedBody(request, MAX_BODY_BYTES);
+  const rawBody = await readBoundedBody(
+    request,
+    config.provider === 'waha' ? 256 * 1024 : MAX_BODY_BYTES
+  );
   if (rawBody === null) return json({ error: 'Body too large.' }, 413);
   if (config.provider === 'waha') {
     const { receiveWahaEvent } = await import('@/lib/pharmacy/whatsapp/waha-webhook');

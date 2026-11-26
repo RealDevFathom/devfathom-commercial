@@ -67,7 +67,12 @@ async function reserveAndSend(
   const reservation = await withTenantDb(organizationId, async (db) => {
     await db.$queryRaw`SELECT "organizationId" FROM pharmacy_waha_sessions WHERE "organizationId"=${organizationId} FOR NO KEY UPDATE`;
     const session = await readWahaSession(db, organizationId);
-    if (!session || session.status !== 'WORKING')
+    if (session?.restrictionCode) throw new WhatsAppProviderError('WAHA_POLICY');
+    if (
+      !session ||
+      session.status !== 'WORKING' ||
+      decryptSecret(session.encryptedApiKey).startsWith('unissued:')
+    )
       throw new WhatsAppProviderError('WAHA_DISCONNECTED');
     const org = await db.organization.findUnique({
       where: { id: organizationId },

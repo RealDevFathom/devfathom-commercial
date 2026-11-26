@@ -36,7 +36,12 @@ const server = createServer(async (req, res) => {
     if (mode === '463' || mode === '475') {
       res
         .writeHead(500)
-        .end(JSON.stringify({ error: { message: 'server returned error ' + mode } }));
+        .end(
+          JSON.stringify({
+            exception: { message: 'server returned error ' + mode },
+            request: { body: { text: 'private synthetic payload' } },
+          })
+        );
       return;
     }
     res.end(JSON.stringify({ id: randomUUID() }));

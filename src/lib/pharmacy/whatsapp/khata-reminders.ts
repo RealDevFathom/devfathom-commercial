@@ -179,6 +179,7 @@ export type KhataReminderRunResult = {
   scanned: number;
   sent: number;
   prepared: number;
+  held?: number;
   unknown: number;
   failed: number;
   duplicate: number;
@@ -322,7 +323,10 @@ export async function processDueWhatsAppKhataReminders(
   // the job for customers it can reach, without WhatsApp credentials.
   const whatsappReady =
     result.configured && Boolean(config.organizationId && hasWhatsAppSender(config));
-  const smsReady = smsConfig.provider !== 'disabled' && Boolean(smsConfig.organizationId);
+  const smsReady =
+    smsConfig.provider !== 'disabled' &&
+    Boolean(smsConfig.organizationId) &&
+    (config.provider !== 'waha' || config.organizationId === smsConfig.organizationId);
   const organizationId = whatsappReady
     ? config.organizationId
     : smsReady
@@ -624,6 +628,8 @@ export async function processDueWhatsAppKhataReminders(
         })
     );
     if (outcome === 'SENT') result.sent += 1;
+    else if (outcome === 'PREPARED' && provider.name === 'waha')
+      result.held = (result.held ?? 0) + 1;
     else if (outcome === 'PREPARED') result.prepared += 1;
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
