@@ -2775,6 +2775,82 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(page.getByRole('form', { name: 'Reopen today for trading' })).toBeVisible();
 });
 
+test('DEV-1041: scan and search each sell one unit at the server price', async ({ page }) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const { otc, syrup } = PHARMACY_E2E.medicines;
+  await scan(page, otc.barcode);
+  const tablet = billLine(page, otc.name);
+  await expect(tablet.getByRole('radio', { name: 'Unit' })).toHaveAttribute('aria-checked', 'true');
+  await expect(tablet).toContainText('2.50');
+  await search(page, syrup.name);
+  await addFirstResult(page, syrup.name);
+  const loose = billLine(page, syrup.name);
+  await expect(loose.getByRole('radio', { name: 'Unit' })).toHaveAttribute('aria-checked', 'true');
+  await expect(loose).toContainText(PHARMACY_E2E_EXPECTED.syrupUnitPrice);
+  await expect(page.getByLabel('Bill total')).toContainText('5.50');
+  await expect(
+    page.getByLabel('Bill total').getByRole('button', { name: /Take payment/ })
+  ).toBeEnabled();
+});
+
+test('DEV-1042: unmatched searches leave the bill, totals and keyboard focus in place', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const field = page.getByLabel('Scan or search');
+  const positions = () =>
+    page.evaluate(() =>
+      [
+        '#counter-search',
+        '[aria-label="Cart"]',
+        '#counter-bill-total',
+        '[aria-label="Phone payment"]',
+      ].map((selector) => {
+        const el = document.querySelector(selector);
+        if (!el) throw new Error('Missing ' + selector);
+        const rect = el.getBoundingClientRect();
+        return [rect.x, rect.y, rect.width, rect.height];
+      })
+    );
+  const writes: Request[] = [];
+  page.on('request', (req) => {
+    if (
+      req.method() === 'POST' &&
+      /pharmacySales\.(captureDemand|setDemandOutcome)/.test(req.url())
+    )
+      writes.push(req);
+  });
+  for (const width of [1366, 375]) {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 768 });
+    await field.focus();
+    const word = 'syntheticmissing' + width;
+    await field.fill(word);
+    await expect(page.getByText(`Nothing in this catalog matches “${word}”.`)).toBeVisible();
+    const prompt = page.getByRole('region', { name: 'What happened to the short line' });
+    await expect(prompt).toHaveCount(0);
+    const original = await positions();
+    await field.press('Enter');
+    await expect(prompt).toContainText(
+      `Nothing matches '${word}'. Was the customer asking for it?`
+    );
+    await expect(field).toBeFocused();
+    expect(await positions()).toEqual(original);
+    await expect(prompt.getByRole('button', { name: 'Unknown' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Alt+5'
+    );
+    await field.press('Escape');
+    await expect(prompt).toHaveCount(0);
+    await expect(field).toBeFocused();
+    await field.press('Enter');
+    await expect(page.getByText(`Nothing in this catalog matches “${word}”.`)).toBeAttached();
+    await expect(prompt).toHaveCount(0);
+  }
+  expect(writes).toHaveLength(0);
+});
+
 test('this spec drives the counter without a pointer', async () => {
   const source = await readFile(join(process.cwd(), 'tests/e2e/pharmacy-counter.spec.ts'), 'utf8');
   // Strip this assertion's own literals so it cannot match itself.

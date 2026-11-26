@@ -934,7 +934,7 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     const view = renderPayment(
       <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
     );
-    fireEvent.click(screen.getByRole('button', { name: 'Khata', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: 'Khata' }));
     const name = await screen.findByLabelText('Customer name');
     mocks.refetch.mockRejectedValueOnce(new Error('Read failed'));
     mocks.queries.counterCart!.isStale = true;

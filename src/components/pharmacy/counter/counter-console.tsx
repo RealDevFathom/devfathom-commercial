@@ -1206,7 +1206,7 @@ function ScopedPharmacyCounterConsole({
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
-    { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
+    { enabled: Boolean(branchId && saleId), staleTime: 30_000, retry: false }
   );
   // DEV-623: every unpaid bill in the branch, so none is stranded with its stock.
   const openBillsQuery = trpc.pharmacySales.openBills.useQuery(
@@ -1622,6 +1622,22 @@ function ScopedPharmacyCounterConsole({
                   : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
                     ? 'ready'
                     : 'unavailable';
+  const lastPayable = useRef<{ scope: string; contents: string } | null>(null);
+  useEffect(() => {
+    if (billState !== 'ready' || !currentBill) return;
+    const contents = billContents(cart);
+    const previous = lastPayable.current;
+    if (
+      paymentOpen &&
+      !tenderOutcome &&
+      previous?.scope === billScope &&
+      previous.contents !== contents
+    )
+      setBalanceAnnouncement(
+        `This bill changed. New balance: Rs ${formatMinor(cart.totals.netMinor - cart.totals.tenderedMinor)}`
+      );
+    lastPayable.current = { scope: billScope, contents };
+  }, [billScope, billState, cart, currentBill, paymentOpen, tenderOutcome]);
   // #1254: opening the drawer moves no money for this bill, so the bill re-read a
   // refused payment demands must not lock "Open drawer", the usual fix for that refusal.
   const drawerBusy =
@@ -2051,7 +2067,7 @@ function ScopedPharmacyCounterConsole({
         }
         return true;
       } catch {
-        setTenderReadRequired(true);
+        if (currentSaleId.current === saleId) setTenderReadRequired(true);
         return false;
       } finally {
         if (!confirmed || attemptRef.current) {
@@ -2093,7 +2109,7 @@ function ScopedPharmacyCounterConsole({
       pending ||
       tenderReadRequired ||
       attempt ||
-      tenderOutcome ||
+      unknownTender ||
       failedBalanceRead ||
       autoRead.current === billScope
     )
@@ -2111,7 +2127,7 @@ function ScopedPharmacyCounterConsole({
     pending,
     refreshTenderBill,
     saleId,
-    tenderOutcome,
+    unknownTender,
     tenderReadRequired,
   ]);
 
@@ -2280,6 +2296,7 @@ function ScopedPharmacyCounterConsole({
 
   const offerMissingItem = useCallback(
     (requested: string) => {
+      if (currentSaleId.current !== saleId) return;
       const term = normalizeMedicineText(requested);
       const terms = promptedTerms.current.get(billScope) ?? new Set<string>();
       if (!term || terms.has(term)) return;
@@ -2288,7 +2305,7 @@ function ScopedPharmacyCounterConsole({
       setResultsDismissed(false);
       setLostSaleCapture({ branchId, requested });
     },
-    [billScope, branchId]
+    [billScope, branchId, saleId]
   );
 
   // DEV-705, DEV-977B: Enter that beats the search debounce runs the search now and highlights
@@ -3073,7 +3090,10 @@ function ScopedPharmacyCounterConsole({
   );
 
   const queueScan = useCallback(
-    (code: string) => setScanQueue((queue) => [...queue, { code, branchId }]),
+    (code: string) => {
+      setLostSaleCapture(null);
+      setScanQueue((queue) => [...queue, { code, branchId }]);
+    },
     [branchId]
   );
 
@@ -3816,11 +3836,11 @@ function ScopedPharmacyCounterConsole({
         ...(demandSaleId ? { saleId: demandSaleId } : {}),
         ...(deviceId ? { terminalId: deviceId } : {}),
         requestedQty: Math.max(requestedCanonicalUnits ?? quantity, capturedUnits),
-        ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
+        requestedMedicineId: activeRow.medicineId,
         requestedText: requested,
         saleUnit: 'UNIT',
         quantity: capturedUnits,
-        reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
+        reason: 'STOCKOUT',
         inventoryRuleSnapshot: {
           query: query.trim(),
           requestedQuantity: quantity,

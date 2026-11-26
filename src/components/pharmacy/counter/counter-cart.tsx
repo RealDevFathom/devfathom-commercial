@@ -98,6 +98,16 @@ function CounterLineRemove({
 
 const UNIT_WORD: Record<SaleUnitKind, string> = { PACK: 'Pack', STRIP: 'Strip', UNIT: 'Unit' };
 
+function smallestSizeNote(line: CounterCartLine, options: readonly SaleUnitOption[]) {
+  if (line.saleUnit === 'PACK' && line.canonicalUnitsPerSaleUnit === 1)
+    return 'One pack contains one unit.';
+  if (!options.length || options.some((option) => option.kind === 'UNIT')) return null;
+  const smallest = options.reduce((smallest, option) =>
+    option.canonicalUnitsPerSaleUnit < smallest.canonicalUnitsPerSaleUnit ? option : smallest
+  );
+  return `Not sold loose. The smallest sellable size is one ${smallest.kind.toLowerCase()}.`;
+}
+
 function CounterLineEditor({
   line,
   controls,
@@ -132,13 +142,6 @@ function CounterLineEditor({
     'grid size-11 place-items-center text-text-strong transition-colors hover:bg-surface-sunken focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
-      {options.length > 0 && !options.some((option) => option.kind === 'UNIT') && (
-        <span className="basis-full text-xs text-text-muted">
-          {options.length === 1 && options[0]!.canonicalUnitsPerSaleUnit === 1
-            ? 'One pack contains one unit.'
-            : `Not sold loose. The smallest sellable size is one ${options.reduce((a, b) => (a.canonicalUnitsPerSaleUnit <= b.canonicalUnitsPerSaleUnit ? a : b)).kind.toLowerCase()}.`}
-        </span>
-      )}
       {editing === 'full' && options.length > 1 ? (
         <span
           role="radiogroup"
@@ -393,6 +396,9 @@ export function CounterCartPanel({
                     {plural(counterUnitNoun(line.dosageForm), line.canonicalUnits)} @{' '}
                     {formatMinor(line.unitPriceMinor)}
                     {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
+                  </p>
+                  <p className="text-xs text-text-muted empty:hidden">
+                    {smallestSizeNote(line, lineControls?.unitOptions(line) ?? [])}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5 empty:hidden">
                     {line.controlled ? (

@@ -558,7 +558,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     ? 'Add an item to start a bill.'
                     : state === 'unavailable'
                       ? 'This bill is unavailable for payment.'
-                      : 'Wait for the current counter action to finish.'}
+                      : 'Locked while the counter finishes its current action.'}
       </p>
     );
     async function submitTender() {
@@ -1002,6 +1002,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {cashMemo ? (
             <div className="space-y-1.5">
+              {lockNote}
               <Label htmlFor="tender-buyer-name">Buyer name (cash memo, optional)</Label>
               <Input
                 id="tender-buyer-name"
@@ -1621,6 +1622,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
 
+          {lockNote}
           {summaryExtra}
         </section>
       </div>
