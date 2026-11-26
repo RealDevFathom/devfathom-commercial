@@ -1935,7 +1935,11 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         (choice as InstanceType<typeof CounterApprovalChoice>).staffProfileIds.toSorted()
       ).toEqual(profiles.map((p) => p.id).toSorted());
       const second = profiles.find((p) => p.userId === other)!;
-      await expect(submit(current, second.id)).resolves.toMatchObject({ approvedByUserId: other });
+      await expect(submit(current, second.id)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      const later = new Date(at.getTime() + 30_000);
+      vi.setSystemTime(later);
+      const nextCode = codeAt(secret, later);
+      await expect(submit(nextCode, second.id)).resolves.toMatchObject({ approvedByUserId: other });
       const audit = await tenant(s.owner, (db) =>
         db.auditLog.findMany({
           where: { action: 'pharmacy.counterApproval.DISCOUNT' },
@@ -1943,7 +1947,7 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         })
       );
       expect(audit.map((row) => row.actorId).sort()).toEqual([s.manager, other].sort());
-      for (const value of [previous, current, secret, deviceSecret, counter.sessionToken])
+      for (const value of [previous, current, nextCode, secret, deviceSecret, counter.sessionToken])
         expect(JSON.stringify(audit).includes(value)).toBe(false);
       // Prime the live, independent counters directly. No attempt exercises an unpatched security control.
       const { rateLimit } = await import('@/lib/rate-limit');

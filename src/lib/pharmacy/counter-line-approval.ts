@@ -26,6 +26,7 @@ import {
 import {
   approvalSecretKindFor,
   matchingApprovalStep,
+  retireApprovalStep,
   verifyApprovalSecret,
 } from '@/lib/approval-authenticator';
 import {
@@ -508,7 +509,7 @@ async function identifyCounterApprover(
       userId: { in: [...eligible.keys()] },
       enabledAt: { not: null },
     },
-    select: { userId: true, encryptedSecret: true, lastUsedStep: true },
+    select: { id: true, userId: true, encryptedSecret: true, lastUsedStep: true },
     orderBy: { userId: 'asc' },
   });
   const reservations = new Map<string, RateLimitResult>();
@@ -524,18 +525,30 @@ async function identifyCounterApprover(
     }
     reservations.set(userId, budget);
   }
-  const matches: Array<{ userId: string; staffProfileId: string }> = [];
+  const matches: Array<{
+    userId: string;
+    staffProfileId: string;
+    authenticatorId: string;
+    step: number;
+  }> = [];
   let used = false;
   for (const auth of authenticators) {
     const step = matchingApprovalStep(auth.encryptedSecret, pin, now);
     if (step === null) continue;
     if (auth.lastUsedStep !== null && step <= auth.lastUsedStep) used = true;
-    matches.push({ userId: auth.userId, staffProfileId: eligible.get(auth.userId)! });
+    matches.push({
+      userId: auth.userId,
+      staffProfileId: eligible.get(auth.userId)!,
+      authenticatorId: auth.id,
+      step,
+    });
   }
   if (used || matches.length === 0) return null;
   if (matches.length > 1 && !matchingStaffProfileId) {
-    // A verified but ambiguous code is not a failed attempt. The explicit choice
-    // makes a fresh, rate-limited comparison against the live candidates.
+    // Permanently retire this step for every match before returning the list. A
+    // subsequent named or code-only verification must consume a later step.
+    for (const match of matches)
+      if (!(await retireApprovalStep(db, match.authenticatorId, match.step))) return null;
     await releaseReservations();
     return new CounterApprovalChoice(matches.map((match) => match.staffProfileId));
   }

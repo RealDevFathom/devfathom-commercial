@@ -94,7 +94,7 @@ describe('refusal reasons (DEV-860)', () => {
 it('returns only the matched profile IDs on the deliberate approval choice', async () => {
   const error = await call('approvalChoice');
   expect(error.message).toBe(
-    'Which person is approving? Choose their name and enter their current code.'
+    'Which person is approving? Choose their name and wait for their next authenticator code, then enter it.'
   );
   expect(error.data.matchingStaffProfileIds).toEqual(['eligible-a', 'eligible-b']);
   expect((await call('otherCause')).data).not.toHaveProperty('matchingStaffProfileIds');

@@ -209,6 +209,19 @@ export function matchingApprovalStep(
   return matchTotpStep(secret, code, APPROVAL_TOTP_WINDOW, now.getTime());
 }
 
+/** Advance the replay guard without attributing a successful approval. */
+export async function retireApprovalStep(db: ScopedDb, authenticatorId: string, step: number) {
+  const consumed = await db.approvalAuthenticator.updateMany({
+    where: {
+      id: authenticatorId,
+      enabledAt: { not: null },
+      OR: [{ lastUsedStep: null }, { lastUsedStep: { lt: step } }],
+    },
+    data: { lastUsedStep: step },
+  });
+  return consumed.count === 1;
+}
+
 async function consumeApprovalCode(
   db: ScopedDb,
   input: ApprovalRecordInput & Pick<ApprovalSecretInput, 'secret'>,
@@ -218,17 +231,7 @@ async function consumeApprovalCode(
 ): Promise<boolean> {
   const step = matchingApprovalStep(authenticator.encryptedSecret, input.secret, now);
   if (step === null) return false;
-  // Single use: only a step newer than the last accepted one is consumed. The guarded
-  // update is atomic, so two simultaneous approvals with one code cannot both succeed.
-  const consumed = await db.approvalAuthenticator.updateMany({
-    where: {
-      id: authenticator.id,
-      enabledAt: { not: null },
-      OR: [{ lastUsedStep: null }, { lastUsedStep: { lt: step } }],
-    },
-    data: { lastUsedStep: step },
-  });
-  if (consumed.count !== 1) return false;
+  if (!(await retireApprovalStep(db, authenticator.id, step))) return false;
   await recordApproval(db, input, 'AUTHENTICATOR', approverUserId, now);
   return true;
 }

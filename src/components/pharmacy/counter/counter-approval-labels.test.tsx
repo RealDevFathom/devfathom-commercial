@@ -175,11 +175,11 @@ it('offers only the returned names after a collision and requires an explicit ch
   expect(submit).toBeDisabled();
   expect(screen.getByLabelText('Approval code')).toHaveValue('');
   fireEvent.change(screen.getByLabelText('Approving manager or owner'), { target: { value: 'c' } });
-  fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '123456' } });
+  fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '654321' } });
   fireEvent.click(submit);
   expect(onDiscard).toHaveBeenLastCalledWith({
     matchingStaffProfileId: 'c',
-    pin: '123456',
+    pin: '654321',
     reason: 'Fixture reason',
   });
 });
@@ -191,13 +191,13 @@ it('continues a line approval only after a matching person is explicitly chosen'
   const request = vi
     .fn()
     .mockResolvedValueOnce({ pin: '123456' })
-    .mockResolvedValueOnce({ matchingStaffProfileId: 'c', pin: '123456' });
+    .mockResolvedValueOnce({ matchingStaffProfileId: 'c', pin: '654321' });
   const send = vi.fn().mockRejectedValueOnce(collision).mockResolvedValueOnce('approved');
   await expect(submitDialogApproval(request, send)).resolves.toBe('approved');
   expect(request.mock.calls).toEqual([[], [['a', 'c']]]);
   expect(send.mock.calls).toEqual([
     [{ pin: '123456' }],
-    [{ matchingStaffProfileId: 'c', pin: '123456' }],
+    [{ matchingStaffProfileId: 'c', pin: '654321' }],
   ]);
 
   request.mockResolvedValueOnce({ pin: '123456' }).mockResolvedValueOnce(null);

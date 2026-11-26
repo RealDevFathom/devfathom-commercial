@@ -96,7 +96,8 @@ export function ApprovalNames({
     <>
       {form.matches && (
         <p role="status">
-          More than one person matches. Choose who is approving and enter their current code.
+          More than one person matches. Choose who is approving and wait for their next
+          authenticator code, then enter it.
         </p>
       )}
       {children}
