@@ -25,6 +25,10 @@
 #   pg_trgm search function to its throwaway test role (see docs/LOCAL_SETUP.md).
 # - tests/pharmacy-price-intelligence.integration.test.ts: the reserved lane needs a
 #   seeded database, the wha1606_runtime role and its reserved port range.
+# - tests/pharmacy-offline-command-fifo-migration.test.ts: the migration harness
+#   needs a separately provisioned historical schema and a setup superuser.
+# - tests/pharmacy-sop-legacy-capture-backfill.test.ts: mixed unit and opt-in
+#   PostgreSQL coverage for the standalone legacy backfill command.
 # - src/lib/pharmacy/accounts/fiscal-exceptions.reader.test.ts: combined unit and
 #   opt-in PostgreSQL coverage, run as a file with TEST_DATABASE_URL.
 # - src/app/(app)/pharmacy/accounts/journal-evidence-export/page.db.test.tsx:
