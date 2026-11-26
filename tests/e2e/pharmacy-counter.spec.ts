@@ -2787,3 +2787,142 @@ test('this spec drives the counter without a pointer', async () => {
     expect(body, `pointer API used: ${pointerApi}`).not.toContain(pointerApi);
   }
 });
+
+test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale alone and takes payment', async ({
+  page,
+}) => {
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const {
+    organizationId,
+    branchId,
+    adminId,
+    patientId,
+    prescriberId,
+    medicines,
+    adminPinCredentialId,
+    adminPin,
+    adminStaffProfileId,
+  } = PHARMACY_E2E;
+  const med = medicines.controlled;
+  const rx = randomUUID();
+  const address = '103 Synthetic Test Street';
+  await db.connect();
+  try {
+    await db.query(
+      "SELECT set_config('app.current_organization_id',$1,false), set_config('app.current_branch_id',$2,false)",
+      [organizationId, branchId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescriptions(id,"organizationId","patientId","prescriberId","sourceKind","sourceFileRef","validFrom","validUntil","capturedByUserId")
+      VALUES ($1,$2,$3,$4,'PAPER_IMAGE','synthetic://dev1043',now()-interval '1 day',now()+interval '1 day',$5)`,
+      [rx, organizationId, patientId, prescriberId, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescription_lines(id,"organizationId","prescriptionId","lineNumber","medicineId","presentationId","authorizedCanonicalUnits",directions)
+      VALUES ($1,$2,$3,1,$4,$5,100,'Synthetic directions')`,
+      [rx + '-line', organizationId, rx, med.id, med.presentationId]
+    );
+    await openCounter(page);
+    await openDrawer(page);
+    await search(page, 'Fathomadol');
+    await stageFirstResult(page, med.name);
+    await page.keyboard.press('F6');
+    const sheet = page.getByRole('dialog', { name: /^Authorise Fathomadol/ });
+    await pressControl(sheet.getByRole('button', { name: 'Find the patient' }));
+    const checks = page.getByRole('dialog', { name: 'Patient, prescription and checks' });
+    const find = checks.getByLabel('Find patient');
+    await find.fill(PHARMACY_E2E.patientName);
+    await find.press('Enter');
+    await pressControl(checks.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+    await pressControl(checks.getByRole('button', { name: /^Authorise Fathomadol/ }));
+    await sheet.getByLabel('Patient address').fill(address);
+    await sheet.getByLabel('Prescription line', { exact: true }).selectOption(rx + '-line');
+    await sheet
+      .getByRole('combobox', { name: 'Approving pharmacist' })
+      .selectOption(adminStaffProfileId);
+    const pin = sheet.getByLabel(/^(Pharmacist PIN|Approval code)$/);
+    const submit = sheet.getByRole('button', { name: 'Authorise line' });
+    const strikes = async () =>
+      Number(
+        (
+          await db.query(
+            'SELECT "failedAttempts" FROM restaurant_operator_credentials WHERE id=$1',
+            [adminPinCredentialId]
+          )
+        ).rows[0].failedAttempts
+      );
+    const before = await strikes();
+    await pin.fill('0000');
+    await pressControl(submit);
+    await expect(sheet.getByRole('alert')).toBeVisible();
+    await expect(pin).toHaveValue('');
+    expect(await strikes()).toBe(before + 1);
+    await expect(billLine(page, med.name)).toHaveCount(0);
+    await pin.fill(adminPin);
+    await pressControl(submit);
+    await expect(billLine(page, med.name)).toBeVisible({ timeout: 15000 });
+    expect(await strikes()).toBe(0);
+    await page.keyboard.press('F9');
+    await pressControl(page.getByRole('button', { name: 'Take payment', exact: true }));
+    await expect(page.getByRole('region', { name: /^Receipt \d+/ })).toContainText(med.name, {
+      timeout: 15000,
+    });
+    const records = await db.query(
+      `SELECT r.*,d."actorUserId",a.metadata,s.status FROM pharmacy_controlled_register_entries r
+      JOIN pharmacy_pharmacist_review_decisions d ON d.id=r."signatureRef" AND d."organizationId"=r."organizationId"
+      JOIN audit_logs a ON a.id=d."selfApprovalAuditId" AND a."organizationId"=r."organizationId"
+      JOIN pharmacy_sales s ON s.id=a.metadata->>'saleId' AND s."organizationId"=r."organizationId"
+      WHERE r."organizationId"=$1 AND r."prescriptionLineId"=$2`,
+      [organizationId, rx + '-line']
+    );
+    expect(records.rows).toHaveLength(1);
+    expect(records.rows[0]).toMatchObject({
+      status: 'COMPLETED',
+      entryKind: 'SALE',
+      branchId,
+      patientId,
+      patientAddress: address,
+      prescriberId,
+      prescriptionId: rx,
+      medicineId: med.id,
+      batchNumber: med.batchNumber,
+      recordedByUserId: adminId,
+      witnessedByUserId: null,
+      actorUserId: adminId,
+      witnessStatement: 'No witness: dispensed by one pharmacist',
+      metadata: expect.objectContaining({
+        selfApproved: true,
+        pinVerified: true,
+        approvalMethod: 'PIN',
+        branchId,
+      }),
+    });
+    expect(records.rows[0].quantityCanonicalUnits).toBeGreaterThan(0);
+    expect(records.rows[0].runningBalance).toBeGreaterThanOrEqual(0);
+
+    // Reuse the synthetic row's otherwise valid clinical and stock details. The database
+    // must refuse a new solo row specifically for a missing or reused approval.
+    for (const decisionId of [null, records.rows[0].signatureRef]) {
+      await db.query('BEGIN');
+      try {
+        await expect(
+          db.query(
+            `INSERT INTO pharmacy_controlled_register_entries
+          SELECT (jsonb_populate_record(NULL::pharmacy_controlled_register_entries,
+            to_jsonb(r) || jsonb_build_object('id',$2::text,'serial',r.serial+1,'signatureRef',$3::text))).*
+          FROM pharmacy_controlled_register_entries r WHERE r.id=$1`,
+            [records.rows[0].id, randomUUID(), decisionId]
+          )
+        ).rejects.toMatchObject({
+          code: '23514',
+          message: 'controlled register requires its verified self-approval',
+        });
+      } finally {
+        await db.query('ROLLBACK');
+      }
+    }
+  } finally {
+    await db.end();
+  }
+});

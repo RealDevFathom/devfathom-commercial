@@ -194,7 +194,8 @@ type SaleRegisterInput = {
   rxSerialWritten: boolean;
   refEntryId: string | null;
   recordedByUserId: string;
-  witnessedByUserId: string;
+  witnessedByUserId: string | null;
+  witnessStatement?: string;
   signatureRef: string;
 };
 
@@ -251,6 +252,7 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
       recordedByUserId: input.recordedByUserId,
       witnessedByUserId: input.witnessedByUserId,
       signatureRef: input.signatureRef,
+      ...(input.witnessStatement ? { witnessStatement: input.witnessStatement } : {}),
       rxSerialWritten: input.rxSerialWritten,
       emergency: input.emergency,
       refEntryId: input.refEntryId,

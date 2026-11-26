@@ -860,3 +860,26 @@ describe('[DEF-10] counter add-line replay (DEV-874)', () => {
     expect(f.db.pharmacySaleLine.findFirst).not.toHaveBeenCalled();
   });
 });
+
+describe('DEV-1043 controlled dispensing by the signed-in pharmacist', () => {
+  const own = {
+    ...line,
+    controlledAuthorization: {
+      ...line.controlledAuthorization,
+      selfApproval: true as const,
+      staffProfileId: 'own-staff',
+      emergency: false,
+      prescriptionLineId: 'rx-line-1',
+    },
+  };
+
+  it('refuses self-approval before verifying a PIN when the branch requires a witness', async () => {
+    const f = callerFor([{ capability: 'pharmacy:dispense', effect: 'ALLOW' }]);
+    f.lock.mockResolvedValue([{ requireSecondPharmacist: true }]);
+    await expect(f.caller.addLine(own)).resolves.toMatchObject({
+      blocked: expect.stringContaining('second pharmacist'),
+    });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+  });
+});

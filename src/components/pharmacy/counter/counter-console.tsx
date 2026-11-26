@@ -773,18 +773,6 @@ function ScopedPharmacyCounterConsole({
   const [discountHold, setHeldDiscount] = useState<
     (CounterHeldDiscount & { branchId: string }) | null
   >(null);
-  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
-    enabled: safetyLicensed,
-  });
-  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
-  // actor cannot dispense, so the controlled authorization panel is not offered (the server
-  // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
-  const controlledBlock: ControlledBlock = !safetyLicensed
-    ? 'NO_SAFETY_MODULE'
-    : (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code === 'FORBIDDEN'
-      ? 'NOT_DISPENSER'
-      : null;
-  const controlledAuthorisable = controlledBlock === null;
   // DEV-961, DEV-977 phase 3: the Authorise sheet's wording follows the approvals setting.
   const approvalCopy = useCounterApprovalCopy();
   // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
@@ -958,6 +946,22 @@ function ScopedPharmacyCounterConsole({
   const branchId = selectedBranchId || enrolledBranchId || (branches[0]?.id ?? '');
   // Every drawer, tender and loyalty write is stamped with the branch's business day:
   // DEV-958A, the workspace's day ending at the branch's "day ends at" hour.
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(
+    { branchId },
+    {
+      enabled: safetyLicensed && Boolean(branchId),
+    }
+  );
+  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
+  // actor cannot dispense, so the controlled authorization panel is not offered (the server
+  // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
+  const controlledBlock: ControlledBlock = !safetyLicensed
+    ? 'NO_SAFETY_MODULE'
+    : (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code === 'FORBIDDEN'
+      ? 'NOT_DISPENSER'
+      : null;
+  const controlledAuthorisable = controlledBlock === null;
+  const ownControlledProfileId = pharmacistsQuery.data?.find((staff) => staff.ownApproval)?.id;
   const dayEnd = branches.find((entry) => entry.id === branchId)?.businessDayEndsAtHistory;
   const todayBusinessDate = useCallback(
     () => businessDate({ timeZone: workspaceZone, dayEnd }),
@@ -1665,7 +1669,11 @@ function ScopedPharmacyCounterConsole({
                 return { ...current, [field]: value === true };
               }
               if (typeof value !== 'string') return current;
-              return { ...current, [field]: value };
+              return {
+                ...current,
+                [field]: value,
+                ...(field === 'staffProfileId' ? { pin: '' } : {}),
+              };
             });
           },
         }
@@ -2360,7 +2368,16 @@ function ScopedPharmacyCounterConsole({
         const voucher = heldVoucher;
         let discountApproval: CounterApprovalPin | undefined;
         const attemptKeys: string[] = [];
+        let usedOwnConfirmation = false;
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
+          const solo =
+            controlled &&
+            !checkOff &&
+            Boolean(ownControlledProfileId) &&
+            billAuth.staffProfileId === ownControlledProfileId;
+          if (solo && usedOwnConfirmation)
+            throw new Error('Enter your own PIN or approval code again for this sale.');
+          usedOwnConfirmation ||= solo;
           const selection = JSON.stringify([
             lineSaleId,
             row.medicineId,
@@ -2397,6 +2414,7 @@ function ScopedPharmacyCounterConsole({
                     patientAddress:
                       patientAddress === null ? { useAddressOnFile: true } : patientAddress.trim(),
                     staffProfileId: billAuth.staffProfileId,
+                    ...(solo ? { selfApproval: true as const } : {}),
                     pin: billAuth.pin,
                     rxSerialWritten: billAuth.rxSerialWritten,
                     emergency: billAuth.emergency,
@@ -2632,6 +2650,7 @@ function ScopedPharmacyCounterConsole({
       focusSearch,
       lotOverride,
       controlledBlock,
+      ownControlledProfileId,
       approvalCopy,
       openSale,
       patientId,

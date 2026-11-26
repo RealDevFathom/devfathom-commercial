@@ -107,11 +107,11 @@ import {
   lookupCounterVoucher,
 } from '@/lib/pharmacy/vouchers';
 import {
-  isLockedOut,
-  registerFailedAttempt,
-  clearLockout,
-} from '@/lib/restaurant/operator-credentials';
-import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+  branchAllowsControlledSelfApproval,
+  confirmControlledSale,
+  NO_CONTROLLED_SALE_WITNESS,
+  writeControlledReviewApproval,
+} from '@/lib/pharmacy/controlled-sale-approval';
 import {
   closePharmacyDay,
   readPharmacyClose,
@@ -3207,6 +3207,7 @@ export const pharmacySalesRouter = router({
                 z.object({ useAddressOnFile: z.literal(true) }).strict(),
               ]),
               staffProfileId: z.string().min(1),
+              selfApproval: z.literal(true).optional(),
               pin: z.string().regex(/^\d{4,8}$/),
               rxSerialWritten: z.boolean(),
               emergency: z.boolean(),
@@ -3401,7 +3402,7 @@ export const pharmacySalesRouter = router({
           // pharmacist authorization), so with the check on nothing below changes. While it is
           // off the line sells like any other item, and the controlled register still gets its
           // entry, marked as written with the check switched off by the owner.
-          if (!mayDispense || !authorization) {
+          if ((!mayDispense || !authorization) && !authorization?.selfApproval) {
             const pharmacistCheck = await readPharmacistCheckPolicy(db, scope.organizationId);
             if (!pharmacistCheck.enabled) {
               await requirePharmacyTodayOpenForTrading(db, scope);
@@ -3454,53 +3455,22 @@ export const pharmacySalesRouter = router({
               'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
           } as const;
           if (!authorization) return blocked;
-          // Serialize credential attempts; returning a denial commits durable lockout counters.
-          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
-          const credential = await db.restaurantOperatorCredential.findFirst({
-            where: {
-              organizationId: scope.organizationId,
-              staffProfileId: authorization.staffProfileId,
-              type: 'PIN',
-              revokedAt: null,
-              deviceId: null,
-            },
-            include: { staffProfile: { include: { user: true } } },
-          });
-          const pharmacist = credential?.staffProfile.user;
-          const now = new Date();
-          if (
-            !credential ||
-            credential.staffProfile.status !== 'ACTIVE' ||
-            !pharmacist ||
-            pharmacist.organizationId !== scope.organizationId ||
-            pharmacist.status !== 'ACTIVE' ||
-            pharmacist.id === scope.actorId ||
-            isLockedOut(credential, now)
-          )
-            return blocked;
-          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
-          if (
-            !(await verifyApprovalSecret(db, {
-              organizationId: scope.organizationId,
-              approverUserId: pharmacist.id,
-              credentialHash: credential.credentialHash,
-              secret: authorization.pin,
-              action: 'pharmacySales.controlledAuthorization',
-              approverRight: 'pharmacy:dispense',
-              requestedById: scope.actorId,
-              now,
-            }))
-          ) {
-            await db.restaurantOperatorCredential.update({
-              where: { id: credential.id },
-              data: registerFailedAttempt(credential, now),
-            });
-            return blocked;
+          if (authorization.selfApproval) {
+            if (authorization.emergency || !authorization.prescriptionLineId)
+              return {
+                blocked: 'Select a valid prescription before confirming a controlled sale alone.',
+              };
+            if (!(await branchAllowsControlledSelfApproval(db, scope)))
+              return {
+                blocked: 'This branch requires a second pharmacist for controlled medicines.',
+              };
           }
-          await db.restaurantOperatorCredential.update({
-            where: { id: credential.id },
-            data: clearLockout(),
-          });
+          const pharmacist = await confirmControlledSale(db, scope, authorization);
+          if (!pharmacist || pharmacist.method === 'BADGE')
+            return authorization.selfApproval
+              ? { blocked: 'Your PIN or approval code was not accepted.' }
+              : blocked;
+          const now = new Date();
           // Check the actor and witness before taking the day lock. The day lock
           // still precedes document/register locks and every stock allocation.
           await requirePharmacyTodayOpenForTrading(db, scope);
@@ -3789,6 +3759,15 @@ export const pharmacySalesRouter = router({
               requestedByUserId: scope.actorId,
             },
           });
+          const approval = authorization.selfApproval
+            ? await writeControlledReviewApproval(db, scope, {
+                reviewItemId: review.id,
+                saleLineId: result.line.id,
+                saleId: input.saleId,
+                method: pharmacist.method,
+                now,
+              })
+            : null;
           const decision = await db.pharmacyPharmacistReviewDecision.create({
             data: {
               organizationId: scope.organizationId,
@@ -3796,6 +3775,7 @@ export const pharmacySalesRouter = router({
               kind: 'SIGN',
               actorUserId: pharmacist.id,
               signedAt: now,
+              ...(approval ? { selfApprovalAuditId: approval.id } : {}),
             },
           });
           await appendControlledSaleEntries(db, {
@@ -3815,7 +3795,8 @@ export const pharmacySalesRouter = router({
             rxSerialWritten: authorization.rxSerialWritten,
             refEntryId: refEntry?.id ?? null,
             recordedByUserId: scope.actorId,
-            witnessedByUserId: pharmacist.id,
+            witnessedByUserId: approval ? null : pharmacist.id,
+            ...(approval ? { witnessStatement: NO_CONTROLLED_SALE_WITNESS } : {}),
             signatureRef: decision.id,
           });
           return result;

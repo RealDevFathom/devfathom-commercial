@@ -305,17 +305,20 @@ export function ControlledRegisterConsole() {
                             {batchNumberLabel(entry.batchNumber)}
                           </td>
                           <td className={cell}>
-                            {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')}
+                            {entry.witnessStatement ??
+                              (entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—'))}
                             {entry.signatureRef ? (
                               <span className="mt-0.5 block text-text-muted">
-                                {entry.lateDispatchAt
-                                  ? 'Owner confirmed'
-                                  : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
-                                      entry.signatureRef.startsWith('solo-')
-                                    ? 'Sender confirmed'
-                                    : entry.signatureRef.startsWith('authenticator:')
-                                      ? 'Approval code witnessed'
-                                      : 'PIN witnessed'}
+                                {entry.witnessStatement
+                                  ? entry.recordedByName
+                                  : entry.lateDispatchAt
+                                    ? 'Owner confirmed'
+                                    : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
+                                        entry.signatureRef.startsWith('solo-')
+                                      ? 'Sender confirmed'
+                                      : entry.signatureRef.startsWith('authenticator:')
+                                        ? 'Approval code witnessed'
+                                        : 'PIN witnessed'}
                               </span>
                             ) : null}
                             {open ? (
@@ -473,6 +476,7 @@ type ShownEntry = {
   batchNumber: string | null;
   inventoryLotId: string;
   witnessName: string | null;
+  witnessStatement?: string | null;
   correctionReason: string | null;
   patientAddress: string | null;
   counterpartyName: string | null;
@@ -550,8 +554,10 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
             </p>
             <p className="mt-1 text-text-muted">
               {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
-              {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')} · balance{' '}
-              {entry.runningBalance}
+              {entry.witnessStatement ??
+                (entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—'))}{' '}
+              · balance {entry.runningBalance}
+              {entry.witnessStatement && entry.recordedByName ? ` · ${entry.recordedByName}` : null}
             </p>
           </article>
         );

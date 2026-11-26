@@ -14161,8 +14161,9 @@ model PharmacyControlledRegisterEntry {
   balanceDelta           Int                               @default(0)
   runningBalance         Int
   recordedByUserId       String
-  /// Null only for an owner-confirmed historical supplier dispatch.
+  /// Empty when a single pharmacist dispenses or an owner confirms a historical dispatch.
   witnessedByUserId      String?
+  witnessStatement        String?
   signatureRef           String?
   rxSerialWritten        Boolean                           @default(false)
   emergency              Boolean                           @default(false)
