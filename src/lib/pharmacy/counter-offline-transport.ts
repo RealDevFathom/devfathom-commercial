@@ -109,23 +109,36 @@ export function counterApprovalSessionActive() {
   return Boolean(approvalSession && approvalSession.expiresAt > Date.now());
 }
 
-const approvalMutations = new Set([
-  'pharmacySales.addLine',
-  'pharmacySales.applyBillDiscount',
-  'pharmacySales.discountBillLine',
-  'pharmacySales.tender',
-  'pharmacySales.discardTenderAttempt',
-]);
+type ApprovalOperation = { type: string; path: string; input?: unknown };
+
+function carriesCounterApproval({ type, path, input }: ApprovalOperation) {
+  if (type !== 'mutation' || !input || typeof input !== 'object') return false;
+  const hasApproval = (value: unknown) =>
+    value !== null && typeof value === 'object' && 'approval' in value && !!value.approval;
+  switch (path) {
+    case 'pharmacySales.addLine':
+      return (
+        ('discountApproval' in input && !!input.discountApproval) ||
+        ('override' in input && hasApproval(input.override)) ||
+        ('scannedPack' in input && hasApproval(input.scannedPack))
+      );
+    case 'pharmacySales.applyBillDiscount':
+    case 'pharmacySales.discountBillLine':
+      return 'discountApproval' in input && !!input.discountApproval;
+    case 'pharmacySales.tender':
+      return 'overLimitApproval' in input && !!input.overLimitApproval;
+    case 'pharmacySales.discardTenderAttempt':
+      return hasApproval(input);
+    default:
+      return false;
+  }
+}
 
 export async function counterApprovalHeaders(
-  operations: readonly { type: string; path: string }[]
+  operations: readonly ApprovalOperation[]
 ): Promise<Record<string, string>> {
   if (!counterApprovalSessionActive()) clearCounterApprovalSession();
-  if (
-    !approvalSession ||
-    !operations.some((op) => op.type === 'mutation' && approvalMutations.has(op.path))
-  )
-    return {};
+  if (!approvalSession || !operations.some(carriesCounterApproval)) return {};
   const session = approvalSession;
   try {
     const result = await counterPost(

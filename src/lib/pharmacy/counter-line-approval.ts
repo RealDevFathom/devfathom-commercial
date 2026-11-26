@@ -415,7 +415,7 @@ async function verifyApproverPin(
   if (selfApproved && !(await isSoleApprover(db, scope, kind, now)))
     return refuseAfterDummyCompare(input.pin);
   // A named entry and an unidentified code spend the same per-person guess budget. The
-  // comparison in identifyCounterApprover already reserved it for each eligible person.
+  // verifier in identifyCounterApprover reserves it once for the identified person.
   const namedBudget =
     typeof method === 'string' && !selfApproved
       ? await spendApproverPinGuessTypedByAnother(scope.organizationId, approver.id)

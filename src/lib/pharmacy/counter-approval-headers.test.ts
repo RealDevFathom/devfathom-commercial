@@ -10,7 +10,13 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 it('sends the in-memory till proof only for pharmacy sale mutations and clears it on unbind', async () => {
-  const mutation = [{ type: 'mutation', path: 'pharmacySales.tender' }];
+  const mutation = [
+    {
+      type: 'mutation',
+      path: 'pharmacySales.tender',
+      input: { overLimitApproval: { pin: '000000' } },
+    },
+  ];
   const enrolled = { deviceId: 'till', organizationId: 'org', branchId: 'branch' };
   const expiresAt = Date.now() + 3_600_000;
   const token = btoa(JSON.stringify({ ...enrolled, expiresAt })) + '.fixture';
@@ -25,6 +31,9 @@ it('sends the in-memory till proof only for pharmacy sale mutations and clears i
   const session = await establishCounterSession();
   expect(await counterApprovalHeaders(mutation)).toEqual({});
   activateCounterApprovalSession(enrolled, session.sessionToken);
+  expect(
+    await counterApprovalHeaders([{ type: 'mutation', path: 'pharmacySales.tender', input: {} }])
+  ).toEqual({});
   expect(await counterApprovalHeaders(mutation)).toEqual({
     'x-pharmacy-approval-device': proof.device.id,
     'x-terminal-session': proof.sessionToken,

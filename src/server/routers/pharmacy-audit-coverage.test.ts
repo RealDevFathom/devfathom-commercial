@@ -463,6 +463,11 @@ const REST_ROUTES: Readonly<
     | { exempt: string }
   >
 > = {
+  'counter/approval-proof/route.ts': {
+    audited: /pharmacyCounterRoute\('approval-proof'\)/,
+    delegate: { file: OFFLINE_ROUTER, writes: /'issueCounterApprovalProof'/ },
+    how: 'Records the cashier, branch and enrolled terminal that obtained a proof. The proof and credentials stay out of audit data.',
+  },
   'counter/bind/route.ts': {
     audited: /bindPharmacyCounterBrowser/,
     delegate: {

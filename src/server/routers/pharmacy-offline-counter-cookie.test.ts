@@ -165,7 +165,19 @@ describe('DEV-957 counter route: cookie credential', () => {
     } finally {
       vi.useRealTimers();
     }
-    expect(mocks.auditCreate).toHaveBeenCalledTimes(1); // the original session opening
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    const issuance = mocks.auditCreate.mock.lastCall;
+    expect(issuance).toMatchObject([
+      {
+        data: {
+          action: 'pharmacyOffline.issueCounterApprovalProof',
+          targetId: DEVICE,
+          actorId: ACTOR,
+        },
+      },
+    ]);
+    for (const sensitive of [SECRET, sessionToken, proof])
+      expect(JSON.stringify(issuance).includes(sensitive)).toBe(false);
   });
 
   it('refuses the cookie from another origin', async () => {

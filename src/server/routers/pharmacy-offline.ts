@@ -1209,7 +1209,13 @@ export function counterAuditEntry(
 ): CounterAuditEntry | null {
   switch (operation) {
     case 'approval-proof':
-      return null;
+      return {
+        action: 'issueCounterApprovalProof',
+        operation: 'EXECUTE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: text(field(outcome, 'deviceId')),
+        metadata: {},
+      };
     case 'establish':
       return {
         action: 'openCounterSession',
@@ -1478,7 +1484,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         });
         if (operation === 'approval-proof') {
           z.object({}).strict().parse(body);
-          return { proof: issueApprovalDeviceProof(sessionToken) };
+          return { deviceId: device.id, proof: issueApprovalDeviceProof(sessionToken) };
         }
         if (operation === 'renew') {
           // DEV-957 phase 2: the counter rotates its own secret while it is still valid.
