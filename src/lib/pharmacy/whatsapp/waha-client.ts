@@ -80,13 +80,21 @@ export class WahaClient {
     if (!/^[1-9]\d{7,14}$/.test(to)) throw new WahaFailure('NOT_ON_WHATSAPP', true);
     const query = new URLSearchParams({ phone: to, session: this.session });
     const result = z
-      .object({ numberExists: z.boolean(), chatId: z.string().optional() })
+      .object({
+        numberExists: z.boolean(),
+        chatId: z.string().optional(),
+        pn: z.string().nullish(),
+      })
       .safeParse(await this.request('/api/contacts/check-exists?' + query));
     if (!result.success) throw new WahaFailure('UNAVAILABLE', true);
     if (!result.data.numberExists) throw new WahaFailure('NOT_ON_WHATSAPP', true);
     const chatId = result.data.chatId;
     if (!chatId || !/^\d{6,20}@(c\.us|lid)$/.test(chatId))
       throw new WahaFailure('UNAVAILABLE', true);
+    const resolvedPhone = chatId.endsWith('@lid')
+      ? (result.data.pn?.split('@')[0] ?? (await this.phoneForLid(chatId)))
+      : chatId.split('@')[0];
+    if (resolvedPhone !== to) throw new WahaFailure('UNAVAILABLE', true);
     const target = { session: this.session, chatId };
     let response: unknown;
     if ('text' in content) {

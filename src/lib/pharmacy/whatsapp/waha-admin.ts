@@ -12,7 +12,7 @@ import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { normalizeWhatsAppNumber } from './messages';
 import { guardedWahaSend } from './waha-policy';
 import { WahaClient, WahaFailure } from './waha-client';
-import { prepareWahaSession, readWahaSession } from './waha-session';
+import { prepareWahaSession, readWahaSession, wahaWebhookUrl } from './waha-session';
 import { WhatsAppProviderError } from './provider';
 
 const command = z.discriminatedUnion('action', [
@@ -130,9 +130,12 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
       }
       if (cmd.action === 'start' && !row.restrictionCode) {
         const rootKey = process.env.PHARMACY_WAHA_PROVISIONING_KEY;
-        const callback = tenantHostUrl(
-          org.slug,
-          '/api/pharmacy/whatsapp/webhook?endpoint=' + encodeURIComponent(row.selector)
+        const callback = wahaWebhookUrl(
+          tenantHostUrl(
+            org.slug,
+            '/api/pharmacy/whatsapp/webhook?endpoint=' + encodeURIComponent(row.selector)
+          ),
+          row.selector
         );
         if (!rootKey || !callback) throw new WahaFailure('UNAVAILABLE', true);
         const provisioner = new WahaClient(row.sessionName, rootKey);

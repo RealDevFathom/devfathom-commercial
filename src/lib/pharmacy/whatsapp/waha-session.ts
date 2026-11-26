@@ -38,7 +38,7 @@ export function selectorOrganization(selector: string): string | null {
 export async function prepareWahaSession(db: ScopedDb, organizationId: string, apiKey: string) {
   if (!apiKey.trim() || apiKey.length > 512) throw new Error('Invalid API key.');
   const sessionName =
-    'ph-' + createHmac('sha256', randomBytes(32)).update(organizationId).digest('hex');
+    'ph-' + createHmac('sha256', randomBytes(32)).update(organizationId).digest('base64url');
   const selector = encryptSecret('pharmacy-waha:' + organizationId);
   const encryptedApiKey = encryptSecret(apiKey);
   const encryptedWebhookSecret = encryptSecret(randomBytes(48).toString('base64url'));
@@ -60,6 +60,34 @@ export function wahaOrigin() {
     )
       return null;
     return url.origin;
+  } catch {
+    return null;
+  }
+}
+
+// Both origins are operator configuration. The container callback can also use the host bridge during local setup.
+export function wahaWebhookUrl(tenantUrl: string | null, selector: string) {
+  const configured = process.env.PHARMACY_WAHA_WEBHOOK_ORIGIN;
+  if (!configured) return tenantUrl;
+  try {
+    const origin = new URL(configured);
+    if (
+      origin.username ||
+      origin.password ||
+      origin.pathname !== '/' ||
+      origin.search ||
+      origin.hash
+    )
+      return null;
+    const local =
+      origin.hostname === 'host.docker.internal' ||
+      origin.hostname === '127.0.0.1' ||
+      origin.hostname === 'localhost' ||
+      origin.hostname === '[::1]';
+    if (origin.protocol !== 'https:' && !(origin.protocol === 'http:' && local)) return null;
+    const url = new URL('/api/pharmacy/whatsapp/webhook', origin);
+    url.searchParams.set('endpoint', selector);
+    return url.toString();
   } catch {
     return null;
   }

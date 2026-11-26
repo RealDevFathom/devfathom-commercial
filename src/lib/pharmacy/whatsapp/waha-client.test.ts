@@ -76,3 +76,17 @@ it('withholds sends to an absent number and does not follow redirects', async ()
   await expect(client.send(recipient, { text: 'Synthetic notice' })).rejects.toThrow();
   expect(calls).toEqual(['/api/contacts/check-exists', '/api/contacts/check-exists']);
 });
+
+it('never dispatches to a different phone returned by a contact lookup', async () => {
+  redirect = false;
+  exists = true;
+  const fetchMock = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(Response.json({ numberExists: true, chatId: '12025550199@c.us' }));
+  try {
+    await expect(client.send(recipient, { text: 'Synthetic notice' })).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  } finally {
+    fetchMock.mockRestore();
+  }
+});

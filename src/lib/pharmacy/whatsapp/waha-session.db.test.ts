@@ -40,6 +40,7 @@ describe.skipIf(!url)('WAHA session storage on restricted PostgreSQL', () => {
           });
         await tx.$queryRaw`SELECT set_config('app.is_platform_admin','false',true),set_config('app.current_organization_id',${tenants[0]},true)`;
         const first = await prepareWahaSession(tx, tenants[0], apiKey);
+        expect(first.sessionName.length).toBeLessThanOrEqual(54);
         await prepareWahaSession(tx, tenants[0], apiKey);
         const row = await readWahaSession(tx, tenants[0]);
         expect(
