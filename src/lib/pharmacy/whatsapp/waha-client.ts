@@ -92,7 +92,9 @@ export class WahaClient {
     if (!chatId || !/^\d{6,20}@(c\.us|lid)$/.test(chatId))
       throw new WahaFailure('UNAVAILABLE', true);
     const resolvedPhone = chatId.endsWith('@lid')
-      ? (result.data.pn?.split('@')[0] ?? (await this.phoneForLid(chatId)))
+      ? result.data.pn == null
+        ? await this.phoneForLid(chatId)
+        : result.data.pn.match(/^(\d{8,15})@c\.us$/)?.[1]
       : chatId.split('@')[0];
     if (resolvedPhone !== to) throw new WahaFailure('UNAVAILABLE', true);
     const target = { session: this.session, chatId };

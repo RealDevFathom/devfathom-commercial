@@ -90,3 +90,50 @@ it('never dispatches to a different phone returned by a contact lookup', async (
     fetchMock.mockRestore();
   }
 });
+
+it('requires the documented phone-ID namespace when a lookup returns a LID', async () => {
+  const transport = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(
+      Response.json({ numberExists: true, chatId: '12345678@lid', pn: recipient + '@lid' })
+    )
+    .mockResolvedValueOnce(Response.json({ id: 'synthetic' }));
+  try {
+    await expect(client.send(recipient, { text: 'Synthetic notice' })).rejects.toThrow();
+    expect(transport).toHaveBeenCalledTimes(1);
+  } finally {
+    transport.mockRestore();
+  }
+});
+
+it('keeps request bodies, API keys and upstream response details out of errors and console logs', async () => {
+  const payload = randomBytes(20).toString('hex');
+  const transport = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(Response.json({ numberExists: true, chatId: recipient + '@c.us' }))
+    .mockResolvedValueOnce(
+      Response.json(
+        {
+          exception: { message: 'server returned error 475' },
+          request: { headers: { 'x-api-key': apiKey }, body: { text: payload } },
+        },
+        { status: 500 }
+      )
+    );
+  const sinks = (['error', 'warn', 'log', 'debug', 'info'] as const).map((method) =>
+    vi.spyOn(console, method).mockImplementation(() => {})
+  );
+  try {
+    const failure = await client.send(recipient, { text: payload }).catch((err: Error) => err);
+    expect(failure).toMatchObject({ reason: 'RESTRICTED', restriction: 475 });
+    const visible = JSON.stringify([
+      String(failure),
+      failure,
+      ...sinks.map((sink) => sink.mock.calls),
+    ]);
+    expect([apiKey, payload].some((marker) => visible.includes(marker))).toBe(false);
+  } finally {
+    transport.mockRestore();
+    for (const sink of sinks) sink.mockRestore();
+  }
+});
