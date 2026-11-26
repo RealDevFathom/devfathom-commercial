@@ -65,3 +65,4 @@
 20261126010000_pharmacy_legacy_pharmacist_day_close
 20261126020100_pharmacy_waha_sessions
 20261126020200_pharmacy_waha_delivery
+20261126020300_pharmacy_waha_webhook_events
