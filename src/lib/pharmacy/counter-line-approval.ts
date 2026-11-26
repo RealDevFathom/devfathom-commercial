@@ -169,7 +169,14 @@ export function counterProofRequired(kind: CounterApprovalKind) {
   );
 }
 
-type ActiveUser = Subject & { organizationId: string | null };
+type ActiveUser = Subject & { organizationId: string | null; name?: string };
+
+async function admittedToApprovalBranch(db: ScopedDb, user: Subject, scope: LedgerScope) {
+  if (!(await counterBranchAssignmentDenial(db, user, scope.organizationId, scope.branchId)))
+    return true;
+  const { isLiveOrganizationOwner } = await import('./owner-data-export');
+  return isLiveOrganizationOwner(db, scope.organizationId, user.id);
+}
 
 async function verifiedCounterId(db: ScopedDb, scope: LedgerScope, counter: CounterSession) {
   const device = await db.pharmacyRegisteredDevice.findFirst({
@@ -257,13 +264,10 @@ export async function authorizeCounterApproval(
     scope.organizationId,
     async (credentialDb) =>
       input.staffProfileId
-        ? verifyApproverPin(
-            credentialDb,
-            scope,
-            kind,
-            { staffProfileId: input.staffProfileId, pin: input.pin },
-            deviceId ? 'named-at-counter' : 'named'
-          )
+        ? verifyApproverPin(credentialDb, scope, kind, {
+            staffProfileId: input.staffProfileId,
+            pin: input.pin,
+          })
         : identifyCounterApprover(
             credentialDb,
             scope,
@@ -315,13 +319,15 @@ export async function confirmCounterApproval(
   if (!approver || !(await mayApproveCounterLine(db, approver, kind))) {
     throw new CounterApprovalDenied(kind);
   }
-  if (
-    approval.approvalBranchId !== undefined &&
-    (approval.approvalBranchId !== scope.branchId ||
-      (await counterBranchAssignmentDenial(db, approver, scope.organizationId, scope.branchId)))
-  )
-    throw new CounterApprovalDenied(kind);
   if (approval.credentialId === null) return;
+  if (
+    (approval.approvalBranchId !== undefined && approval.approvalBranchId !== scope.branchId) ||
+    !(await admittedToApprovalBranch(db, approver, scope))
+  )
+    throw new CounterApprovalDenied(
+      kind,
+      `${approver.name ?? 'This approver'} is not assigned to this branch.`
+    );
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
       id: approval.credentialId,
@@ -356,7 +362,7 @@ async function verifyApproverPin(
   scope: LedgerScope,
   kind: CounterApprovalKind,
   input: CounterApprovalPin,
-  method: 'named' | 'named-at-counter' | { matchedUserId: string } = 'named'
+  method: 'named' | { matchedUserId: string } = 'named'
 ): Promise<CounterApproval | null> {
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
@@ -383,11 +389,11 @@ async function verifyApproverPin(
     return refuseAfterDummyCompare(input.pin);
   }
   if (typeof method === 'object' && method.matchedUserId !== approver.id) return null;
-  if (
-    method !== 'named' &&
-    (await counterBranchAssignmentDenial(db, approver, scope.organizationId, scope.branchId))
-  )
-    return null;
+  if (!(await admittedToApprovalBranch(db, approver, scope)))
+    throw new CounterApprovalDenied(
+      kind,
+      `${credential.staffProfile.displayName} is not assigned to this branch.`
+    );
   const selfApproved = approver.id === scope.actorId;
   if (selfApproved && !(await isSoleApprover(db, scope, kind, now)))
     return refuseAfterDummyCompare(input.pin);
@@ -433,7 +439,7 @@ async function verifyApproverPin(
     approvalPolicy,
     selfApproved,
     credentialId: credential.id,
-    ...(method !== 'named' ? { approvalBranchId: scope.branchId } : {}),
+    approvalBranchId: scope.branchId,
   };
 }
 
@@ -466,6 +472,7 @@ async function identifyCounterApprover(
           status: 'ACTIVE',
           OR: [
             { role: 'ADMIN' },
+            { organizationRole: { key: 'owner', isSystem: true } },
             {
               pharmacyBranchAssignments: {
                 some: {
@@ -498,7 +505,11 @@ async function identifyCounterApprover(
   for (const credential of credentials) {
     const person = credential.staffProfile.user;
     if (!person || eligible.has(person.id) || isLockedOut(credential, now)) continue;
-    if (!(await mayApproveCounterLine(db, person, kind, { now }))) continue;
+    if (
+      !(await mayApproveCounterLine(db, person, kind, { now })) ||
+      !(await admittedToApprovalBranch(db, person, scope))
+    )
+      continue;
     if (person.id === scope.actorId && !(await isSoleApprover(db, scope, kind, now))) continue;
     eligible.set(person.id, credential.staffProfileId);
   }
@@ -595,7 +606,11 @@ export async function listCounterApprovers(
     const user = profile.user as ActiveUser | null;
     if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
     if (!capable.has(user.id))
-      capable.set(user.id, await mayApproveCounterLine(db, user, kind, { now }));
+      capable.set(
+        user.id,
+        (await mayApproveCounterLine(db, user, kind, { now })) &&
+          (await admittedToApprovalBranch(db, user, scope))
+      );
     if (capable.get(user.id))
       eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
   }

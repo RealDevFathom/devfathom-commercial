@@ -50,6 +50,9 @@ function fixture(approver = manager, holders: string[] = ['manager'], others = [
     async (_type, _pin, credentialHash) => credentialHash === 'hash'
   );
   const db = {
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ branchId: scope.branchId }),
+    },
     $queryRaw: vi.fn(),
     user: {
       findFirst: vi.fn().mockResolvedValue(actor),
@@ -58,7 +61,7 @@ function fixture(approver = manager, holders: string[] = ['manager'], others = [
       findFirst: vi.fn().mockResolvedValue({
         id: 'cred',
         credentialHash: 'hash',
-        staffProfile: { status: 'ACTIVE', user: approver },
+        staffProfile: { status: 'ACTIVE', displayName: 'Sana', user: approver },
       }),
       findMany: vi.fn().mockResolvedValue(
         others.map((user, index) => ({
@@ -91,6 +94,32 @@ beforeEach(async () => {
 });
 
 describe('counter discount approval (#520)', () => {
+  it('requires branch admission before a named approval and rechecks it in the sale', async () => {
+    const db = fixture();
+    const approval = await authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    const unassigned = {
+      ...manager,
+      name: 'Sana',
+      permissionOverrides: [],
+      organizationRole: null,
+    };
+    db.user.findFirst.mockResolvedValue(unassigned);
+    await expect(confirmCounterApproval(db as never, scope, 'DISCOUNT', approval)).rejects.toThrow(
+      'Sana is not assigned to this branch.'
+    );
+    await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)).rejects.toThrow(
+      'Sana is not assigned to this branch.'
+    );
+    db.user.findFirst.mockResolvedValue({
+      ...unassigned,
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+    });
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'DISCOUNT', pin)
+    ).resolves.toMatchObject({ approvedByUserId: manager.id });
+  });
+
   it('refuses a discount with no PIN approval before reading any credential', async () => {
     const db = fixture();
     await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT')).rejects.toBeInstanceOf(
@@ -106,6 +135,7 @@ describe('counter discount approval (#520)', () => {
       approvalPolicy: 'MANAGER_PIN',
       selfApproved: false,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
     expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
     expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
@@ -186,6 +216,7 @@ describe('counter discount approval (#520)', () => {
       approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
       selfApproved: true,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
     expect(verifyOperatorCredential).toHaveBeenCalledWith('PIN', '1234', 'hash');
   });
@@ -247,6 +278,7 @@ describe('counter scanned-pack FEFO approval (DEV-843)', () => {
       approvalPolicy: 'MANAGER_PIN',
       selfApproved: false,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
     expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
     expect(can).not.toHaveBeenCalledWith(
@@ -304,6 +336,7 @@ describe('counter scanned-pack FEFO approval (DEV-843)', () => {
       approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
       selfApproved: true,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
   });
 });
@@ -338,6 +371,7 @@ describe('counter FEFO-override approval (#520)', () => {
       approvalPolicy: 'PHARMACIST_PIN',
       selfApproved: false,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
   });
 
@@ -431,6 +465,7 @@ describe('DEV-290: Khata over-limit approval at the till', () => {
       approvalPolicy: 'MANAGER_PIN',
       selfApproved: false,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
     expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
   });
@@ -469,7 +504,12 @@ describe('DEV-290: Khata over-limit approval at the till', () => {
 describe('DEV-290: listCounterApprovers', () => {
   const owner = { id: 'owner', organizationId: 'org', status: 'ACTIVE', role: 'EMPLOYEE' };
   function listDb(profiles: Array<{ id: string; displayName: string; user: unknown }>) {
-    return { restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue(profiles) } };
+    return {
+      pharmacyBranchAssignment: {
+        findFirst: vi.fn().mockResolvedValue({ branchId: scope.branchId }),
+      },
+      restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue(profiles) },
+    };
   }
 
   it('offers other active managers and owners with a live PIN, never the actor', async () => {
@@ -625,8 +665,10 @@ describe('DEV-806: one shared approver check for the PIN and password routes', (
       approvalPolicy: 'MANAGER_PIN',
       selfApproved: false,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
     const saleDb = {
+      pharmacyBranchAssignment: db.pharmacyBranchAssignment,
       user: { findFirst: vi.fn().mockResolvedValue(manager) },
       restaurantOperatorCredential: { findFirst: vi.fn().mockResolvedValue({ id: 'cred' }) },
     };
@@ -653,6 +695,7 @@ describe('DEV-806: one shared approver check for the PIN and password routes', (
       approvalPolicy: 'SOLE_APPROVER_PIN_REAUTH',
       selfApproved: true,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
   });
 
@@ -672,6 +715,9 @@ describe('DEV-806: one shared approver check for the PIN and password routes', (
   it('never offers a tenant ADMIN without pharmacy:manage as an approver at the till', async () => {
     grants();
     const db = {
+      pharmacyBranchAssignment: {
+        findFirst: vi.fn().mockResolvedValue({ branchId: scope.branchId }),
+      },
       restaurantStaffProfile: {
         findMany: vi.fn().mockResolvedValue([
           { id: 'staff-admin', displayName: 'Owner Ayesha', user: tenantAdmin },
@@ -695,6 +741,7 @@ describe('DEV-712: discarding an unknown payment attempt', () => {
       approvalPolicy: 'MANAGER_PIN',
       selfApproved: false,
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
     expect(can).toHaveBeenCalledWith(manager, 'pharmacy:manage', undefined, expect.anything());
   });
@@ -775,6 +822,7 @@ describe('DEV-66 discount right granted by the owner', () => {
       approvedByUserId: 'manager',
       approvalPolicy: 'MANAGER_PIN',
       credentialId: 'cred',
+      approvalBranchId: scope.branchId,
     });
   });
 

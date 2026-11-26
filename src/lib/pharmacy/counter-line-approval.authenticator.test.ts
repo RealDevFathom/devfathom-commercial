@@ -77,6 +77,9 @@ function fixture(options: {
   const enrolled = new Set(options.enrolled ?? []);
   const db = {
     $queryRaw: vi.fn(),
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ branchId: scope.branchId }),
+    },
     user: { findFirst: vi.fn().mockResolvedValue(options.actor ?? cashier) },
     organization: {
       findFirst: vi.fn().mockResolvedValue({
@@ -142,17 +145,26 @@ describe('DEV-879 counter approvals with an authenticator code', () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     const start = Date.now();
     try {
-      await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT', {
-        ...named, counter: { deviceId: 'old-device', sessionToken: 'expired-fixture' },
-      })).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
+      await expect(
+        authorizeCounterApproval(db as never, scope, 'DISCOUNT', {
+          ...named,
+          counter: { deviceId: 'old-device', sessionToken: 'expired-fixture' },
+        })
+      ).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
       for (let i = 0; i < 5; i++) {
         await expect(submit('0000')).rejects.toBeInstanceOf(CounterApprovalDenied);
       }
       const reads = db.restaurantOperatorCredential.findFirst.mock.calls.length;
       expect(reads).toBe(6);
       vi.setSystemTime(start + 900_000 - 1);
-      await expect(authorizeCounterApproval(db as never, { ...scope, branchId: 'another-branch' },
-        'KHATA_OVER_LIMIT', named)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      await expect(
+        authorizeCounterApproval(
+          db as never,
+          { ...scope, branchId: 'another-branch' },
+          'KHATA_OVER_LIMIT',
+          named
+        )
+      ).rejects.toBeInstanceOf(CounterApprovalDenied);
       expect(db.restaurantOperatorCredential.findFirst).toHaveBeenCalledTimes(reads);
       vi.setSystemTime(start + 900_001);
       await expect(submit(named.pin)).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
