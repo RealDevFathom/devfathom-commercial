@@ -18,6 +18,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { expectNoPersistedPin } from '@/lib/test-support/persisted-pin';
 
 const databaseUrl = process.env.TEST_DATABASE_URL ?? '';
 if (databaseUrl) {
@@ -138,7 +139,8 @@ describeIfDatabase('DEV-961 approvals in each mode of the authenticator setting'
     ({ encryptSecret } = await import('@/lib/secret-crypto'));
     ({ generateTotpSecret } = await import('@/lib/totp'));
     const credentials = await import('@/lib/restaurant/operator-credentials');
-    const { seedDepartments, ensurePlatformModule } = await import('@/lib/test-support/departments');
+    const { seedDepartments, ensurePlatformModule } =
+      await import('@/lib/test-support/departments');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
     const { db } = await import('@/lib/db');
     disconnect = () => db.$disconnect();
@@ -311,12 +313,23 @@ describeIfDatabase('DEV-961 approvals in each mode of the authenticator setting'
   );
 
   it('writes one uniform audit row per accepted approval, naming the method', async () => {
+    // Exercise both approval methods even when this audit test is run on its own.
+    const before = (await approvalRows()).length;
+    await setRequired(true);
+    const now = nextStep();
+    await expect(manager(codeAt(secret, now), now)).resolves.toEqual({ verified: true });
+    await setRequired(false);
+    await expect(manager(MANAGER_PIN, nextStep())).resolves.toEqual({ verified: true });
     const rows = await approvalRows();
+    expect(rows).toHaveLength(before + 2);
     const methods = rows.map((row) => (row.metadata as { approvalMethod: string }).approvalMethod);
     expect(methods).toContain('PIN');
     expect(methods).toContain('AUTHENTICATOR');
     const shape = (row: (typeof rows)[number]) => Object.keys(row.metadata as object).sort();
     for (const row of rows) expect(shape(row)).toEqual(shape(rows[0]!));
-    expect(JSON.stringify(rows)).not.toContain(MANAGER_PIN);
+    expectNoPersistedPin(rows, MANAGER_PIN, {
+      approverId: [MANAGER],
+      requestedById: [MANAGER],
+    });
   });
 });
