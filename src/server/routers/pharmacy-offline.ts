@@ -1640,6 +1640,25 @@ async function quarantineReceipt(
       rejectionReason: reason,
     },
   });
+  await db.auditLog.create({
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      source: 'REST_API',
+      category: 'PHARMACY',
+      operation: 'UPDATE',
+      action: 'pharmacyOffline.quarantineOfflineReceipt',
+      targetType: 'PharmacyOfflineCommand',
+      targetId: stored.id,
+      metadata: {
+        branchId: scope.branchId,
+        deviceId,
+        sequence: command.sequence,
+        receiptNumber: command.leasedReceipt.receiptNumber,
+        reason,
+      },
+    },
+  });
   await appendReceiptEvent(
     db,
     { ...receiptEvidence(ctx, command, request), originalHash },

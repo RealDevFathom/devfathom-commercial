@@ -521,6 +521,25 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
         where: { deviceId: counter.fixture.deviceId },
         orderBy: { createdAt: 'asc' },
       });
+      const audits = await db.auditLog.findMany({
+        where: {
+          action: 'pharmacyOffline.quarantineOfflineReceipt',
+          organizationId: ORG_A,
+          actorId: ACTOR,
+        },
+        select: { metadata: true },
+      });
+      expect(audits).toEqual([
+        {
+          metadata: {
+            branchId: scope.branchId,
+            deviceId: counter.fixture.deviceId,
+            sequence: failed.sequence,
+            receiptNumber: failed.leasedReceipt.receiptNumber,
+            reason: review.reason,
+          },
+        },
+      ]);
       expect(rows).toMatchObject([
         { kind: 'REFUSED', evidence: { command: failed } },
         { kind: 'QUARANTINED', reason: review.reason, actorId: ACTOR },
