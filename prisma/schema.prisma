@@ -210,6 +210,8 @@ model PharmacyBranch {
   khataReminderCadenceDays        Int                          @default(7)
   khataReminderMinBalanceMinor    Int                          @default(10000)
   khataReminderRevision           Int                          @default(0)
+  /// Whether controlled dispensing requires an independent pharmacist at this branch.
+  requireSecondPharmacist         Boolean                      @default(false)
   /// DEV-846: the owner's record of pharmacist coverage hours for this branch,
   /// `{ timeZone, windows }` (the rule-set `presenceHours` shape). A record only:
   /// the live-sale hours check reads the jurisdiction rule set, never this.

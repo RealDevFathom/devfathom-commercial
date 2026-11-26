@@ -35,8 +35,10 @@ function pharmacistCredential(overrides: Record<string, unknown> = {}) {
 function fixture({
   drawer = { id: 'drawer-1' } as { id: string } | null,
   credentials = [pharmacistCredential()] as unknown[],
+  requireSecondPharmacist = true,
 } = {}) {
   return {
+    pharmacyBranch: { findFirstOrThrow: vi.fn(async () => ({ requireSecondPharmacist })) },
     pharmacyDrawerSession: { findFirst: vi.fn(async () => drawer) },
     restaurantOperatorCredential: { findMany: vi.fn(async () => credentials) },
   };
@@ -125,6 +127,16 @@ describe('evaluateCounterSaleReadiness (DEV-860)', () => {
     const db = fixture({ drawer: null });
     await expect(run(db, false)).resolves.toEqual({ ready: true, blockers: [], warnings: [] });
     expect(db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('omits the witness warning and credential search when the branch allows solo dispensing', async () => {
+    const db = fixture({ credentials: [], requireSecondPharmacist: false });
+    await expect(run(db)).resolves.toEqual({ ready: true, blockers: [], warnings: [] });
+    expect(db.pharmacyBranch.findFirstOrThrow).toHaveBeenCalledWith({
+      where: { organizationId: scope.organizationId, id: scope.branchId },
+      select: { requireSecondPharmacist: true },
+    });
+    expect(db.restaurantOperatorCredential.findMany).not.toHaveBeenCalled();
   });
 
   it('warns when no second pharmacist holds an active staff PIN', async () => {
