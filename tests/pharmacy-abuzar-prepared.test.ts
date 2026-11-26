@@ -106,3 +106,30 @@ it('lists persisted source identities omitted from a later export', async () => 
     expect.objectContaining({ table: 'stock', sourceId: 'S9' })
   );
 });
+
+it('packages long history into numbered uploads without repeating operational rows or losing references', async () => {
+  const { packageForUpload } = await import('../tools/abuzar-import/packages');
+  const data = await readPreparedExport(await syntheticExport());
+  const template = data.tables.history[0]!;
+  data.tables.history = Array.from({ length: 80 }, (_, i) => ({
+    ...template,
+    RowID: 'source-' + i,
+    DocumentNo: 'doc-' + i,
+  }));
+  const { mkdtemp } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const parent = await mkdtemp(join(tmpdir(), 'synthetic-abuzar-parts-'));
+  const result = await packageForUpload(data, parent, 17);
+  const primary = await readPreparedExport(join(result.directory, 'opening'));
+  expect(primary.tables.stock).toEqual(data.tables.stock);
+  expect(primary.tables.history).toEqual([]);
+  const history = [];
+  for (const name of result.historyPackages) {
+    const part = await readPreparedExport(join(result.directory, name));
+    expect(part.tables.products).toEqual([]);
+    expect(part.manifest.sourceFingerprint).toBe(data.manifest.sourceFingerprint);
+    history.push(...part.tables.history);
+  }
+  expect(result.historyPackages.length).toBeGreaterThan(1);
+  expect(history).toEqual(data.tables.history);
+});
