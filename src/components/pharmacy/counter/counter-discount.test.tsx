@@ -194,7 +194,7 @@ describe('DEV-961 with DEV-977 phase 3: the sheet follows the approvals setting'
     [
       'CODE',
       'They choose their name and enter the current 6-digit code from their authenticator app on this till (a staff member with no login enters their PIN) when you apply it to the bill.',
-      'a manager or owner approves with their approval code when you apply it.',
+      'a manager or owner approves with their authenticator code when you apply it.',
     ],
     [
       'PIN',
@@ -228,7 +228,7 @@ describe('DEV-961 with DEV-977 phase 3: the sheet follows the approvals setting'
 
 describe('A4 approval help for a selected bill line', () => {
   it.each([
-    ['CODE', 'current approval code'],
+    ['CODE', 'current authenticator code'],
     ['PIN', 'staff PIN'],
   ] as const)('uses the %s mode helper inside the sheet', async (mode, expected) => {
     render(

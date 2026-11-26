@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('@/lib/approval-authenticator', async () => {
   const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
   return {
+    approvalSecretKindFor: vi.fn(async () => 'PIN'),
     verifyApprovalSecret: async (
       _db: unknown,
       input: { secret: string; credentialHash: string }
@@ -44,6 +45,7 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
   verifyOperatorCredential: vi.fn(),
 }));
 
+import { approvalSecretKindFor } from '@/lib/approval-authenticator';
 import { addSaleLine } from '@/lib/pharmacy/sales';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { annotateAudit, recordAudit } from '@/server/audit';
@@ -314,6 +316,19 @@ describe('pharmacySales.addLine controlled actor', () => {
     });
     expect(credential).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it('asks for the independent pharmacist’s authenticator code when the organization requires it', async () => {
+    vi.mocked(approvalSecretKindFor).mockResolvedValueOnce('CODE');
+    const { caller, credential, register } = callerFor([
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+    ]);
+    await expect(caller.addLine({ ...line, controlledAuthorization: undefined })).resolves.toEqual({
+      blocked:
+        'Controlled medicine requires the patient address, an independent pharmacist authenticator code, and either a valid prescription or an emergency supply with the prescriber name.',
+    });
+    expect(credential).not.toHaveBeenCalled();
     expect(register).not.toHaveBeenCalled();
   });
 

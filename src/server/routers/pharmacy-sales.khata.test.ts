@@ -48,6 +48,8 @@ import {
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
+import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
+import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { FinancePostingError } from '@/lib/finance/journal';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import {
@@ -58,10 +60,7 @@ import {
   listCounterApprovers,
   mayApproveCounterLine,
 } from '@/lib/pharmacy/counter-line-approval';
-import {
-  recordKhataRepayment,
-  searchKhataRepaymentAccounts,
-} from '@/lib/pharmacy/khata-repayment';
+import { recordKhataRepayment, searchKhataRepaymentAccounts } from '@/lib/pharmacy/khata-repayment';
 import { can, subjectFromSession } from '@/lib/abac';
 import * as abac from '@/lib/abac';
 import { pharmacyRegulatoryFixture } from '@/lib/test-support/pharmacy-regulatory';
@@ -97,7 +96,12 @@ function fixture(
   };
   const { rules, profile } = pharmacyRegulatoryFixture('branch-a');
   const db = {
-    organization: { findUnique: vi.fn().mockResolvedValue({ status: 'ACTIVE' }) },
+    organization: {
+      findUnique: vi.fn().mockResolvedValue({ status: 'ACTIVE' }),
+      findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: true }),
+    },
+    restaurantOperatorCredential: { findFirst: vi.fn().mockResolvedValue({ id: 'own-pin' }) },
+    approvalAuthenticator: { findFirst: vi.fn().mockResolvedValue(null) },
     branchRegulatoryProfile: {
       findFirst: vi.fn().mockResolvedValue({
         ...profile,
@@ -107,7 +111,10 @@ function fixture(
     },
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
-    user: { findUnique: vi.fn(async () => member) },
+    user: {
+      findUnique: vi.fn(async () => member),
+      findFirst: vi.fn().mockResolvedValue({ ...member, role }),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ branchId: 'branch-a' }]),
       // DEV-821: the drawer-manager decision's branch assignment.
@@ -511,7 +518,9 @@ describe.each(
     async (source) => {
       const f = fixture();
       f.user.role = 'EMPLOYEE';
-      f.member.organizationRole.permissions = [{ capability: 'reports:financial', effect: 'ALLOW' }];
+      f.member.organizationRole.permissions = [
+        { capability: 'reports:financial', effect: 'ALLOW' },
+      ];
       const denial = { capability: 'pharmacy:dispense', effect: 'DENY' };
       if (source === 'user') f.member.permissionOverrides = [denial];
       else f.member.organizationRole.permissions.push(denial);
@@ -927,6 +936,35 @@ describe('Khata router trust and recovery boundary', () => {
     describe('password route: second-person rule', () => {
       const manager = [counter, { capability: 'pharmacy:manage', effect: 'ALLOW' }] as Permission[];
 
+      it.each([
+        [true, APPROVAL_AUTHENTICATOR_SETUP_MESSAGE],
+        [false, NO_PIN_SET_MESSAGE],
+      ] as const)(
+        'requires a solo owner without either approval credential to set up first (authenticator required: %s)',
+        async (required, message) => {
+          const f = fixture([{ capability: '*', effect: 'ALLOW' }]);
+          f.db.restaurantOperatorCredential.findFirst.mockResolvedValue(null);
+          f.db.organization.findFirst.mockResolvedValue({ requireApprovalAuthenticator: required });
+          await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+            code: 'FORBIDDEN',
+            message,
+          });
+          expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+          expect(applyPharmacyTender).not.toHaveBeenCalled();
+        }
+      );
+
+      it('requires authenticator setup for a sole owner who already has a PIN', async () => {
+        const f = fixture([{ capability: '*', effect: 'ALLOW' }]);
+        await expect(f.caller().tender(overLimit)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: APPROVAL_AUTHENTICATOR_SETUP_MESSAGE,
+        });
+        expect(f.db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
+        expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+        expect(applyPharmacyTender).not.toHaveBeenCalled();
+      });
+
       it('refuses a manager ringing the sale while another owner or manager exists', async () => {
         vi.mocked(isSoleActiveApprover).mockResolvedValueOnce(false);
         const f = fixture(manager, 'EMPLOYEE');
@@ -936,7 +974,11 @@ describe('Khata router trust and recovery boundary', () => {
         });
         expect(isSoleActiveApprover).toHaveBeenCalledWith(
           f.db,
-          expect.objectContaining({ organizationId: 'org-a', branchId: 'branch-a', actorId: 'owner-a' }),
+          expect.objectContaining({
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            actorId: 'owner-a',
+          }),
           'KHATA_OVER_LIMIT'
         );
         expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
@@ -1003,6 +1045,30 @@ describe('Khata router trust and recovery boundary', () => {
         credentialId: 'cred-manager',
       };
       const tillCharge = { ...overLimit, overLimitApproval: managerPin };
+
+      it('refuses an anonymous approval without till proof before any charge or credential check', async () => {
+        const f = fixture([counter], 'EMPLOYEE');
+        await expect(
+          f.caller().tender({ ...overLimit, overLimitApproval: { pin: '000000' } })
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: expect.stringContaining('Choose the approver by name'),
+        });
+        expect(authorizeCounterApproval).not.toHaveBeenCalled();
+        expect(applyPharmacyTender).not.toHaveBeenCalled();
+      });
+
+      it('rejects code-only approval on tenderOutcome before reading the ledger', async () => {
+        const f = fixture([counter], 'EMPLOYEE');
+        await expect(
+          f.caller().tenderOutcome({ ...overLimit, overLimitApproval: { pin: '000000' } })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('only accepted when taking payment'),
+        });
+        expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
+        expect(authorizeCounterApproval).not.toHaveBeenCalled();
+      });
 
       it('lets a cashier charge over the limit once a manager approves with their PIN', async () => {
         vi.mocked(authorizeCounterApproval).mockResolvedValue(pinApproval);
@@ -1521,11 +1587,15 @@ describe('DEV-821 the drawer operator decision', () => {
   it('passes manager for a manager or owner on the branch', async () => {
     const f = fixture(managingAdmin(), 'EMPLOYEE');
     await f.caller().tender(cash);
-    expect(operatorOf()).toMatchObject({ drawerOperator: { kind: 'COUNTER', actorIsManager: true } });
+    expect(operatorOf()).toMatchObject({
+      drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+    });
   });
 
   it('lets an explicit DENY on the manager family win over a manager ALLOW', async () => {
-    const f = fixture(managingAdmin(), 'ADMIN', [{ capability: 'pharmacy.manage', effect: 'DENY' }]);
+    const f = fixture(managingAdmin(), 'ADMIN', [
+      { capability: 'pharmacy.manage', effect: 'DENY' },
+    ]);
     await f.caller().tender(cash);
     expect(operatorOf()).toMatchObject({
       drawerOperator: { kind: 'COUNTER', actorIsManager: false },

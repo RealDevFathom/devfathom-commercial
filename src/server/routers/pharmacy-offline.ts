@@ -1,4 +1,9 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  CounterTransportError,
+  establishToken,
+  issueApprovalDeviceProof,
+  verifyToken,
+} from '@/lib/pharmacy/counter-terminal-session';
 import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -217,8 +222,7 @@ export const pharmacyOfflineRouter = router({
         offlineUnitsLeft: quotas
           .filter((quota) => quota.deviceId === device.id)
           .reduce((total, quota) => total + Math.max(0, quota.quotaUnits - quota.consumedUnits), 0),
-        failedOfflineSales:
-          pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
+        failedOfflineSales: pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
       }));
     })
   ),
@@ -610,19 +614,14 @@ export async function receiptNumberGaps(
         lastUnused: lease.blockEnd,
         unused: lease.blockEnd - lease.nextNumber + 1,
         cause: revoked ? ('REVOKED' as const) : ('EXPIRED' as const),
-        since: (revoked ? (device.revokedAt ?? device.secretExpiresAt) : device.secretExpiresAt).toISOString(),
+        since: (revoked
+          ? (device.revokedAt ?? device.secretExpiresAt)
+          : device.secretExpiresAt
+        ).toISOString(),
       };
     });
 }
 
-class CounterTransportError extends Error {
-  constructor(
-    readonly code: string,
-    readonly status = 400
-  ) {
-    super(code);
-  }
-}
 const safety = z
   .object({
     issuedAt: z.iso.datetime(),
@@ -1140,74 +1139,16 @@ export async function replayCounterCommand(
   };
 }
 
-const sessionSchema = z
-  .object({
-    actorId: id,
-    organizationId: id,
-    branchId: id,
-    deviceId: id,
-    credentialHash: z.string(),
-    expiresAt: z.number(),
-    nonce: z.string(),
-  })
-  .strict();
-function sessionMac(payload: string) {
-  const key = process.env.PLATFORM_ENCRYPTION_KEY;
-  if (!key) throw new CounterTransportError('session_unavailable', 503);
-  return createHmac('sha256', key)
-    .update('pharmacy-counter-session:v1\n')
-    .update(payload)
-    .digest('hex');
-}
-function establishToken(ctx: PharmacyCounterContext) {
-  const payload = Buffer.from(
-    JSON.stringify({
-      ...ctx.scope,
-      actorId: ctx.scope.actorId,
-      deviceId: ctx.deviceId,
-      credentialHash: hashDeviceSecret(ctx.deviceSecret),
-      expiresAt: Date.now() + 8 * 60 * 60 * 1000,
-      nonce: randomUUID(),
-    })
-  ).toString('base64url');
-  return payload + '.' + sessionMac(payload);
-}
-function verifyToken(
-  token: string,
-  ctx: Pick<PharmacyCounterContext, 'scope' | 'deviceId'> & { credentialHash: string }
-) {
-  const [payload, signature, ...extra] = token.split('.');
-  if (
-    !payload ||
-    !signature ||
-    extra.length ||
-    !/^[a-f0-9]{64}$/.test(signature) ||
-    !timingSafeEqual(Buffer.from(signature, 'hex'), Buffer.from(sessionMac(payload), 'hex'))
-  )
-    throw new CounterTransportError('invalid_terminal_session', 401);
-  const parsed = sessionSchema.safeParse(JSON.parse(Buffer.from(payload, 'base64url').toString()));
-  if (
-    !parsed.success ||
-    parsed.data.expiresAt <= Date.now() ||
-    parsed.data.actorId !== ctx.scope.actorId ||
-    parsed.data.organizationId !== ctx.scope.organizationId ||
-    parsed.data.branchId !== ctx.scope.branchId ||
-    parsed.data.deviceId !== ctx.deviceId ||
-    parsed.data.credentialHash !== ctx.credentialHash
-  )
-    throw new CounterTransportError('invalid_terminal_session', 401);
-}
 export type CounterOperation =
-  | 'establish'
-  | 'snapshot'
-  | 'replay'
-  | 'lease'
-  | 'quota'
-  | 'reject'
-  | 'renew';
+  'establish' | 'approval-proof' | 'snapshot' | 'replay' | 'lease' | 'quota' | 'reject' | 'renew';
 
 /** DEV-957 phase 2: what an expired device secret may no longer be used for. */
-const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set(['snapshot', 'lease', 'quota']);
+const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set([
+  'snapshot',
+  'approval-proof',
+  'lease',
+  'quota',
+]);
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
@@ -1267,6 +1208,14 @@ export function counterAuditEntry(
   outcome: unknown
 ): CounterAuditEntry | null {
   switch (operation) {
+    case 'approval-proof':
+      return {
+        action: 'issueCounterApprovalProof',
+        operation: 'EXECUTE',
+        targetType: 'PharmacyRegisteredDevice',
+        targetId: text(field(outcome, 'deviceId')),
+        metadata: {},
+      };
     case 'establish':
       return {
         action: 'openCounterSession',
@@ -1528,10 +1477,15 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             },
           };
         }
-        verifyToken(request.headers.get('x-terminal-session') ?? '', {
+        const sessionToken = request.headers.get('x-terminal-session') ?? '';
+        verifyToken(sessionToken, {
           ...ctx,
           credentialHash: hashDeviceSecret(ctx.deviceSecret),
         });
+        if (operation === 'approval-proof') {
+          z.object({}).strict().parse(body);
+          return { deviceId: device.id, proof: issueApprovalDeviceProof(sessionToken) };
+        }
         if (operation === 'renew') {
           // DEV-957 phase 2: the counter rotates its own secret while it is still valid.
           // The new secret goes back once, for this browser's non-extractable signing key
@@ -1797,9 +1751,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // Review round 2: nor can a sale taken while offline selling was off be settled
           // this way: only one its verified signed RULES allowed (the receipt checks above
           // run first, and a refusal here rolls the retirement back).
-          if (
-            !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id))
-          )
+          if (!signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id)))
             throw new CounterTransportError('offline_selling_off', 409);
           await settleOfflineCommand(
             db,

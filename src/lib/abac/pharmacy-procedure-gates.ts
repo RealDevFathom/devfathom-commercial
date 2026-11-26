@@ -2392,6 +2392,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'assignedBranchScope only; no capability checked',
     none: 'any signed-in member assigned to the branch (or a workspace administrator); no permission action is checked',
   },
+  'pharmacySales.fefoOverrideApprovers': {
+    gate: 'requireCartWriteAccess -> pharmacy:counter or exact pharmacy:dispense (counter family not DENIED) at assigned branch or ADMIN',
+    lines: ['take-payment/see-till-approvers', 'dispense-prescriptions/see-till-approvers'],
+  },
   'pharmacySales.handoverDrawer': {
     gate: 'requireDrawerManagerAccess -> pharmacy:manage, assigned branch or ADMIN',
     lines: ['run-branches/run-cash-drawers-branches'],

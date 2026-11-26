@@ -1,6 +1,5 @@
 'use client';
 
-import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { useEffect, useId, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -11,10 +10,16 @@ import { Textarea } from '@/components/ui/textarea';
 import type { CounterTenderResult, KhataApprover } from './counter-tender-panel';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 
-const APPROVER_PIN = /^\d{4,8}$/;
+import {
+  ApprovalFallback,
+  ApprovalNames,
+  useApprovalEntry,
+  UnavailableCounterApprover,
+  type ApprovalEntry,
+} from './counter-approval-entry';
 const MIN_REASON = 3;
 
-export type CounterTenderDiscardInput = { staffProfileId: string; pin: string; reason: string };
+export type CounterTenderDiscardInput = ApprovalEntry & { reason: string };
 
 type Props = {
   /** Locks the form while a payment or an outcome check is running. */
@@ -35,8 +40,8 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
   const [approvers, setApprovers] = useState<KhataApprover[] | null>(null);
   const [approversError, setApproversError] = useState(false);
   const [reload, setReload] = useState(0);
-  const [approverId, setApproverId] = useState('');
-  const [pin, setPin] = useState('');
+  const form = useApprovalEntry();
+  const { profile: approverId, setProfile: setApproverId, pin, setPin } = form;
   const [reason, setReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -58,20 +63,24 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
     return () => {
       current = false;
     };
-  }, [open, loadApprovers, reload]);
+  }, [open, loadApprovers, reload, setApproverId]);
 
   const locked = disabled || submitting;
-  const ready = Boolean(approverId) && APPROVER_PIN.test(pin) && reason.trim().length >= MIN_REASON;
+  const ready =
+    form.entry &&
+    (form.codeOnly || approvers?.some((row) => row.id === approverId)) &&
+    reason.trim().length >= MIN_REASON;
 
   async function submit() {
-    if (!ready || locked || submitRef.current) return;
+    if (!form.entry || !ready || locked || submitRef.current) return;
     submitRef.current = true;
     setSubmitting(true);
     setError('');
     try {
-      const result = await onDiscard({ staffProfileId: approverId, pin, reason: reason.trim() });
+      const result = await onDiscard({ ...form.entry, reason: reason.trim() });
       // The PIN is one-time evidence: never keep it after a decision.
       setPin('');
+      if (result.approvalMatches) form.reset(result.approvalMatches);
       if (result.status === 'unknown') setError(result.message);
       else setOpen(false);
     } catch {
@@ -91,6 +100,7 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
         className="min-h-11 rounded-sm"
         disabled={disabled}
         onClick={() => {
+          form.reset();
           setApprovers(null);
           setApproversError(false);
           setError('');
@@ -111,54 +121,55 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
       </legend>
       <p id={`${id}-help`} className="text-sm leading-relaxed text-text-body">
         Use this only after checking the payment did not reach the shop. A manager or owner approves
-        with their PIN. The attempt can never be recorded afterwards; if it was already recorded,
-        the counter shows it as paid instead.
+        with their {approvalCopy.secretName}. The attempt can never be recorded afterwards; if it
+        was already recorded, the counter shows it as paid instead.
       </p>
-      <Label htmlFor={`${id}-approver`}>Approving manager or owner</Label>
-      <select
-        id={`${id}-approver`}
-        className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-        disabled={locked || approvers === null || approversError}
-        value={approverId}
-        onChange={(event) => {
-          setApproverId(event.target.value);
-          setPin('');
-        }}
-      >
-        <option value="">Select manager or owner</option>
-        {(approvers ?? []).map((approver) => (
-          <option key={approver.id} value={approver.id}>
-            {approver.self ? `${approver.name} (you)` : approver.name}
-          </option>
-        ))}
-      </select>
-      {approversError ? (
-        <div className="space-y-2">
-          <p role="alert" className="text-sm text-destructive">
-            Approvers could not be loaded.
+      <ApprovalNames form={form}>
+        <Label htmlFor={`${id}-approver`}>Approving manager or owner</Label>
+        <select
+          id={`${id}-approver`}
+          className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+          disabled={locked || approvers === null || approversError}
+          value={approverId}
+          onChange={(event) => {
+            setApproverId(event.target.value);
+            setPin('');
+          }}
+        >
+          <option value="">Select manager or owner</option>
+          {form.visible(approvers ?? []).map((approver) => (
+            <option key={approver.id} value={approver.id}>
+              {approver.self ? `${approver.name} (you)` : approver.name}
+            </option>
+          ))}
+        </select>
+        {approversError ? (
+          <div className="space-y-2">
+            <p role="alert" className="text-sm text-destructive">
+              Approvers could not be loaded.
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 rounded-sm"
+              onClick={() => {
+                setApproversError(false);
+                setReload((value) => value + 1);
+              }}
+            >
+              Retry loading approvers
+            </Button>
+          </div>
+        ) : approvers === null ? (
+          <p role="status" className="text-sm text-text-muted">
+            Loading approvers…
           </p>
-          <Button
-            type="button"
-            variant="outline"
-            className="min-h-11 rounded-sm"
-            onClick={() => {
-              setApproversError(false);
-              setReload((value) => value + 1);
-            }}
-          >
-            Retry loading approvers
-          </Button>
-        </div>
-      ) : approvers === null ? (
-        <p role="status" className="text-sm text-text-muted">
-          Loading approvers…
-        </p>
-      ) : approvers.length === 0 ? (
-        <p role="status" className="text-sm text-text-body">
-          No manager or owner has an active staff PIN. A manager or owner creates their own under
-          Settings, Your PIN. <OwnPinLink />
-        </p>
-      ) : null}
+        ) : approvers.length === 0 ? (
+          <p role="status" className="text-sm text-text-body">
+            <UnavailableCounterApprover />
+          </p>
+        ) : null}
+      </ApprovalNames>
       <Label htmlFor={`${id}-pin`}>{approvalCopy.approverLabel}</Label>
       <Input
         id={`${id}-pin`}
@@ -168,13 +179,14 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
         maxLength={8}
         aria-describedby={`${id}-pin-hint`}
         value={pin}
-        disabled={locked || !approverId}
+        disabled={locked || (!form.codeOnly && !approverId)}
         onChange={(event) => setPin(event.target.value.replace(/\D/g, ''))}
         className="h-11 rounded-sm"
       />
       <p id={`${id}-pin-hint`} className="text-sm text-text-muted">
         {approvalCopy.hint}
       </p>
+      <ApprovalFallback form={form} disabled={locked} />
       <Label htmlFor={`${id}-reason`}>Reason</Label>
       <Textarea
         id={`${id}-reason`}

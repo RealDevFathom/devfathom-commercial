@@ -6,6 +6,7 @@ import { httpBatchLink, TRPCClientError } from '@trpc/client';
 import superjson from 'superjson';
 import { signInRedirectPath } from '@/lib/auth/session-state';
 import { trpc } from './trpc';
+import { counterApprovalHeaders } from './pharmacy/counter-offline-transport';
 
 function getBaseUrl() {
   if (typeof window !== 'undefined') return '';
@@ -71,6 +72,7 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
         httpBatchLink({
           url: `${getBaseUrl()}/api/trpc`,
           transformer: superjson,
+          headers: ({ opList }) => counterApprovalHeaders(opList),
         }),
       ],
     })

@@ -735,25 +735,25 @@ describe('family Khata tender', () => {
     const take = screen.getByRole('button', { name: 'Take payment' });
     fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
     // The till's PIN approval is the default method.
-    expect(screen.getByLabelText('Manager or owner PIN at this till')).toBeChecked();
+    expect(screen.getByLabelText('Manager or owner authenticator code at this till')).toBeChecked();
     expect(screen.queryByLabelText('Your password (current account)')).not.toBeInTheDocument();
     await screen.findByRole('option', { name: 'Manager Sana' });
     expect(loadKhataApprovers).toHaveBeenCalledOnce();
     fireEvent.change(screen.getByLabelText('Reason for exceeding the limit'), {
       target: { value: 'Paying on Friday' },
     });
-    expect(screen.getByLabelText('Approval code')).toBeDisabled();
-    expect(screen.getByLabelText('Approval code')).toHaveAccessibleDescription(
+    expect(screen.getByLabelText('Authenticator code')).toBeDisabled();
+    expect(screen.getByLabelText('Authenticator code')).toHaveAccessibleDescription(
       // DEV-961: on by default, the approver enters the current code from their app.
       /6-digit code from their authenticator app/
     );
     fireEvent.change(screen.getByLabelText('Approving manager or owner'), {
       target: { value: 'staff-manager' },
     });
-    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '12a' } });
-    expect(screen.getByLabelText('Approval code')).toHaveValue('12');
+    fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '12a' } });
+    expect(screen.getByLabelText('Authenticator code')).toHaveValue('12');
     expect(take).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '246813' } });
+    fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '246813' } });
     expect(take).toBeEnabled();
     fireEvent.click(take);
     await screen.findByText('Payment recorded.');
@@ -769,7 +769,7 @@ describe('family Khata tender', () => {
       },
       { amount: '', cashReceived: '' }
     );
-    expect(screen.getByLabelText('Approval code')).toHaveValue('');
+    expect(screen.getByLabelText('Authenticator code')).toHaveValue('');
   });
   it('DEV-290: offers a solo owner their own profile and explains a missing approver', async () => {
     const loadKhataApprovers = vi
@@ -791,11 +791,10 @@ describe('family Khata tender', () => {
     ).not.toBeInTheDocument();
     fireEvent.click(override);
     fireEvent.click(override);
-    await screen.findByText(/No manager or owner has an active staff PIN/);
-    // DEV-931: the notice says where a manager or owner creates their own PIN.
-    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+    await screen.findByText(/No manager or owner is available/);
+    expect(screen.getByRole('link', { name: 'Set up your authenticator app' })).toHaveAttribute(
       'href',
-      '/pharmacy/settings/pin'
+      '/approval-authenticator-setup'
     );
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
   });

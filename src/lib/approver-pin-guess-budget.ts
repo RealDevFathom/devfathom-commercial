@@ -1,6 +1,12 @@
 import 'server-only';
 
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
+import {
+  clearRateLimit,
+  rateLimitHasCapacity,
+  rateLimit,
+  refundRateLimit,
+  type RateLimitResult,
+} from '@/lib/rate-limit';
 import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/operator-credentials';
 
 /**
@@ -18,6 +24,10 @@ function budgetKey(organizationId: string, approverId: string) {
   return `approver-pin-typed-by-another:${organizationId}:${approverId}`;
 }
 
+export function approverGuessBudgetAvailable(organizationId: string, approverId: string) {
+  return rateLimitHasCapacity(budgetKey(organizationId, approverId), MAX_FAILED_ATTEMPTS);
+}
+
 /** Spends one guess. `ok: false` once the approver's budget for this window is gone. */
 export function spendApproverPinGuessTypedByAnother(organizationId: string, approverId: string) {
   return rateLimit(budgetKey(organizationId, approverId), MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
@@ -26,4 +36,13 @@ export function spendApproverPinGuessTypedByAnother(organizationId: string, appr
 /** A correct PIN restores the approver's budget, as a correct PIN clears their strikes. */
 export function clearApproverPinGuessesTypedByAnother(organizationId: string, approverId: string) {
   return clearRateLimit(budgetKey(organizationId, approverId));
+}
+
+/** Release only the reservation whose multi-person comparison did not need to spend it. */
+export function refundApproverPinGuessTypedByAnother(
+  organizationId: string,
+  approverId: string,
+  reservation: RateLimitResult
+) {
+  return refundRateLimit(budgetKey(organizationId, approverId), LOCKOUT_DURATION_MS, reservation);
 }

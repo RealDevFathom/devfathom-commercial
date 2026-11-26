@@ -1,3 +1,4 @@
+import { CounterApprovalChoice } from '@/lib/pharmacy/counter-approval-choice';
 import { initTRPC, TRPCError } from '@trpc/server';
 import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
@@ -59,6 +60,9 @@ export const createTRPCContext = async (opts?: {
   const session = explicitSession !== undefined ? explicitSession : (actor?.session ?? null);
   const organization = opts?.organization ?? actor?.organization ?? null;
   const headers = opts?.req?.headers ?? null;
+  const deviceId = headers?.get('x-pharmacy-approval-device');
+  const sessionToken = headers?.get('x-terminal-session');
+  const deviceProof = headers?.get('x-pharmacy-approval-proof');
   const organizationId = organization?.id ?? session?.user?.organizationId;
   if (!organizationId) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
@@ -79,6 +83,9 @@ export const createTRPCContext = async (opts?: {
       ip: ipFromHeaders(headers),
       userAgent: headers?.get('user-agent') ?? null,
     },
+    ...(deviceId && sessionToken && deviceProof
+      ? { approvalCounter: { deviceId, sessionToken, deviceProof } }
+      : {}),
     // Mutable per-request holder. A mutation can enrich its own audit entry via
     // `annotateAudit(ctx, {...})`; the audit middleware reads this after the
     // resolver runs. Stays a stable reference across middleware `ctx` spreads.
@@ -156,6 +163,12 @@ const t = initTRPC
         ...shape.data,
         validation: validation?.fields ?? null,
         ...(reason ? { reason } : {}),
+        ...(error.code === 'FORBIDDEN' && error.cause instanceof CounterApprovalChoice
+          ? {
+              matchingStaffProfileIds: error.cause.staffProfileIds,
+              choiceProofs: error.cause.choiceProofs,
+            }
+          : {}),
       };
       delete data.stack;
       return {

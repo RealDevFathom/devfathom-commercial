@@ -6,14 +6,20 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import type { BillDiscountExclusion, BillDiscountRequest } from '@/lib/pharmacy/bill-discount';
-import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
+import {
+  submitDialogApproval,
+  type ApprovalEntry,
+  type ApprovalMatches,
+} from './counter-approval-entry';
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
+  isCounterApprovalMessage,
   counterErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { percentToBps } from './discount-maximum-panel';
 
 /** DEV-956: why an item took no share of the whole-bill discount, in the cashier's words. */
@@ -43,7 +49,7 @@ export type CounterBillDiscountInput = {
   branchId: string;
   saleId: string;
   lines: readonly CartLine[];
-  requestApproval: (discount: string) => Promise<CounterApprovalPin | null>;
+  requestApproval: (discount: string, matches?: ApprovalMatches) => Promise<ApprovalEntry | null>;
   onChanged: (message: string) => void;
   /**
    * DEV-977 phase 3: name each item left out, and why, in the message itself. The discount
@@ -68,6 +74,7 @@ export function useCounterBillDiscount({
   onChanged,
   nameLeftOut = false,
 }: CounterBillDiscountInput) {
+  const approvalCopy = useCounterApprovalCopy();
   const setting = trpc.pharmacySales.billDiscountSetting.useQuery({ branchId });
   const maximum = trpc.pharmacySales.discountMaximum.useQuery(
     { branchId },
@@ -81,8 +88,7 @@ export function useCounterBillDiscount({
     discount: BillDiscountRequest,
     label: string
   ): Promise<{ error: string | null; leftOut: string[] }> => {
-    let discountApproval: CounterApprovalPin | undefined;
-    const post = () =>
+    const post = (discountApproval?: ApprovalEntry) =>
       apply.mutateAsync({
         branchId,
         saleId,
@@ -94,17 +100,22 @@ export function useCounterBillDiscount({
       try {
         outcome = await post();
       } catch (failure) {
-        if (!(failure instanceof Error) || failure.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED)
+        if (
+          !(failure instanceof Error) ||
+          !isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
+        )
           throw failure;
-        const approval = await requestApproval(label);
-        if (!approval) {
+        const approved = await submitDialogApproval(
+          (matches) => (matches ? requestApproval(label, matches) : requestApproval(label)),
+          post
+        );
+        if (!approved) {
           return {
             error: 'The discount was not given: it needs a manager or owner to approve it.',
             leftOut: [],
           };
         }
-        discountApproval = approval;
-        outcome = await post();
+        outcome = approved;
       }
       const reasons = describeBillDiscountExclusions(outcome.excluded, lines);
       if (outcome.status === 'REFUSED') {
@@ -125,8 +136,9 @@ export function useCounterBillDiscount({
     } catch (failure) {
       return {
         error:
-          failure instanceof Error && failure.message === COUNTER_DISCOUNT_APPROVAL_REQUIRED
-            ? 'That PIN did not approve the discount, so it was not given. A manager or owner must enter their own PIN.'
+          failure instanceof Error &&
+          isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
+            ? `That ${approvalCopy.secretName} did not approve the discount, so it was not given. A manager or owner must enter their own ${approvalCopy.secretName}.`
             : counterErrorMessage(failure),
         leftOut: [],
       };
@@ -155,6 +167,7 @@ export function CounterBillDiscountEntry({
   disabled: boolean;
 }) {
   const id = useId();
+  const approvalCopy = useCounterApprovalCopy();
   const bill = useCounterBillDiscount({ branchId, saleId, lines, requestApproval, onChanged });
   const [kind, setKind] = useState<BillDiscountRequest['kind']>('PERCENT');
   const [value, setValue] = useState('');
@@ -305,7 +318,7 @@ export function CounterBillDiscountEntry({
             Prescription, restricted and controlled medicines, and items that already have their own
             discount, voucher or promotion, are left out and named here. Give it before taking any
             payment. If you cannot give discounts on your own, a manager or owner approves with
-            their PIN.
+            their {approvalCopy.secretName}.
           </p>
           <Button type="submit" className="min-h-11" disabled={busy}>
             {bill.pending ? 'Applying…' : 'Apply to bill'}

@@ -120,7 +120,7 @@ beforeEach(() => {
 const cookie = `df_pharmacy_counter_device=${encodeURIComponent(SECRET)}`;
 
 function counter(
-  operation: 'establish' | 'snapshot',
+  operation: 'establish' | 'snapshot' | 'approval-proof',
   headers: Record<string, string>,
   method = 'POST'
 ) {
@@ -146,6 +146,38 @@ describe('DEV-957 counter route: cookie credential', () => {
       'x-terminal-session': sessionToken,
     });
     expect(snapshot.status).toBe(200);
+  });
+
+  it('issues a short-lived approval proof only with the device credential and its session', async () => {
+    const { validApprovalDeviceProof } = await import('@/lib/pharmacy/counter-terminal-session');
+    const { sessionToken } = await (await counter('establish', { cookie, origin: ORIGIN })).json();
+    const headers = { origin: ORIGIN, 'x-terminal-session': sessionToken };
+    expect((await counter('approval-proof', headers)).status).toBe(401);
+    const result = await counter('approval-proof', { ...headers, cookie });
+    expect(result.status).toBe(200);
+    const { proof } = await result.json();
+    expect(validApprovalDeviceProof(sessionToken, proof)).toBe(true);
+    expect(validApprovalDeviceProof('other-session', proof)).toBe(false);
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(Date.now() + 61_000);
+      expect(validApprovalDeviceProof(sessionToken, proof)).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(mocks.auditCreate).toHaveBeenCalledTimes(2);
+    const issuance = mocks.auditCreate.mock.lastCall;
+    expect(issuance).toMatchObject([
+      {
+        data: {
+          action: 'pharmacyOffline.issueCounterApprovalProof',
+          targetId: DEVICE,
+          actorId: ACTOR,
+        },
+      },
+    ]);
+    for (const sensitive of [SECRET, sessionToken, proof])
+      expect(JSON.stringify(issuance).includes(sensitive)).toBe(false);
   });
 
   it('refuses the cookie from another origin', async () => {
@@ -183,7 +215,12 @@ describe('DEV-957 counter route: cookie credential', () => {
       route.pharmacyCounterRoute('establish')(
         new Request('http://localhost:4331/api/pharmacy/counter/establish', {
           method: 'POST',
-          headers: { cookie, origin, 'x-forwarded-host': 'tenant.example', 'x-forwarded-proto': 'https' },
+          headers: {
+            cookie,
+            origin,
+            'x-forwarded-host': 'tenant.example',
+            'x-forwarded-proto': 'https',
+          },
           body: '{}',
         })
       );
@@ -215,15 +252,23 @@ describe('DEV-957 counter route: cookie credential', () => {
 
   it('refuses a malformed cookie or bearer value', async () => {
     expect(
-      (await counter('establish', { cookie: 'df_pharmacy_counter_device=pcd_short', origin: ORIGIN }))
-        .status
+      (
+        await counter('establish', {
+          cookie: 'df_pharmacy_counter_device=pcd_short',
+          origin: ORIGIN,
+        })
+      ).status
     ).toBe(401);
     expect((await counter('establish', { authorization: 'Basic abc' })).status).toBe(401);
     expect((await counter('establish', {})).status).toBe(401);
   });
 });
 
-function bindRequest(headers: Record<string, string>, body: unknown = { secret: SECRET }, method = 'POST') {
+function bindRequest(
+  headers: Record<string, string>,
+  body: unknown = { secret: SECRET },
+  method = 'POST'
+) {
   return new Request(`${ORIGIN}/api/pharmacy/counter/bind`, {
     method,
     headers: { 'content-type': 'application/json', ...headers },
@@ -246,7 +291,11 @@ describe('DEV-957 bind route: setting the device cookie', () => {
     expect(setCookie).toMatch(/Path=\/api\/pharmacy\/counter/);
     expect(setCookie).not.toMatch(/Domain=/i);
     // The response body never echoes the secret.
-    expect(JSON.stringify(await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN })).then((r) => r.json()))).not.toContain(SECRET);
+    expect(
+      JSON.stringify(
+        await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN })).then((r) => r.json())
+      )
+    ).not.toContain(SECRET);
     expect(mocks.auditCreate).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
@@ -295,7 +344,9 @@ describe('DEV-957 bind route: setting the device cookie', () => {
 
   it("refuses another tenant's, a revoked and a malformed secret", async () => {
     mocks.resolveBySecret.mockResolvedValueOnce(null); // RLS hides other tenants' rows
-    expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(401);
+    expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(
+      401
+    );
     mocks.resolveBySecret.mockResolvedValueOnce({
       id: DEVICE,
       name: 'x',
@@ -306,7 +357,9 @@ describe('DEV-957 bind route: setting the device cookie', () => {
       // DEV-957 phase 2: the device row now carries its credential expiry.
       secretExpiresAt: new Date(Date.now() + 30 * 86_400_000),
     });
-    expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(401);
+    expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(
+      401
+    );
     mocks.resolveBySecret.mockResolvedValueOnce({
       id: DEVICE,
       name: 'x',
@@ -315,7 +368,9 @@ describe('DEV-957 bind route: setting the device cookie', () => {
       status: 'REVOKED',
       revokedAt: new Date(),
     });
-    expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(401);
+    expect((await bind.bindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }))).status).toBe(
+      401
+    );
     const malformed = await bind.bindPharmacyCounterBrowser(
       bindRequest({ origin: ORIGIN }, { secret: 'pcd_short' })
     );
@@ -324,7 +379,9 @@ describe('DEV-957 bind route: setting the device cookie', () => {
   });
 
   it('clears the cookie only for this exact origin', async () => {
-    const cleared = await bind.unbindPharmacyCounterBrowser(bindRequest({ origin: ORIGIN }, null, 'DELETE'));
+    const cleared = await bind.unbindPharmacyCounterBrowser(
+      bindRequest({ origin: ORIGIN }, null, 'DELETE')
+    );
     expect(cleared.status).toBe(200);
     expect(cleared.headers.get('set-cookie')).toMatch(/df_pharmacy_counter_device=;/);
     expect(cleared.headers.get('set-cookie')).toMatch(/Max-Age=0/i);

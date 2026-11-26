@@ -1,6 +1,6 @@
 'use client';
 
-import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
@@ -8,6 +8,14 @@ import { Check, TriangleAlert } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  ApprovalFallback,
+  ApprovalNames,
+  useApprovalEntry,
+  UnavailableCounterApprover,
+  type ApprovalEntry,
+  type ApprovalMatches,
+} from './counter-approval-entry';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
@@ -70,6 +78,7 @@ const TENDER_TYPES = [
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
 
 export type CounterTenderResult = {
+  approvalMatches?: ApprovalMatches;
   status: 'accepted' | 'rejected' | 'unknown';
   message: string;
   /** Change from the accepted saved tender, independent of the current bill balance. */
@@ -151,7 +160,7 @@ export type CounterTenderPanelProps = {
       familyAccountId?: string;
       ownerOverride?: boolean;
       overrideReason?: string;
-      overLimitApproval?: { staffProfileId: string; pin: string };
+      overLimitApproval?: ApprovalEntry;
       /** DEV-863: the customer's own prepaid PIN, for this request only. */
       prepaidPin?: string;
       providerRef?: string;
@@ -234,8 +243,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const [approvalMethod, setApprovalMethod] = useState<'PIN' | 'PASSWORD'>('PIN');
     const [approvers, setApprovers] = useState<KhataApprover[] | null>(null);
     const [approversError, setApproversError] = useState(false);
-    const [approverId, setApproverId] = useState('');
-    const [approverPin, setApproverPin] = useState('');
+    const form = useApprovalEntry();
+    const {
+      profile: approverId,
+      setProfile: setApproverId,
+      pin: approverPin,
+      setPin: setApproverPin,
+    } = form;
     const [totp, setTotp] = useState('');
     const [statementPending, setStatementPending] = useState(false);
     const [khataReload, setKhataReload] = useState(0);
@@ -279,6 +293,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const focusCaptureRef = useRef<'payer' | 'reference' | null>(null);
     const takingPayment = pending || submitting;
     const displayedOutcome = recoveryOutcome ?? outcome;
+    const outcomeMessage =
+      displayedOutcome?.status === 'rejected' ? (
+        <PinAwareMessage message={displayedOutcome.message} prefix="Payment was not accepted. " />
+      ) : (
+        displayedOutcome?.message
+      );
     const unknown = displayedOutcome?.status === 'unknown';
     const balanceKnown =
       balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
@@ -414,7 +434,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       return () => {
         current = false;
       };
-    }, [wantsApprovers, loadKhataApprovers]);
+    }, [wantsApprovers, loadKhataApprovers, setApproverId]);
     const signupPatient = khataSignupPatient ?? null;
     const signupPatientId = signupPatient?.patientId ?? null;
     // Consent belongs to one person: a different payer must tick it again.
@@ -481,7 +501,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             (ownerOverride &&
               Boolean(overrideReason.trim()) &&
               (approvalMethod === 'PIN'
-                ? Boolean(approverId) && APPROVER_PIN.test(approverPin)
+                ? Boolean(
+                    form.entry && (form.codeOnly || approvers?.some((row) => row.id === approverId))
+                  )
                 : Boolean(password) && Boolean(reauthenticateOwner))))));
 
     // DEV-41: a disabled Take payment button always says why, in cashier words.
@@ -547,9 +569,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       setOutcome(null);
       try {
         const pinApproval =
-          isKhata && overLimit && approvalMethod === 'PIN'
-            ? { staffProfileId: approverId, pin: approverPin }
-            : undefined;
+          isKhata && overLimit && approvalMethod === 'PIN' ? form.entry : undefined;
         // The PIN is single-use evidence for this attempt: clear it whatever the outcome.
         setApproverPin('');
         const customerPin = type === 'WALLET' ? prepaidPin : undefined;
@@ -601,8 +621,10 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           },
           { amount, cashReceived: type === 'CASH' ? (cashReceived ?? '') : '' }
         );
+        if (result.approvalMatches) form.reset(result.approvalMatches);
         setOutcome(result);
         if (result.status === 'accepted') {
+          form.reset();
           if (changeMinor !== null && changeMinor > 0) setRecordedChangeMinor(changeMinor);
           setAmount('');
           setCashReceived(null);
@@ -843,7 +865,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                   : 'Taking payment… Keep this bill open.'
                 : checkingOutcome
                   ? 'Checking payment outcome… No payment is being sent.'
-                  : (displayedOutcome?.message ??
+                  : (outcomeMessage ??
                     (state === 'idle'
                       ? 'Open a bill before taking payment.'
                       : state === 'loading'
@@ -1308,9 +1330,12 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             name="khata-approval-method"
                             checked={approvalMethod === 'PIN'}
                             disabled={!editable}
-                            onChange={() => setApprovalMethod('PIN')}
+                            onChange={() => {
+                              form.reset();
+                              setApprovalMethod('PIN');
+                            }}
                           />
-                          Manager or owner PIN at this till
+                          Manager or owner {approvalCopy.secretName} at this till
                         </Label>
                         {reauthenticateOwner ? (
                           <Label className="flex min-h-11 items-center gap-2">
@@ -1327,37 +1352,38 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       </fieldset>
                       {approvalMethod === 'PIN' ? (
                         <>
-                          <Label htmlFor="khata-approver">Approving manager or owner</Label>
-                          <select
-                            id="khata-approver"
-                            className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
-                            disabled={!editable || approvers === null || approversError}
-                            value={approverId}
-                            onChange={(event) => {
-                              setApproverId(event.target.value);
-                              setApproverPin('');
-                            }}
-                          >
-                            <option value="">Select manager or owner</option>
-                            {(approvers ?? []).map((approver) => (
-                              <option key={approver.id} value={approver.id}>
-                                {approver.self ? `${approver.name} (you)` : approver.name}
-                              </option>
-                            ))}
-                          </select>
-                          {approversError ? (
-                            <p role="alert" className="text-sm text-destructive">
-                              Approvers could not be loaded. Untick and tick the approval box to
-                              retry.
-                            </p>
-                          ) : approvers === null ? (
-                            <p role="status">Loading approvers…</p>
-                          ) : approvers.length === 0 ? (
-                            <p role="status">
-                              No manager or owner has an active staff PIN. A manager or owner
-                              creates their own under Settings, Your PIN. <OwnPinLink />
-                            </p>
-                          ) : null}
+                          <ApprovalNames form={form}>
+                            <Label htmlFor="khata-approver">Approving manager or owner</Label>
+                            <select
+                              id="khata-approver"
+                              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                              disabled={!editable || approvers === null || approversError}
+                              value={approverId}
+                              onChange={(event) => {
+                                setApproverId(event.target.value);
+                                setApproverPin('');
+                              }}
+                            >
+                              <option value="">Select manager or owner</option>
+                              {form.visible(approvers ?? []).map((approver) => (
+                                <option key={approver.id} value={approver.id}>
+                                  {approver.self ? `${approver.name} (you)` : approver.name}
+                                </option>
+                              ))}
+                            </select>
+                            {approversError ? (
+                              <p role="alert" className="text-sm text-destructive">
+                                Approvers could not be loaded. Untick and tick the approval box to
+                                retry.
+                              </p>
+                            ) : approvers === null ? (
+                              <p role="status">Loading approvers…</p>
+                            ) : approvers.length === 0 ? (
+                              <p role="status">
+                                <UnavailableCounterApprover />
+                              </p>
+                            ) : null}
+                          </ApprovalNames>
                           <Label htmlFor="khata-approver-pin">{approvalCopy.approverLabel}</Label>
                           <Input
                             id="khata-approver-pin"
@@ -1367,7 +1393,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                             maxLength={8}
                             aria-describedby="khata-approver-pin-hint"
                             value={approverPin}
-                            disabled={!editable || !approverId}
+                            disabled={!editable || (!form.codeOnly && !approverId)}
                             onChange={(event) =>
                               setApproverPin(event.target.value.replace(/\D/g, ''))
                             }
@@ -1376,6 +1402,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                           <p id="khata-approver-pin-hint" className="text-sm text-text-muted">
                             {approvalCopy.hint}
                           </p>
+                          <ApprovalFallback form={form} disabled={!editable} />
                         </>
                       ) : (
                         <>

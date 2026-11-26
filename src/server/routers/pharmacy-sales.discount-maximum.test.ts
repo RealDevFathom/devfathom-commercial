@@ -34,6 +34,7 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 
 function fixture(options: { support?: boolean } = {}) {
   const db = {
+    organization: { findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
@@ -123,6 +124,18 @@ describe("DEV-66 changing the owner's maximum discount", () => {
     vi.mocked(verifyOwnerExportPin).mockResolvedValue(result);
     await expect(fixture().caller.saveDiscountMaximum(save)).rejects.toMatchObject({ code });
     expect(saveMaxDiscountBps).not.toHaveBeenCalled();
+  });
+
+  it('asks for the owner’s authenticator code when authenticator approval is enabled', async () => {
+    const { db, caller } = fixture();
+    db.organization.findFirst.mockResolvedValue({ requireApprovalAuthenticator: true });
+    await expect(caller.saveDiscountMaximum({ ...save, pin: '' })).rejects.toThrow(
+      'Enter your own authenticator code to confirm.'
+    );
+    vi.mocked(verifyOwnerExportPin).mockResolvedValue('REJECTED');
+    await expect(caller.saveDiscountMaximum(save)).rejects.toThrow(
+      'That authenticator code is not correct.'
+    );
   });
 
   it('refuses an empty PIN without checking it', async () => {

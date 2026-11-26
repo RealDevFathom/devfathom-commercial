@@ -16,13 +16,13 @@ import {
   authorizeCounterApproval,
   confirmCounterApproval,
   CounterApprovalDenied,
+  counterProofRequired,
   fefoOverrideApprovalPolicy,
   isSoleActiveApprover,
   listCounterApprovers,
   mayApproveCounterLine,
   type CounterApproval,
   type CounterApprovalKind,
-  type CounterApprovalPin,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import { readPharmacistCheckPolicy } from '@/lib/pharmacy/pharmacist-check-policy';
@@ -98,7 +98,7 @@ import {
   emergencyNoRxDecision,
   resolveEmergencySupplyPolicy,
 } from '@/lib/pharmacy/controlled-register';
-import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
+import { ACTIVE_STATUSES, APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { annotateAudit, recordAudit } from '@/server/audit';
 import { annotateAuditBranch } from '@/server/audit-branch';
 import {
@@ -111,7 +111,7 @@ import {
   registerFailedAttempt,
   clearLockout,
 } from '@/lib/restaurant/operator-credentials';
-import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+import { approvalSecretKindFor, verifyApprovalSecret } from '@/lib/approval-authenticator';
 import {
   closePharmacyDay,
   readPharmacyClose,
@@ -146,6 +146,8 @@ import {
 import { prescriptionIsCurrent } from '@/lib/pharmacy/prescription-calendar';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
+import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
+import { CounterApprovalChoice } from '@/lib/pharmacy/counter-approval-choice';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import {
   applyBillDiscount,
@@ -311,6 +313,33 @@ const maximumWords = (bps: number) =>
 const counterApprovalPin = z
   .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
   .strict();
+// Anonymous approval is meaningful only with the independently verified till session.
+const counterLineApproval = z.union([
+  counterApprovalPin,
+  z.strictObject({
+    pin: z.string().regex(/^\d{6}$/),
+    matchingStaffProfileId: z.string().trim().min(1).max(128).optional(),
+    choiceProof: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+  }),
+]);
+type CounterLineApprovalRequest = z.infer<typeof counterLineApproval>;
+
+function authorizeSaleApproval(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind,
+  input?: CounterLineApprovalRequest
+) {
+  if (!input) return authorizeCounterApproval(db, scope, kind, input);
+  const counter = ctx.approvalCounter;
+  if (counter) return authorizeCounterApproval(db, scope, kind, { ...input, counter });
+  if ('staffProfileId' in input) return authorizeCounterApproval(db, scope, kind, input);
+  throw counterProofRequired(kind);
+}
 const tenderInput = z
   .object({
     branchId,
@@ -339,7 +368,7 @@ const tenderInput = z
      * DEV-290: a manager's or owner's staff PIN entered at the cashier's till to approve the
      * over-limit charge. Verified by the server; never stored, hashed or replayed.
      */
-    overLimitApproval: counterApprovalPin.optional(),
+    overLimitApproval: counterLineApproval.optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
     // reference, never a full card number. Bank transfers use the bank statement reference.
     // Each tender's shape is enforced in settlement.
@@ -367,6 +396,11 @@ const tenderInput = z
     path: ['providerRef'],
     message: 'Invalid payment reference.',
   });
+// The outcome and write have the same public type. Only a write takes an anonymous code.
+const tenderReadInput = tenderInput.refine(
+  (input) => !input.overLimitApproval || 'staffProfileId' in input.overLimitApproval,
+  { message: 'Approval codes are only accepted when taking payment.' }
+);
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -555,12 +589,12 @@ type CounterLineRequest = Omit<
   SaleLineInput,
   'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified' | 'scannedPack'
 > & {
-  discountApproval?: CounterApprovalPin;
+  discountApproval?: CounterLineApprovalRequest;
   /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
   voucherPin?: string;
-  override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalPin };
+  override?: { inventoryLotId: string; reason: string; approval?: CounterLineApprovalRequest };
   /** DEV-843: a manager or owner PIN approves a scanned pack that is not from the FEFO lot. */
-  scannedPack?: { payload: string; approval?: CounterApprovalPin };
+  scannedPack?: { payload: string; approval?: CounterLineApprovalRequest };
 };
 
 /**
@@ -633,7 +667,13 @@ async function approvedLineInput(
     lineInput.voucherCashierPinVerified = true;
   }
   if ((input.discountMinor ?? 0) > 0) {
-    const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
+    const approval = await authorizeSaleApproval(
+      ctx,
+      db,
+      scope,
+      'DISCOUNT',
+      input.discountApproval
+    );
     approvals.push({ kind: 'DISCOUNT', approval });
     lineInput.approvedByUserId = approval.approvedByUserId;
     lineInput.approvalPolicy = approval.approvalPolicy;
@@ -648,7 +688,8 @@ async function approvedLineInput(
     // pharmacist approval does not stand in. A wrong or ineligible PIN is refused outright;
     // a scan with no PIN may still sell a pack from the earliest-expiry lot.
     if (scannedPack.approval) {
-      const approval = await authorizeCounterApproval(
+      const approval = await authorizeSaleApproval(
+        ctx,
         db,
         scope,
         'SCANNED_PACK_FEFO',
@@ -668,7 +709,13 @@ async function approvedLineInput(
     }
   }
   if (override) {
-    const approval = await authorizeCounterApproval(db, scope, 'FEFO_OVERRIDE', override.approval);
+    const approval = await authorizeSaleApproval(
+      ctx,
+      db,
+      scope,
+      'FEFO_OVERRIDE',
+      override.approval
+    );
     approvals.push({ kind: 'FEFO_OVERRIDE', approval });
     lineInput.override = {
       inventoryLotId: override.inventoryLotId,
@@ -952,6 +999,8 @@ function fail(error: unknown): never {
     });
   if (error instanceof ControlledRestorationDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+  if (error instanceof CounterApprovalChoice)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message, cause: error });
   if (error instanceof CounterApprovalDenied)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
@@ -1457,7 +1506,33 @@ async function mayApproveKhataOverLimit(ctx: TRPCContext, scope: LedgerScope): P
     'KHATA_OVER_LIMIT',
     { source: 'TRPC' }
   );
-  return approver && (await isSoleActiveApprover(db, scope, 'KHATA_OVER_LIMIT'));
+  if (!approver || !(await isSoleActiveApprover(db, scope, 'KHATA_OVER_LIMIT'))) return false;
+  if (await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId)) {
+    const { organizationId, actorId: userId } = scope;
+    const mode = await approvalSecretKindFor(db, organizationId);
+    const credential =
+      mode === 'CODE'
+        ? await db.approvalAuthenticator.findFirst({
+            where: { organizationId, userId, enabledAt: { not: null } },
+            select: { id: true },
+          })
+        : await db.restaurantOperatorCredential.findFirst({
+            where: {
+              organizationId,
+              type: 'PIN',
+              revokedAt: null,
+              deviceId: null,
+              staffProfile: { organizationId, userId, status: 'ACTIVE' },
+            },
+            select: { id: true },
+          });
+    if (!credential)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: mode === 'CODE' ? APPROVAL_AUTHENTICATOR_SETUP_MESSAGE : NO_PIN_SET_MESSAGE,
+      });
+  }
+  return true;
 }
 
 /** Shared durable copy allocation for download and queued thermal transport. Caller holds the transaction. */
@@ -1518,6 +1593,38 @@ export async function allocateSettledCounterReceiptPrintJob(
     receiptNumber: receipt.receiptNumber,
     result: { status: 'READY' as const, ...job, copyNumber: state.copyCount },
   };
+}
+
+async function confirmOwnerDiscountSetting(
+  db: ScopedDb,
+  scope: LedgerScope,
+  pin: string,
+  action: 'pharmacy.maxDiscount' | 'pharmacy.billDiscount'
+) {
+  const result = pin
+    ? await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin,
+        action,
+      })
+    : 'EMPTY';
+  if (result === 'OK') return;
+  const mode = await approvalSecretKindFor(db, scope.organizationId);
+  const method = mode === 'CODE' ? 'authenticator code' : 'PIN';
+  if (result === 'EMPTY')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: `Enter your own ${method} to confirm.` });
+  if (result === 'NO_PIN')
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: mode === 'CODE' ? APPROVAL_AUTHENTICATOR_SETUP_MESSAGE : NO_PIN_SET_MESSAGE,
+    });
+  if (result === 'LOCKED')
+    throw new TRPCError({
+      code: 'TOO_MANY_REQUESTS',
+      message: `Your ${method} is locked after too many wrong tries. Wait and try again.`,
+    });
+  throw new TRPCError({ code: 'FORBIDDEN', message: `That ${method} is not correct.` });
 }
 
 export const pharmacySalesRouter = router({
@@ -1615,24 +1722,7 @@ export const pharmacySalesRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
       if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
         throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
-      if (!input.pin)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
-      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
-      const pin = await verifyOwnerExportPin({
-        organizationId: scope.organizationId,
-        userId: scope.actorId,
-        pin: input.pin,
-        action: 'pharmacy.maxDiscount',
-      });
-      if (pin === 'NO_PIN')
-        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
-      if (pin === 'LOCKED')
-        throw new TRPCError({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
-        });
-      if (pin !== 'OK')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      await confirmOwnerDiscountSetting(ctx.db, scope, input.pin, 'pharmacy.maxDiscount');
       const saved = await ctx.db.$transaction((tx) =>
         saveMaxDiscountBps(txDb(tx), scope, input.maxDiscountBps)
       );
@@ -2526,7 +2616,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
+  tenderOutcome: protectedProcedure.input(tenderReadInput).query(async ({ ctx, input }) => {
     if (
       isManualTender(input.type) ||
       input.approvalCode !== undefined ||
@@ -2562,9 +2652,9 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
-          attempt: tenderInput,
+          attempt: tenderReadInput,
           reason: z.string().trim().min(3).max(500),
-          approval: counterApprovalPin,
+          approval: counterLineApproval,
         })
         .strict()
     )
@@ -2580,7 +2670,8 @@ export const pharmacySalesRouter = router({
             ? await khataScope(ctx, attempt.branchId, 'write')
             : await requireCounterReceiptAccess(ctx, attempt.branchId, true);
         // Verified in its own transaction, so a wrong PIN keeps its lockout strike.
-        const approval = await authorizeCounterApproval(
+        const approval = await authorizeSaleApproval(
+          ctx,
           ctx.db as unknown as ScopedDb,
           scope,
           'TENDER_DISCARD',
@@ -2703,7 +2794,8 @@ export const pharmacySalesRouter = router({
       // PINs are verified before the transaction so a refusal still commits its lockout strike.
       const pinApproval =
         input.ownerOverride === true && input.overLimitApproval
-          ? await authorizeCounterApproval(
+          ? await authorizeSaleApproval(
+              ctx,
               ctx.db as unknown as ScopedDb,
               scope,
               'KHATA_OVER_LIMIT',
@@ -2841,24 +2933,7 @@ export const pharmacySalesRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
       if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
         throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
-      if (!input.pin)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
-      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
-      const pin = await verifyOwnerExportPin({
-        organizationId: scope.organizationId,
-        userId: scope.actorId,
-        pin: input.pin,
-        action: 'pharmacy.billDiscount',
-      });
-      if (pin === 'NO_PIN')
-        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
-      if (pin === 'LOCKED')
-        throw new TRPCError({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
-        });
-      if (pin !== 'OK')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      await confirmOwnerDiscountSetting(ctx.db, scope, input.pin, 'pharmacy.billDiscount');
       const saved = await ctx.db.$transaction((tx) =>
         saveBillDiscountEnabled(txDb(tx), scope, input.enabled)
       );
@@ -2892,7 +2967,7 @@ export const pharmacySalesRouter = router({
               })
               .strict(),
           ]),
-          discountApproval: counterApprovalPin.optional(),
+          discountApproval: counterLineApproval.optional(),
         })
         .strict()
     )
@@ -2904,7 +2979,8 @@ export const pharmacySalesRouter = router({
       });
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const approval = await authorizeCounterApproval(
+        const approval = await authorizeSaleApproval(
+          ctx,
           ctx.db,
           scope,
           'DISCOUNT',
@@ -2952,7 +3028,7 @@ export const pharmacySalesRouter = router({
               .strict(),
           ]),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
-          discountApproval: counterApprovalPin.optional(),
+          discountApproval: counterLineApproval.optional(),
         })
         .strict()
     )
@@ -2975,7 +3051,8 @@ export const pharmacySalesRouter = router({
         // #520: PINs are verified before the sale transaction takes a connection.
         const approval = removal
           ? null
-          : await authorizeCounterApproval(
+          : await authorizeSaleApproval(
+              ctx,
               ctx.db as unknown as ScopedDb,
               scope,
               'DISCOUNT',
@@ -3019,6 +3096,12 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  fefoOverrideApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCartWriteAccess(ctx, input.branchId);
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'FEFO_OVERRIDE');
     }),
   /** Eligible manager/owner PIN profiles for a scanned pack's first-expiry approval. */
   scannedPackFefoApprovers: protectedProcedure
@@ -3252,12 +3335,12 @@ export const pharmacySalesRouter = router({
             .regex(/^\d{4,8}$/)
             .optional(),
           // #520: the approver is proven by a PIN the server verifies, never named by the caller.
-          discountApproval: counterApprovalPin.optional(),
+          discountApproval: counterLineApproval.optional(),
           override: z
             .object({
               inventoryLotId: z.string().min(1),
               reason: z.string().trim().min(1).max(500),
-              approval: counterApprovalPin.optional(),
+              approval: counterLineApproval.optional(),
             })
             .strict()
             .optional(),
@@ -3268,7 +3351,7 @@ export const pharmacySalesRouter = router({
             .object({
               payload: z.string().trim().min(1).max(256),
               // DEV-843: a manager or owner PIN for a pack that is not from the FEFO lot.
-              approval: counterApprovalPin.optional(),
+              approval: counterLineApproval.optional(),
             })
             .strict()
             .optional(),
@@ -3449,11 +3532,13 @@ export const pharmacySalesRouter = router({
               message: 'You do not have permission to dispense a controlled medicine.',
             });
           }
-          const blocked = {
+          const blocked = async () => ({
             blocked:
-              'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
-          } as const;
-          if (!authorization) return blocked;
+              (await approvalSecretKindFor(db, scope.organizationId)) === 'PIN'
+                ? 'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.'
+                : 'Controlled medicine requires the patient address, an independent pharmacist authenticator code, and either a valid prescription or an emergency supply with the prescriber name.',
+          });
+          if (!authorization) return blocked();
           // Serialize credential attempts; returning a denial commits durable lockout counters.
           await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
           const credential = await db.restaurantOperatorCredential.findFirst({
@@ -3477,8 +3562,9 @@ export const pharmacySalesRouter = router({
             pharmacist.id === scope.actorId ||
             isLockedOut(credential, now)
           )
-            return blocked;
-          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
+            return blocked();
+          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now })))
+            return blocked();
           if (
             !(await verifyApprovalSecret(db, {
               organizationId: scope.organizationId,
@@ -3495,7 +3581,7 @@ export const pharmacySalesRouter = router({
               where: { id: credential.id },
               data: registerFailedAttempt(credential, now),
             });
-            return blocked;
+            return blocked();
           }
           await db.restaurantOperatorCredential.update({
             where: { id: credential.id },
@@ -3601,7 +3687,7 @@ export const pharmacySalesRouter = router({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
               select: { cnic: true },
             });
-            if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
+            if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked();
             const units = input.quantity * input.canonicalUnitsPerSaleUnit;
             const regulatoryProfile = await db.branchRegulatoryProfile.findFirst({
               where: {
@@ -3714,7 +3800,7 @@ export const pharmacySalesRouter = router({
             });
             return result;
           }
-          if (!authorization.prescriptionLineId) return blocked;
+          if (!authorization.prescriptionLineId) return blocked();
           // Lock prescription and branch before stock allocation, fill numbering and register numbering.
           await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
           await lockSaleForControlledLine(db, scope, input.saleId);
@@ -3747,7 +3833,7 @@ export const pharmacySalesRouter = router({
               workspaceTimezone(organization?.timezone)
             )
           )
-            return blocked;
+            return blocked();
           const units = input.quantity * input.canonicalUnitsPerSaleUnit;
           if (
             !Number.isSafeInteger(units) ||

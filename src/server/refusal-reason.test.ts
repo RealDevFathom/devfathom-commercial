@@ -20,12 +20,20 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { CounterApprovalChoice } from '@/lib/pharmacy/counter-approval-choice';
 import { RefusalReason, refusalReasonOf } from './refusal-reason';
 import { publicProcedure, router } from './trpc';
 
 const OUTSIDE = 'Branch is outside your scope.';
 
 const testRouter = router({
+  approvalChoice: publicProcedure.query(() => {
+    const choice = new CounterApprovalChoice(
+      ['eligible-a', 'eligible-b'],
+      ['fixture-a', 'fixture-b']
+    );
+    throw new TRPCError({ code: 'FORBIDDEN', message: choice.message, cause: choice });
+  }),
   named: publicProcedure.query(() => {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -84,4 +92,14 @@ describe('refusal reasons (DEV-860)', () => {
     expect(refusalReasonOf(new Error('PROFILE_MISSING'))).toBeNull();
     expect(refusalReasonOf(undefined)).toBeNull();
   });
+});
+
+it('returns only the matched profile IDs on the deliberate approval choice', async () => {
+  const error = await call('approvalChoice');
+  expect(error.message).toBe(
+    'Which person is approving? Choose their name and wait for their next authenticator code, then enter it.'
+  );
+  expect(error.data.matchingStaffProfileIds).toEqual(['eligible-a', 'eligible-b']);
+  expect(error.data.choiceProofs).toEqual(['fixture-a', 'fixture-b']);
+  expect((await call('otherCause')).data).not.toHaveProperty('matchingStaffProfileIds');
 });

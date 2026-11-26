@@ -69,12 +69,15 @@ const override = {
   reason: 'Customer travelling; wants longer dating',
 };
 
-function fixture() {
+function fixture(requireApprovalAuthenticator = false) {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const lotRead = vi.fn();
   const db = {
     // DEV-631: a counter bill or line is refused while today's business day is closed.
-    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    organization: {
+      findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
+      findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator }),
+    },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: transaction,
@@ -200,21 +203,27 @@ describe('pharmacySales.addLine batch override (PH-A4)', () => {
     expect(addSaleLine).not.toHaveBeenCalled();
   });
 
-  it('refuses a non-pharmacist override without a pharmacist PIN (#520)', async () => {
-    const f = fixture();
-    vi.mocked(can).mockResolvedValue(false);
-    await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
-    });
-    // Approval is settled before the sale transaction takes a connection.
-    expect(f.transaction).not.toHaveBeenCalled();
-    expect(addSaleLine).not.toHaveBeenCalled();
-    expect(lastAudit()).toMatchObject({
-      outcome: 'FAILURE',
-      detail: { action: 'fefo_override' },
-    });
-  });
+  it.each([
+    { requireAuthenticator: false, credential: 'PIN' },
+    { requireAuthenticator: true, credential: 'authenticator code' },
+  ])(
+    'refuses a non-pharmacist override without a pharmacist $credential (#520)',
+    async ({ requireAuthenticator, credential }) => {
+      const f = fixture(requireAuthenticator);
+      vi.mocked(can).mockResolvedValue(false);
+      await expect(f.caller.addLine({ ...line, override })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: `A non-FEFO batch needs a pharmacist to approve it with their ${credential}.`,
+      });
+      // Approval is settled before the sale transaction takes a connection.
+      expect(f.transaction).not.toHaveBeenCalled();
+      expect(addSaleLine).not.toHaveBeenCalled();
+      expect(lastAudit()).toMatchObject({
+        outcome: 'FAILURE',
+        detail: { action: 'fefo_override' },
+      });
+    }
+  );
 
   it('re-checks the approver inside the sale transaction before any stock is touched (#520)', async () => {
     const f = fixture();

@@ -2260,7 +2260,7 @@ it('DEV-961: asks for an approval code while the authenticator setting is on (th
   await screen.findByText(/Ledger balance/);
   fireEvent.click(screen.getByLabelText('Owner or manager: authorize limit increase'));
   await screen.findByRole('option', { name: 'Manager Sana' });
-  const field = screen.getByLabelText('Approval code');
+  const field = screen.getByLabelText('Authenticator code');
   expect(field).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
   expect(screen.queryByLabelText('Approver PIN')).not.toBeInTheDocument();
 });

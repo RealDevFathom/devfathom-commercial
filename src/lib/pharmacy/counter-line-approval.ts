@@ -9,14 +9,50 @@ import {
   clearLockout,
   isLockedOut,
   OPERATOR_CREDENTIAL_BCRYPT_COST,
+  LOCKOUT_DURATION_MS,
+  MAX_FAILED_ATTEMPTS,
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
-import { verifyApprovalSecret } from '@/lib/approval-authenticator';
-import { COUNTER_DISCOUNT_APPROVAL_REQUIRED } from './counter-messages';
+import { rateLimit, refundRateLimit, type RateLimitResult } from '@/lib/rate-limit';
+import { counterBranchAssignmentDenial } from './counter-capability';
+import { CounterApprovalChoice } from './counter-approval-choice';
+import { timingSafeEqual } from 'node:crypto';
+import {
+  counterChoiceProof,
+  validApprovalDeviceProof,
+  verifyToken,
+} from './counter-terminal-session';
+import { pharmacyDeviceSecretExpired } from './device-secret-expiry';
+import {
+  approverGuessBudgetAvailable,
+  spendApproverPinGuessTypedByAnother,
+  refundApproverPinGuessTypedByAnother,
+} from '@/lib/approver-pin-guess-budget';
+import {
+  approvalSecretKindFor,
+  matchingApprovalStep,
+  retireApprovalStep,
+  verifyApprovalSecret,
+} from '@/lib/approval-authenticator';
+import {
+  COUNTER_DISCOUNT_APPROVAL_REQUIRED,
+  COUNTER_FEFO_APPROVAL_REQUIRED,
+  counterApprovalMessage,
+} from './counter-messages';
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
+type CounterSession = { deviceId: string; sessionToken: string; deviceProof?: string };
+export type CounterApprovalInput =
+  | CounterApprovalPin
+  | {
+      staffProfileId?: string;
+      matchingStaffProfileId?: string;
+      choiceProof?: string;
+      pin: string;
+      counter: CounterSession;
+    };
 
 export type CounterApprovalKind =
   'DISCOUNT' | 'FEFO_OVERRIDE' | 'KHATA_OVER_LIMIT' | 'SCANNED_PACK_FEFO' | 'TENDER_DISCARD';
@@ -28,6 +64,8 @@ export type CounterApproval = {
   selfApproved: boolean;
   /** The PIN credential that proved the approval; null for the pharmacist on duty. */
   credentialId: string | null;
+  /** Branch admission was part of a verified till approval and must still hold at use. */
+  approvalBranchId?: string;
 };
 
 /**
@@ -104,7 +142,7 @@ export async function mayDiscountWithoutApproval(
 
 const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
   DISCOUNT: COUNTER_DISCOUNT_APPROVAL_REQUIRED,
-  FEFO_OVERRIDE: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
+  FEFO_OVERRIDE: COUNTER_FEFO_APPROVAL_REQUIRED,
   KHATA_OVER_LIMIT:
     'Charging over the Khata credit limit needs a manager or owner to approve it with their PIN.',
   SCANNED_PACK_FEFO:
@@ -124,12 +162,60 @@ export function fefoOverrideApprovalPolicy(approval: CounterApproval, actorId: s
 }
 
 export class CounterApprovalDenied extends Error {
-  constructor(readonly kind: CounterApprovalKind) {
-    super(DENIED_MESSAGE[kind]);
+  constructor(
+    readonly kind: CounterApprovalKind,
+    message = DENIED_MESSAGE[kind]
+  ) {
+    super(message);
   }
 }
 
-type ActiveUser = Subject & { organizationId: string | null };
+async function approvalDenied(db: ScopedDb, scope: LedgerScope, kind: CounterApprovalKind) {
+  const mode = await approvalSecretKindFor(db, scope.organizationId);
+  return new CounterApprovalDenied(kind, counterApprovalMessage(DENIED_MESSAGE[kind], mode));
+}
+
+export function counterProofRequired(kind: CounterApprovalKind) {
+  return new CounterApprovalDenied(
+    kind,
+    'This till could not verify its enrollment. Choose the approver by name to continue.'
+  );
+}
+
+type ActiveUser = Subject & { organizationId: string | null; name?: string };
+
+async function admittedToApprovalBranch(db: ScopedDb, user: Subject, scope: LedgerScope) {
+  if (!(await counterBranchAssignmentDenial(db, user, scope.organizationId, scope.branchId)))
+    return true;
+  const { isLiveOrganizationOwner } = await import('./owner-data-export');
+  return isLiveOrganizationOwner(db, scope.organizationId, user.id);
+}
+
+async function verifiedCounterId(db: ScopedDb, scope: LedgerScope, counter: CounterSession) {
+  if (!validApprovalDeviceProof(counter.sessionToken, counter.deviceProof)) return null;
+  const device = await db.pharmacyRegisteredDevice.findFirst({
+    where: {
+      id: counter.deviceId,
+      kind: 'PHARMACY_COUNTER',
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'ACTIVE',
+      revokedAt: null,
+    },
+    select: { id: true, deviceSecretHash: true, secretExpiresAt: true },
+  });
+  if (!device || pharmacyDeviceSecretExpired(device, new Date())) return null;
+  try {
+    verifyToken(counter.sessionToken, {
+      scope,
+      deviceId: device.id,
+      credentialHash: device.deviceSecretHash,
+    });
+  } catch {
+    return null;
+  }
+  return device.id;
+}
 
 /**
  * Resolve the approval BEFORE the sale transaction opens. PIN checks run in their own tenant
@@ -141,13 +227,13 @@ export async function authorizeCounterApproval(
   db: ScopedDb,
   scope: LedgerScope,
   kind: CounterApprovalKind,
-  input?: CounterApprovalPin
+  input?: CounterApprovalInput
 ): Promise<CounterApproval> {
   const actor = (await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   })) as ActiveUser | null;
-  if (!actor) throw new CounterApprovalDenied(kind);
-  if (kind === 'FEFO_OVERRIDE' && (await mayApproveCounterLine(db, actor, kind))) {
+  if (!actor) throw await approvalDenied(db, scope, kind);
+  if (kind === 'FEFO_OVERRIDE' && !input && (await mayApproveCounterLine(db, actor, kind))) {
     return {
       approvedByUserId: actor.id,
       approvalPolicy: 'PHARMACIST_ON_DUTY',
@@ -165,15 +251,55 @@ export async function authorizeCounterApproval(
       credentialId: null,
     };
   }
-  if (!input) throw new CounterApprovalDenied(kind);
+  if (!input) throw await approvalDenied(db, scope, kind);
+  // Reserve before looking up the profile. Changing the chosen name, branch or action
+  // cannot buy the signed-in requester more guesses. An accepted approval refunds only
+  // its own reservation so concurrent failures keep counting.
+  const requesterKey = JSON.stringify([
+    'pharmacy-approval-requester',
+    scope.organizationId,
+    scope.actorId,
+  ]);
+  const attempt = await rateLimit(requesterKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
+  if (!attempt.ok || !attempt.windowStartedAt) throw await approvalDenied(db, scope, kind);
+  const deviceId = 'counter' in input ? await verifiedCounterId(db, scope, input.counter) : null;
+  // Named approvals also work when a browser sends a stale terminal session. Only
+  // a verified session may charge a physical till or identify an unnamed approver.
+  if (!input.staffProfileId && !deviceId) throw counterProofRequired(kind);
+  let counterReservation: { key: string; attempt: RateLimitResult } | undefined;
+  if (deviceId) {
+    const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, deviceId]);
+    const reservation = await rateLimit(key, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
+    if (!reservation.ok || !reservation.windowStartedAt)
+      throw await approvalDenied(db, scope, kind);
+    counterReservation = { key, attempt: reservation };
+  }
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
   const approval = await withTenantDb(
     scope.organizationId,
-    (credentialDb) => verifyApproverPin(credentialDb, scope, kind, input),
+    async (credentialDb) =>
+      input.staffProfileId
+        ? verifyApproverPin(credentialDb, scope, kind, {
+            staffProfileId: input.staffProfileId,
+            pin: input.pin,
+          })
+        : identifyCounterApprover(
+            credentialDb,
+            scope,
+            kind,
+            input.pin,
+            deviceId!,
+            'matchingStaffProfileId' in input ? input.matchingStaffProfileId : undefined,
+            'choiceProof' in input ? input.choiceProof : undefined
+          ),
     { userId: scope.actorId, skipDrain: true }
   );
   // Throw only after the credential transaction has committed any failed attempt.
-  if (!approval) throw new CounterApprovalDenied(kind);
+  if (!approval) throw await approvalDenied(db, scope, kind);
+  await refundRateLimit(requesterKey, LOCKOUT_DURATION_MS, attempt);
+  if (counterReservation)
+    await refundRateLimit(counterReservation.key, LOCKOUT_DURATION_MS, counterReservation.attempt);
+  if (approval instanceof CounterApprovalChoice) throw approval;
   return approval;
 }
 
@@ -204,13 +330,21 @@ export async function confirmCounterApproval(
       !approver ||
       !(await mayDiscountWithoutApproval(db, approver))
     )
-      throw new CounterApprovalDenied(kind);
+      throw await approvalDenied(db, scope, kind);
     return;
   }
   if (!approver || !(await mayApproveCounterLine(db, approver, kind))) {
-    throw new CounterApprovalDenied(kind);
+    throw await approvalDenied(db, scope, kind);
   }
   if (approval.credentialId === null) return;
+  if (
+    (approval.approvalBranchId !== undefined && approval.approvalBranchId !== scope.branchId) ||
+    !(await admittedToApprovalBranch(db, approver, scope))
+  )
+    throw new CounterApprovalDenied(
+      kind,
+      `${approver.name ?? 'This approver'} is not assigned to this branch.`
+    );
   const credential = await db.restaurantOperatorCredential.findFirst({
     where: {
       id: approval.credentialId,
@@ -222,7 +356,7 @@ export async function confirmCounterApproval(
     },
     select: { id: true },
   });
-  if (!credential) throw new CounterApprovalDenied(kind);
+  if (!credential) throw await approvalDenied(db, scope, kind);
 }
 
 /**
@@ -244,7 +378,8 @@ async function verifyApproverPin(
   db: ScopedDb,
   scope: LedgerScope,
   kind: CounterApprovalKind,
-  input: CounterApprovalPin
+  input: CounterApprovalPin,
+  method: 'named' | { matchedUserId: string } = 'named'
 ): Promise<CounterApproval | null> {
   await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
   const credential = await db.restaurantOperatorCredential.findFirst({
@@ -270,13 +405,27 @@ async function verifyApproverPin(
   ) {
     return refuseAfterDummyCompare(input.pin);
   }
+  if (typeof method === 'object' && method.matchedUserId !== approver.id) return null;
+  if (!(await admittedToApprovalBranch(db, approver, scope)))
+    throw new CounterApprovalDenied(
+      kind,
+      `${credential.staffProfile.displayName} is not assigned to this branch.`
+    );
   const selfApproved = approver.id === scope.actorId;
   if (selfApproved && !(await isSoleApprover(db, scope, kind, now)))
     return refuseAfterDummyCompare(input.pin);
+  // A named entry and an unidentified code spend the same per-person guess budget. The
+  // verifier in identifyCounterApprover reserves it once for the identified person.
+  const namedBudget =
+    typeof method === 'string' && !selfApproved
+      ? await spendApproverPinGuessTypedByAnother(scope.organizationId, approver.id)
+      : undefined;
+  if (namedBudget && !namedBudget.ok) return null;
   if (
     !(await verifyApprovalSecret(db, {
       organizationId: scope.organizationId,
       approverUserId: approver.id,
+      authenticatorOnly: typeof method === 'object',
       credentialHash: credential.credentialHash,
       secret: input.pin,
       action: `pharmacy.counterApproval.${kind}`,
@@ -295,6 +444,8 @@ async function verifyApproverPin(
     where: { id: credential.id },
     data: clearLockout(),
   });
+  if (namedBudget?.windowStartedAt)
+    await refundApproverPinGuessTypedByAnother(scope.organizationId, approver.id, namedBudget);
   const approvalPolicy = selfApproved
     ? 'SOLE_APPROVER_PIN_REAUTH'
     : kind === 'FEFO_OVERRIDE'
@@ -305,7 +456,154 @@ async function verifyApproverPin(
     approvalPolicy,
     selfApproved,
     credentialId: credential.id,
+    approvalBranchId: scope.branchId,
   };
+}
+
+/**
+ * Identify only inside the credential transaction, then use the normal locked verifier to
+ * recheck authority, consume the step and audit exactly one person. Comparing candidates
+ * does not consume a code or write a credential strike in somebody else's name.
+ */
+async function identifyCounterApprover(
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind,
+  pin: string,
+  deviceId: string,
+  matchingStaffProfileId?: string,
+  choiceProof?: string
+) {
+  if (!/^\d{6}$/.test(pin) || (await approvalSecretKindFor(db, scope.organizationId)) !== 'CODE')
+    return null;
+  const now = new Date();
+  const credentials = await db.restaurantOperatorCredential.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+      staffProfile: {
+        organizationId: scope.organizationId,
+        status: 'ACTIVE',
+        user: {
+          organizationId: scope.organizationId,
+          status: 'ACTIVE',
+          OR: [
+            { role: 'ADMIN' },
+            { organizationRole: { key: 'owner', isSystem: true } },
+            {
+              pharmacyBranchAssignments: {
+                some: {
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  active: true,
+                  branch: { organizationId: scope.organizationId, active: true },
+                },
+              },
+            },
+          ],
+        },
+      },
+    },
+    select: {
+      staffProfileId: true,
+      failedAttempts: true,
+      lockedUntil: true,
+      staffProfile: {
+        select: {
+          user: {
+            select: { id: true, organizationId: true, status: true, role: true, department: true },
+          },
+        },
+      },
+    },
+    orderBy: { id: 'asc' },
+  });
+  const eligible = new Map<string, string>();
+  for (const credential of credentials) {
+    const person = credential.staffProfile.user;
+    if (!person || eligible.has(person.id) || isLockedOut(credential, now)) continue;
+    if (
+      !(await mayApproveCounterLine(db, person, kind, { now })) ||
+      !(await admittedToApprovalBranch(db, person, scope))
+    )
+      continue;
+    if (person.id === scope.actorId && !(await isSoleApprover(db, scope, kind, now))) continue;
+    eligible.set(person.id, credential.staffProfileId);
+  }
+  if (!eligible.size) return null;
+  const authenticators = await db.approvalAuthenticator.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: { in: [...eligible.keys()] },
+      enabledAt: { not: null },
+    },
+    select: { id: true, userId: true, encryptedSecret: true, lastUsedStep: true },
+    orderBy: { userId: 'asc' },
+  });
+  const matches: Array<{
+    userId: string;
+    staffProfileId: string;
+    authenticatorId: string;
+    lastUsedStep: number | null;
+    step: number;
+  }> = [];
+  let used = false;
+  for (const auth of authenticators) {
+    const step = matchingApprovalStep(auth.encryptedSecret, pin, now);
+    if (step === null || !(await approverGuessBudgetAvailable(scope.organizationId, auth.userId)))
+      continue;
+    if (auth.lastUsedStep !== null && step <= auth.lastUsedStep) used = true;
+    matches.push({
+      userId: auth.userId,
+      staffProfileId: eligible.get(auth.userId)!,
+      authenticatorId: auth.id,
+      lastUsedStep: auth.lastUsedStep,
+      step,
+    });
+  }
+  if (used || matches.length === 0) return null;
+  const proofFor = (match: (typeof matches)[number], step: number) =>
+    counterChoiceProof(scope, deviceId, kind, match.authenticatorId, match.staffProfileId, step);
+  if (matches.length > 1 && !matchingStaffProfileId) {
+    // Permanently retire this step for every match before returning the list. A
+    // subsequent named or code-only verification must consume a later step.
+    for (const match of matches)
+      if (!(await retireApprovalStep(db, match.authenticatorId, match.step))) return null;
+    return new CounterApprovalChoice(
+      matches.map((match) => match.staffProfileId),
+      matches.map((match) => proofFor(match, match.step))
+    );
+  }
+  const match = matchingStaffProfileId
+    ? matches.find((candidate) => candidate.staffProfileId === matchingStaffProfileId)
+    : matches[0];
+  if (!match) return null;
+  if (matchingStaffProfileId) {
+    // The previous step was retired by this specific collision. Any later
+    // consumption advances it and invalidates the continuation automatically.
+    if (!choiceProof || !/^[0-9a-f]{64}$/.test(choiceProof) || match.lastUsedStep === null)
+      return null;
+    const expected = proofFor(match, match.lastUsedStep);
+    if (!timingSafeEqual(Buffer.from(choiceProof, 'hex'), Buffer.from(expected, 'hex')))
+      return null;
+  }
+  // Atomically recheck the one identified person's shared budget before use.
+  // Unattributed failures spend only the cashier and verified-till allowances.
+  const reservation = await spendApproverPinGuessTypedByAnother(scope.organizationId, match.userId);
+  if (!reservation.ok || !reservation.windowStartedAt) return null;
+  try {
+    return await verifyApproverPin(
+      db,
+      scope,
+      kind,
+      { staffProfileId: match.staffProfileId, pin },
+      { matchedUserId: match.userId }
+    );
+  } finally {
+    await refundApproverPinGuessTypedByAnother(scope.organizationId, match.userId, reservation);
+  }
 }
 
 /**
@@ -336,7 +634,11 @@ export async function listCounterApprovers(
     const user = profile.user as ActiveUser | null;
     if (!user || user.organizationId !== scope.organizationId || user.status !== 'ACTIVE') continue;
     if (!capable.has(user.id))
-      capable.set(user.id, await mayApproveCounterLine(db, user, kind, { now }));
+      capable.set(
+        user.id,
+        (await mayApproveCounterLine(db, user, kind, { now })) &&
+          (await admittedToApprovalBranch(db, user, scope))
+      );
     if (capable.get(user.id))
       eligible.push({ id: profile.id, name: profile.displayName, self: user.id === scope.actorId });
   }

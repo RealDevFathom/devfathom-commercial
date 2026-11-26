@@ -70,6 +70,8 @@ export type ApprovalSecretInput = {
    * one. Defaults to PIN.
    */
   credentialType?: 'PIN' | 'BADGE';
+  /** Auto-detection matched an app code. A mode change must never reinterpret it as a PIN. */
+  authenticatorOnly?: boolean;
   /** What the approver entered: their PIN or badge, or a code from their authenticator app. */
   secret: string;
   /** The action being approved, recorded on the audit row (for example a procedure path). */
@@ -139,6 +141,7 @@ export async function verifyApprovalSecret(
       })));
   const credentialType = input.credentialType ?? 'PIN';
   if (pinAccepted) {
+    if (input.authenticatorOnly) return null;
     if (!(await verifyOperatorCredential(credentialType, input.secret, input.credentialHash)))
       return null;
     await recordApproval(db, input, credentialType, approverUserId, now);
@@ -191,6 +194,34 @@ export async function consumeMemberApprovalCode(
   );
 }
 
+/** Non-consuming comparison used only after the caller has checked eligibility and guess budgets. */
+export function matchingApprovalStep(
+  encryptedSecret: string,
+  code: string,
+  now: Date
+): number | null {
+  let secret: string;
+  try {
+    secret = decryptSecret(encryptedSecret);
+  } catch {
+    return null;
+  }
+  return matchTotpStep(secret, code, APPROVAL_TOTP_WINDOW, now.getTime());
+}
+
+/** Advance the replay guard without attributing a successful approval. */
+export async function retireApprovalStep(db: ScopedDb, authenticatorId: string, step: number) {
+  const consumed = await db.approvalAuthenticator.updateMany({
+    where: {
+      id: authenticatorId,
+      enabledAt: { not: null },
+      OR: [{ lastUsedStep: null }, { lastUsedStep: { lt: step } }],
+    },
+    data: { lastUsedStep: step },
+  });
+  return consumed.count === 1;
+}
+
 async function consumeApprovalCode(
   db: ScopedDb,
   input: ApprovalRecordInput & Pick<ApprovalSecretInput, 'secret'>,
@@ -198,25 +229,9 @@ async function consumeApprovalCode(
   approverUserId: string,
   now: Date
 ): Promise<boolean> {
-  let secret: string;
-  try {
-    secret = decryptSecret(authenticator.encryptedSecret);
-  } catch {
-    return false;
-  }
-  const step = matchTotpStep(secret, input.secret, APPROVAL_TOTP_WINDOW, now.getTime());
+  const step = matchingApprovalStep(authenticator.encryptedSecret, input.secret, now);
   if (step === null) return false;
-  // Single use: only a step newer than the last accepted one is consumed. The guarded
-  // update is atomic, so two simultaneous approvals with one code cannot both succeed.
-  const consumed = await db.approvalAuthenticator.updateMany({
-    where: {
-      id: authenticator.id,
-      enabledAt: { not: null },
-      OR: [{ lastUsedStep: null }, { lastUsedStep: { lt: step } }],
-    },
-    data: { lastUsedStep: step },
-  });
-  if (consumed.count !== 1) return false;
+  if (!(await retireApprovalStep(db, authenticator.id, step))) return false;
   await recordApproval(db, input, 'AUTHENTICATOR', approverUserId, now);
   return true;
 }

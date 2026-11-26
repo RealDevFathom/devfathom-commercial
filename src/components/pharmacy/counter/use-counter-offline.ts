@@ -54,6 +54,9 @@ import {
   CounterRequestError,
   counterSetupMessage,
   establishCounterSession,
+  activateCounterApprovalSession,
+  clearCounterApprovalSession,
+  counterApprovalSessionActive,
   fetchCounterSnapshots,
   grantCounterQuota,
   renewCounterCredential,
@@ -94,6 +97,7 @@ export type CounterOfflineActions = {
 };
 
 export type CounterOfflineView = {
+  hasSession: boolean;
   status: CounterOfflineStatus;
   enrolment: CounterEnrolment | null;
   /** A plain sentence when the server or the browser could not be used. */
@@ -241,7 +245,12 @@ export function useCounterOffline(input: {
   }, []);
 
   const open = useCallback(
-    async (enrolled: CounterEnrolment, isOnline: boolean, key: string, cancelled: () => boolean) => {
+    async (
+      enrolled: CounterEnrolment,
+      isOnline: boolean,
+      key: string,
+      cancelled: () => boolean
+    ) => {
       const finish = (next: Omit<Opened, 'key'>) => {
         if (cancelled()) return;
         // The readiness clock must not lag the snapshots just installed, or a
@@ -257,7 +266,9 @@ export function useCounterOffline(input: {
       }
       if (cancelled()) return;
       sealerRef.current =
-        record && record.deviceId === enrolled.deviceId ? counterSaleSealer(record.signingKey) : null;
+        record && record.deviceId === enrolled.deviceId
+          ? counterSaleSealer(record.signingKey)
+          : null;
       if (!record || record.deviceId !== enrolled.deviceId) {
         return finish({
           status: 'unavailable',
@@ -315,6 +326,7 @@ export function useCounterOffline(input: {
       runtimeRef.current?.close();
       runtimeRef.current = counter.runtime;
       sessionTokenRef.current = counter.sessionToken;
+      activateCounterApprovalSession(enrolled, counter.sessionToken);
       let unreachable =
         isOnline && counter.error instanceof CounterRequestError && counter.error.status === 0;
       let message = isOnline && counter.error ? counterSetupMessage(counter.error) : null;
@@ -387,11 +399,18 @@ export function useCounterOffline(input: {
   );
 
   useEffect(() => {
+    clearCounterApprovalSession();
     if (!enrolledHere || !enrolment) return;
     let cancelled = false;
+    const close = () => {
+      cancelled = true;
+      clearCounterApprovalSession();
+    };
+    window.addEventListener('pagehide', close);
     void open(enrolment, online, openKey, () => cancelled);
     return () => {
-      cancelled = true;
+      close();
+      window.removeEventListener('pagehide', close);
     };
   }, [enrolledHere, enrolment, online, openKey, open]);
 
@@ -400,6 +419,7 @@ export function useCounterOffline(input: {
       runtimeRef.current?.close();
       runtimeRef.current = null;
       sessionTokenRef.current = null;
+      clearCounterApprovalSession();
     },
     []
   );
@@ -541,6 +561,7 @@ export function useCounterOffline(input: {
     };
   }, [ready, refresh, enrolmentName, canResolveConflict]);
   const idle = {
+    hasSession: false,
     message: null,
     readiness: null,
     rows: [],
@@ -559,6 +580,7 @@ export function useCounterOffline(input: {
   if (!enrolledHere) return { status: 'other-branch', enrolment, ...idle };
   return {
     status: current?.status ?? 'opening',
+    hasSession: online && current?.hasSession === true && counterApprovalSessionActive(),
     enrolment,
     message: current?.message ?? null,
     readiness,

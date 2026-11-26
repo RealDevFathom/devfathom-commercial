@@ -15,6 +15,13 @@ import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { BPS, NO_MAXIMUM_DISCOUNT_BPS } from '@/lib/pharmacy/smart-discount';
 import { trpc } from '@/lib/trpc';
 import { percentToBps } from './discount-maximum-panel';
+import {
+  ApprovalFallback,
+  ApprovalNames,
+  matchingProfiles,
+  useApprovalEntry,
+  type ApprovalEntry,
+} from './counter-approval-entry';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 import {
   COUNTER_SHEET_BACKDROP,
@@ -103,7 +110,7 @@ export function CounterDiscountEntry({
       saleLineId: string,
       discount: CounterHeldDiscount,
       requestId: string,
-      approval?: { staffProfileId: string; pin: string }
+      approval?: ApprovalEntry
     ) => Promise<void>;
   };
   /** DEV-977 phase 3: who can approve, read while the sheet is open (the supervisor block). */
@@ -122,12 +129,11 @@ export function CounterDiscountEntry({
   const [error, setError] = useState<string | null>(null);
   const [target, setTarget] = useState<'ITEM' | 'BILL' | 'LINE'>('ITEM');
   const [lineId, setLineId] = useState('');
-  const [approverId, setApproverId] = useState('');
-  const [secret, setSecret] = useState('');
+  const form = useApprovalEntry();
+  const { profile: approverId, setProfile: setApproverId, pin: secret, setPin: setSecret } = form;
   const attempt = useRef<{ fingerprint: string; id: string } | null>(null);
   const resetLine = () => {
-    setSecret('');
-    setApproverId('');
+    form.reset();
     setLineId('');
     attempt.current = null;
   };
@@ -227,7 +233,7 @@ export function CounterDiscountEntry({
                   setError('Choose a bill line.');
                   return;
                 }
-                if ((secret || approverId) && (!approverId || !/^\d{4,8}$/.test(secret))) {
+                if ((secret || approverId || form.matches) && !form.entry) {
                   setError('Choose the approving manager or owner and enter their approval.');
                   setSecret('');
                   return;
@@ -237,7 +243,7 @@ export function CounterDiscountEntry({
                   attempt.current = { fingerprint, id: browserUuid() };
                 setSending(true);
                 setError(null);
-                const approval = secret ? { staffProfileId: approverId, pin: secret } : undefined;
+                const approval = form.entry;
                 setSecret('');
                 void billLines
                   .apply(lineId, discount, attempt.current.id, approval)
@@ -248,7 +254,11 @@ export function CounterDiscountEntry({
                     setOpen(false);
                     onOpenChange?.(false);
                   })
-                  .catch((e) => setError(counterErrorMessage(e)))
+                  .catch((e) => {
+                    const matches = matchingProfiles(e);
+                    if (matches) form.reset(matches);
+                    setError(counterErrorMessage(e));
+                  })
                   .finally(() => setSending(false));
                 return;
               }
@@ -476,7 +486,7 @@ export function CounterDiscountEntry({
                       <b className="font-semibold text-text-strong">
                         A manager or owner must approve a discount you cannot give on your own.
                       </b>{' '}
-                      {approvalCopy.discountSupervisorHow}{' '}
+                      {approvalCopy.discountSupervisorHow(form.codeOnly)}{' '}
                       {toLine
                         ? 'when you apply it to this line'
                         : toBill
@@ -485,38 +495,45 @@ export function CounterDiscountEntry({
                       . The approval and both names are saved with the sale.
                     </p>
                   </CounterNote>
-                  {toLine && approvers.status === 'ready' && approvers.list.length > 0 && (
-                    <>
-                      <Label htmlFor={id + '-approver'}>Approving manager or owner</Label>
-                      <SelectField
-                        id={id + '-approver'}
-                        value={approverId}
-                        onChange={(e) => {
-                          setApproverId(e.target.value);
-                          setSecret('');
-                        }}
-                      >
-                        <option value="">Use my own discount right</option>
-                        {approvers.list.map((a) => (
-                          <option key={a.id} value={a.id}>
-                            {a.name}
-                          </option>
-                        ))}
-                      </SelectField>
-                      <Label htmlFor={id + '-secret'}>{approvalCopy.approverLabel}</Label>
-                      <Input
-                        id={id + '-secret'}
-                        type="password"
-                        inputMode="numeric"
-                        autoComplete="off"
-                        maxLength={8}
-                        disabled={!approverId || sending}
-                        value={secret}
-                        onChange={(e) => setSecret(e.target.value)}
-                      />
-                    </>
-                  )}
-                  {approvers.status === 'loading' ? (
+                  {toLine &&
+                    (form.codeOnly ||
+                      (approvers.status === 'ready' && approvers.list.length > 0)) && (
+                      <>
+                        <ApprovalNames form={form}>
+                          <Label htmlFor={id + '-approver'}>Approving manager or owner</Label>
+                          <SelectField
+                            id={id + '-approver'}
+                            value={approverId}
+                            onChange={(e) => {
+                              setApproverId(e.target.value);
+                              setSecret('');
+                            }}
+                          >
+                            <option value="">Use my own discount right</option>
+                            {form
+                              .visible(approvers.status === 'ready' ? approvers.list : [])
+                              .map((a) => (
+                                <option key={a.id} value={a.id}>
+                                  {a.name}
+                                </option>
+                              ))}
+                          </SelectField>
+                        </ApprovalNames>
+                        <Label htmlFor={id + '-secret'}>{approvalCopy.approverLabel}</Label>
+                        <Input
+                          id={id + '-secret'}
+                          type="password"
+                          inputMode="numeric"
+                          autoComplete="off"
+                          maxLength={8}
+                          disabled={(!form.codeOnly && !approverId) || sending}
+                          value={secret}
+                          onChange={(e) => setSecret(e.target.value)}
+                        />
+                        <ApprovalFallback form={form} disabled={sending} />
+                      </>
+                    )}
+                  {form.codeOnly || form.matches ? null : approvers.status === 'loading' ? (
                     <p role="status" className="text-text-muted">
                       Checking who can approve…
                     </p>

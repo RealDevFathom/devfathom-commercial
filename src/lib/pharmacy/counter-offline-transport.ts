@@ -48,7 +48,9 @@ async function counterPost(
   }
   if (!response.ok) {
     const code =
-      parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string'
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { error?: unknown }).error === 'string'
         ? (parsed as { error: string }).error
         : 'unexpected_response';
     throw new CounterRequestError(response.status, code);
@@ -72,13 +74,107 @@ export type CounterSignedSnapshot = {
   payload: unknown;
 };
 
+// Established in this tab only. The server rechecks the actor, branch and current device key.
+let approvalSession: { deviceId: string; sessionToken: string; expiresAt: number } | undefined;
+
+export function clearCounterApprovalSession() {
+  approvalSession = undefined;
+}
+
+// Bind proof only after the counter hook accepts the opened runtime for its current branch.
+// The decoded expiry only schedules client cleanup. The server verifies the signed token.
+export function activateCounterApprovalSession(
+  enrolled: { deviceId: string; branchId: string; organizationId: string },
+  sessionToken: string | null
+) {
+  clearCounterApprovalSession();
+  if (!sessionToken) return;
+  try {
+    const payload = sessionToken.split('.')[0]!;
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    if (
+      claims.deviceId === enrolled.deviceId &&
+      claims.organizationId === enrolled.organizationId &&
+      claims.branchId === enrolled.branchId &&
+      Number.isSafeInteger(claims.expiresAt) &&
+      claims.expiresAt > Date.now()
+    )
+      approvalSession = { deviceId: enrolled.deviceId, sessionToken, expiresAt: claims.expiresAt };
+  } catch {
+    // An unreadable session cannot enable code-only approval.
+  }
+}
+
+export function counterApprovalSessionActive() {
+  return Boolean(approvalSession && approvalSession.expiresAt > Date.now());
+}
+
+type ApprovalOperation = { type: string; path: string; input?: unknown };
+
+function carriesCounterApproval({ type, path, input }: ApprovalOperation) {
+  if (type !== 'mutation' || !input || typeof input !== 'object') return false;
+  const hasApproval = (value: unknown) =>
+    value !== null && typeof value === 'object' && 'approval' in value && !!value.approval;
+  switch (path) {
+    case 'pharmacySales.addLine':
+      return (
+        ('discountApproval' in input && !!input.discountApproval) ||
+        ('override' in input && hasApproval(input.override)) ||
+        ('scannedPack' in input && hasApproval(input.scannedPack))
+      );
+    case 'pharmacySales.applyBillDiscount':
+    case 'pharmacySales.discountBillLine':
+      return 'discountApproval' in input && !!input.discountApproval;
+    case 'pharmacySales.tender':
+      return 'overLimitApproval' in input && !!input.overLimitApproval;
+    case 'pharmacySales.discardTenderAttempt':
+      return hasApproval(input);
+    default:
+      return false;
+  }
+}
+
+export async function counterApprovalHeaders(
+  operations: readonly ApprovalOperation[]
+): Promise<Record<string, string>> {
+  if (!counterApprovalSessionActive()) clearCounterApprovalSession();
+  if (!approvalSession || !operations.some(carriesCounterApproval)) return {};
+  const session = approvalSession;
+  try {
+    const result = await counterPost(
+      '/api/pharmacy/counter/approval-proof',
+      {},
+      session.sessionToken
+    );
+    if (
+      session !== approvalSession ||
+      !counterApprovalSessionActive() ||
+      !result ||
+      typeof result !== 'object' ||
+      !('proof' in result) ||
+      typeof result.proof !== 'string'
+    )
+      return {};
+    return {
+      'x-pharmacy-approval-device': session.deviceId,
+      'x-terminal-session': session.sessionToken,
+      'x-pharmacy-approval-proof': result.proof,
+    };
+  } catch {
+    // The mutation may still use a named approval or the operator's own permission.
+    return {};
+  }
+}
+
 /** Sets the httpOnly device cookie for the secret enrol/rotate just returned. */
 export async function bindCounterBrowser(secret: string): Promise<CounterBinding> {
+  clearCounterApprovalSession();
   return (await counterPost('/api/pharmacy/counter/bind', { secret })) as CounterBinding;
 }
 
 /** Clears this browser's device cookie. */
 export async function unbindCounterBrowser(): Promise<void> {
+  clearCounterApprovalSession();
   await counterPost('/api/pharmacy/counter/bind', null, undefined, 'DELETE');
 }
 

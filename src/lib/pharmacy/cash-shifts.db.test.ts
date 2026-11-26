@@ -401,7 +401,8 @@ async function asMember<T>(
     caller: ReturnType<
       (typeof import('@/server/routers/pharmacy-sales'))['pharmacySalesRouter']['createCaller']
     >
-  ) => Promise<T>
+  ) => Promise<T>,
+  approvalCounter?: import('@/server/trpc').TRPCContext['approvalCounter']
 ) {
   const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
   const organizationId = s.owner.organizationId;
@@ -433,6 +434,7 @@ async function asMember<T>(
           support: null,
           requestMeta: { ip: null, userAgent: null },
           audit: { detail: {} },
+          approvalCounter,
         } as never)
       ),
     { userId, timeout: 60_000 }
@@ -1942,6 +1944,402 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
       })
     ).resolves.toEqual({ verified: true });
   });
+
+  it('DEV-961: repeated successful named approvals refund their exact PostgreSQL reservations on an unenrolled till', async () => {
+    const s = await shop('named_budget', { shifts: true, approvalAuthenticator: false });
+    const scope = s.as(s.cashier);
+    const { authorizeCounterApproval } = await import('./counter-line-approval');
+    const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+    const keys = [
+      rateLimitStorageKey(
+        JSON.stringify(['pharmacy-approval-requester', scope.organizationId, scope.actorId])
+      ),
+      rateLimitStorageKey(`approver-pin-typed-by-another:${scope.organizationId}:${s.manager}`),
+    ];
+    const profile = await tenant(s.owner, (db) =>
+      db.restaurantStaffProfile.findFirstOrThrow({ where: { userId: s.manager } })
+    );
+    // Model one previous failure in a live window with a sub-millisecond start.
+    await tenant(scope, async (db) => {
+      for (const key of keys)
+        await db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+          VALUES (${key}, 1, date_trunc('milliseconds', now()) + interval '15 minutes 0.000321 seconds')`;
+    });
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    try {
+      for (let i = 0; i < 6; i++)
+        await expect(
+          tenant(scope, (db) =>
+            authorizeCounterApproval(db, scope, 'DISCOUNT', {
+              staffProfileId: profile.id,
+              pin: MANAGER_PIN,
+            })
+          )
+        ).resolves.toMatchObject({ approvedByUserId: s.manager });
+      const { establishToken, issueApprovalDeviceProof } =
+        await import('./counter-terminal-session');
+      const { device, secret } = await tenant(s.owner, (db) =>
+        devices.enrollPharmacyCounter(db, s.owner, { name: 'Named proof fixture' })
+      );
+      const otherBranchToken = establishToken({
+        scope: { ...scope, branchId: 'other' },
+        deviceId: device.id,
+        deviceSecret: secret,
+      });
+      for (const token of [
+        establishToken({ scope, deviceId: device.id, deviceSecret: secret }),
+        otherBranchToken,
+        (() => {
+          vi.useFakeTimers({ toFake: ['Date'] });
+          try {
+            vi.setSystemTime(Date.now() - 9 * 3_600_000);
+            return establishToken({ scope, deviceId: device.id, deviceSecret: secret });
+          } finally {
+            vi.useRealTimers();
+          }
+        })(),
+      ]) {
+        await expect(
+          tenant(scope, (db) =>
+            authorizeCounterApproval(db, scope, 'DISCOUNT', {
+              staffProfileId: profile.id,
+              pin: MANAGER_PIN,
+              counter: {
+                deviceId: device.id,
+                sessionToken: token,
+                deviceProof:
+                  token === otherBranchToken ? issueApprovalDeviceProof(token) : undefined,
+              },
+            })
+          )
+        ).resolves.toMatchObject({ approvedByUserId: s.manager });
+      }
+      const tillKey = rateLimitStorageKey(
+        JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id])
+      );
+      expect(
+        await tenant(
+          scope,
+          (db) => db.$queryRaw`SELECT count FROM rate_limit_buckets WHERE key = ${tillKey}`
+        )
+      ).toEqual([]);
+      const counts = await tenant(
+        scope,
+        (db) => db.$queryRaw<{ count: number }[]>`
+        SELECT count FROM rate_limit_buckets WHERE key IN (${keys[0]}, ${keys[1]})`
+      );
+      expect(counts.map((row) => row.count)).toEqual([1, 1]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('DEV-961: a verified till resolves a unique previous-step code, refuses replay and asks which person on collision', async () => {
+    const s = await shop('detect', { shifts: true, approvalAuthenticator: true });
+    const { authorizeCounterApproval, CounterApprovalDenied } =
+      await import('./counter-line-approval');
+    const { CounterApprovalChoice } = await import('./counter-approval-choice');
+    const { establishToken, issueApprovalDeviceProof } = await import('./counter-terminal-session');
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const scope = s.as(s.cashier);
+    const secret = generateTotpSecret();
+    const { device, secret: deviceSecret } = await tenant(s.owner, (db) =>
+      devices.enrollPharmacyCounter(db, s.owner, { name: 'Approval till' })
+    );
+    const enroll = (userId: string) =>
+      tenant(s.owner, (db) =>
+        db.approvalAuthenticator.create({
+          data: { userId, encryptedSecret: encryptSecret(secret), enabledAt: new Date() },
+        })
+      );
+    await enroll(s.manager);
+    const sessionFor = (actor: Scope) => {
+      const sessionToken = establishToken({ scope: actor, deviceId: device.id, deviceSecret });
+      return {
+        deviceId: device.id,
+        sessionToken,
+        deviceProof: issueApprovalDeviceProof(sessionToken),
+      };
+    };
+    const counter = sessionFor(scope);
+    const at = new Date();
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(at);
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    try {
+      const submit = (pin: string, matchingStaffProfileId?: string, choiceProof?: string) =>
+        tenant(scope, (db) =>
+          authorizeCounterApproval(db, scope, 'DISCOUNT', {
+            pin,
+            matchingStaffProfileId,
+            choiceProof,
+            counter,
+          })
+        );
+      // An equally capable person with the same synthetic code but no active
+      // branch assignment must never appear as a match or cause a collision.
+      const inactive = await addMember(s, scope.organizationId + '_inactive', ['pharmacy:manage'], {
+        pin: MANAGER_PIN,
+      });
+      await tenant(s.owner, (db) =>
+        db.pharmacyBranchAssignment.updateMany({
+          where: { userId: inactive, branchId: scope.branchId },
+          data: { active: false },
+        })
+      );
+      await enroll(inactive);
+      await expect(
+        tenant(scope, (db) =>
+          authorizeCounterApproval(db, scope, 'DISCOUNT', {
+            pin: codeAt(secret, at),
+            counter: { ...counter, deviceProof: undefined },
+          })
+        )
+      ).rejects.toThrow(/Choose the approver by name/);
+      const previous = codeAt(secret, new Date(at.getTime() - 30_000));
+      await expect(submit(previous)).resolves.toMatchObject({
+        approvedByUserId: s.manager,
+        selfApproved: false,
+      });
+      await expect(submit(previous)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      const other = await addMember(s, s.owner.organizationId + '_other', ['pharmacy:manage'], {
+        pin: MANAGER_PIN,
+      });
+      await enroll(other);
+      const current = codeAt(secret, at);
+      const profiles = await tenant(s.owner, (db) =>
+        db.restaurantStaffProfile.findMany({
+          where: { userId: { in: [other, s.manager] } },
+          select: { id: true, userId: true },
+        })
+      );
+      const choice: unknown = await submit(current).catch((error: unknown) => error);
+      expect(choice).toBeInstanceOf(CounterApprovalChoice);
+      expect(
+        (choice as InstanceType<typeof CounterApprovalChoice>).staffProfileIds.toSorted()
+      ).toEqual(profiles.map((p) => p.id).toSorted());
+      const second = profiles.find((p) => p.userId === other)!;
+      const response = choice as InstanceType<typeof CounterApprovalChoice>;
+      const proof = response.choiceProofs[response.staffProfileIds.indexOf(second.id)]!;
+      await expect(submit(current, second.id, proof)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      const later = new Date(at.getTime() + 30_000);
+      vi.setSystemTime(later);
+      const nextCode = codeAt(secret, later);
+      await expect(submit(nextCode, second.id)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      await expect(submit(nextCode, second.id, proof)).resolves.toMatchObject({
+        approvedByUserId: other,
+      });
+      const audit = await tenant(s.owner, (db) =>
+        db.auditLog.findMany({
+          where: { action: 'pharmacy.counterApproval.DISCOUNT' },
+          select: { actorId: true, metadata: true, description: true },
+        })
+      );
+      expect(audit.map((row) => row.actorId).sort()).toEqual([s.manager, other].sort());
+      for (const value of [
+        previous,
+        current,
+        nextCode,
+        proof,
+        secret,
+        deviceSecret,
+        counter.sessionToken,
+      ])
+        expect(JSON.stringify(audit).includes(value)).toBe(false);
+      // Prime the live, independent counters directly. No attempt exercises an unpatched security control.
+      const { rateLimit } = await import('@/lib/rate-limit');
+      const { MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS } =
+        await import('@/lib/restaurant/operator-credentials');
+      const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+      const budgetKeys = [s.manager, other].map((id) =>
+        rateLimitStorageKey(`approver-pin-typed-by-another:${scope.organizationId}:${id}`)
+      );
+      await tenant(scope, async (db) => {
+        for (const key of budgetKeys)
+          await db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+            VALUES (${key}, ${MAX_FAILED_ATTEMPTS - 1}, now() + interval '15 minutes')
+            ON CONFLICT (key) DO UPDATE SET count = EXCLUDED.count, "resetAt" = EXCLUDED."resetAt"`;
+      });
+      // The two fixture authenticators share a synthetic seed. Pick one known
+      // nonmatching input offline and submit it once to check internal accounting.
+      const fixtureCodes = [-30_000, 0, 30_000].map((delta) =>
+        codeAt(secret, new Date(later.getTime() + delta))
+      );
+      const nonmatching = ['111111', '222222', '333333', '444444'].find(
+        (value) => !fixtureCodes.includes(value)
+      )!;
+      await expect(submit(nonmatching)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      const budgets = await tenant(
+        scope,
+        (db) =>
+          db.$queryRaw<{ count: number }[]>`SELECT count FROM rate_limit_buckets
+          WHERE key IN (${budgetKeys[0]}, ${budgetKeys[1]})`
+      );
+      expect(budgets.map(({ count }) => count)).toEqual([
+        MAX_FAILED_ATTEMPTS - 1,
+        MAX_FAILED_ATTEMPTS - 1,
+      ]);
+      for (let i = 0; i < MAX_FAILED_ATTEMPTS; i++)
+        await rateLimit(
+          JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),
+          MAX_FAILED_ATTEMPTS,
+          LOCKOUT_DURATION_MS
+        );
+      const secondRequester = s.as(s.cashier2);
+      await expect(
+        tenant(secondRequester, (db) =>
+          authorizeCounterApproval(db, secondRequester, 'DISCOUNT', {
+            pin: current,
+            counter: sessionFor(secondRequester),
+            staffProfileId: profiles.find((p) => p.userId === s.manager)!.id,
+          })
+        )
+      ).rejects.toBeInstanceOf(CounterApprovalDenied);
+      expect(
+        await tenant(s.owner, (db) =>
+          db.auditLog.count({ where: { action: 'pharmacy.counterApproval.DISCOUNT' } })
+        )
+      ).toBe(2);
+    } finally {
+      vi.unstubAllEnvs();
+      vi.useRealTimers();
+    }
+  });
+
+  it('DEV-961: one capped cashier and one exhausted approver do not block another eligible approval', async () => {
+    const s = await shop('independent_caps', { shifts: true, approvalAuthenticator: true });
+    const { authorizeCounterApproval, CounterApprovalDenied } =
+      await import('./counter-line-approval');
+    const { establishToken, issueApprovalDeviceProof } = await import('./counter-terminal-session');
+    const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const second = await addMember(s, s.owner.organizationId + '_second', ['pharmacy:manage'], {
+      pin: MANAGER_PIN,
+    });
+    const seed = generateTotpSecret();
+    const { device, secret } = await tenant(s.owner, async (db) => {
+      for (const userId of [s.manager, second])
+        await db.approvalAuthenticator.create({
+          data: { userId, encryptedSecret: encryptSecret(seed), enabledAt: new Date() },
+        });
+      return devices.enrollPharmacyCounter(db, s.owner, { name: 'Shared counter fixture' });
+    });
+    async function prime(key: string) {
+      await tenant(
+        s.owner,
+        (db) => db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+        VALUES (${rateLimitStorageKey(key)}, 5, now() + interval '15 minutes')
+        ON CONFLICT (key) DO UPDATE SET count = EXCLUDED.count, "resetAt" = EXCLUDED."resetAt"`
+      );
+    }
+    const forCashier = (actorId: string) => {
+      const scope = s.as(actorId);
+      const sessionToken = establishToken({ scope, deviceId: device.id, deviceSecret: secret });
+      return tenant(scope, (db) =>
+        authorizeCounterApproval(db, scope, 'DISCOUNT', {
+          pin: codeAt(seed, new Date()),
+          counter: {
+            deviceId: device.id,
+            sessionToken,
+            deviceProof: issueApprovalDeviceProof(sessionToken),
+          },
+        })
+      );
+    };
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    try {
+      await prime(
+        JSON.stringify(['pharmacy-approval-requester', s.owner.organizationId, s.cashier])
+      );
+      await prime(`approver-pin-typed-by-another:${s.owner.organizationId}:${s.manager}`);
+      await expect(forCashier(s.cashier)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      await expect(forCashier(s.cashier2)).resolves.toMatchObject({ approvedByUserId: second });
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it.each(['cashier', 'till', 'approver'] as const)(
+    'DEV-961: a spent %s budget refuses a valid code at the tender discard entry point without consuming or auditing it',
+    async (cap) => {
+      const s = await shop('spent_' + cap, { shifts: true, approvalAuthenticator: true });
+      const { establishToken, issueApprovalDeviceProof } =
+        await import('./counter-terminal-session');
+      const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+      const { generateTotpSecret } = await import('@/lib/totp');
+      const { encryptSecret } = await import('@/lib/secret-crypto');
+      const seed = generateTotpSecret();
+      const scope = s.as(s.cashier);
+      const { device, secret } = await tenant(s.owner, async (db) => {
+        await db.approvalAuthenticator.create({
+          data: {
+            userId: s.manager,
+            encryptedSecret: encryptSecret(seed),
+            enabledAt: new Date(),
+            lastUsedStep: 1,
+          },
+        });
+        return devices.enrollPharmacyCounter(db, s.owner, { name: 'Budget fixture' });
+      });
+      const key = {
+        cashier: JSON.stringify(['pharmacy-approval-requester', scope.organizationId, s.cashier]),
+        till: JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),
+        approver: `approver-pin-typed-by-another:${scope.organizationId}:${s.manager}`,
+      }[cap];
+      await tenant(
+        scope,
+        (db) => db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+        VALUES (${rateLimitStorageKey(key)}, 5, now() + interval '15 minutes')`
+      );
+      const snapshot = () =>
+        tenant(scope, async (db) => ({
+          auditRows: await db.auditLog.count(),
+          authenticator: await db.approvalAuthenticator.findFirstOrThrow({
+            where: { userId: s.manager },
+            select: { lastUsedStep: true },
+          }),
+        }));
+      const before = await snapshot();
+      const sessionToken = establishToken({ scope, deviceId: device.id, deviceSecret: secret });
+      vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+      try {
+        await expect(
+          asMember(
+            s,
+            s.cashier,
+            (caller) =>
+              caller.discardTenderAttempt({
+                attempt: {
+                  branchId: scope.branchId,
+                  saleId: 'fixture-only',
+                  deviceId: device.id,
+                  businessDate: s.today,
+                  type: 'CASH',
+                  amountMinor: 1,
+                  idempotencyKey: 'fixture-only',
+                },
+                reason: 'Synthetic budget verification',
+                approval: { pin: codeAt(seed, new Date()) },
+              }),
+            {
+              deviceId: device.id,
+              sessionToken,
+              deviceProof: issueApprovalDeviceProof(sessionToken),
+            }
+          )
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message:
+            'Discarding a payment attempt needs a manager or owner to approve it with their authenticator code.',
+        });
+        expect(await snapshot()).toEqual(before);
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    }
+  );
 
   it('DEV-961: the variance approval and its solo self-approval follow the approval setting; app codes typed by someone else spend the same guess budget as PINs', async () => {
     const { encryptSecret } = await import('@/lib/secret-crypto');

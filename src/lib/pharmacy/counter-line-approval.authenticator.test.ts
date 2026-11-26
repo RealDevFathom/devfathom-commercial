@@ -14,6 +14,8 @@ vi.mock('@/lib/approval-authenticator-gate', () => ({
   ),
 }));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
+  LOCKOUT_DURATION_MS: 900_000,
+  MAX_FAILED_ATTEMPTS: 5,
   OPERATOR_CREDENTIAL_BCRYPT_COST: 12,
   verifyOperatorCredential: vi.fn(),
   isLockedOut: vi.fn(() => false),
@@ -24,6 +26,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 import { authorizeCounterApproval, CounterApprovalDenied } from './counter-line-approval';
 import { verifyRefundPin } from './refund-authorization';
 import { can } from '@/lib/abac';
+import { clearRateLimit } from '@/lib/rate-limit';
 import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -74,6 +77,9 @@ function fixture(options: {
   const enrolled = new Set(options.enrolled ?? []);
   const db = {
     $queryRaw: vi.fn(),
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ branchId: scope.branchId }),
+    },
     user: { findFirst: vi.fn().mockResolvedValue(options.actor ?? cashier) },
     organization: {
       findFirst: vi.fn().mockResolvedValue({
@@ -117,12 +123,69 @@ function fixture(options: {
   return db;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await Promise.all(
+    ['cashier', 'manager', 'owner'].map((id) =>
+      clearRateLimit(JSON.stringify(['pharmacy-approval-requester', scope.organizationId, id]))
+    )
+  );
   vi.clearAllMocks();
   vi.mocked(isLockedOut).mockReturnValue(false);
 });
 
 describe('DEV-879 counter approvals with an authenticator code', () => {
+  it.each([
+    [true, 'authenticator code'],
+    [false, 'PIN'],
+  ] as const)(
+    'names the configured method on a FEFO refusal (required: %s)',
+    async (required, method) => {
+      const db = fixture({ required, holders: [] });
+      await expect(authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE')).rejects.toThrow(
+        `A non-FEFO batch needs a pharmacist to approve it with their ${method}.`
+      );
+    }
+  );
+
+  it('allows named approval with a stale till session and limits an unenrolled cashier for 15 minutes', async () => {
+    const db = {
+      ...fixture({ required: false, approver: { ...manager, id: 'limit-manager' } }),
+      pharmacyRegisteredDevice: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const named = { staffProfileId: 'staff-manager', pin: '1234' };
+    const submit = (pin: string) =>
+      authorizeCounterApproval(db as never, scope, 'DISCOUNT', { ...named, pin });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
+    try {
+      await expect(
+        authorizeCounterApproval(db as never, scope, 'DISCOUNT', {
+          ...named,
+          counter: { deviceId: 'old-device', sessionToken: 'expired-fixture' },
+        })
+      ).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
+      for (let i = 0; i < 5; i++) {
+        await expect(submit('0000')).rejects.toBeInstanceOf(CounterApprovalDenied);
+      }
+      const reads = db.restaurantOperatorCredential.findFirst.mock.calls.length;
+      expect(reads).toBe(6);
+      vi.setSystemTime(start + 900_000 - 1);
+      await expect(
+        authorizeCounterApproval(
+          db as never,
+          { ...scope, branchId: 'another-branch' },
+          'KHATA_OVER_LIMIT',
+          named
+        )
+      ).rejects.toBeInstanceOf(CounterApprovalDenied);
+      expect(db.restaurantOperatorCredential.findFirst).toHaveBeenCalledTimes(reads);
+      vi.setSystemTime(start + 900_001);
+      await expect(submit(named.pin)).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('approves a discount with the manager’s current code and audits the code use', async () => {
     const db = fixture({ enrolled: ['manager'] });
     await expect(

@@ -31,6 +31,17 @@ import { PharmacySettlementError } from './settlement';
  * fell through to `error.message` for any reason it did not know.
  */
 describe('counterErrorMessage', () => {
+  it.each([
+    'SERIAL_FEFO_APPROVAL_REQUIRED',
+    'SHIFT_APPROVAL_REQUIRED',
+    'SHIFT_APPROVAL_NEEDS_ANOTHER',
+  ])('uses the configured approval method for %s', (reason) => {
+    const format =
+      reason === 'SERIAL_FEFO_APPROVAL_REQUIRED' ? counterSaleErrorMessage : counterErrorMessage;
+    expect(format(new Error(reason), 'CODE')).toContain('their authenticator code');
+    expect(format(new Error(reason), 'PIN')).toContain('their PIN');
+  });
+
   it('maps the drawer reason that leaked to the counter', () => {
     expect(counterErrorMessage(new PharmacySettlementError('DRAWER_NOT_OPEN'))).toBe(
       'The cash drawer for this counter is not open. Open it before taking or paying out cash.'

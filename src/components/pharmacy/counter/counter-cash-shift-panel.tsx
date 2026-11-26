@@ -187,7 +187,8 @@ function CloseShift({
   mayClose: boolean;
   onClosed: () => void;
 }) {
-  const secret = useApprovalSecretKind() === 'CODE' ? 'authenticator code' : 'PIN';
+  const mode = useApprovalSecretKind();
+  const secret = mode === 'CODE' ? 'authenticator code' : 'PIN';
   const [expanded, setExpanded] = useState(false);
   const [counted, setCounted] = useState('');
   const [note, setNote] = useState('');
@@ -401,7 +402,7 @@ function CloseShift({
           ) : null}
           {close.error ? (
             <p role="alert" className="text-sm text-destructive">
-              {counterErrorMessage(close.error)}
+              {counterErrorMessage(close.error, mode)}
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
