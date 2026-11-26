@@ -7,6 +7,7 @@ import { redirect } from 'next/navigation';
 import { PharmacyOnboardingConsole } from '@/components/pharmacy/onboarding-console';
 import { FbrTier1Summary } from '@/components/pharmacy/fbr-tier1-summary';
 import { LicenceRenewalBanner } from '@/components/pharmacy/licence-renewal-banner';
+import { BranchCashMode } from '@/components/pharmacy/branch-cash-mode';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { buttonVariants } from '@/components/ui/button';
@@ -134,6 +135,7 @@ export default async function PharmacyOnboardingPage() {
         }
       />
       <LicenceRenewalBanner reminders={renewals} />
+      {owner ? <BranchCashMode /> : null}
       {askPin ? (
         <SectionCard
           eyebrow="Before you continue"

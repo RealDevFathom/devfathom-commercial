@@ -163,6 +163,18 @@ test('refuses a large upload for the signed-in user when both slots are occupied
   const response = await POST(multipartUpload('/api/upload', 9));
   expect(response.status).toBe(429);
   expect((await response.json()).error).toContain('Wait for one to finish');
-  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-a');
+  expect(mocks.acquireSlot).toHaveBeenCalledExactlyOnceWith('user-a', 'org-a');
+  expect(mocks.put).not.toHaveBeenCalled();
+});
+
+test('returns a plain retry response if the upload slot check fails', async () => {
+  mocks.acquireSlot.mockRejectedValueOnce(new Error('private database detail'));
+  const request = multipartUpload('/api/upload', 9);
+  request.headers.set('content-length', String(9 * 1024 * 1024 + 1024));
+  const response = await POST(request);
+  expect(response.status).toBe(503);
+  expect(response.headers.get('Content-Type')).toMatch(/^text\/plain\b/);
+  expect(await response.text()).toBe('Uploads are temporarily unavailable. Try again shortly.');
+  expect(request.bodyUsed).toBe(false);
   expect(mocks.put).not.toHaveBeenCalled();
 });
