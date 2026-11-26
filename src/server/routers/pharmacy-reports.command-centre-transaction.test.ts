@@ -68,11 +68,15 @@ describe('command-centre transaction-local Khata context', () => {
   it('runs the owner report reader through one transaction client', async () => {
     const result = await caller().commandCentre(input);
     expect(mocks.transaction).toHaveBeenCalledTimes(1);
-    expect(mocks.read).toHaveBeenCalledWith(mocks.tx, {
-      ...input,
-      branchIds: ['branch_1'],
-      timeZone: 'Asia/Karachi',
-    });
+    expect(mocks.read).toHaveBeenCalledWith(
+      mocks.tx,
+      {
+        ...input,
+        branchIds: ['branch_1'],
+        timeZone: 'Asia/Karachi',
+      },
+      { organizationId: 'org_1', userId: 'owner_1' }
+    );
     expect(result.permissions).toEqual({ operational: true, financial: true });
     expect(result.metrics.khataAgingMinor).toBe(4200);
   });
@@ -80,7 +84,10 @@ describe('command-centre transaction-local Khata context', () => {
   it('preserves financial masking after the transaction read', async () => {
     mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const result = await caller().commandCentre(input);
-    expect(mocks.read).toHaveBeenCalledWith(mocks.tx, expect.any(Object));
+    expect(mocks.read).toHaveBeenCalledWith(mocks.tx, expect.any(Object), {
+      organizationId: 'org_1',
+      userId: 'owner_1',
+    });
     expect(result.permissions.financial).toBe(false);
     expect(result.metrics.khataAgingMinor).toBeNull();
   });

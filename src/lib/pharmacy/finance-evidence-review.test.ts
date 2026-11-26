@@ -238,6 +238,15 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
         if (query.sql.includes("set_config('app.current_branch_id'")) return [];
         return rawResults[index++] ?? [];
       }),
+      user: {
+        findUnique: vi.fn(async () => ({
+          role: 'ADMIN',
+          status: 'ACTIVE',
+          permissionOverrides: [],
+          organizationRole: { permissions: [] },
+        })),
+      },
+      pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
       pharmacyRecallNotice: { count: vi.fn(async () => counts.recalls) },
       pharmacySupplierClaim: { count: vi.fn(async () => counts.claims) },
       pharmacyReceivingException: { count: vi.fn(async () => counts.receiving) },
@@ -252,6 +261,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
   }
 
   const filters = { branchIds: [BRANCH], from: '2026-03-01', to: '2026-03-01' };
+  const reader = { organizationId: ORG, userId: 'report-reader' };
   const populated = [
     [
       {
@@ -281,7 +291,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 
   it('maps ledger rows to metrics exactly, keeping unknown margin as null', async () => {
     const { db } = makeDb(populated, populatedCounts);
-    const result = await readPharmacyOwnerCommandCentre(db, filters);
+    const result = await readPharmacyOwnerCommandCentre(db, filters, reader);
     expect(result.metrics).toEqual({
       salesMinor: 12_000,
       marginMinor: null,
@@ -312,7 +322,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 
   it('asserts CURRENT freshness from the JS clock even when every ledger is empty', async () => {
     const { db, coverageArgs } = makeDb([], { recalls: 0, claims: 0, receiving: 0, coverage: 0 });
-    const result = await readPharmacyOwnerCommandCentre(db, filters);
+    const result = await readPharmacyOwnerCommandCentre(db, filters, reader);
     expect(result.freshness).toEqual({
       status: 'CURRENT',
       asOf: '2026-03-10T12:00:00.000Z',
@@ -326,7 +336,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 
   it('issues branch-context Khata reads in addition to six aggregate reads and the signal-evidence read', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
-    await readPharmacyOwnerCommandCentre(db, filters);
+    await readPharmacyOwnerCommandCentre(db, filters, reader);
     expect(calls).toHaveLength(11);
     const money = calls[0];
     expect(money?.sql).toContain('s."businessDate">=');
@@ -358,7 +368,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 
   it('bounds lost demand and margin postings by workspace midnights; business dates stay calendar dates', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
-    await readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: 'Asia/Karachi' });
+    await readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: 'Asia/Karachi' }, reader);
     // 1 March on the Karachi clock: 19:00 UTC on 28 February to 19:00 UTC on 1 March.
     expect(calls[2]?.values).toEqual([
       BRANCH,
@@ -378,21 +388,21 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 
   it('salesMinor is gross of returns: no return-line or refund term in the sales expression', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
-    await readPharmacyOwnerCommandCentre(db, filters);
+    await readPharmacyOwnerCommandCentre(db, filters, reader);
     expect(calls[0]?.sql).not.toContain('pharmacy_sale_return_lines');
     expect(calls[0]?.sql).toContain(`s."status"='COMPLETED'`);
   });
 
   it('cashMinor sums tender amountMinor without referencing changeGivenMinor (pinned; contract says "less change given")', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
-    await readPharmacyOwnerCommandCentre(db, filters);
+    await readPharmacyOwnerCommandCentre(db, filters, reader);
     expect(calls[0]?.sql).toContain(`t."type"='CASH'`);
     expect(calls[0]?.sql).not.toContain('changeGivenMinor');
   });
 
   it('F-06: cashVarianceMinor reads only final, non-superseded daily closes as the contract states', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
-    await readPharmacyOwnerCommandCentre(db, filters);
+    await readPharmacyOwnerCommandCentre(db, filters, reader);
     const { sql, values } = calls[0]!;
     const closeStart = sql.indexOf('(SELECT SUM(c."cashVarianceMinor")');
     expect(closeStart).toBeGreaterThan(-1);
@@ -418,7 +428,7 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
 
   it('F-07: deviceFiscalOfflineExceptions stays null because the contract declares no source', async () => {
     const { db } = makeDb(populated, populatedCounts);
-    const result = await readPharmacyOwnerCommandCentre(db, filters);
+    const result = await readPharmacyOwnerCommandCentre(db, filters, reader);
     expect(result.metrics.deviceFiscalOfflineExceptions).toBeNull();
   });
 });

@@ -138,6 +138,7 @@ function fixture(
     },
     restaurantBranch: { findMany: branches },
     pharmacyBranch: { findMany: branches },
+    pharmacyBranchAssignment: { findMany: vi.fn(async () => []) },
     restaurantStaffProfile: {
       findFirst: vi.fn(async () => ({ primaryBranchId: branchId })),
     },

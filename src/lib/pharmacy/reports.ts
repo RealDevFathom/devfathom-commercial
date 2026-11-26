@@ -343,7 +343,7 @@ async function readKhataAgingMinor(
 
 type ClinicalReader = { organizationId: string; userId: string };
 
-async function readSafetyQueueCount(
+async function scopedSafetyQueueQuery(
   db: Prisma.TransactionClient,
   selectedBranches: string[],
   reader?: ClinicalReader
@@ -368,7 +368,7 @@ async function readSafetyQueueCount(
       ).map((row) => row.branchId);
   if (!visible.length) return null;
   const branches = Prisma.join(visible);
-  const [row] = await db.$queryRaw<Array<{ value: number }>>(Prisma.sql`
+  return Prisma.sql`
     SELECT (
       SELECT COUNT(*)::int FROM pharmacy_pharmacist_review_items i
       JOIN pharmacy_sale_lines line ON line."organizationId" = i."organizationId" AND line.id = i."saleLineId"
@@ -381,8 +381,7 @@ async function readSafetyQueueCount(
       SELECT COUNT(*)::int FROM pharmacy_register_incidents r
       WHERE r."organizationId" = ${organizationId} AND r."branchId" IN (${branches}) AND r.status = 'OPEN'
     ) AS value
-  `);
-  return row?.value ?? 0;
+  `;
 }
 
 export async function readPharmacyOwnerCommandCentre(
@@ -391,6 +390,7 @@ export async function readPharmacyOwnerCommandCentre(
   clinicalReader?: ClinicalReader
 ) {
   const parsed = validatePharmacyReportFilters(filters);
+  const safetyQuery = await scopedSafetyQueueQuery(db, filters.branchIds, clinicalReader);
   // Business-date columns compare against `parsed`; event and posting timestamps use the
   // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on (DEV-958A: the
   // branches' business day, which ends at their "day ends at" hour).
@@ -508,7 +508,7 @@ export async function readPharmacyOwnerCommandCentre(
               qualifiedPersonValidTo: { gt: at },
             },
           }),
-      readSafetyQueueCount(db, filters.branchIds, clinicalReader),
+      safetyQuery ? db.$queryRaw<Array<{ value: number }>>(safetyQuery) : null,
       dimensional
         ? none
         : db.$queryRaw<Array<{ aging: number; rejected: number }>>(
@@ -558,7 +558,7 @@ export async function readPharmacyOwnerCommandCentre(
       openClaims: claims,
       openReceivingExceptions: receiving,
       pharmacistCoverage: coverage,
-      safetyQueue: safety,
+      safetyQueue: safety ? (safety[0]?.value ?? 0) : null,
       agingFiscalDocuments: fiscal ? (fiscal[0]?.aging ?? 0) : null,
       rejectedFiscalDocuments: fiscal ? (fiscal[0]?.rejected ?? 0) : null,
       accountsPayableMinor: null,
