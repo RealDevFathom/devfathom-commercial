@@ -2855,6 +2855,49 @@ test('DEV-1042: unmatched searches leave the bill, totals and keyboard focus in 
   expect(writes).toHaveLength(0);
 });
 
+for (const [method, detail] of [
+  ['Card', 'No slip details'],
+  ['Bank transfer', 'No transfer details'],
+] as const) {
+  test(`DEV-1045 records a synthetic ${method} with empty references`, async ({ page }) => {
+    await openCounter(page);
+    await openDrawer(page);
+    await scan(page, PHARMACY_E2E.medicines.otc.barcode);
+    await expect(billLine(page, PHARMACY_E2E.medicines.otc.name)).toBeVisible();
+    await page.getByLabel('Scan or search').press('F9');
+    const sheet = page.getByRole('dialog', { name: /^Take payment/ });
+    await pressControl(sheet.getByRole('button', { name: method, exact: true }));
+    await pressControl(sheet.getByRole('button', { name: 'Take payment', exact: true }));
+    const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter / });
+    await expect(receipt).toContainText(detail);
+    await expect(receipt).toContainText('2.50');
+  });
+}
+
+test('DEV-1046 returns keyboard focus to a prefilled Khata sign-up on an unmatched term', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await openDrawer(page);
+  await scan(page, PHARMACY_E2E.medicines.otc.barcode);
+  await expect(billLine(page, PHARMACY_E2E.medicines.otc.name)).toBeVisible();
+  await page.getByLabel('Scan or search').press('F9');
+  const sheet = page.getByRole('dialog', { name: /^Take payment/ });
+  await pressControl(sheet.getByRole('button', { name: 'Khata', exact: true }));
+  const box = sheet.getByRole('combobox', { name: 'Family Khata account' });
+  await expect(box).toBeFocused();
+  for (const [query, label] of [
+    ['Synthetic Family', 'Customer name'],
+    ['03001234567', 'Phone'],
+  ]) {
+    await box.fill(query);
+    await expect(sheet.getByText(`No account found for '${query}'.`)).toBeVisible();
+    await pressControl(sheet.getByRole('button', { name: 'Sign this customer up' }));
+    await expect(sheet.getByLabel(label, { exact: true })).toHaveValue(query);
+    await box.focus();
+  }
+});
+
 test('this spec drives the counter without a pointer', async () => {
   const source = await readFile(join(process.cwd(), 'tests/e2e/pharmacy-counter.spec.ts'), 'utf8');
   // Strip this assertion's own literals so it cannot match itself.

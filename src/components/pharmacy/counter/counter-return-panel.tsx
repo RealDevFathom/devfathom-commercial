@@ -1413,6 +1413,13 @@ export function ReturnForm({
           )}
           <section aria-label="Return and refund history" className="space-y-2">
             <h3 className="font-semibold">Return and refund history</h3>
+            {data.tenders
+              .filter((row) => row.paymentDetails)
+              .map((row) => (
+                <p key={row.id}>
+                  {row.type} · {formatMinor(row.amountMinor)} · {row.paymentDetails}
+                </p>
+              ))}
             {data.returns.length === 0 && <p>No returns recorded.</p>}
             {data.returns.map((row) => (
               <p key={row.id}>

@@ -508,7 +508,7 @@ suite('khata reminder PostgreSQL balance and idempotency', () => {
 });
 
 suite('DEV-1046 search', () => {
-  it('returns one masked page from 1,000 eligible accounts and resolves a later account by ID', async () => {
+  beforeAll(async () => {
     await inScope(a, async (db) => {
       const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: a.saleId } });
       const payerCustomerId = sale.customerId!;
@@ -533,15 +533,21 @@ suite('DEV-1046 search', () => {
           customerId: payerCustomerId,
         })),
       });
+    });
+  }, 60_000);
+  it('returns one masked page from 1,000 eligible accounts and resolves a later account by ID', async () => {
+    await inScope(a, async (db) => {
       const start = performance.now();
       const results = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: 'Synthetic' });
       expect(results).toHaveLength(10);
       expect(results[0]).toMatchObject({ displayName: 'Synthetic 0000', maskedPhone: '•••• 9876' });
       expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '987' })).toHaveLength(10);
       const last = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '0999' });
-      expect(last.map((row) => row.id)).toEqual([accounts[999]!.id]);
-      expect(await khata.readSaleKhataStatement(db, a, a.saleId, accounts[999]!.id)).toMatchObject({
-        account: { id: accounts[999]!.id },
+      expect(last.map((row) => row.id)).toEqual([`search_${suffix}_999`]);
+      expect(
+        await khata.readSaleKhataStatement(db, a, a.saleId, `search_${suffix}_999`)
+      ).toMatchObject({
+        account: { id: `search_${suffix}_999` },
       });
       expect(results[0]).not.toHaveProperty('phone');
       expect(results[0]).not.toHaveProperty('payer');

@@ -912,6 +912,28 @@ it.each([0, -1, NaN, Infinity, 1.5, Number.MAX_SAFE_INTEGER + 1])(
   }
 );
 
+it('DEV-1046 searches by name, offers masked matches and selects with the keyboard without taking payment', async () => {
+  const row = {
+    id: 'eligible',
+    displayName: 'Synthetic Family',
+    maskedPhone: '•••• 9876',
+    creditLimitMinor: 100000,
+    balanceMinor: 250,
+  };
+  const loadKhataAccounts = vi.fn(async (term?: string) => (term === 'Syn' ? [row] : []));
+  const { props } = setup({ loadKhataAccounts, signUpKhata: vi.fn() });
+  chooseTender('KHATA');
+  const input = screen.getByRole('combobox', { name: 'Family Khata account' });
+  expect(input).toHaveFocus();
+  fireEvent.change(input, { target: { value: 'Syn' } });
+  const option = await screen.findByRole('option', { name: 'Synthetic Family' });
+  expect(option).toHaveTextContent('•••• 9876');
+  expect(option).toHaveTextContent('997.50');
+  fireEvent.keyDown(input, { key: 'ArrowDown' });
+  fireEvent.keyDown(input, { key: 'Enter' });
+  await screen.findByText(/Ledger balance/);
+  expect(props.onTender).not.toHaveBeenCalled();
+});
 describe('DEV-716 inline Khata signup', () => {
   it('signs up a new customer with name, phone and consent, then reloads accounts', async () => {
     const account = {

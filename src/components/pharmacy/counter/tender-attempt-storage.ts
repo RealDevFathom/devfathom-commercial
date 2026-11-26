@@ -104,6 +104,7 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   if (raw.length > 4096) throw new Error(TENDER_STORAGE_MESSAGE);
   const stored = storedSchema.parse(JSON.parse(raw));
   const input = stored.input;
+  if (stored.version === 2 && input.type !== 'CARD') throw new Error(TENDER_STORAGE_MESSAGE);
   const date = new Date(input.businessDate);
   if (isManualTender(input.type)) {
     if (input.approvalCode !== undefined) throw new Error(TENDER_STORAGE_MESSAGE);

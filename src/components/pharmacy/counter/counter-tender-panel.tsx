@@ -1265,7 +1265,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               >
                 <option value="">Choose family account</option>
                 {accounts.map((row) => (
-                  <option key={row.id} value={row.id}>
+                  <option key={row.id} value={row.id} aria-label={row.displayName}>
                     {row.displayName}
                     {row.maskedPhone && ` · ${row.maskedPhone}`} · Rs{' '}
                     {formatMinor(Math.max(0, row.creditLimitMinor - row.balanceMinor))} available

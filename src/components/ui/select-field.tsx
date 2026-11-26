@@ -27,6 +27,7 @@ type SelectFieldProps = React.ComponentPropsWithRef<'select'> & {
 type Option = {
   value: string;
   label: string;
+  accessibleLabel?: string;
   disabled: boolean;
   hidden: boolean;
   group: string | null;
@@ -91,7 +92,7 @@ function changesOptions(record: MutationRecord, native: HTMLSelectElement): bool
   if (record.type === 'childList' || record.type === 'characterData') return true;
   return (
     (record.target instanceof HTMLOptionElement || record.target instanceof HTMLOptGroupElement) &&
-    ['value', 'label', 'disabled', 'hidden'].includes(record.attributeName ?? '')
+    ['value', 'label', 'aria-label', 'disabled', 'hidden'].includes(record.attributeName ?? '')
   );
 }
 
@@ -174,6 +175,7 @@ export function SelectField(allProps: SelectFieldProps) {
         return {
           value: option.value,
           label: option.label,
+          accessibleLabel: option.getAttribute('aria-label') || undefined,
           disabled: option.disabled || (inGroup && group.disabled),
           hidden: option.hidden || (inGroup && group.hidden),
           group: inGroup ? group.label : null,
@@ -443,6 +445,8 @@ export function SelectField(allProps: SelectFieldProps) {
               <Combobox.Item
                 key={option.value}
                 value={option}
+                aria-label={option.accessibleLabel}
+                aria-description={option.accessibleLabel ? option.label : undefined}
                 disabled={option.disabled}
                 className="min-h-11 cursor-pointer rounded-sm px-3 py-2 text-sm text-text-body data-highlighted:bg-surface-sunken"
               >
