@@ -27,7 +27,7 @@ function verifyTerminalSignature(
       encryptedSigningSecret: null,
       previousEncryptedSigningSecret: null,
       previousSigningSecretExpiresAt: null,
-      legacySigningCutoff: new Date(1_700_000_001_000),
+      webhookKeysDeployedAt: new Date(1_700_000_001_000),
     },
     source,
     body,

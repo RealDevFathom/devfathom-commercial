@@ -1,5 +1,6 @@
 import 'server-only';
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { z } from 'zod';
 import type { RestaurantTerminalProviderConfig } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
@@ -10,7 +11,7 @@ export type SigningConfig = Pick<
   | 'encryptedSigningSecret'
   | 'previousEncryptedSigningSecret'
   | 'previousSigningSecretExpiresAt'
-  | 'legacySigningCutoff'
+  | 'webhookKeysDeployedAt'
 >;
 
 export function freshTerminalTimestamp(
@@ -55,11 +56,14 @@ export function verifyProviderSignature(
   }
 
   const legacy = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
-  return legacy &&
-    now < config.legacySigningCutoff.getTime() &&
-    matches(legacy, `${timestamp}.${source}.`)
-    ? 'LEGACY'
-    : 'FAILED';
+  const configured = process.env.RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF;
+  const cutoff =
+    configured === undefined
+      ? config.webhookKeysDeployedAt.getTime() + 30 * 24 * 60 * 60_000
+      : z.iso.datetime({ offset: true }).safeParse(configured).success
+        ? Date.parse(configured)
+        : NaN;
+  return legacy && now < cutoff && matches(legacy, `${timestamp}.${source}.`) ? 'LEGACY' : 'FAILED';
 }
 
 export async function rotateTerminalWebhookKey(

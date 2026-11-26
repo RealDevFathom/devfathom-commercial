@@ -19,4 +19,6 @@ A new verified event returns 202 and queues one job. A duplicate returns 200. Ke
 
 Until a configuration gets its first key, a sender may use the existing `RESTAURANT_TERMINAL_WEBHOOK_SECRET` and the original UTF-8 prefix `timestamp + '.' + source + '.'` followed by the exact raw bytes. Each successful legacy acceptance, including a duplicate, writes a `restaurant.webhook.legacy_key_accepted` audit entry with the business, configuration and event ID.
 
-The migration sets `legacySigningCutoff` to one absolute instant 30 days after migration deployment. Existing and subsequently created configurations inherit that same instant. At or after the cutoff the receiver refuses the shared key. Provisioning the first configuration key ends shared-key acceptance for that configuration immediately.
+Set `RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF` to an absolute ISO 8601 timestamp with a timezone on every receiver, then restart or redeploy those instances. At that instant shared signatures expire. An invalid value refuses shared signatures. When unset, the window ends 30 days after this migration was deployed. Restarting or adding a provider does not extend the window.
+
+Provisioning any key immediately and permanently retires shared-key signing for the entire business and source, including sibling terminals.

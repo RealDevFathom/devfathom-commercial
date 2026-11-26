@@ -17,7 +17,7 @@ const config = () => ({
   encryptedSigningSecret: encryptSecret('current'),
   previousEncryptedSigningSecret: encryptSecret('previous'),
   previousSigningSecretExpiresAt: new Date(now + 1),
-  legacySigningCutoff: new Date(now + 1),
+  webhookKeysDeployedAt: new Date(now - 30 * 86_400_000 + 1),
 });
 
 beforeEach(() => {
@@ -56,4 +56,16 @@ it('allows the shared key only on an unprovisioned configuration before its excl
   expect(verifyProviderSignature(legacy, source, body, signature, timestamp, now + 1)).toBe(
     'FAILED'
   );
+});
+
+it('takes an absolute environment cutoff and fails closed on invalid configuration', () => {
+  const legacy = { ...config(), encryptedSigningSecret: null };
+  const verify = () =>
+    verifyProviderSignature(legacy, source, body, sign('legacy'), timestamp, now);
+  vi.stubEnv('RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF', new Date(now).toISOString());
+  expect(verify()).toBe('FAILED');
+  vi.stubEnv('RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF', new Date(now + 1).toISOString());
+  expect(verify()).toBe('LEGACY');
+  vi.stubEnv('RESTAURANT_TERMINAL_WEBHOOK_LEGACY_CUTOFF', 'invalid');
+  expect(verify()).toBe('FAILED');
 });

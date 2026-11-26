@@ -6724,8 +6724,8 @@ model RestaurantTerminalProviderConfig {
   encryptedSigningSecret         String?
   previousEncryptedSigningSecret String?
   previousSigningSecretExpiresAt DateTime?                      @db.Timestamptz(3)
-  /// Absolute rollout deadline installed once by the migration, also for future rows.
-  legacySigningCutoff            DateTime                       @default(dbgenerated()) @db.Timestamptz(3)
+  /// Deployment anchor for the default shared-key changeover window.
+  webhookKeysDeployedAt            DateTime                       @default(dbgenerated()) @db.Timestamptz(3)
   createdAt                      DateTime                       @default(now())
   updatedAt                      DateTime                       @updatedAt
 

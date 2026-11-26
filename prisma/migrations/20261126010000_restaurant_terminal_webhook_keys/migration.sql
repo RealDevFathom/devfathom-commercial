@@ -1,8 +1,8 @@
 BEGIN;
 SET LOCAL lock_timeout = '10s';
 
--- Freeze a single deadline at deployment. A configuration created later inherits
--- the same absolute instant, even after a restart or the end of the changeover.
+-- Record the migration deployment time once. Restarting or adding a config must
+-- not restart the default window. The effective cutoff is deployment configuration.
 DO $migration$
 BEGIN
   EXECUTE format(
@@ -10,8 +10,8 @@ BEGIN
        ADD COLUMN IF NOT EXISTS "encryptedSigningSecret" text,
        ADD COLUMN IF NOT EXISTS "previousEncryptedSigningSecret" text,
        ADD COLUMN IF NOT EXISTS "previousSigningSecretExpiresAt" timestamptz(3),
-       ADD COLUMN IF NOT EXISTS "legacySigningCutoff" timestamptz(3) NOT NULL DEFAULT %L::timestamptz',
-    transaction_timestamp() + interval '720 hours'
+       ADD COLUMN IF NOT EXISTS "webhookKeysDeployedAt" timestamptz(3) NOT NULL DEFAULT %L::timestamptz',
+    transaction_timestamp()
   );
 
   IF NOT EXISTS (

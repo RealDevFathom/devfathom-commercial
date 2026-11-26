@@ -183,7 +183,7 @@ async function resolveWebhookProvider(
     (SigningConfig & { organizationId: string; legacyRetired: boolean })[]
   >`
     SELECT id, "organizationId", "encryptedSigningSecret", "previousEncryptedSigningSecret",
-           "previousSigningSecretExpiresAt", "legacySigningCutoff",
+           "previousSigningSecretExpiresAt", "webhookKeysDeployedAt",
            (SELECT provider.source = ANY(org."restaurantRetiredWebhookSources")
               FROM organizations org WHERE org.id = provider."organizationId") AS "legacyRetired"
     FROM restaurant_terminal_provider_configs provider

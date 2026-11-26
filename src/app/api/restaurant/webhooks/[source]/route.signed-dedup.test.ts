@@ -99,7 +99,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
                 encryptedSigningSecret: state.scoped ? encryptSecret(orgId + '-key') : null,
                 previousEncryptedSigningSecret: null,
                 previousSigningSecretExpiresAt: null,
-                legacySigningCutoff: new Date(Date.now() + 60_000),
+                webhookKeysDeployedAt: new Date(),
               },
             ]
           : [],
