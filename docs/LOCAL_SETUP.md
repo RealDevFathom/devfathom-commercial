@@ -286,11 +286,12 @@ connection role. Do not reuse the superuser URL from that example for `bun run t
 ### Running all pharmacy database suites
 
 `scripts/run-pharmacy-db-tests.sh` runs every pharmacy `*.db.test.ts` file (every tracked
-`*.db.test.ts` whose path contains `pharmacy`), one file at a time, against **one** migrated
-PostgreSQL 16 database. It is for local use; CI does not run it. The roles follow the QA gate
-in `.github/workflows/qa.yml`: a non-superuser owner runs the migrations, the suites write as
-a restricted runtime role, and a superuser is used only to load the repeat-purchasing fixture
-and for the SOP suites' cleanup.
+`*.db.test.ts` whose path contains `pharmacy`), one file at a time, on a local PostgreSQL 16
+server. Most suites share one migrated database. The runner creates two more for the receipt
+identity and settlement returns suites. It is for local use; CI does not run it. The roles
+follow the QA gate in `.github/workflows/qa.yml`: a non-superuser owner runs the migrations,
+the suites write as a restricted runtime role, and a superuser is used for isolated database
+creation, loading the repeat-purchasing fixture, and the few suites' documented setup or cleanup.
 
 1. As a superuser, create the roles once per server and a database whose name contains
    `test`, `e2e`, `tmp` or `disposable` as a separate word. Several suites refuse any other
@@ -369,11 +370,19 @@ and for the SOP suites' cleanup.
 
 The suites leave their uniquely named rows behind, so the database can be reused. To start
 clean, drop it and repeat the steps.
-Two suites need a database of their own and stay skipped in this run:
-`src/lib/pharmacy/receipt-identity.db.test.ts` (set `WHA1364_RECEIPT_TEST_DATABASE_URL` to a
-new database whose name starts with `wha1364_`) and
-`src/lib/pharmacy/settlement.returns.db.test.ts` (the seeded counter end-to-end database,
-`PHARMACY_E2E=1` with `PHARMACY_E2E_DATABASE_URL`).
+
+For receipt identity and settlement returns, the runner prints the names of the two fresh
+databases it creates (`wha1364_receipt_test_*` and `pharmacy_returns_disposable_*`). It migrates
+them as the same restricted owner, grants access to the same restricted runtime role, and
+runs each suite twice against its own database without reseeding or resetting between passes.
+No browser or counter E2E seed is needed. The runner sets `WHA1364_RECEIPT_TEST_DATABASE_URL`
+for receipt identity and `PHARMACY_E2E=1` with `PHARMACY_E2E_DATABASE_URL` for settlement
+returns. The returns suite requires a loopback host and a database name marked `disposable`,
+but does not require a specific port. The isolated databases are kept for troubleshooting.
+
+The DEV-293 upgrade cases in `goods-receipt.db.test.ts` use the separate
+`scripts/qa/controlled-supplier-return-upgrade.sh` harness. They need both the pre- and
+post-migration schemas and a handoff fixture, which a fresh migrated database cannot provide.
 
 ### Repeat purchasing, RLS, and catering preconditions
 
