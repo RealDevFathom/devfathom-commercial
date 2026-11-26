@@ -38,7 +38,7 @@ function message(status: number, body: string) {
 
 export const POST = uploadPost(async (request, readUploadForm) => {
   try {
-    const actor = await resolveTenantActor({ request, throwOnHostError: true });
+    const actor = await resolveTenantActor({ request });
     if (!actor?.session.user.id) return message(401, 'Sign in to upload a supplier document.');
 
     const origin = request.headers.get('origin');

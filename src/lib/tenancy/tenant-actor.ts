@@ -6,6 +6,7 @@ import {
 } from '@/lib/tenancy/demo-identity';
 
 import { cache } from 'react';
+import { SUPPLIER_DOCUMENT_UPLOAD_URL } from '@/lib/pharmacy/supplier-document-contract';
 import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
 import { headers } from 'next/headers';
 import { getServerActionRequestMetadata } from 'next/dist/server/lib/server-action-request-meta';
@@ -45,8 +46,6 @@ export type TenantActor = {
 
 type ResolveTenantActorOptions = {
   request?: Request;
-  /** Let a route return the host denial status instead of a generic sign-in response. */
-  throwOnHostError?: boolean;
   /**
    * Route handlers wrapped by `auth()` already have the resolved session. Pass
    * it here to avoid evaluating Auth.js a second time after request scope ends.
@@ -126,15 +125,20 @@ async function organizationForServerComponent(
 
 async function organizationForActor(
   expectedOrganizationId: string,
-  request?: Request,
-  throwOnHostError?: boolean
+  request?: Request
 ): Promise<TenantOrganization | null> {
   try {
     return request
       ? await requireOrganizationForRequest(request, expectedOrganizationId)
       : await organizationForServerComponent(expectedOrganizationId);
   } catch (error) {
-    if (error instanceof TenantHostError && !throwOnHostError) return null;
+    if (error instanceof TenantHostError) {
+      // This route reports the host denial as plain text. Other callers keep
+      // treating a host mismatch as no member session.
+      const path = request && new URL(request.url).pathname;
+      if (path !== SUPPLIER_DOCUMENT_UPLOAD_URL && path !== `${SUPPLIER_DOCUMENT_UPLOAD_URL}/`)
+        return null;
+    }
     throw error;
   }
 }
@@ -168,11 +172,7 @@ async function resolveTenantActorUncached(
   // already has a tenant session, and avoids decoding a stale JWT first.
   const support = onSharedHost ? null : await getSupportSession(options.request);
   if (support) {
-    const organization = await organizationForActor(
-      support.organizationId,
-      options.request,
-      options.throwOnHostError
-    );
+    const organization = await organizationForActor(support.organizationId, options.request);
     if (!organization) return null;
     const user = await withTenantDb(organization.id, (tenantDb) =>
       tenantDb.user.findUnique({
@@ -249,11 +249,7 @@ async function resolveTenantActorUncached(
     ) {
       throw new ApprovalAuthenticatorSetupRequiredError();
     }
-    const organization = await organizationForActor(
-      session.user.organizationId,
-      options.request,
-      options.throwOnHostError
-    );
+    const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
     if (organization.isDemo || session.user.demoAccessExpiresAt !== undefined) {
       const seat = demoSeatFromOrganizationId(organization.id, getDemoSeatCount());

@@ -211,7 +211,7 @@ it('returns the wrong-workspace host error as plain text without reading the bod
   );
   const request = upload(pdf(8));
   const response = await POST(request);
-  expect(mocks.actor).toHaveBeenCalledWith(expect.objectContaining({ throwOnHostError: true }));
+  expect(mocks.actor).toHaveBeenCalledWith({ request: expect.any(Request) });
   expect(response.status).toBe(409);
   expect(response.headers.get('content-type')).toMatch(/^text\/plain\b/);
   expect(await response.text()).toBe('This session belongs to a different workspace.');
