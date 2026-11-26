@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import type { PharmacySupplierSubmissionKind, Prisma } from '@/generated/prisma/client';
 import { notFound } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { Button } from '@/components/ui/button';
@@ -71,14 +72,12 @@ async function decide(queue: Queue, branch: string | undefined, form: FormData) 
       select: { id: true, branchId: true },
     });
     if (!row) notFound();
-    await pharmacySupplierLinksRouter
-      .createCaller(ctx)
-      .approveProposal({
-        submissionId: id,
-        branchId: row.branchId,
-        approved: decision === 'approve',
-        reason,
-      });
+    await pharmacySupplierLinksRouter.createCaller(ctx).approveProposal({
+      submissionId: id,
+      branchId: row.branchId,
+      approved: decision === 'approve',
+      reason,
+    });
   } else {
     if (decision !== 'approve') return;
     const row = await ctx.db.pharmacyRegisterIncident.findFirst({
@@ -92,6 +91,44 @@ async function decide(queue: Queue, branch: string | undefined, form: FormData) 
   }
   revalidatePath('/dashboard');
   revalidatePath('/dashboard/approvals/[queue]', 'page');
+}
+
+function supplierEvidence(
+  kind: PharmacySupplierSubmissionKind,
+  payload: Prisma.JsonValue,
+  lines: { id: string; lineNumber: number }[]
+): string {
+  const fields = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {};
+  switch (kind) {
+    case 'SUBSTITUTION_PROPOSAL':
+      return typeof fields.description === 'string'
+        ? fields.description
+        : 'No substitution description supplied.';
+    case 'ETA':
+      return typeof fields.eta === 'string'
+        ? `Estimated arrival: ${fields.eta}`
+        : 'No arrival time supplied.';
+    case 'DOCUMENT':
+      return typeof fields.fileName === 'string'
+        ? `Document: ${fields.fileName}`
+        : 'Supplier document submitted.';
+    case 'PARTIAL_ACCEPTANCE': {
+      const quantities = fields.quantities;
+      if (quantities && typeof quantities === 'object' && !Array.isArray(quantities)) {
+        const accepted = lines.flatMap((line) =>
+          typeof quantities[line.id] === 'number'
+            ? [`Line ${line.lineNumber}: ${quantities[line.id]} packs`]
+            : []
+        );
+        if (accepted.length) return accepted.join(' · ');
+      }
+      return 'No line quantities supplied.';
+    }
+    case 'ACKNOWLEDGEMENT':
+      return 'The supplier acknowledged the order.';
+    case 'REJECTION':
+      return 'The supplier rejected the order.';
+  }
 }
 
 export default async function ApprovalQueue({
@@ -116,12 +153,19 @@ export default async function ApprovalQueue({
             select: {
               id: true,
               kind: true,
-              submittedAt: true,
+              sourceEvidence: true,
               payload: true,
               actionLink: {
                 select: {
                   purchaseOrder: {
-                    select: { reference: true, supplier: { select: { name: true } } },
+                    select: {
+                      reference: true,
+                      supplier: { select: { name: true } },
+                      lines: {
+                        select: { id: true, lineNumber: true },
+                        orderBy: { lineNumber: 'asc' },
+                      },
+                    },
                   },
                 },
               },
@@ -131,7 +175,12 @@ export default async function ApprovalQueue({
           id: row.id,
           title: row.actionLink.purchaseOrder.supplier.name,
           detail: `${row.actionLink.purchaseOrder.reference} · ${row.kind.toLowerCase().replaceAll('_', ' ')}`,
-          evidence: JSON.stringify(row.payload, null, 2),
+          evidence: [
+            supplierEvidence(row.kind, row.payload, row.actionLink.purchaseOrder.lines),
+            row.sourceEvidence,
+          ]
+            .filter(Boolean)
+            .join('\n'),
         }))
       : (
           await ctx.db.pharmacyRegisterIncident.findMany({
@@ -161,9 +210,9 @@ export default async function ApprovalQueue({
       {rows.slice(0, 25).map((row) => (
         <SectionCard key={row.id} title={row.title}>
           <p>{row.detail}</p>
-          <pre className="my-3 whitespace-pre-wrap break-words text-sm text-text-muted">
+          <p className="my-3 whitespace-pre-wrap break-words text-sm text-text-muted">
             {row.evidence}
-          </pre>
+          </p>
           <form
             className="flex flex-wrap items-end gap-2"
             action={decide.bind(null, queue, branch)}
