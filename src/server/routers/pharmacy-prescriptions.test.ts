@@ -61,6 +61,7 @@ function context(
 ) {
   return {
     db: {
+      user: { findUnique: vi.fn().mockResolvedValue(null) },
       organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
       pharmacyPatient: {
         findFirst: mocks.patient,
@@ -1397,6 +1398,13 @@ describe('DEV-938 refill reminder branch assignment', () => {
   function reminderContext(role: 'ADMIN' | 'EMPLOYEE', userId = 'pharmacist-a') {
     const ctx = context(userId);
     ctx.session!.user.role = role;
+    if (userId === 'owner-a')
+      vi.mocked(ctx.db.user.findUnique).mockResolvedValue({
+        role,
+        status: 'ACTIVE',
+        organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+        permissionOverrides: [],
+      } as never);
     ctx.db = {
       ...ctx.db,
       pharmacyBranch: { findFirst: branchFind },
@@ -1414,7 +1422,7 @@ describe('DEV-938 refill reminder branch assignment', () => {
     mocks.hasModule.mockReturnValue(true);
     // Scoped to the session organization: another tenant's branch is not found.
     branchFind.mockImplementation(async ({ where }) =>
-      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active === true
+      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active !== false
         ? { id: 'branch-a' }
         : null
     );
@@ -1450,6 +1458,7 @@ describe('DEV-938 refill reminder branch assignment', () => {
         branchId: 'branch-a',
         active: true,
         branch: { organizationId: 'org-a', active: true },
+        user: { organizationId: 'org-a', status: 'ACTIVE' },
       },
       select: { branchId: true },
     });
@@ -1505,6 +1514,17 @@ describe('DEV-938 refill reminder branch assignment', () => {
     });
     expect(reminderCreate).toHaveBeenCalledOnce();
     expect(ctx.audit.detail.metadata).toMatchObject({ branchId: 'branch-a' });
+  });
+
+  it('requires the original dispensing branch for an assigned non-owner administrator', async () => {
+    const ctx = reminderContext('ADMIN', 'admin-a');
+    assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
+    fillFind.mockResolvedValue({ id: 'fill-a', branchId: 'branch-b' });
+    await expect(caller(ctx).captureRefillReminder(reminderInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'FILL_DISPENSED_AT_ANOTHER_BRANCH',
+    });
+    expect(reminderCreate).not.toHaveBeenCalled();
   });
 
   it('leaves the owner able to record at any branch of the organization', async () => {
@@ -1601,7 +1621,7 @@ describe('DEV-962 a fill records the branch that dispensed it', () => {
     mocks.hasModule.mockReturnValue(true);
     mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: false } });
     branchFind.mockImplementation(async ({ where }) =>
-      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active === true
+      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active !== false
         ? { id: 'branch-a' }
         : null
     );

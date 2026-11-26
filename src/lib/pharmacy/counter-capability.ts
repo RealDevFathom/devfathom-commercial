@@ -103,6 +103,17 @@ export async function counterBranchAssignmentDenial(
   organizationId: string,
   branchId: string
 ): Promise<'branch_forbidden' | null> {
+  async function ownsBranch() {
+    if (!(await actorIsPharmacyOwner(db, organizationId, user.id))) return false;
+    return Boolean(
+      await db.pharmacyBranch.findFirst({
+        where: { id: branchId, organizationId },
+        select: { id: true },
+      })
+    );
+  }
+  // Check the usual admission path first. A session role only orders the live checks.
+  if (user.role === 'ADMIN' && (await ownsBranch())) return null;
   const assignment = await db.pharmacyBranchAssignment.findFirst({
     where: {
       organizationId,
@@ -115,12 +126,8 @@ export async function counterBranchAssignmentDenial(
     select: { branchId: true },
   });
   if (assignment?.branchId === branchId) return null;
-  if (!(await actorIsPharmacyOwner(db, organizationId, user.id))) return 'branch_forbidden';
-  const branch = await db.pharmacyBranch.findFirst({
-    where: { id: branchId, organizationId },
-    select: { id: true },
-  });
-  return branch ? null : 'branch_forbidden';
+  if (user.role !== 'ADMIN' && (await ownsBranch())) return null;
+  return 'branch_forbidden';
 }
 
 const DRAWER_MANAGER_CAPABILITIES = ['pharmacy:manage', 'pharmacy.manage'] as const;

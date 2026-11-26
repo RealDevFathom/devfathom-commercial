@@ -16,6 +16,7 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
@@ -619,7 +620,7 @@ export const pharmacyPrescriptionsRouter = router({
           quantityCanonicalUnits: z.number().int().positive(),
           idempotencyKey: z.string().trim().min(1).max(200),
           // DEV-962: the branch dispensing the fill. Only that branch may later record the
-          // fill's refill reminder; a fill recorded without one leaves that to an admin.
+          // fill's refill reminder; a fill recorded without one leaves that to an owner.
           branchId: z.string().trim().min(1).max(128).optional(),
         })
         .strict()
@@ -679,7 +680,7 @@ export const pharmacyPrescriptionsRouter = router({
       // DEV-938: a reminder is recorded only at a branch the caller works at, as
       // every other branch-scoped dispensing action. A branch of another
       // organization, an inactive one and a missing one get the same refusal;
-      // only a session ADMIN of this organization may use any of its branches.
+      // only a tenant owner of this organization may use any of its branches.
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { id: input.branchId, organizationId, active: true },
         select: { id: true },
@@ -691,10 +692,9 @@ export const pharmacyPrescriptionsRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       // DEV-962: a fill has one reminder slot, and only the branch that dispensed the fill may
       // take it, so another branch cannot use it up. A fill whose dispensing branch is not
-      // recorded (older than this rule, branch not provable) is left to an organisation admin.
-      // The session ADMIN exception is the same as the branch rule above. A missing fill is
-      // reported by `captureRefillReminder` as before.
-      if (user.role !== 'ADMIN') {
+      // recorded (older than this rule, branch not provable) is left to an organisation owner.
+      // A missing fill is reported by `captureRefillReminder` as before.
+      if (user.role !== 'ADMIN' || !(await actorIsPharmacyOwner(ctx.db, organizationId, user.id))) {
         const fill = await ctx.db.prescriptionFill.findFirst({
           where: { id: input.fillId, organizationId },
           select: { branchId: true },

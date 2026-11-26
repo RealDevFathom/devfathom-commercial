@@ -227,6 +227,7 @@ function fakeDb(
     },
     pharmacySale: { update: record('sale.update') },
     user: {
+      findUnique: vi.fn().mockResolvedValue(null),
       findFirst: async () => ({ id: 'pharmacist', organizationId: 'org', status: 'ACTIVE' }),
     },
     // DEV-941: the pharmacist works at this branch.
