@@ -353,6 +353,30 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('rolls back the profile and first claim when the roster belongs to another member', async () => {
+    const { createTenantDb } = await import('@/lib/tenancy/scoped-db');
+    const db = createTenantDb(organizationId, userId);
+    await db.uploadedFile.create({
+      data: { name: 'foreign-roster.pdf', uploadedById: 'other-' + suffix },
+    });
+    await expect(
+      caller(db).saveRegulatoryProfile({
+        ...profile,
+        qualifiedPersonCoverageRosterRef: '/api/files/foreign-roster.pdf',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Upload this file again to attach it here.',
+    });
+    expect(await db.branchRegulatoryProfile.count({ where: { branchId } })).toBe(0);
+    expect(
+      await db.uploadedFile.findMany({
+        where: { name: { in: ['licence.pdf', 'foreign-roster.pdf'] } },
+        select: { ownerType: true, ownerId: true, boundAt: true },
+      })
+    ).toEqual(Array(2).fill({ ownerType: null, ownerId: null, boundAt: null }));
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile({
