@@ -30,7 +30,7 @@ it.runIf(url)(
       );
       await client.query(
         `INSERT INTO pharmacy_registered_devices(id,"organizationId","branchId",name,"deviceSecretHash","enrolledByActorId","updatedAt")
-      VALUES($1,$2,$3,'Counter',$1,'fixture',now())`,
+      VALUES($1,$2,$3,'Counter',encode(sha256(convert_to($1,'UTF8')),'hex'),'fixture',now())`,
         [device, org, branch]
       );
       await client.query(
