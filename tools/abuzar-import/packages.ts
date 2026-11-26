@@ -5,7 +5,7 @@ import { gzipSync } from 'node:zlib';
 import { columns, tableNames, type Prepared, type Tables, type Table } from './prepared';
 
 const budget = 4 * 1024 * 1024 - 128 * 1024;
-function encodeTable<K extends Table>(name: K, rows: Tables[K]) {
+function encodeTable(name: Table, rows: Tables[Table]) {
   const header: readonly string[] = columns[name];
   const lines = rows.map((row) =>
     header

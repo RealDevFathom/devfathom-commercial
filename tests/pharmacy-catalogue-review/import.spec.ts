@@ -124,3 +124,148 @@ for (const scenario of scenarios) {
     }
   });
 }
+
+test('prepared Abuzar import holds controlled placeholder stock and balances the books once', async ({
+  browser,
+}) => {
+  const { Client } = await import('pg');
+  const { syntheticExport } = await import('../fixtures/abuzar-prepared');
+  const { readdir, readFile } = await import('node:fs/promises');
+  const group = 'abuzar' + Date.now().toString(36);
+  const workspace: Workspace = {
+    group,
+    ...JSON.parse(
+      execFileSync('bun', [join(__dirname, 'fixture.ts'), group, 'owner', 'pharmacist'], {
+        encoding: 'utf8',
+      })
+    ),
+  };
+  const owner = await signIn(browser, workspace, 'owner');
+  const origin = new URL(owner.url()).origin;
+  const directory = await syntheticExport();
+  const files = await readdir(directory);
+  const db = new Client({ connectionString: process.env.PHARMACY_E2E_DATABASE_URL });
+  await db.connect();
+  try {
+    await db.query('BEGIN');
+    await db.query("SELECT set_config('app.current_organization_id',$1,false)", [workspace.slug]);
+    const branch = (
+      await db.query<{ id: string }>('SELECT id FROM pharmacy_branches WHERE "organizationId"=$1', [
+        workspace.slug,
+      ])
+    ).rows[0]!.id;
+    const location = 'shelf-' + branch;
+    await db.query(
+      'INSERT INTO pharmacy_stock_locations(id,"organizationId","branchId",code,name,kind,"updatedAt") VALUES($1,$2,$3,\'QA\',\'Synthetic shelf\',\'STORE\',now())',
+      [location, workspace.slug, branch]
+    );
+    await db.query(
+      'INSERT INTO pharmacy_accounting_periods(id,"organizationId","branchId","startsAt","endsAt",status) VALUES($1,$2,$3,\'2026-11-01\',\'2026-12-01\',\'OPEN\')',
+      ['period-' + branch, workspace.slug, branch]
+    );
+    await db.query('COMMIT');
+    await owner.goto(origin + '/pharmacy/inventory/import');
+    await owner
+      .getByLabel('Prepared export files')
+      .setInputFiles(files.map((name) => join(directory, name)));
+    await owner.getByLabel('Source branch code').fill('B1');
+    await owner.getByRole('button', { name: 'Preview step' }).click();
+    await expect(owner.getByRole('heading', { name: 'Review totals' })).toBeVisible();
+    await owner.getByRole('button', { name: 'Confirm totals and apply' }).click();
+    await owner.getByRole('link', { name: 'Review the staged catalogue' }).click();
+    await owner.getByRole('button', { name: /Ask to create 2 medicines/ }).click();
+    await expect(owner.getByText('Waiting for approval', { exact: true })).toBeVisible();
+    const reviewer = await signIn(browser, workspace, 'pharmacist');
+    const review = reviewer
+      .locator('article')
+      .filter({ hasText: /Imported from Abuzar|products.csv/ });
+    await review.getByRole('button', { name: 'Approve edit' }).click();
+    await expect(reviewer.getByText('Edit approved.', { exact: true })).toBeVisible();
+    await reviewer.reload();
+    await reviewer.getByRole('button', { name: 'Create medicines', exact: true }).click();
+    await expect(reviewer.getByText('All medicines created', { exact: true })).toBeVisible();
+
+    async function run(step: string, confirmed?: string) {
+      const financial = step === 'stock' || step === 'balances';
+      const multipart: Record<string, string | { name: string; mimeType: string; buffer: Buffer }> =
+        {
+          selection: JSON.stringify({
+            branchId: branch,
+            step,
+            sourceBranch: 'B1',
+            addToExisting: false,
+            confirmed,
+            ...(financial ? { cutover: '2026-11-26' } : {}),
+            ...(step === 'stock'
+              ? { stockLocationId: location, witnessId: workspace.slug + '-pharmacist' }
+              : {}),
+          }),
+        };
+      if (step === 'stock' && confirmed) multipart.witnessSecret = workspace.approvalPin;
+      for (const name of files)
+        multipart[name] = {
+          name,
+          mimeType: 'application/octet-stream',
+          buffer: await readFile(join(directory, name)),
+        };
+      const response = await owner.request.post(origin + '/api/pharmacy/abuzar-import', {
+        headers: { origin },
+        multipart,
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      return response.json();
+    }
+    const snapshot = async () =>
+      (
+        await db.query(`SELECT
+      (SELECT count(*)::int FROM finance_journal_entries) AS journals,
+      (SELECT count(*)::int FROM pharmacy_sales) AS sales,
+      (SELECT count(*)::int FROM pharmacy_controlled_register_entries WHERE "entryKind"::text='OPENING') AS controlled,
+      (SELECT count(*)::int FROM pharmacy_manufacturing_batches WHERE state='QUARANTINED' AND "batchNumber" IS NULL AND "expiresAt" IS NULL AND "stateChangedAt" IS NOT NULL) AS held,
+      (SELECT count(*)::int FROM pharmacy_abuzar_history) AS archive,
+      (SELECT sum(CASE WHEN side='DEBIT' THEN "amountMinor" ELSE -"amountMinor" END)::text FROM finance_journal_lines) AS net,
+      (SELECT md5(string_agg(t::text,',' ORDER BY t."sourceId")) FROM pharmacy_abuzar_openings t) AS checksum`)
+      ).rows[0];
+    expect(await snapshot()).toMatchObject({ journals: 0, controlled: 0, held: 0, archive: 0 });
+    for (const [step, count] of Object.entries({
+      parties: 1,
+      prices: 2,
+      stock: 1,
+      balances: 1,
+      history: 1,
+    })) {
+      const before = await snapshot();
+      const dry = await run(step);
+      expect(await snapshot()).toEqual(before);
+      expect(dry.create).toBe(count);
+      expect((await run(step, dry.confirmation)).applied).toBe(count);
+      const after = await snapshot();
+      expect((await run(step, dry.confirmation)).applied).toBe(0);
+      expect(await snapshot()).toEqual(after);
+    }
+    const result = await run('reconcile');
+    expect(result.actual).toEqual(result.expected);
+    expect(result.actual).toEqual({
+      products: 2,
+      stockUnits: '23',
+      stockValueMinor: '4600',
+      customerBalanceMinor: '1250',
+      supplierBalanceMinor: '0',
+    });
+    expect(result.differences.map((d: { reason: string }) => d.reason)).toEqual([
+      'negative quantity',
+      'fractional quantity',
+    ]);
+    expect(await snapshot()).toMatchObject({
+      journals: 2,
+      sales: 0,
+      controlled: 1,
+      held: 1,
+      archive: 1,
+      net: '0',
+      checksum: expect.stringMatching(/^[a-f0-9]{32}$/),
+    });
+  } finally {
+    await db.end();
+  }
+});
