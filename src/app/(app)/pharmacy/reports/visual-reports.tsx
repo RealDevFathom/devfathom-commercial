@@ -330,6 +330,8 @@ function Figures({
   return (
     <VisualReportTable
       rows={q.data.rows}
+      unit={percent(chart) ? 'percent' : chart === 'returnMedicine' ? 'units' : 'money'}
+      currency={currency}
       title={CHARTS[chart]}
       scope={branchLabel + ' · ' + rangeLabel(q.data.period)}
       format={formatter(chart, currency)}

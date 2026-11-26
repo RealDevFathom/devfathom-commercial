@@ -19,9 +19,13 @@ export function VisualReportTable({
   scope,
   format,
   select,
+  unit,
+  currency,
   extra,
 }: {
   rows: ChartRow[];
+  unit: 'percent' | 'money' | 'units';
+  currency: string | null;
   title: string;
   scope: string;
   format: (value: number) => string;
@@ -50,22 +54,8 @@ export function VisualReportTable({
     setExporting(true);
     setError(false);
     try {
-      const { Workbook } = await import('exceljs');
-      const wb = new Workbook(),
-        sheet = wb.addWorksheet('Report');
-      sheet.addRow([title]);
-      sheet.addRow([scope]);
-      sheet.addRow(['Group', 'Value', ...(extra ? [extra.label] : []), 'Excluded lines']);
-      for (const row of visible)
-        sheet.addRow([
-          row.label,
-          row.value === null ? 'Unavailable' : format(row.value),
-          ...(extra ? [extra.format(row)] : []),
-          row.excluded,
-        ]);
-      sheet.columns.forEach((column) => {
-        column.width = 34;
-      });
+      const { reportWorkbook } = await import('@/lib/pharmacy/visual-report-workbook');
+      const wb = reportWorkbook(title, scope, visible, unit, currency, extra?.label);
       const bytes = await wb.xlsx.writeBuffer();
       const url = URL.createObjectURL(
         new Blob([new Uint8Array(bytes)], {
