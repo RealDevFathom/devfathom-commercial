@@ -1,7 +1,12 @@
 // @vitest-environment node
 import { readFileSync } from 'node:fs';
 import { Client } from 'pg';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+vi.mock('server-only', () => ({}));
 
 const url = process.env.PHARMACY_DB_TEST_OWNER_URL;
 const migration = readFileSync(
@@ -141,21 +146,68 @@ it.runIf(url)(
         ('mixed','pharmacyPurchasing.provisionMyPurchasePin','member-replacement',NULL,NULL,NULL,'2025-10-02'),
         ('mixed','accountPin.setMine','member-alias','User','member-alias','{"credentialId":"alias","staffProfileId":"alias"}','2026-01-03');
 
-      -- Two successful approval uses wrote bookkeeping after the member changed the PIN.
-      UPDATE restaurant_operator_credentials SET "updatedAt" = '2026-02-01' WHERE id = 'self-last';
-      INSERT INTO audit_logs ("organizationId",action,"actorId","targetType","targetId","createdAt")
-        VALUES ('mixed','restaurantTerminal.coAuthorize','member-self-last','RestaurantOperatorCredential','self-last','2026-02-01');
-      UPDATE restaurant_operator_credentials SET "updatedAt" = '2026-03-01' WHERE id = 'self-last';
-      INSERT INTO audit_logs ("organizationId",action,"actorId","targetType","targetId","createdAt")
-        VALUES ('mixed','restaurantTerminal.coAuthorize','member-self-last','RestaurantOperatorCredential','self-last','2026-03-01');
     `);
+      const pin = '586291';
+      const credentialHash = await hashOperatorCredential('PIN', pin);
+      await db.query(
+        `UPDATE restaurant_operator_credentials SET "credentialHash"=$1 WHERE id='self-last'`,
+        [credentialHash]
+      );
+
+      // The historical fixture uses the tenant's PIN approval mode. Capture the real
+      // verifier's audit payload, then persist it alongside its successful-use bookkeeping.
+      const createAudit = vi.fn();
+      const approvalDb = {
+        organization: { findFirst: async () => ({ requireApprovalAuthenticator: false }) },
+        auditLog: { create: createAudit },
+      } as unknown as ScopedDb;
+      for (const now of [new Date('2026-02-01'), new Date('2026-03-01')]) {
+        const method = await verifyApprovalSecret(approvalDb, {
+          organizationId: 'mixed',
+          approverUserId: 'member-self-last',
+          approverRight: 'OWNER',
+          secret: pin,
+          credentialHash,
+          action: 'pharmacy.ownerDataExport',
+          approvalPinMustChange: false,
+          deviceBound: false,
+          now,
+        });
+        expect(method).toBe('PIN');
+        const { data } = createAudit.mock.lastCall![0];
+        expect(data.description).toBe('Approved with a PIN');
+        await db.query(
+          `INSERT INTO audit_logs ("organizationId",source,outcome,action,"actorId","targetType","targetId",metadata,"createdAt")
+          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            data.organizationId,
+            data.source,
+            data.outcome,
+            data.action,
+            data.actorId,
+            data.targetType,
+            data.targetId,
+            data.metadata,
+            now,
+          ]
+        );
+        await db.query(
+          `UPDATE restaurant_operator_credentials SET "updatedAt"=$1 WHERE id='self-last'`,
+          [now]
+        );
+      }
+      expect(createAudit).toHaveBeenCalledTimes(2);
       await db.query(migration);
       expect(
         (
-          await db.query(`
+          await db.query(
+            `
       SELECT e.id FROM expected e LEFT JOIN restaurant_operator_credentials c ON c.id = e.id
-      WHERE c."approvalPinMustChange" IS DISTINCT FROM e.marked OR c."credentialHash" IS DISTINCT FROM 'unchanged'
-    `)
+      WHERE c."approvalPinMustChange" IS DISTINCT FROM e.marked OR c."credentialHash" IS DISTINCT FROM
+        CASE WHEN e.id='self-last' THEN $1 ELSE 'unchanged' END
+    `,
+            [credentialHash]
+          )
         ).rows
       ).toEqual([]);
       expect(
