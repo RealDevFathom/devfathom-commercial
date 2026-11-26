@@ -16,7 +16,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     }
     const uploadedById = actor.session.user.id;
 
-    const formData = await readUploadForm(uploadedById);
+    const formData = await readUploadForm(uploadedById, actor.organization.id);
     if (formData instanceof Response) return formData;
     if (!formData) return NextResponse.json({ error: UPLOAD_SIZE_MESSAGE }, { status: 413 });
     const file = formData.get('file') as File | null;
