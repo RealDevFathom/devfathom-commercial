@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { dashboardPeriods, readOwnerTrading, type TradingSection } from './owner-trading';
 import { aggregateTenderTotals } from './manual-payments';
-import { readPharmacyOwnerCommandCentre } from './reports';
+import { readKhataAgingMinor, readPharmacyOwnerCommandCentre } from './reports';
 import { receiveLot } from './stock-ledger';
 import { grossMargin } from './finance-reports';
 
@@ -321,6 +321,8 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
           dueAt: new Date('2026-09-01'),
         },
       });
+      expect(await readKhataAgingMinor(db, [id], 0)).toBeNull();
+      expect(await readKhataAgingMinor(db, [id], 1)).toBe(1200);
       const ledger = await listKhataLedger(db, scope, at);
       const command = await readPharmacyOwnerCommandCentre(db, {
         branchIds: [id],

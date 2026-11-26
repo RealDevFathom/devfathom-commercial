@@ -309,10 +309,34 @@ type MoneyCounts = {
   cashVarianceMinor: number | null;
 };
 
-export async function readKhataAgingMinor(
+export const DASHBOARD_KHATA_EVENT_LIMIT = 10000;
+
+/** Caller has already selected this branch under Khata FORCE RLS. */
+export async function khataHistoryWithinLimit(
+  db: Prisma.TransactionClient,
+  branchId: string,
+  limit: number
+) {
+  const [size] = await db.$queryRaw<{ events: number }[]>`SELECT COUNT(*)::int AS events FROM (
+    SELECT 1 FROM pharmacy_khata_events WHERE "organizationId"=current_setting('app.current_organization_id',true)
+    AND "branchId"=${branchId} LIMIT ${limit + 1}) bounded`;
+  return size.events <= limit;
+}
+
+export function readKhataAgingMinor(
   db: Prisma.TransactionClient,
   branchIds: readonly string[]
-): Promise<number> {
+): Promise<number>;
+export function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[],
+  maxEventsPerBranch: number
+): Promise<number | null>;
+export async function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[],
+  maxEventsPerBranch?: number
+): Promise<number | null> {
   const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
@@ -324,6 +348,11 @@ export async function readKhataAgingMinor(
     // authorized report branch under its own branch context rather than bypassing that boundary.
     for (const branchId of branchIds) {
       await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
+      if (
+        maxEventsPerBranch !== undefined &&
+        !(await khataHistoryWithinLimit(db, branchId, maxEventsPerBranch))
+      )
+        return null;
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
         // A dishonoured cheque re-opens what it bounced, exactly as readKhataBalance counts it:
         // linked to a payment it re-opens that payment's charge, linked to a charge it re-opens
@@ -509,14 +538,21 @@ export async function readPharmacyOwnerCommandCentre(
       dimensional
         ? none
         : db.$queryRaw<Array<{ aging: number; rejected: number }>>(
-            Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
+            Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches}) AND "status" IN ('QUEUED','SUBMITTING','REJECTED','DEAD')`
           ),
     ]);
-  const khataAgingMinor = dimensional ? null : await readKhataAgingMinor(db, filters.branchIds);
+  const khataAgingMinor = dimensional
+    ? null
+    : dashboardAt
+      ? await readKhataAgingMinor(db, filters.branchIds, DASHBOARD_KHATA_EVENT_LIMIT)
+      : await readKhataAgingMinor(db, filters.branchIds);
   // DEV-729: the evaluator leaves a signal row (in any status) wherever it has run. A
   // branch with none has never been calculated, so a zero there is unknown, not "all fine".
   const signalHistory = await db.$queryRaw<Array<{ evaluatedBranches: number }>>(
-    Prisma.sql`SELECT COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (${branches})`
+    dashboardAt
+      ? Prisma.sql`SELECT COUNT(*)::int AS "evaluatedBranches" FROM (VALUES ${Prisma.join(filters.branchIds.map((id) => Prisma.sql`(${id}::text)`))}) b(id)
+      WHERE EXISTS (SELECT 1 FROM pharmacy_stock_signals h WHERE h."organizationId"=current_setting('app.current_organization_id',true) AND h."branchId"=b.id)`
+      : Prisma.sql`SELECT COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (${branches})`
   );
   const m = money[0] ?? {
     salesMinor: 0,

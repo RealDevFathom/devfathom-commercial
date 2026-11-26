@@ -4,7 +4,11 @@ import type { DashboardPeriod } from './owner-trading';
 import { readApAging } from './accounts/ap-aging';
 import { computeDueBillReminders } from './accounts/ap-payables-drafts';
 import { listKhataLedger } from './family-khata';
-import { readKhataAgingMinor } from './reports';
+import {
+  readKhataAgingMinor,
+  khataHistoryWithinLimit,
+  DASHBOARD_KHATA_EVENT_LIMIT,
+} from './reports';
 import { roleDashboard } from './stock-signals-operations';
 import { purchaseOrderScopeWhere } from './purchasing-console';
 import { countLegacySupplierDispatches } from './supplier-returns-operations';
@@ -74,9 +78,7 @@ export async function readCustomerPosition(
         const scope = { organizationId, branchId: p.id, actorId };
         // The detailed ledger reads every event for each displayed family. Detect a
         // large branch through its indexed tenant/branch prefix before that fold.
-        const [size] = await tx.$queryRaw<{ events: number }[]>`SELECT count(*)::int AS events FROM
-          (SELECT 1 FROM pharmacy_khata_events WHERE "organizationId"=${organizationId} AND "branchId"=${p.id} LIMIT 10001) bounded`;
-        if (size.events > 10000) return null;
+        if (!(await khataHistoryWithinLimit(tx, p.id, DASHBOARD_KHATA_EVENT_LIMIT))) return null;
         const ledger = await listKhataLedger(tx as ScopedDb, scope, now);
         if (ledger.truncated) return null;
         const owing = ledger.accounts.filter((a) => a.balanceMinor > 0);
