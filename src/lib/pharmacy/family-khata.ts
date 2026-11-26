@@ -3,6 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { counterCustomerPhoneFilters } from './counter-customer-phone';
 import { writePatientConsent } from './consent-writer';
 import { linkCustomerToSale } from './customer-loyalty';
 import { auditPatientRead } from './patient-prescriptions';
@@ -369,7 +370,6 @@ export async function readSaleKhataAccounts(
   });
   if (!sale?.customerId) return [];
   const term = filter.query?.trim();
-  const digits = term?.replace(/[\s()-]/g, '');
   const where = {
     organizationId: scope.organizationId,
     branchId: scope.branchId,
@@ -381,9 +381,7 @@ export async function readSaleKhataAccounts(
           OR: [
             { displayName: { contains: term, mode: 'insensitive' as const } },
             { payer: { displayName: { contains: term, mode: 'insensitive' as const } } },
-            ...(digits && /^\+?\d+$/.test(digits)
-              ? [{ payer: { phoneLast4: { contains: digits.slice(-4) } } }]
-              : []),
+            ...counterCustomerPhoneFilters(term, scope.organizationId).map((payer) => ({ payer })),
           ],
         }
       : {}),

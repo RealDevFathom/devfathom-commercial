@@ -535,6 +535,33 @@ suite('DEV-1046 search', () => {
       });
     });
   }, 60_000);
+  it('finds an eligible family by the middle of a consented phone number and returns only its mask', async () => {
+    await inScope(a, async (db) => {
+      const customer = await db.pharmacyCustomer.findFirstOrThrow({
+        where: { sales: { some: { id: a.saleId } } },
+      });
+      await db.pharmacyPatient.update({
+        where: { id: customer.patientId },
+        data: { phone: '+923001239876' },
+      });
+      const { writePatientConsent } = await import('./consent-writer');
+      const consent = {
+        patientId: customer.patientId,
+        purpose: 'LOYALTY' as const,
+        channel: 'IN_PERSON' as const,
+      };
+      await writePatientConsent(db, a.organizationId, a.actorId, { ...consent, granted: true });
+      const found = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '300123' });
+      expect(found).toHaveLength(10);
+      expect(found[0]?.maskedPhone).toBe('•••• 9876');
+      expect(JSON.stringify(found)).not.toContain('300123');
+      expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '03211119876' })).toEqual(
+        []
+      );
+      await writePatientConsent(db, a.organizationId, a.actorId, { ...consent, granted: false });
+      expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '300123' })).toEqual([]);
+    });
+  });
   it('returns one masked page from 1,000 eligible accounts and resolves a later account by ID', async () => {
     await inScope(a, async (db) => {
       const start = performance.now();

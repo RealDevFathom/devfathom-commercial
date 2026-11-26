@@ -28,6 +28,7 @@ import {
   type PortalRequestKind,
 } from '@/lib/pharmacy/customer-portal';
 import { actorManagesBranchDrawers } from '@/lib/pharmacy/counter-capability';
+import { counterCustomerPhoneFilters } from '@/lib/pharmacy/counter-customer-phone';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { PharmacySettlementError } from '@/lib/pharmacy/settlement';
@@ -431,9 +432,7 @@ export const pharmacyOrderingRouter = router({
                   {
                     OR: [
                       { displayName: { contains: input.query, mode: 'insensitive' as const } },
-                      ...(/^\+?\d+$/.test(input.query)
-                        ? [{ phoneLast4: { contains: input.query.slice(-4) } }]
-                        : []),
+                      ...counterCustomerPhoneFilters(input.query, organizationId),
                     ],
                   },
                 ],
