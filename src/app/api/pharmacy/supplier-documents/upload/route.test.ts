@@ -251,7 +251,11 @@ it('admits a live outside link before reading and attributes its upload to the l
   const response = await POST(outsideUpload());
   expect(response.status).toBe(204);
   expect(await response.text()).toBe('');
-  expect(publicAccess.admit).toHaveBeenCalledWith({ kind: 'token', token, ip: expect.any(String) });
+  expect(publicAccess.admit).toHaveBeenCalledWith({
+    kind: 'supplier-upload',
+    token,
+    ip: expect.any(String),
+  });
   expect(mocks.permission.mock.invocationCallOrder[0]).toBeLessThan(
     mocks.slot.mock.invocationCallOrder[0]!
   );

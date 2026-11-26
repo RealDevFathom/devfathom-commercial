@@ -366,48 +366,52 @@ async function main() {
       // against a part-received order would see 30 units outstanding where the
       // first saw 100, and the spec would fail for a reason that is the fixture's
       // rather than the product's. The reference is handed to the spec below.
-      const order = await tx.pharmacyPurchaseOrder.create({
-        data: {
-          organizationId,
-          branchId: branch.id,
-          reference: purchaseOrderReference,
-          // Approved by the approver and sent, which is the only state a
-          // receipt may be filed against.
-          status: 'SENT',
-          supplierId: supplier.id,
-          createdByUserId: receiver!.id,
-          approvedByUserId: approver!.id,
-          approvedAt: day(-2),
-          submittedAt: day(-3),
-          sentAt: day(-1),
-          expectedDeliveryAt: day(1),
-          // Prisma 7 rejects a composite-FK scalar in a nested create: the
-          // parent supplies `organizationId` through the relation, so
-          // repeating it here is an unknown argument rather than a duplicate.
-          lines: {
-            create: {
-              lineNumber: 1,
-              medicineId: medicine.id,
-              packLevelId: packLevel.id,
-              orderedPacks: FIXTURE.purchaseOrder.orderedPacks,
-              canonicalUnitsPerPack: FIXTURE.purchaseOrder.unitsPerPack,
-              orderedCanonicalUnits:
-                FIXTURE.purchaseOrder.orderedPacks * FIXTURE.purchaseOrder.unitsPerPack,
-              listPricePerPackMinor: 250_00,
+      let purchaseOrderId: string;
+      {
+        const order = await tx.pharmacyPurchaseOrder.create({
+          data: {
+            organizationId,
+            branchId: branch.id,
+            reference: purchaseOrderReference,
+            // Approved by the approver and sent, which is the only state a
+            // receipt may be filed against.
+            status: 'SENT',
+            supplierId: supplier.id,
+            createdByUserId: receiver!.id,
+            approvedByUserId: approver!.id,
+            approvedAt: day(-2),
+            submittedAt: day(-3),
+            sentAt: day(-1),
+            expectedDeliveryAt: day(1),
+            // Prisma 7 rejects a composite-FK scalar in a nested create: the
+            // parent supplies `organizationId` through the relation, so
+            // repeating it here is an unknown argument rather than a duplicate.
+            lines: {
+              create: {
+                lineNumber: 1,
+                medicineId: medicine.id,
+                packLevelId: packLevel.id,
+                orderedPacks: FIXTURE.purchaseOrder.orderedPacks,
+                canonicalUnitsPerPack: FIXTURE.purchaseOrder.unitsPerPack,
+                orderedCanonicalUnits:
+                  FIXTURE.purchaseOrder.orderedPacks * FIXTURE.purchaseOrder.unitsPerPack,
+                listPricePerPackMinor: 250_00,
+              },
+            },
+            approvals: {
+              create: {
+                actorUserId: approver!.id,
+                policy: 'PUR-02:SEGREGATION_OF_DUTIES',
+                decision: 'APPROVED',
+                fromStatus: 'SUBMITTED',
+                toStatus: 'APPROVED',
+                reason: 'Seeded acceptance fixture.',
+              },
             },
           },
-          approvals: {
-            create: {
-              actorUserId: approver!.id,
-              policy: 'PUR-02:SEGREGATION_OF_DUTIES',
-              decision: 'APPROVED',
-              fromStatus: 'SUBMITTED',
-              toStatus: 'APPROVED',
-              reason: 'Seeded acceptance fixture.',
-            },
-          },
-        },
-      });
+        });
+        purchaseOrderId = order.id;
+      }
 
       // Quarantine is referenced by the capture form even when nothing is
       // rejected, so fail loudly here rather than in the browser.
@@ -424,7 +428,7 @@ async function main() {
         update: {},
         select: { id: true },
       });
-      return { branchId: branch.id, relationshipId: relationship.id, purchaseOrderId: order.id };
+      return { branchId: branch.id, relationshipId: relationship.id, purchaseOrderId };
     });
 
     mkdirSync(path.dirname(HANDLE_PATH), { recursive: true });

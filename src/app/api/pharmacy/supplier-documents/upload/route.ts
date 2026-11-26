@@ -59,7 +59,11 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     let organizationId = actor?.organization.id;
     let linkId: string | null = null;
     if (outside) {
-      const gate = await admitAnonymousRequest({ kind: 'token', token, ip: clientIp(request) });
+      const gate = await admitAnonymousRequest({
+        kind: 'supplier-upload',
+        token,
+        ip: clientIp(request),
+      });
       if (!gate.ok) {
         const response = message(429, 'Too many tries. Please try again later.');
         response.headers.set('Retry-After', String(gate.retryAfter));

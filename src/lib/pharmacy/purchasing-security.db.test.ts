@@ -814,54 +814,74 @@ async function newLink() {
     it('keeps supplier evidence, document access and audit rows on the issuing order', async () => {
       const { token } = await newLink();
       const linkId = supplierLinks.supplierLinkId(token)!;
-      const document = await inOrg(async (db) => {
-        await supplierLinks.getSupplierActionPage(db, token);
-        const evidence = await supplierLinks.submitSupplierEvidence(db, {
-          token,
-          kind: 'ACKNOWLEDGEMENT',
-          idempotencyKey: 'confirmation',
-          payload: {},
-        });
-        const doc = await supplierLinks.uploadSupplierDocument(db, {
-          token,
-          idempotencyKey: 'invoice',
-          fileName: 'invoice.pdf',
-          declaredMimeType: 'application/pdf',
-          content: Buffer.from('%PDF-1.7'),
-        });
-        const rows = await db.auditLog.findMany({
-          where: { organizationId: org, metadata: { path: ['actionLinkId'], equals: linkId } },
-          select: { action: true, targetId: true },
-        });
-        expect(rows).toEqual(
-          expect.arrayContaining([
-            { action: 'pharmacySupplierLinks.get', targetId: expect.any(String) },
-            { action: 'pharmacySupplierLinks.submit', targetId: evidence.id },
-          ])
-        );
-        await db.pharmacySupplierActionLink.update({
-          where: { id: linkId },
-          data: { revokedAt: new Date() },
-        });
-        await expect(supplierLinks.getSupplierActionPage(db, token)).rejects.toMatchObject({
-          reason: 'INVALID_LINK',
-        });
-        return doc;
-      });
-      const other = org + '_other';
-      const otherLink = await newLink();
-      await withTenantDb(other, async (db) => {
-        await expect(
-          supplierLinks.getSupplierActionPage(db, otherLink.token)
-        ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
-        expect(
-          await db.pharmacySupplierDocument.findFirst({ where: { id: document.id } })
-        ).toBeNull();
-      });
-      const { GET } = await import('@/app/api/pharmacy/supplier-documents/[id]/route');
+      const { POST } = await import('@/app/api/pharmacy/supplier-documents/upload/route');
+      const {
+        SUPPLIER_DOCUMENT_TOKEN_HEADER,
+        SUPPLIER_ACCESS_HEADER,
+        SUPPLIER_DOCUMENT_UPLOAD_URL,
+      } = await import('./supplier-document-contract');
       const tenantActor = await import('@/lib/tenancy/tenant-actor');
-      const actor = vi.spyOn(tenantActor, 'resolveTenantActor');
+      const actor = vi.spyOn(tenantActor, 'resolveTenantActor').mockResolvedValue(null);
       try {
+        const form = new FormData();
+        form.set('file', new File(['%PDF-1.7'], 'invoice.pdf', { type: 'application/pdf' }));
+        form.set('idempotencyKey', 'invoice');
+        const origin = 'https://pharmacy.example.test';
+        const response = await POST(
+          new Request(origin + SUPPLIER_DOCUMENT_UPLOAD_URL, {
+            method: 'POST',
+            body: form,
+            headers: {
+              origin,
+              [SUPPLIER_ACCESS_HEADER]: 'order-link',
+              [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+            },
+          })
+        );
+        expect(response.status).toBe(204);
+        const document = await inOrg(async (db) => {
+          await supplierLinks.getSupplierActionPage(db, token);
+          const evidence = await supplierLinks.submitSupplierEvidence(db, {
+            token,
+            kind: 'ACKNOWLEDGEMENT',
+            idempotencyKey: 'confirmation',
+            payload: {},
+          });
+          const doc = await db.pharmacySupplierDocument.findFirstOrThrow({
+            where: { submission: { actionLinkId: linkId } },
+          });
+          const rows = await db.auditLog.findMany({
+            where: { organizationId: org, metadata: { path: ['actionLinkId'], equals: linkId } },
+            select: { action: true, targetId: true },
+          });
+          expect(rows).toEqual(
+            expect.arrayContaining([
+              { action: 'pharmacySupplierLinks.get', targetId: expect.any(String) },
+              { action: 'pharmacySupplierLinks.submit', targetId: evidence.id },
+              { action: 'pharmacySupplierLinks.uploadDocument', targetId: doc.id },
+            ])
+          );
+          await db.pharmacySupplierActionLink.update({
+            where: { id: linkId },
+            data: { revokedAt: new Date() },
+          });
+          await expect(supplierLinks.getSupplierActionPage(db, token)).rejects.toMatchObject({
+            reason: 'INVALID_LINK',
+          });
+          return doc;
+        });
+        const other = org + '_other';
+        const otherLink = await newLink();
+        await withTenantDb(other, async (db) => {
+          await expect(
+            supplierLinks.getSupplierActionPage(db, otherLink.token)
+          ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
+          expect(
+            await db.pharmacySupplierDocument.findFirst({ where: { id: document.id } })
+          ).toBeNull();
+        });
+        const { GET } = await import('@/app/api/pharmacy/supplier-documents/[id]/route');
+
         const read = () =>
           GET(
             new Request(
