@@ -1,5 +1,6 @@
 'use client';
 
+import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
 import { browserUuid } from '@/lib/browser-uuid';
 import {
   enrolledCounterDeviceId,
@@ -876,10 +877,11 @@ function ScopedPharmacyCounterConsole({
   // DEV-508: Void and Shift+F4 open a reason-and-confirm dialog; nothing is voided until confirmed.
   const [voidOpen, setVoidOpen] = useState(false);
   const online = useBrowserOnline();
+  const promptedTerms = useRef(new Map<string, Set<string>>());
   // DEV-81: the short line whose optional outcome chips are showing.
   const [lostSaleCapture, setLostSaleCapture] = useState<{
     branchId: string;
-    demandId: string;
+    demandId?: string;
     requested: string;
   } | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
@@ -1407,6 +1409,14 @@ function ScopedPharmacyCounterConsole({
       setReceiptSettlement(null);
       setSettledChange(null);
       setReceiptOpen(false);
+      setLostSaleCapture(null);
+      const draftKey = JSON.stringify([branchId, null]);
+      if (keepBillUnit && nextSaleId && promptedTerms.current.has(draftKey))
+        promptedTerms.current.set(
+          JSON.stringify([branchId, nextSaleId]),
+          promptedTerms.current.get(draftKey)!
+        );
+      promptedTerms.current.delete(draftKey);
       setSaleId(nextSaleId);
       autoRead.current = null;
       setBalanceFailure(null);
@@ -1418,7 +1428,7 @@ function ScopedPharmacyCounterConsole({
       setTenderReadRequired(false);
       setRestoredAttempt(null);
     },
-    [discardReceiptIntent]
+    [branchId, discardReceiptIntent]
   );
 
   // ── Derived state ─────────────────────────────────────────────────────────
@@ -2268,6 +2278,19 @@ function ScopedPharmacyCounterConsole({
     focusQuantityOnStage.current = false;
   }, [activeRow]);
 
+  const offerMissingItem = useCallback(
+    (requested: string) => {
+      const term = normalizeMedicineText(requested);
+      const terms = promptedTerms.current.get(billScope) ?? new Set<string>();
+      if (!term || terms.has(term)) return;
+      terms.add(term);
+      promptedTerms.current.set(billScope, terms);
+      setResultsDismissed(false);
+      setLostSaleCapture({ branchId, requested });
+    },
+    [billScope, branchId]
+  );
+
   // DEV-705, DEV-977B: Enter that beats the search debounce runs the search now and highlights
   // its first result; nothing is added until the cashier presses Enter on what they see.
   const searchAndHighlight = useCallback(
@@ -2284,13 +2307,13 @@ function ScopedPharmacyCounterConsole({
         if (result.rows[0]) {
           setResultsDismissed(false);
           setHighlightId(result.rows[0].medicineId);
-        }
+        } else offerMissingItem(text.trim());
       } catch (error) {
         if (search.revision === scannerRevision.current)
           setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       }
     },
-    [branchId, runSearch, utils]
+    [branchId, offerMissingItem, runSearch, utils]
   );
 
   const openSale = useCallback(async () => {
@@ -2788,8 +2811,9 @@ function ScopedPharmacyCounterConsole({
               { branchId, query: search.query },
               { staleTime: 10_000 }
             );
-        if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
-          return;
+        if (revision !== scannerRevision.current || barcodeBusy.current) return;
+        if (result.rows.length === 0) offerMissingItem(scan.text);
+        if (result.rows.length !== 1) return;
         const row = result.rows[0]!;
         if (!cached && !search.serializedPack) catalogueCache.put(branchId, search.query, row);
         const serialized = search.serializedPack;
@@ -2841,6 +2865,7 @@ function ScopedPharmacyCounterConsole({
       branchId,
       busy,
       catalogueCache,
+      offerMissingItem,
       query,
       runSearch,
       setupNotice,
@@ -3771,7 +3796,14 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
       return;
     }
-    const capturedUnits = activeRow ? shortfallUnits : quantity;
+    if (!activeRow) {
+      setNotice({
+        tone: 'info',
+        message: 'Press Enter on an unmatched search to record what the customer asked for.',
+      });
+      return;
+    }
+    const capturedUnits = shortfallUnits;
     if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
       setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
       return;
@@ -3805,7 +3837,10 @@ function ScopedPharmacyCounterConsole({
         tone: 'success',
         message: `Recorded a shortage of ${capturedUnits} ${plural(counterUnitNoun(activeRow?.dosageForm), capturedUnits)} for ${requested}.`,
       });
-      if (demand?.id) setLostSaleCapture({ branchId, demandId: demand.id, requested });
+      if (demand?.id) {
+        setResultsDismissed(false);
+        setLostSaleCapture({ branchId, demandId: demand.id, requested });
+      }
       focusSearch();
     } catch (error) {
       setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
@@ -3835,12 +3870,37 @@ function ScopedPharmacyCounterConsole({
     (choice: LostSaleChoice) => {
       const capture = lostSaleCapture;
       setLostSaleCapture(null);
-      if (!capture) return;
-      setDemandOutcome
-        .mutateAsync({ branchId: capture.branchId, demandId: capture.demandId, ...choice })
-        .catch((error: unknown) => setNotice({ tone: 'warning', message: messageFrom(error) }));
+      if (!capture || capture.branchId !== branchId || !branchAuthorized || busy) return;
+      const save = capture.demandId
+        ? setDemandOutcome.mutateAsync({ branchId, demandId: capture.demandId, ...choice })
+        : captureDemand.mutateAsync({
+            branchId,
+            ...(demandSaleId ? { saleId: demandSaleId } : {}),
+            ...(deviceId ? { terminalId: deviceId } : {}),
+            requestedText: capture.requested,
+            requestedQty: 1,
+            quantity: 1,
+            saleUnit: 'UNIT',
+            reason: 'NOT_CARRIED',
+            inventoryRuleSnapshot: { source: 'COUNTER_NO_MATCH_CHOICE' },
+            ...choice,
+          });
+      void save.catch((error: unknown) =>
+        setNotice({ tone: 'warning', message: messageFrom(error) })
+      );
+      focusSearch();
     },
-    [lostSaleCapture, setDemandOutcome]
+    [
+      branchAuthorized,
+      branchId,
+      busy,
+      captureDemand,
+      demandSaleId,
+      deviceId,
+      focusSearch,
+      lostSaleCapture,
+      setDemandOutcome,
+    ]
   );
   const dismissLostSaleChips = useCallback(() => setLostSaleCapture(null), []);
 
@@ -4742,15 +4802,6 @@ function ScopedPharmacyCounterConsole({
                   ) : null}
                 </div>
               ) : null}
-              {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
-                <CounterLostSaleChips
-                  key={lostSaleCapture.demandId}
-                  requested={lostSaleCapture.requested}
-                  onChoose={chooseLostSaleOutcome}
-                  onDismiss={dismissLostSaleChips}
-                />
-              ) : null}
-
               {dayClosed ? (
                 <div
                   role="status"
@@ -4937,6 +4988,7 @@ function ScopedPharmacyCounterConsole({
                             : 'counter-search-help'
                         }
                         onDraftChange={(text) => {
+                          setLostSaleCapture(null);
                           scannerRevision.current += 1;
                           setResultsDismissed(false);
                           // Results follow the field once it is too short to search;
@@ -4963,10 +5015,15 @@ function ScopedPharmacyCounterConsole({
                           // DEV-977B (Counter v2): Escape closes the results over the bill.
                           if (
                             event.key === 'Escape' &&
-                            resultsShown &&
+                            (resultsShown ||
+                              lostSaleCapture ||
+                              scannerInFlight.current ||
+                              event.currentTarget.value.trim()) &&
                             !event.nativeEvent.isComposing
                           ) {
                             event.preventDefault();
+                            scannerRevision.current += 1;
+                            setLostSaleCapture(null);
                             setResultsDismissed(true);
                             setHighlightId(null);
                             return;
@@ -5162,7 +5219,7 @@ function ScopedPharmacyCounterConsole({
             <div
               data-counter-results=""
               className={
-                searchState === 'idle'
+                searchState === 'idle' && !lostSaleCapture
                   ? 'sr-only'
                   : resultsDismissed
                     ? 'hidden'
@@ -5179,30 +5236,41 @@ function ScopedPharmacyCounterConsole({
                 </div>
               ) : null}
               <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
-                <CounterSearchResults
-                  rows={
-                    searchCurrent && !searchQuery.isPlaceholderData
-                      ? (searchQuery.data?.rows ?? [])
-                      : []
-                  }
-                  state={searchState}
-                  query={trimmedQuery}
-                  disabled={busy || !branchAuthorized}
-                  disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
-                  activeMedicineId={
-                    highlightId ??
-                    activeRow?.medicineId ??
-                    (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
-                  }
-                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                  onSelect={stageRow}
-                  onAdd={addRowNow}
-                  slow={slowSearch}
-                  onCaptureDemand={() => void captureShortfall()}
-                  onRetry={() => {
-                    if (searchCurrent) void searchQuery.refetch();
-                  }}
-                />
+                {lostSaleCapture?.branchId === branchId ? (
+                  <CounterLostSaleChips
+                    key={lostSaleCapture.demandId ?? lostSaleCapture.requested}
+                    requested={lostSaleCapture.requested}
+                    unmatched={!lostSaleCapture.demandId}
+                    onChoose={chooseLostSaleOutcome}
+                    onDismiss={dismissLostSaleChips}
+                  />
+                ) : (
+                  <CounterSearchResults
+                    rows={
+                      searchCurrent && !searchQuery.isPlaceholderData
+                        ? (searchQuery.data?.rows ?? [])
+                        : []
+                    }
+                    state={searchState}
+                    query={trimmedQuery}
+                    disabled={busy || !branchAuthorized}
+                    disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
+                    activeMedicineId={
+                      highlightId ??
+                      activeRow?.medicineId ??
+                      (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
+                    }
+                    error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                    onSelect={stageRow}
+                    onAdd={addRowNow}
+                    slow={slowSearch}
+                    emptySearchHint="Press Enter if the customer was asking for this item."
+                    onCaptureDemand={() => void captureShortfall()}
+                    onRetry={() => {
+                      if (searchCurrent) void searchQuery.refetch();
+                    }}
+                  />
+                )}
               </div>
               {searchState === 'ready' && searchRows.length > 0 ? (
                 <p

@@ -6340,6 +6340,62 @@ describe('DEV-618 counter composition', () => {
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
+  it.each(['name', 'scan'])(
+    'DEV-1042: an unmatched %s only records the deliberate Unknown choice',
+    async (source) => {
+      const word = source === 'name' ? 'panadol' : '123456';
+      mocks.queries.counterSearch = query({ rows: [], truncated: false });
+      mocks.searchQuery.mockResolvedValue({ rows: [], truncated: false });
+      mocks.mutations.captureDemand!.mockResolvedValue({ id: 'choice' });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const field = screen.getByLabelText('Scan or search');
+      field.focus();
+      const type = (term: string) => fireEvent.change(field, { target: { value: term } });
+      const enter = () => fireEvent.keyDown(field, { key: 'Enter' });
+      const prompt = () =>
+        screen.queryByRole('region', { name: 'What happened to the short line' });
+      type('halfword');
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      });
+      expect(prompt()).not.toBeInTheDocument();
+      type(word);
+      enter();
+      expect(
+        await screen.findByText(`Nothing matches '${word}'. Was the customer asking for it?`)
+      ).toBeVisible();
+      expect(field).toHaveFocus();
+      expect(prompt()?.closest('[data-counter-results]')).toBeTruthy();
+      expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
+      fireEvent.keyDown(field, { key: 'Escape' });
+      expect(prompt()).not.toBeInTheDocument();
+      type('nextword');
+      enter();
+      await screen.findByText(/Was the customer asking/);
+      type('nextwords');
+      expect(prompt()).not.toBeInTheDocument();
+      type(' ' + word.toUpperCase() + ' ');
+      enter();
+      await act(async () => {});
+      expect(prompt()).not.toBeInTheDocument();
+      expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
+      type('newterm');
+      enter();
+      await screen.findByText(/Was the customer asking/);
+      fireEvent.keyDown(field, { key: '5', altKey: true });
+      await waitFor(() =>
+        expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            outcome: 'UNKNOWN',
+            requestedText: 'newterm',
+            saleId: 'sale-a',
+          })
+        )
+      );
+      expect(mocks.mutations.setDemandOutcome).not.toHaveBeenCalled();
+    }
+  );
+
   it('DEV-81 offers optional outcome chips after a shortage and records one tap', async () => {
     mocks.mutations.captureDemand!.mockResolvedValue({ id: 'demand-a' });
     mocks.mutations.setDemandOutcome!.mockResolvedValue({});

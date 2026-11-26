@@ -42,8 +42,6 @@ export const LOST_SALES_DEFAULTS = {
   measuredRateMinEvents: 200,
   visitWindowMs: 10 * 60 * 1000,
   willReturnWindowMs: 7 * 24 * 60 * 60 * 1000,
-  /** The counter chip panel defaults to UNKNOWN after this long. */
-  chipAutoDismissMs: 5000,
 } as const;
 
 export class LostSalesError extends Error {

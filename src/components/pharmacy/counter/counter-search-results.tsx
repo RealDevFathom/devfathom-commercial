@@ -33,6 +33,7 @@ export type CounterSearchResultsProps = {
   onAdd?: (row: CounterSearchRow) => void;
   /** DEV-977B: the search has been waiting long enough to say so. */
   slow?: boolean;
+  emptySearchHint?: string;
   onCaptureDemand: () => void;
   onRetry: () => void;
   listLabel?: string;
@@ -97,6 +98,7 @@ export function CounterSearchResults({
   onSelect,
   onAdd,
   slow = false,
+  emptySearchHint,
   onCaptureDemand,
   onRetry,
   listLabel = 'Search results',
@@ -182,16 +184,20 @@ export function CounterSearchResults({
       <div className="space-y-3">
         {reasonText}
         <p className="text-sm text-text-muted">Nothing in this catalog matches “{query}”.</p>
-        <Button
-          type="button"
-          size="touch"
-          disabled={disabled}
-          aria-describedby={reason ? reasonId : undefined}
-          onClick={onCaptureDemand}
-          className="h-auto min-h-11 whitespace-normal"
-        >
-          Capture as unfulfilled demand
-        </Button>
+        {emptySearchHint ? (
+          <p className="text-sm text-text-muted">{emptySearchHint}</p>
+        ) : (
+          <Button
+            type="button"
+            size="touch"
+            disabled={disabled}
+            aria-describedby={reason ? reasonId : undefined}
+            onClick={onCaptureDemand}
+            className="h-auto min-h-11 whitespace-normal"
+          >
+            Capture as unfulfilled demand
+          </Button>
+        )}
       </div>
     );
   }
