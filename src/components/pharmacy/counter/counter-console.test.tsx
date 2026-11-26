@@ -1170,7 +1170,7 @@ describe('PharmacyCounterConsole offline indicator (DEV-641)', () => {
       // React Query holds the mutation while offline instead of sending it.
       mocks.pausedMutations.add('tender');
       enterPayment();
-      expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
       expect(
         screen.getByText('Offline — the payment will be sent when the connection returns.')
       ).toBeInTheDocument();
@@ -1203,6 +1203,7 @@ describe('PharmacyCounterConsole offline indicator (DEV-641)', () => {
       );
       renderPayment(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
       enterPayment();
+      await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
       goOffline(onLine);
       expect(
         screen.getByText('Offline — this payment is waiting for the server to confirm it.')
@@ -1715,7 +1716,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
       fireEvent.keyUp(button, { key });
       fireEvent.click(button);
       fireEvent.click(button);
-      expect(mocks.mutations.tender).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(1));
       expect(screen.getByRole('button', { name: 'Taking payment…' })).toBeDisabled();
       expect(mocks.mutations.addLine).not.toHaveBeenCalled();
       await act(async () => resolve(accepted()));
@@ -5200,10 +5201,11 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
   });
 
-  it('DEV-1041: restarts an ordinary scan in the branch unit when another counter closes this bill', async () => {
+  it('DEV-1041: preserves the scanned strip on a new bill when another counter closes this bill', async () => {
     const row = barcodeRow({
       onHandUnits: 50,
       unitsPerPack: 10,
+      barcodePackLevelId: 'strip',
       saleUnits: [
         { kind: 'STRIP', levelLabel: 'Strip', packLevelId: 'strip', canonicalUnitsPerSaleUnit: 10 },
         { kind: 'UNIT', levelLabel: 'Unit', packLevelId: 'unit', canonicalUnitsPerSaleUnit: 1 },
@@ -5223,7 +5225,7 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
       mocks.mutations.addLine.mock.calls.map(([input]) => [input.saleId, input.saleUnit])
     ).toEqual([
       ['sale-a', 'STRIP'],
-      ['sale-b', 'UNIT'],
+      ['sale-b', 'STRIP'],
     ]);
   });
 

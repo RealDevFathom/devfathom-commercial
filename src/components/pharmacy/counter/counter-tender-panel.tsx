@@ -1640,7 +1640,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             className="text-sm text-destructive empty:hidden"
             role={error ? 'alert' : undefined}
           >
-            {error}
+            {error && !displayedOutcome?.message.includes(error) ? error : null}
           </p>
 
           {disabledReason ? (

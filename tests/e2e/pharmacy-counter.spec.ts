@@ -2831,6 +2831,7 @@ test('DEV-1042: unmatched searches leave the bill, totals and keyboard focus in 
     await expect(page.getByText(`Nothing in this catalog matches “${word}”.`)).toBeVisible();
     const prompt = page.getByRole('region', { name: 'What happened to the short line' });
     await expect(prompt).toHaveCount(0);
+    expect(writes).toHaveLength(width === 1366 ? 0 : 1);
     const original = await positions();
     await field.press('Enter');
     await expect(prompt).toContainText(
@@ -2849,7 +2850,11 @@ test('DEV-1042: unmatched searches leave the bill, totals and keyboard focus in 
     await expect(page.getByText(`Nothing in this catalog matches “${word}”.`)).toBeAttached();
     await expect(prompt).toHaveCount(0);
   }
-  expect(writes).toHaveLength(0);
+  expect(writes).toHaveLength(2);
+  for (const write of writes) {
+    expect(write.url()).toContain('captureDemand');
+    expect(write.postData()).toContain('COUNTER_NO_MATCH_AUTOMATIC');
+  }
 });
 
 for (const [method, detail] of [
