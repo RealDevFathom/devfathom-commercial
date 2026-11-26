@@ -10,7 +10,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
 import {
   receiptDesign,
-  ReceiptDesignSchema,
+  ReceiptDesignForSaveSchema,
   optionalSections,
   textBlocks,
   type ReceiptDesign,
@@ -131,7 +131,7 @@ function Editor({
   const save = trpc.pharmacySales.counterSaveReceiptFormat.useMutation();
   const busy = save.isPending || upload.isPending;
   const disabled = busy || !canSave;
-  const parsed = ReceiptDesignSchema.safeParse(draft);
+  const parsed = ReceiptDesignForSaveSchema.safeParse(draft);
   const dirty = JSON.stringify(receiptDesign(saved.layout)) !== JSON.stringify(draft);
   const conflict = base !== saved.revision;
   const patch = (values: Partial<ReceiptDesign>) => {

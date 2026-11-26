@@ -1,3 +1,4 @@
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { createHash } from 'node:crypto';
 /**
  * Receipt authorization against PostgreSQL as a NOSUPERUSER NOBYPASSRLS role.
@@ -1075,6 +1076,44 @@ describeIfDatabase('receipt design revision and protected facts', () => {
     expect(receipt).toMatchObject({ branchName: 'Counter A', counterLabel: 'Collection counter' });
     expect(JSON.stringify(receipt)).not.toContain(ids.branchA);
   });
+  it.each([
+    'tax invoice',
+    'FBR',
+    'verified',
+    'certified',
+    'approved by',
+    'licensed by',
+    'DRAP approved',
+    'government',
+  ])(
+    'refuses the phrase %s on pharmacy receipt saves, including disguised forms',
+    async (phrase) => {
+      const admin = { id: ids.admin, role: 'ADMIN' as const, organizationId: ids.orgA };
+      const mixed = [...phrase.replaceAll(' ', '')]
+        .map((c, i) => (i % 2 ? c.toUpperCase() : c.toLowerCase()))
+        .join(' . ');
+      const expected = {
+        code: 'BAD_REQUEST',
+        message: `Remove “${phrase}” from the receipt text before saving.`,
+      };
+      for (const field of ['businessText', 'headerText', 'footerText'] as const) {
+        for (const [layout, value] of [
+          [DEFAULT_RECEIPT_LAYOUT, phrase],
+          [receiptDesign(null), mixed],
+        ] as const) {
+          await expect(
+            act(ids.orgA, admin, (api) =>
+              api.counterSaveReceiptFormat({
+                branchId: ids.branchA,
+                revision: 0,
+                layout: { ...layout, [field]: `Our ${value} services` },
+              })
+            )
+          ).rejects.toMatchObject(expected);
+        }
+      }
+    }
+  );
   it('saves only the selected branch, audits the revision, and leaves a recorded sale and its copy state intact', async () => {
     const admin = { id: ids.counterAdmin, role: 'ADMIN' as const, organizationId: ids.orgA };
     const saleId = ids.printableSale;

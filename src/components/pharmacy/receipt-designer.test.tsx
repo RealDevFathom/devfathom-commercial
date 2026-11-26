@@ -101,3 +101,13 @@ it('shows the profile notice only to an administrator whose branch lacks a regis
   expect(screen.queryByText(notice)).not.toBeInTheDocument();
   expect(screen.getByTitle('Sample receipt').getAttribute('srcdoc')).toContain('Market Pharmacy');
 });
+
+it('names a prohibited phrase beside its field before a design can be saved', () => {
+  render(<PharmacyReceiptDesigner canSave />);
+  const header = screen.getByRole('textbox', { name: /^Header$/ });
+  fireEvent.change(header, { target: { value: 'Our F.b R receipt' } });
+  expect(header).toHaveAccessibleDescription('Remove “FBR” from the receipt text before saving.');
+  expect(screen.getByRole('button', { name: 'Save design' })).toBeDisabled();
+  fireEvent.change(header, { target: { value: 'Thank you for visiting.' } });
+  expect(screen.getByRole('button', { name: 'Save design' })).toBeEnabled();
+});

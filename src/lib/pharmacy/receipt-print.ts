@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '@/lib/receipts/configuration';
 import { readReceiptLogo } from './receipt-logo';
 import {
+  receiptClaimIssues,
   receiptDesign,
   safePharmacyLayout,
   SavePharmacyReceiptLayoutSchema,
@@ -217,6 +218,8 @@ export async function savePharmacyReceiptFormat(
 ) {
   const { actorId, ...fields } = request;
   const input = SavePharmacyReceiptLayoutSchema.parse(fields);
+  const [claim] = receiptClaimIssues(input.layout);
+  if (claim) throw new TRPCError({ code: 'BAD_REQUEST', message: claim.message });
   if (input.layout.version === 2 && input.layout.logo) {
     try {
       await readReceiptLogo(

@@ -31,6 +31,39 @@ export const ReceiptDesignSchema = ReceiptLayoutSchema.extend({
   brandingQr: z.object({ url: website }).strict().optional(),
   locale: z.enum(['en', 'ur', 'both']),
 }).strict();
+const prohibitedClaims = [
+  'tax invoice',
+  'FBR',
+  'verified',
+  'certified',
+  'approved by',
+  'licensed by',
+  'DRAP approved',
+  'government',
+] as const;
+
+function claimKey(text: string) {
+  return text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\p{P}\p{S}\p{Cf}]+/gu, '');
+}
+
+export function receiptClaimIssues(layout: Pick<ReceiptDesign, (typeof textBlocks)[number]>) {
+  return textBlocks.flatMap((field) => {
+    const key = claimKey(layout[field]);
+    const phrase = prohibitedClaims.find((candidate) => key.includes(claimKey(candidate)));
+    return phrase
+      ? [{ field, message: `Remove “${phrase}” from the receipt text before saving.` }]
+      : [];
+  });
+}
+
+export const ReceiptDesignForSaveSchema = ReceiptDesignSchema.superRefine((layout, ctx) => {
+  for (const { field, message } of receiptClaimIssues(layout))
+    ctx.addIssue({ code: 'custom', path: [field], message });
+});
+
 export const PharmacyReceiptLayoutSchema = z.discriminatedUnion('version', [
   ReceiptLayoutSchema,
   ReceiptDesignSchema,
