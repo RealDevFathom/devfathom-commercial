@@ -5155,6 +5155,33 @@ describe('DEV-712 the counter advances to a new bill after payment', () => {
     expect(screen.queryByText(/Refresh the counter/)).not.toBeInTheDocument();
   });
 
+  it('DEV-1041: restarts an ordinary scan in the branch unit when another counter closes this bill', async () => {
+    const row = barcodeRow({
+      onHandUnits: 50,
+      unitsPerPack: 10,
+      saleUnits: [
+        { kind: 'STRIP', levelLabel: 'Strip', packLevelId: 'strip', canonicalUnitsPerSaleUnit: 10 },
+        { kind: 'UNIT', levelLabel: 'Unit', packLevelId: 'unit', canonicalUnitsPerSaleUnit: 1 },
+      ],
+    });
+    mocks.searchQuery.mockResolvedValue({ rows: [row], truncated: false });
+    mocks.mutations.addLine!.mockRejectedValueOnce(refused('BAD_REQUEST', 'INVALID_STATE'));
+    mocks.refetch.mockImplementationOnce(async () => {
+      Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
+      return mocks.queries.counterCart;
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F4' });
+    scan();
+    await waitFor(() => expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2));
+    expect(
+      mocks.mutations.addLine.mock.calls.map(([input]) => [input.saleId, input.saleUnit])
+    ).toEqual([
+      ['sale-a', 'STRIP'],
+      ['sale-b', 'UNIT'],
+    ]);
+  });
+
   it('links a loyalty card scanned after payment to a new bill, not the paid one (DEV-748)', async () => {
     openTheDrawer();
     Object.assign(mocks.queries.counterCart!, { data: settled(), isSuccess: true });
@@ -8927,6 +8954,25 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
       expect(startingUnit).toHaveAttribute('aria-checked', 'true');
     }
   );
+
+  it('DEV-1041: changing the branch preference preserves the unit on a bill already open', () => {
+    const settings = (unit: 'UNIT' | 'PACK') =>
+      query({
+        branches: [{ id: 'branch-a', name: 'A', code: 'A', counterDefaultSaleUnit: unit }],
+      });
+    mocks.queries.counterBranches = settings('UNIT');
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    mocks.queries.counterBranches = settings('PACK');
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const addsAs = within(screen.getByRole('radiogroup', { name: 'Adds as' }));
+    expect(addsAs.getByRole('radio', { name: /Unit/ })).toHaveAttribute('aria-checked', 'true');
+    act(() => mocks.searchProps.mock.lastCall![0].onSelect(twoUnitRow()));
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F4' });
+    expect(addsAs.getByRole('radio', { name: /Strip/ })).toHaveAttribute('aria-checked', 'true');
+    expect(mocks.mutations.changeLine).not.toHaveBeenCalled();
+  });
 
   it('adds a pressed result in one step, in the unit chosen under Adds as', async () => {
     mocks.mutations.addLine!.mockResolvedValue({});

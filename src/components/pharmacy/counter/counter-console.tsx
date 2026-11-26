@@ -330,10 +330,23 @@ function hasValidBill(
   );
 }
 
-/**
- * DEV-712: a bill the server will never add another line or payment to. A scan
- * against it opens the next bill instead of failing with INVALID_STATE.
- */
+function counterAddOption(row: CounterSearchRow, kind: SaleUnitKind) {
+  const requested =
+    kind === 'UNIT'
+      ? looseSaleUnitOption(row.saleUnits)
+      : row.saleUnits.find((option) => option.kind === kind);
+  return (
+    requested ??
+    row.saleUnits.reduce<SaleUnitOption | null>(
+      (smallest, option) =>
+        !smallest || option.canonicalUnitsPerSaleUnit < smallest.canonicalUnitsPerSaleUnit
+          ? option
+          : smallest,
+      null
+    )
+  );
+}
+
 function billContents(cart: CounterCart) {
   return JSON.stringify([
     cart.status,
@@ -350,6 +363,10 @@ function billContents(cart: CounterCart) {
   ]);
 }
 
+/**
+ * DEV-712: a bill the server will never add another line or payment to. A scan
+ * against it opens the next bill instead of failing with INVALID_STATE.
+ */
 function billClosed(cart: CounterCart | null | undefined, saleId: string | null): boolean {
   return Boolean(
     saleId && cart?.saleId === saleId && (cart.status === 'COMPLETED' || cart.status === 'VOID')
@@ -1434,26 +1451,15 @@ function ScopedPharmacyCounterConsole({
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const cart = cartQuery.data ?? null;
-  const branchDefault =
-    branches.find((branch) => branch.id === branchId)?.counterDefaultSaleUnit ?? 'UNIT';
+  const configuredBranch = branches.find((branch) => branch.id === branchId);
+  const branchDefault = configuredBranch?.counterDefaultSaleUnit ?? 'UNIT';
+  // Once the branch is known, pin its starting choice for the lifetime of this bill.
+  useEffect(() => {
+    if (saleId && configuredBranch) setAddUnit((current) => current ?? branchDefault);
+  }, [branchDefault, configuredBranch, saleId]);
   const addUnit = billClosed(cart, saleId) ? branchDefault : (billUnit ?? branchDefault);
   const addUnitFor = useCallback(
-    (row: CounterSearchRow) => {
-      const requested =
-        addUnit === 'UNIT'
-          ? looseSaleUnitOption(row.saleUnits)
-          : row.saleUnits.find((option) => option.kind === addUnit);
-      return (
-        requested ??
-        row.saleUnits.reduce<SaleUnitOption | null>(
-          (smallest, option) =>
-            !smallest || option.canonicalUnitsPerSaleUnit < smallest.canonicalUnitsPerSaleUnit
-              ? option
-              : smallest,
-          null
-        )
-      );
-    },
+    (row: CounterSearchRow) => counterAddOption(row, addUnit),
     [addUnit]
   );
   const patient = patientPanelQuery.data ?? null;
@@ -2500,12 +2506,13 @@ function ScopedPharmacyCounterConsole({
         const voucher = heldVoucher;
         let discountApproval: CounterApprovalPin | undefined;
         const attemptKeys: string[] = [];
+        let postedOption = option;
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
             lineSaleId,
             row.medicineId,
-            option.packLevelId,
-            option.kind,
+            postedOption.packLevelId,
+            postedOption.kind,
             units,
             overrideLotId,
             row.labelLot?.inventoryLotId,
@@ -2560,10 +2567,10 @@ function ScopedPharmacyCounterConsole({
                 }
               : {}),
             presentationId: row.presentationId,
-            packLevelId: option.packLevelId,
-            saleUnit: option.kind,
+            packLevelId: postedOption.packLevelId,
+            saleUnit: postedOption.kind,
             quantity: units,
-            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            canonicalUnitsPerSaleUnit: postedOption.canonicalUnitsPerSaleUnit,
             ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
             // Retries keep the key until a confirmed add; the next completed
             // scanner gesture must allocate another item, even for the same code.
@@ -2670,6 +2677,27 @@ function ScopedPharmacyCounterConsole({
           if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
           if (!scanIsCurrent()) return;
           clearBill();
+          if (scannedRow && !scannedPack) {
+            const nextOption = counterAddOption(row, branchDefault);
+            if (nextOption && nextOption.kind !== postedOption.kind) {
+              if (
+                manualDiscount ||
+                voucher ||
+                !counterSelectionPreview(row, nextOption, units)?.sufficient
+              ) {
+                stageRow(row, false);
+                setSaleUnit(nextOption.kind);
+                setQuantityText(String(units));
+                setNotice({
+                  tone: 'warning',
+                  message:
+                    'The previous bill closed. Review the stock and price for this item on the new bill.',
+                });
+                return;
+              }
+              postedOption = nextOption;
+            }
+          }
           startedNextBill = true;
           activeSaleId = await openSale();
           if (!scanIsCurrent()) return;
@@ -2687,7 +2715,7 @@ function ScopedPharmacyCounterConsole({
         lastAddOutcome.current = 'added';
         for (const unit of row.saleUnits)
           knownSaleUnits.current.set(unit.packLevelId, row.saleUnits);
-        catalogueCache.sold(row.medicineId, units * option.canonicalUnitsPerSaleUnit);
+        catalogueCache.sold(row.medicineId, units * postedOption.canonicalUnitsPerSaleUnit);
         await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
@@ -2713,7 +2741,7 @@ function ScopedPharmacyCounterConsole({
             : null;
         setNotice({
           tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName}${unitOption ? ` (${unitOption.levelLabel.toLowerCase()})` : ''} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName}${unitOption ? ` (${postedOption.levelLabel.toLowerCase()})` : ''} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -2759,6 +2787,7 @@ function ScopedPharmacyCounterConsole({
       activeRow,
       addLine,
       addUnitFor,
+      branchDefault,
       heldVoucher,
       heldDiscount,
       catalogueCache,
@@ -4138,6 +4167,7 @@ function ScopedPharmacyCounterConsole({
               ? looseSaleUnitOption(options)
               : (options.find((entry) => entry.kind === kind) ?? null);
           if (option) {
+            setAddUnit(kind);
             setSaleUnit(option.kind);
             return;
           }

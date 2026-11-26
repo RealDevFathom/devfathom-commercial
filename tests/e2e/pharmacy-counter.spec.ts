@@ -740,10 +740,8 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
 
-  // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
-  // with a single match adds one of its first sale unit (scan-to-add, 699d5c1d; pinned by
-  // counter-console.test.tsx "adds a barcode on Enter only when the search returns that
-  // single medicine"). Nothing is added unless the scan matched exactly this medicine.
+  // This receipt includes a whole pack in addition to the two strips.
+  await page.getByLabel('Scan or search').press('F3');
   await scan(page, otc.barcode);
   await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
@@ -2355,6 +2353,7 @@ test.describe('Counter server features', () => {
     await openDrawer(page);
     const { otc, syrup } = PHARMACY_E2E.medicines;
     for (const med of [otc, syrup]) {
+      if (med === syrup) await page.getByLabel('Scan or search').press('F3');
       await search(page, med.name);
       await addFirstResult(page, med.name);
       await expect(billLine(page, med.name)).toBeVisible();
