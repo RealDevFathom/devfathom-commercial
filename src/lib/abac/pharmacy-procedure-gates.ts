@@ -1856,14 +1856,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.anomalySignals': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.branchComparison': {
-    gate: 'reports:operational + requireFinancialReports + role ADMIN',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
@@ -1881,7 +1881,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.categoryGrowth': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
@@ -1928,7 +1928,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.expiryAdvice': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
@@ -1946,21 +1946,21 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.lostSalesRecovery': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/admin-view-repeat-lostsales-packflags',
       'operational-reports/admin-view-repeat-lostsales-packflags',
     ],
   },
   'pharmacyReports.marketing': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.packAuthenticationFlags': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + financialReportFilters (reports:financial) + role ADMIN',
     lines: [
       'financial-reports/admin-view-repeat-lostsales-packflags',
       'operational-reports/admin-view-repeat-lostsales-packflags',
@@ -1978,14 +1978,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['controlled-medicines/review-mark-ready-submit'],
   },
   'pharmacyReports.refreshAnomalies': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + financialReportFilters (reports:financial) + role ADMIN',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.repeatPurchasing': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/admin-view-repeat-lostsales-packflags',
       'operational-reports/admin-view-repeat-lostsales-packflags',

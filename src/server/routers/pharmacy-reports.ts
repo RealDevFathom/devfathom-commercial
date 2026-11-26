@@ -286,11 +286,39 @@ async function requireFinancialReports(ctx: TRPCContext) {
     });
 }
 
-async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
+async function financialReaderBranches(ctx: TRPCContext): Promise<'ALL' | string[]> {
+  const org = ctx.entitlements.organizationId;
+  const user = ctx.session?.user;
+  if (
+    !org ||
+    ctx.organization?.id !== org ||
+    !user?.id ||
+    (user.organizationId && user.organizationId !== org)
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Organization is outside your report scope.',
+    });
+  return user.role === 'ADMIN' ? 'ALL' : assignedRegisterBranchIds(ctx.db, org, user.id);
+}
+
+/** Operational-only readers retain their existing scope. Monetary reports follow admission. */
+async function financeBoundReportBranches(ctx: TRPCContext, branches: 'ALL' | string[]) {
+  const user = ctx.session!.user;
+  if (branches !== 'ALL' || user.role === 'ADMIN') return branches;
+  const subject = subjectFromSession(user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    (await can(subject, 'reports:financial', undefined, options)) ||
+    (await can(subject, 'finance:read', undefined, options))
+  )
+    return financialReaderBranches(ctx);
+  return branches;
+}
+
+async function financialReportFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
   await requireFinancialReports(ctx);
-  const available = await scope(ctx);
-  if (ctx.session!.user.role !== 'ADMIN')
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+  const available = await reportScope(ctx, await financialReaderBranches(ctx));
   const branchIds = input.branchId
     ? [input.branchId]
     : available.branches.map((branch) => branch.id);
@@ -356,7 +384,7 @@ export const pharmacyReportsRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scoped = await ownerFilters(ctx, input);
+      const scoped = await financialReportFilters(ctx, input);
       let period: ReturnType<typeof validatePharmacyReportFilters>;
       try {
         period = validatePharmacyReportFilters(scoped);
@@ -380,7 +408,7 @@ export const pharmacyReportsRouter = router({
   marketing: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {
-      const scoped = await ownerFilters(ctx, input);
+      const scoped = await financialReportFilters(ctx, input);
       try {
         validateMarketingReportFilters(scoped);
       } catch (error) {
@@ -401,7 +429,7 @@ export const pharmacyReportsRouter = router({
   lostSalesRecovery: reports
     .input(filters.pick({ branchId: true, from: true, to: true }))
     .query(async ({ ctx, input }) => {
-      const scoped = await ownerFilters(ctx, input);
+      const scoped = await financialReportFilters(ctx, input);
       try {
         validateMarketingReportFilters(scoped);
       } catch (error) {
@@ -741,7 +769,7 @@ export const pharmacyReportsRouter = router({
       return { branches: [], organizationId };
     // DEV-505: an operational-report holder reads every branch; a Manager only
     // the branches their reports are scoped to.
-    const reportBranches = await pharmacyReportAccess(ctx);
+    const reportBranches = await financeBoundReportBranches(ctx, await pharmacyReportAccess(ctx));
     if (reportBranches === 'ALL' || reportBranches.length) return reportScope(ctx, reportBranches);
     const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, user.id);
     if (!assigned.length) return { branches: [], organizationId };
@@ -956,9 +984,9 @@ export const pharmacyReportsRouter = router({
     )
     .query(async ({ ctx, input }) => {
       await requireFinancialReports(ctx);
-      if (ctx.session!.user.role !== 'ADMIN')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
-      const available = await scope(ctx);
+      const available = await reportScope(ctx, await financialReaderBranches(ctx));
+      if (ctx.session.user.role !== 'ADMIN' && !available.branches.length)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
       // The RSC tenant facade otherwise gives each statement its own transaction, losing
       // the transaction-local branch context before the khata ledger is read.
       return ctx.db.$transaction((tx) =>
@@ -1023,7 +1051,7 @@ export const pharmacyReportsRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scoped = { ...(await ownerFilters(ctx, input)), asOf: input.asOf };
+      const scoped = { ...(await financialReportFilters(ctx, input)), asOf: input.asOf };
       try {
         validateRepeatFilters(scoped, new Date(), ctx.organization?.timezone);
       } catch (error) {
@@ -1040,7 +1068,8 @@ export const pharmacyReportsRouter = router({
       );
     }),
   commandCentre: branchReports.input(filters).query(async ({ ctx, input }) => {
-    const available = await reportScope(ctx, ctx.reportBranches);
+    const reportBranches = await financeBoundReportBranches(ctx, ctx.reportBranches);
+    const available = await reportScope(ctx, reportBranches);
     const branchIds = input.branchId
       ? [input.branchId]
       : available.branches.map((branch) => branch.id);
@@ -1086,7 +1115,7 @@ export const pharmacyReportsRouter = router({
         permissions: { operational: true, financial },
         // DEV-505: the safety queue is counted across the whole organization, so a
         // branch-scoped reader (a Manager) is not shown other branches' activity.
-        metrics: ctx.reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
+        metrics: reportBranches === 'ALL' ? metrics : { ...metrics, safetyQueue: null },
       };
     } catch (error) {
       throw new TRPCError({
@@ -1096,14 +1125,14 @@ export const pharmacyReportsRouter = router({
     }
   }),
   anomalySignals: reports.input(filters).query(async ({ ctx, input }) => {
-    const bounded = await ownerFilters(ctx, input);
+    const bounded = await financialReportFilters(ctx, input);
     return readPharmacyAnomalySignals(ctx.db, {
       ...bounded,
       timeZone: ctx.organization?.timezone,
     });
   }),
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
-    const bounded = await ownerFilters(ctx, input);
+    const bounded = await financialReportFilters(ctx, input);
     return readExpiryAdvice(ctx.db, {
       timeZone: ctx.organization?.timezone,
       organizationId: ctx.entitlements.organizationId,
@@ -1135,7 +1164,9 @@ export const pharmacyReportsRouter = router({
       );
     }),
   packAuthenticationFlags: reports.input(filters).query(async ({ ctx, input }) => {
-    const resolved = await ownerFilters(ctx, input);
+    if (ctx.session.user.role !== 'ADMIN')
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+    const resolved = await financialReportFilters(ctx, input);
     return readPackAuthenticationFlags(ctx.db, resolved.branchIds, {
       organizationId: ctx.entitlements.organizationId,
       ...reportDimensions(input),
@@ -1156,7 +1187,9 @@ export const pharmacyReportsRouter = router({
       return { acknowledged: true };
     }),
   refreshAnomalies: reports.input(filters).mutation(async ({ ctx, input }) => {
-    const bounded = await ownerFilters(ctx, input);
+    if (ctx.session.user.role !== 'ADMIN')
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+    const bounded = await financialReportFilters(ctx, input);
     return refreshPharmacyAnomalySignals(
       ctx.db,
       { ...bounded, timeZone: ctx.organization?.timezone },

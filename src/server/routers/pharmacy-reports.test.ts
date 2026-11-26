@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
-  assignmentFindMany: vi.fn(),
+  assignmentFindMany: vi.fn(async (): Promise<{ branchId: string }[]> => []),
   userFindFirst: vi.fn(),
   userCount: vi.fn(),
   credentialFindFirst: vi.fn(),
@@ -585,6 +585,20 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.comparisonRead).not.toHaveBeenCalled();
   });
 
+  it('compares only assigned branches for a non-administrator with both report permissions', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational' || action === 'reports:financial'
+    );
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'other', name: 'Sibling' },
+    ]);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    await caller('EMPLOYEE').branchComparison({ from: '2026-10-01', to: '2026-10-07' });
+    expect(
+      mocks.comparisonRead.mock.calls[0][1].branches.map((branch: { id: string }) => branch.id)
+    ).toEqual(['branch_1']);
+  });
   it('denies branch comparison to a non-owner even with financial capability', async () => {
     mocks.can.mockResolvedValue(true);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
