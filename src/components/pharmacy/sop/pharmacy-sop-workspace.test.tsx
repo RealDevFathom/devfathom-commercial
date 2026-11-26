@@ -277,10 +277,15 @@ describe('pharmacy procedures workspace', () => {
 
     const timezone = screen.getByRole('combobox', { name: /^Branch timezone/ });
     expect(timezone).toHaveAttribute('data-select-field-trigger');
+    expect(timezone).toHaveAccessibleDescription('Due times and reports use this timezone.');
     expect(timezone).toHaveTextContent('Asia/Karachi');
     timezone.focus();
     fireEvent.keyDown(timezone, { key: 'ArrowDown' });
-    fireEvent.click(await screen.findByRole('option', { name: 'Europe/London' }), { detail: 0 });
+    const london = await screen.findByRole('option', { name: 'Europe/London' });
+    london.focus();
+    fireEvent.keyDown(london, { key: 'Enter' });
+    // jsdom does not synthesize the click a browser sends for Enter.
+    fireEvent.click(london, { detail: 0 });
     await waitFor(() => expect(timezone).toHaveTextContent('Europe/London'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn on procedures' }));
