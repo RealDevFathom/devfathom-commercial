@@ -34,6 +34,8 @@ import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
+import { BusinessChart, reportMoney } from './business-chart';
+
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
 type CommandQuery = {
   data?: {
@@ -45,11 +47,11 @@ type CommandQuery = {
   isLoading: boolean;
   refetch: () => unknown;
 };
-const formatMetric = (key: string, value: number | null) =>
+const formatMetric = (key: string, value: number | null, currency?: string | null) =>
   value == null
     ? '—'
     : key.toLowerCase().includes('minor')
-      ? `PKR ${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+      ? reportMoney(value, currency)
       : value.toLocaleString();
 
 /**
@@ -58,8 +60,10 @@ const formatMetric = (key: string, value: number | null) =>
  * owner reads as "nothing to reorder".
  */
 const UNCALCULATED_METRICS = new Set(['openStockSignals', 'recommendedOrders']);
-const metricValue = (key: string, value: number | null) =>
-  value == null && UNCALCULATED_METRICS.has(key) ? 'Not calculated yet' : formatMetric(key, value);
+const metricValue = (key: string, value: number | null, currency?: string | null) =>
+  value == null && UNCALCULATED_METRICS.has(key)
+    ? 'Not calculated yet'
+    : formatMetric(key, value, currency);
 const metricSub = (key: string, value: number | null, source: string | null | undefined) =>
   value != null
     ? sourceLine(source)
@@ -79,6 +83,7 @@ function WidgetState({
   contracts,
   branchCount,
   metricsReady,
+  currency,
 }: {
   item: (typeof PHARMACY_WIDGET_REGISTRY)[number];
   query: CommandQuery;
@@ -91,6 +96,7 @@ function WidgetState({
   }>;
   branchCount: number;
   metricsReady: boolean;
+  currency?: string | null;
 }) {
   // A command query that is still fetching — or disabled while its branches
   // load — has no data and no error yet. That is a loading state, not a
@@ -151,7 +157,7 @@ function WidgetState({
         <Stat
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
-          value={metricValue(item.metrics[index]!, value)}
+          value={metricValue(item.metrics[index]!, value, currency)}
           sub={metricSub(item.metrics[index]!, value, contract?.source)}
         />
       ))}
@@ -555,7 +561,11 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       ) : (
         <div data-testid="pharmacy-dashboard-grid" className="grid min-w-0 gap-5 lg:grid-cols-2">
           {layout.widgets
-            .filter((item) => item.visible)
+            .filter(
+              (item) =>
+                item.visible &&
+                (item.key !== 'expiry' || command.data?.permissions.financial === true)
+            )
             .map((preference) => {
               const item = definition.get(preference.key)!;
               return (
@@ -586,11 +596,23 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                     }
                   >
                     <p className="mb-4 text-sm text-text-muted">{item.description}</p>
+                    {item.key === 'expiry' && command.data ? (
+                      <BusinessChart
+                        title="Stock expiring from today"
+                        points={[30, 60, 90].map((days) => ({
+                          label: `${days} days`,
+                          value: command.data!.metrics[`expiryValueMinor${days}`] ?? null,
+                        }))}
+                        format={(minor) => reportMoney(minor, catalog.data?.currency)}
+                        empty="No stock expiring in the next 90 days."
+                      />
+                    ) : null}
                     <WidgetState
                       item={item}
                       query={command}
                       contracts={catalog.data?.metrics ?? []}
                       branchCount={branches.data?.branches.length ?? 0}
+                      currency={catalog.data?.currency}
                       metricsReady={Boolean(catalog.data) || Boolean(catalog.error)}
                     />
                     {item.key === 'stock' && procurement ? (

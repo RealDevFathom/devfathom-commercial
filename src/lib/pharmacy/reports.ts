@@ -128,7 +128,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory/expiry?within=30',
-    'reports:operational',
+    'reports:financial',
   ],
   [
     'expiryValueMinor60',
@@ -137,7 +137,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory/expiry?within=60',
-    'reports:operational',
+    'reports:financial',
   ],
   [
     'expiryValueMinor90',
@@ -146,7 +146,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory/expiry?within=90',
-    'reports:operational',
+    'reports:financial',
   ],
   [
     'expiryValueMinor180',
@@ -155,7 +155,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory/expiry?within=180',
-    'reports:operational',
+    'reports:financial',
   ],
   [
     'openRecalls',

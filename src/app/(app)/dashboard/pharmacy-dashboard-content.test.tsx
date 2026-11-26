@@ -390,3 +390,25 @@ it('requests the Karachi business date at 00:30', () => {
     vi.useRealTimers();
   }
 });
+
+it('plots the report’s cumulative expiry values for the next 30, 60 and 90 days', () => {
+  state.catalog = query({
+    metrics: CATALOG_METRICS,
+    currency: 'AED',
+    permissions: { operational: true, financial: true },
+  });
+  state.command = query({
+    freshness: { asOf: '2026-09-04T10:00:00Z', source: 'synthetic ledger' },
+    permissions: { operational: true, financial: true },
+    metrics: { expiryValueMinor30: 1200, expiryValueMinor60: 3400, expiryValueMinor90: 5600 },
+  });
+  render(<PharmacyDashboardContent role="EMPLOYEE" />);
+  const table = screen.getByRole('table', { name: 'Stock expiring from today' });
+  for (const [period, amount] of [
+    ['30 days', 'AED 12.00'],
+    ['60 days', 'AED 34.00'],
+    ['90 days', 'AED 56.00'],
+  ]) {
+    expect(within(table).getByRole('row', { name: `${period} ${amount}` })).toBeInTheDocument();
+  }
+});

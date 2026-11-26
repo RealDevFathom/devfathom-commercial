@@ -909,6 +909,10 @@ export const pharmacyReportsRouter = router({
     }),
   catalog: branchReports.query(async ({ ctx }) => ({
     reports: pharmacyReportCatalog(),
+    currency:
+      ctx.organization?.id === ctx.entitlements.organizationId
+        ? (ctx.organization?.currency ?? null)
+        : null,
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
       operational: true,
@@ -1053,6 +1057,10 @@ export const pharmacyReportsRouter = router({
         ? result.metrics
         : {
             ...result.metrics,
+            expiryValueMinor30: null,
+            expiryValueMinor60: null,
+            expiryValueMinor90: null,
+            expiryValueMinor180: null,
             salesMinor: null,
             marginMinor: null,
             cashMinor: null,
