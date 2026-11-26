@@ -1,6 +1,7 @@
 /** PV boundary and solo-owner approval against PostgreSQL. */
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { expectNoPersistedPin } from '@/lib/test-support/persisted-pin';
 import { Client } from 'pg';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -345,7 +346,7 @@ suite('PV security persistence and compatibility', () => {
           reauthenticatedAt: expect.any(String),
         },
       });
-      expect(JSON.stringify(audit)).not.toContain('1234');
+      expectNoPersistedPin(audit, '1234');
     });
   });
 

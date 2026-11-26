@@ -22,6 +22,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { expectNoPersistedPin } from '@/lib/test-support/persisted-pin';
 import {
   retirePharmacyRegulatoryRules,
   seedPharmacyRegulatoryProfile,
@@ -75,7 +76,7 @@ const run = randomUUID().replaceAll('-', '').slice(0, 10);
 const organizationId = `ct_counter_${run}`;
 const branchMain = `ct_branch_main_${run}`;
 const branchClose = `ct_branch_close_${run}`;
-const branchReview = `ct_branch_review_${run}`;
+let reviewSequence = 0;
 const actorId = `ct-cashier-${run}`;
 /** A counter cashier: takes payments, never resolves a review. */
 const cashierId = `ct-counter-cashier-${run}`;
@@ -308,7 +309,6 @@ beforeAll(async () => {
   businessDate = new Date(`${workspaceToday(organization.timezone)}T00:00:00.000Z`);
   await setupBranch(branchMain);
   await setupBranch(branchClose);
-  await setupBranch(branchReview);
   // The counter cashier, with counter access on the main branch.
   const { seedDepartments } = await import('@/lib/test-support/departments');
   await tenant(async (db) => {
@@ -327,7 +327,6 @@ beforeAll(async () => {
       data: { userId: actorId, capability: 'pharmacy:counter', effect: 'ALLOW', reason: 'DEV-743' },
     });
     await db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchMain } });
-    await db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchReview } });
     // The owner manages the pharmacy (a cashier never does): the refund rule's grant.
     await db.userPermissionOverride.create({
       data: { userId: actorId, capability: 'pharmacy:manage', effect: 'ALLOW', reason: 'DEV-743' },
@@ -656,8 +655,15 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
   }
 
   it('resolves a review exactly once when two resolutions race, and the day closes after', async () => {
+    // Closing the branch day is permanent, so use a fresh branch for each test run.
+    const branchReview = `ct_branch_review_${run}_${++reviewSequence}`;
+    const slipRef = `RRN-${run}-review-${reviewSequence}`;
+    await setupBranch(branchReview);
+    await tenant((db) =>
+      db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchReview } })
+    );
     const reviewScope = scopeOf(branchReview);
-    const { saleId, review } = await chargeIntoReview(branchReview, `RRN-${run}-6`);
+    const { saleId, review } = await chargeIntoReview(branchReview, slipRef);
     // The review holds the business day.
     await expect(
       tenant((db) => settlement.cutPharmacyDailyClose(db, reviewScope, { businessDate }))
@@ -670,7 +676,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
           attemptKey: review.attemptKey,
           outcome: 'REVERSED',
           resolutionReason: reason,
-          slipRef: `RRN-${run}-6`,
+          slipRef,
           managerPin,
         })
       );
@@ -694,8 +700,8 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
     expect(attempt).toMatchObject({
       status: 'REVERSED',
       resolvedById: actorId,
-      resolutionRef: `RRN-${run}-6`,
-      providerRef: `RRN-${run}-6`,
+      resolutionRef: slipRef,
+      providerRef: slipRef,
       tenderId: null,
     });
     // Money taken is recorded for a provider refund, never as a tender on the bill.
@@ -720,7 +726,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         branchId: branchReview,
       }),
     });
-    expect(JSON.stringify(resolutions)).not.toContain(managerPin);
+    expectNoPersistedPin(resolutions, managerPin);
 
     // The sale may take another payment: a new terminal attempt starts, and is declined.
     const terminal = gatedTerminal();

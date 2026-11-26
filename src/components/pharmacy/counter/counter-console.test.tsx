@@ -2265,7 +2265,16 @@ it('DEV-961: asks for an approval code while the authenticator setting is on (th
   expect(screen.queryByLabelText('Approver PIN')).not.toBeInTheDocument();
 });
 
+// Give the device and each command distinct IDs, none of which can contain the PIN.
+function mockFixedCounterIds() {
+  let sequence = 0;
+  vi.spyOn(globalThis.crypto, 'randomUUID').mockImplementation(
+    () => `aaaaaaaa-aaaa-4aaa-aaaa-${String(++sequence).padStart(12, 'a')}`
+  );
+}
+
 it('DEV-290: sends a manager PIN approval with the tender but never stores it', async () => {
+  mockFixedCounterIds();
   mocks.khataAccounts.mockResolvedValue([
     { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
   ]);
@@ -4741,6 +4750,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
     it.each([false, true])(
       'retries exactly the refused pack with a fresh PIN (self: %s)',
       async (self) => {
+        mockFixedCounterIds();
         preparePack();
         mocks.scannedPackApprovers.mockResolvedValue([
           { id: 'staff-manager', name: self ? 'Owner' : 'Manager', self },
