@@ -2,6 +2,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { seedDepartments } from '@/lib/test-support/departments';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
 vi.mock('@/lib/pharmacy/migration/starter-package', () => ({
@@ -19,6 +20,27 @@ vi.mock('@/lib/pharmacy/migration/starter-package', () => ({
     manufacturerLabel: 'QA manufacturer',
   })),
 }));
+
+async function linkAbuzarMedicine(
+  db: ScopedDb,
+  provenance: { batchId: string; editId: string; createdById: string },
+  medicineId: string,
+  sourceKey: string,
+  rowNumber: number
+) {
+  const row = await db.pharmacyMigrationRow.create({
+    data: {
+      batchId: provenance.batchId,
+      sourceKey,
+      rowNumber,
+      rawPayload: {},
+      targetModelKey: 'medicine',
+    },
+  });
+  await db.pharmacyStagedMedicineLink.create({
+    data: { ...provenance, medicineId, sourceKey, rowId: row.id },
+  });
+}
 
 async function snapshot(db: ScopedDb) {
   const tables = [
@@ -62,7 +84,7 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
           await enqueueStarterImport(db, id);
         });
       }
-      const existing = await withTenantDb(b, async (db) => {
+      const { existing, provenance } = await withTenantDb(b, async (db) => {
         const row = await db.medicine.create({
           data: {
             productName: 'QA local edit',
@@ -87,8 +109,56 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
           },
           include: { presentations: { include: { packLevels: true } } },
         });
-        return row;
+        await seedDepartments(db, [b], ['QA']);
+        const actor = await db.user.create({
+          data: { name: 'QA importer', email: b + '@example.test', department: 'QA', title: 'QA' },
+        });
+        const edit = await db.pharmacyCatalogueEdit.create({
+          data: {
+            editorId: actor.id,
+            operation: 'createStagedMedicines',
+            expectedUpdatedAt: new Date(),
+            changes: {},
+          },
+        });
+        const source = await db.pharmacyMigrationSource.create({
+          data: {
+            kind: 'ABUZAR',
+            fileName: 'synthetic.csv',
+            byteSize: BigInt(0),
+            contentHash: '0'.repeat(64),
+          },
+        });
+        const batch = await db.pharmacyMigrationBatch.create({
+          data: { sourceId: source.id, label: 'QA catalogue', profilerVersion: 'QA' },
+        });
+        const provenance = { batchId: batch.id, editId: edit.id, createdById: actor.id };
+        return { existing: row, provenance };
       });
+      // Keep coverage for unbound, exact legacy-code aliases before adding native import links.
+      await expect(
+        withTenantDb(b, async (db) => {
+          await loadStarterBatch(db, b);
+          const identity = await db.pharmacyStarterIdentity.findFirstOrThrow({
+            where: { sourceId: '0000' },
+          });
+          expect(identity.medicineId).toBe(existing.id);
+          throw new Error('Rollback synthetic alias-only match');
+        })
+      ).rejects.toThrow('Rollback synthetic alias-only match');
+      await withTenantDb(b, (db) =>
+        linkAbuzarMedicine(db, provenance, existing.id, 'abuzar-item:0000', 1)
+      );
+      // A literal ICode and its canonical namespaced key must agree on the existing medicine.
+      await expect(
+        withTenantDb(b, async (db) => {
+          const other = await db.medicine.create({
+            data: { productName: 'QA ambiguous identity', productFamily: 'PHARMACEUTICAL' },
+          });
+          await linkAbuzarMedicine(db, provenance, other.id, '0000', 2);
+          await loadStarterBatch(db, b);
+        })
+      ).rejects.toThrow('Ambiguous Abuzar starter identity');
       for (const id of [a, b]) {
         await expect(
           withTenantDb(id, async (db) => {
@@ -113,6 +183,11 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
         expect(await withTenantDb(id, snapshot)).toEqual(before);
       }
       await withTenantDb(b, async (db) => {
+        expect(
+          await db.pharmacyStarterIdentity.findFirstOrThrow({ where: { sourceId: '0000' } })
+        ).toMatchObject({
+          medicineId: existing.id,
+        });
         expect(await db.medicine.findUnique({ where: { id: existing.id } })).toMatchObject({
           productName: 'QA local edit',
           manufacturer: 'QA local label',

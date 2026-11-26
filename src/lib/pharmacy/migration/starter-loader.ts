@@ -29,14 +29,22 @@ async function existingProducts(
   rows: StarterProduct[],
   normalized: (value: string) => string
 ) {
-  // A staged file's row number/code is an Abuzar identity only for the ABUZAR source kind.
+  // Native Abuzar imports qualify each literal ICode; older links can store it bare.
   const sources = await db.$queryRaw<{ sourceId: string; medicineId: string }[]>`
-    SELECT l."sourceKey" AS "sourceId", l."medicineId" FROM pharmacy_staged_medicine_links l
+    SELECT ids."sourceId", l."medicineId"
+    FROM unnest(${rows.map((row) => row.sourceId)}::text[]) AS ids("sourceId")
+    JOIN pharmacy_staged_medicine_links l ON l."organizationId"=${organizationId}
+      AND l."sourceKey" IN (ids."sourceId", 'abuzar-item:' || ids."sourceId")
     JOIN pharmacy_migration_batches b ON b."organizationId"=l."organizationId" AND b.id=l."batchId"
     JOIN pharmacy_migration_sources s ON s."organizationId"=b."organizationId" AND s.id=b."sourceId"
-    WHERE l."organizationId"=${organizationId} AND s.kind='ABUZAR' AND l."medicineId" IS NOT NULL
-      AND l."sourceKey" = ANY(${rows.map((r) => r.sourceId)}::text[])`;
-  const sourceIds = new Map(sources.map((row) => [row.sourceId, row.medicineId]));
+    WHERE s.kind='ABUZAR' AND l."medicineId" IS NOT NULL`;
+  const sourceIds = new Map<string, string>();
+  for (const { sourceId, medicineId } of sources) {
+    const existing = sourceIds.get(sourceId);
+    if (existing !== undefined && existing !== medicineId)
+      throw new Error('Ambiguous Abuzar starter identity.');
+    sourceIds.set(sourceId, medicineId);
+  }
   const codes = rows.flatMap((r) =>
     r.legacyCode && !sourceIds.has(r.sourceId) ? [r.legacyCode] : []
   );
