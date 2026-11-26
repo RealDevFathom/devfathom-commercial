@@ -91,3 +91,18 @@ it('reconciles each source row against persisted opening quantities, values and 
     actualValueMinor: '4400',
   });
 });
+
+it('lists persisted source identities omitted from a later export', async () => {
+  const { reconciliation } = await import('@/lib/pharmacy/migration/abuzar-reconciliation');
+  const data = await readPreparedExport(await syntheticExport());
+  const result = reconciliation(data, 'B1', {
+    products: new Set(['A', 'B', 'C']),
+    stock: new Map([['S9', { units: 5, value: '1000' }]]),
+    balances: new Map(),
+  });
+  expect(result.actual.products).toBe(3);
+  expect(result.actual.stockUnits).toBe('5');
+  expect(result.differences).toContainEqual(
+    expect.objectContaining({ table: 'stock', sourceId: 'S9' })
+  );
+});

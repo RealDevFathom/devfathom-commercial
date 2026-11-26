@@ -10,6 +10,7 @@ type Snapshot = {
   products: Set<string>;
   stock: Map<string, { units: number; value: string }>;
   balances: Map<string, string>;
+  balanceAccounts?: Map<string, string>;
 };
 export function reconciliation(data: Prepared, branch: string, snapshot: Snapshot) {
   const source = new Map(data.tables.products.map((p) => [p.ICode, p]));
@@ -85,6 +86,45 @@ export function reconciliation(data: Prepared, branch: string, snapshot: Snapsho
         actualMinor: String(persisted),
       });
   });
+  for (const id of snapshot.products) {
+    if (source.has(id)) continue;
+    actual.products++;
+    differences.push({
+      table: 'products',
+      sourceId: id,
+      reason: 'persisted product absent from source',
+    });
+  }
+  const sourceStock = new Set(
+    data.tables.stock.filter((s) => s.Branch === branch).map((s) => s.RowID)
+  );
+  for (const [id, posted] of snapshot.stock) {
+    if (sourceStock.has(id)) continue;
+    actual.stockUnits += BigInt(posted.units);
+    actual.stockValueMinor += BigInt(posted.value);
+    differences.push({
+      table: 'stock',
+      sourceId: id,
+      reason: 'persisted opening absent from source',
+      actualUnits: posted.units,
+      actualValueMinor: posted.value,
+    });
+  }
+  const sourceBalances = new Set(
+    data.tables.balances.filter((b) => b.Branch === branch).map((b) => b.RowID)
+  );
+  for (const [id, value] of snapshot.balances) {
+    if (sourceBalances.has(id)) continue;
+    const account = snapshot.balanceAccounts?.get(id);
+    if (account === 'ACCOUNTS_PAYABLE') actual.supplierBalanceMinor += BigInt(value);
+    if (account === 'ACCOUNTS_RECEIVABLE') actual.customerBalanceMinor += BigInt(value);
+    differences.push({
+      table: 'balances',
+      sourceId: id,
+      reason: 'persisted opening absent from source',
+      actualMinor: value,
+    });
+  }
   const display = (t: typeof expected) => ({
     ...t,
     stockUnits: String(t.stockUnits),
@@ -105,7 +145,8 @@ export async function readReconciliation(
     where: {
       organizationId: org,
       medicineId: { not: null },
-      sourceKey: { in: data.tables.products.map((p) => 'abuzar-item:' + p.ICode) },
+      sourceKey: { startsWith: 'abuzar-item:' },
+      batch: { profilerVersion: 'abuzar/2', source: { kind: 'ABUZAR' } },
     },
     select: { sourceKey: true },
   });
@@ -117,13 +158,14 @@ export async function readReconciliation(
     LEFT JOIN pharmacy_stock_movements m ON m."organizationId"=l."organizationId" AND m.id=l."postedMovementId"
     WHERE a."organizationId"=${org} AND a."branchId"=${branchId} AND a."sourceBranch"=${sourceBranch}`;
   const balances = await db.$queryRaw<
-    { sourceId: string; value: string }[]
-  >`SELECT a."sourceId",(CASE WHEN e.account='ACCOUNTS_PAYABLE' THEN -e."balanceMinor" ELSE e."balanceMinor" END)::text AS value
+    { sourceId: string; value: string; account: string }[]
+  >`SELECT a."sourceId",e.account::text AS account,(CASE WHEN e.account='ACCOUNTS_PAYABLE' THEN -e."balanceMinor" ELSE e."balanceMinor" END)::text AS value
     FROM pharmacy_abuzar_openings a JOIN pharmacy_opening_ledger_entries e ON e."organizationId"=a."organizationId" AND e.id=a."ledgerEntryId"
     WHERE a."organizationId"=${org} AND a."branchId"=${branchId} AND a."sourceBranch"=${sourceBranch}`;
   return reconciliation(data, sourceBranch, {
     products: new Set(products.map((p) => p.sourceKey.slice('abuzar-item:'.length))),
     stock: new Map(stock.map((s) => [s.sourceId, s])),
     balances: new Map(balances.map((b) => [b.sourceId, b.value])),
+    balanceAccounts: new Map(balances.map((b) => [b.sourceId, b.account])),
   });
 }
