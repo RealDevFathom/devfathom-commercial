@@ -172,7 +172,7 @@ export async function readVisualChart(
   return {
     period,
     excludedLines: number(
-      data[0]?.periodExcluded ?? rows.reduce((sum, row) => sum + row.excluded, 0n)
+      data[0]?.periodExcluded ?? rows.reduce((sum, row) => sum + row.excluded, BigInt(0))
     ),
     postedCurrencies: [...new Set(data.flatMap((row) => row.currencies ?? []))].sort(),
     more: drill && rows.length > 50,
