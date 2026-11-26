@@ -492,6 +492,51 @@ describeIfDatabase('DEV-1052 only safety staff release a safety quarantine', () 
     expect(await units(at)).toEqual({ saleable: 20, held: 0 });
   });
 
+  it('lets only one of two simultaneous inventory releases take the inventory-held units', async () => {
+    const at = await stock('race', 20);
+    await safetyHold(at, 5);
+    await inventoryHold(at, 5);
+    expect(await units(at)).toEqual({ saleable: 10, held: 10 });
+
+    // Two requests at once, each asking for all five inventory-held units.
+    const outcomes = await Promise.all(
+      [tag('race-a'), tag('race-b')].map((key) =>
+        refusal(clerk, (api) => api.releaseQuarantinedPart(release(at, 5, key)))
+      )
+    );
+    expect(outcomes.filter((outcome) => 'resolved' in outcome)).toEqual([{ resolved: true }]);
+    // The loser finds only safety-held units left, and is refused them.
+    expect(outcomes.filter((outcome) => !('resolved' in outcome))).toEqual([SAFETY_HOLD]);
+
+    // The five safety-held units never left quarantine.
+    expect(await units(at)).toEqual({ saleable: 15, held: 5 });
+    const released = (await entries(at)).filter((entry) => entry.origin === 'RELEASE');
+    expect(released).toEqual([
+      expect.objectContaining({ authority: 'INVENTORY', quantityUnits: -5, actorId: ids.clerk }),
+    ]);
+    const held = (authority: string) =>
+      entries(at).then((rows) =>
+        rows
+          .filter((entry) => entry.authority === authority)
+          .reduce((sum, entry) => sum + entry.quantityUnits, 0)
+      );
+    expect(await held('SAFETY')).toBe(5);
+    expect(await held('INVENTORY')).toBe(0);
+    // No balance of this lot went below zero.
+    const balances = await withTenantDb(ids.orgA, (db) =>
+      db.pharmacyStockBalance.findMany({
+        where: { organizationId: ids.orgA, inventoryLotId: at.lotId },
+        select: { disposition: true, onHandUnits: true },
+      })
+    );
+    expect(balances.length).toBeGreaterThan(0);
+    for (const balance of balances) expect(balance.onHandUnits).toBeGreaterThanOrEqual(0);
+
+    // The safety officer can still release what safety held.
+    await act(officer, (api) => api.releaseSafetyQuarantine(release(at, 5)));
+    expect(await units(at)).toEqual({ saleable: 20, held: 0 });
+  });
+
   it('records both authorities when someone holding both permissions releases a mixed lot', async () => {
     const at = await stock('mixed-both', 20);
     await safetyHold(at, 6);
@@ -547,7 +592,7 @@ describeIfDatabase('DEV-1052 only safety staff release a safety quarantine', () 
       const sql = readFileSync(
         join(
           process.cwd(),
-          'prisma/migrations/20261127060000_pharmacy_quarantine_hold_entries/migration.sql'
+          'prisma/migrations/20261126010110_pharmacy_quarantine_hold_entries/migration.sql'
         ),
         'utf8'
       );
