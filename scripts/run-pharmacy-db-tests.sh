@@ -1,18 +1,34 @@
 #!/usr/bin/env bash
-# Runs every pharmacy *.db.test.ts file, one file at a time, against ONE migrated
-# disposable PostgreSQL database. Setup and roles: docs/LOCAL_SETUP.md,
+# Runs every tracked pharmacy *.db.test.ts file, one file at a time, against a
+# migrated disposable PostgreSQL database plus two newly provisioned isolated databases.
+# Setup and roles: docs/LOCAL_SETUP.md,
 # "Running all pharmacy database suites". Local use only; not part of CI.
 #
 #   PHARMACY_DB_TEST_RUNTIME_URL    NOSUPERUSER NOBYPASSRLS NOCREATEROLE runtime (read/write grants)
 #   PHARMACY_DB_TEST_OWNER_URL      NOSUPERUSER NOBYPASSRLS CREATEROLE role that owns the
 #                                   database and ran the migrations
-#   PHARMACY_DB_TEST_SUPERUSER_URL  superuser; only the SOP suites' cleanup uses it
+#   PHARMACY_DB_TEST_SUPERUSER_URL  superuser for isolated database creation and existing
+#                                   suites' fixture setup/cleanup, never their runtime
 #   PHARMACY_DB_TEST_COHORT_URL     SELECT-only role for repeat-purchasing.db.test.ts;
 #                                   repeat-purchasing.fixture.sql must already be loaded
 #
 # All four must point at the same local database, whose name contains test, e2e, tmp or
 # disposable as a separate word (for example devfathom_pharmacy_test). Extra arguments go
 # to vitest, e.g. --reporter=verbose.
+#
+# The only intentionally gated pharmacy database cases are the DEV-293 upgrade
+# cases in src/lib/pharmacy/goods-receipt.db.test.ts. They require both pre- and
+# post-migration states and a handoff fixture from scripts/qa/controlled-supplier-return-upgrade.sh.
+#
+# Other PostgreSQL checks stay in their existing lanes, outside this *.db.test.ts runner:
+# - tests/pharmacy-medicine-rls.test.ts: the standalone RLS lane delegates the exact
+#   pg_trgm search function to its throwaway test role (see docs/LOCAL_SETUP.md).
+# - tests/pharmacy-price-intelligence.integration.test.ts: the reserved lane needs a
+#   seeded database, the wha1606_runtime role and its reserved port range.
+# - src/lib/pharmacy/accounts/fiscal-exceptions.reader.test.ts: combined unit and
+#   opt-in PostgreSQL coverage, run as a file with TEST_DATABASE_URL.
+# - src/app/(app)/pharmacy/accounts/journal-evidence-export/page.db.test.tsx:
+#   a TSX route integration suite, run as a file with TEST_DATABASE_URL.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -79,6 +95,82 @@ fi
 runtime="$PHARMACY_DB_TEST_RUNTIME_URL"
 owner="$PHARMACY_DB_TEST_OWNER_URL"
 
+# Do not clone the shared database: these suites need fresh fixtures, without any
+# rows from other suites. Never reuse or reset an existing database.
+isolated_suffix="$(openssl rand -hex 8)"
+receipt_database="wha1364_receipt_test_${isolated_suffix}"
+returns_database="pharmacy_returns_disposable_${isolated_suffix}"
+receipt_file=src/lib/pharmacy/receipt-identity.db.test.ts
+returns_file=src/lib/pharmacy/settlement.returns.db.test.ts
+
+database_url() {
+  bun -e 'const url = new URL(process.argv[1]); url.pathname = "/" + process.argv[2]; console.log(url.href);' "$1" "$2"
+}
+
+database_role() {
+  bun -e '
+import pg from "pg";
+const [url, kind] = process.argv.slice(1);
+const client = new pg.Client({ connectionString: url });
+try {
+  await client.connect();
+  const { rows: [role] } = await client.query(
+    "SELECT rolname, rolsuper, rolbypassrls, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = current_user"
+  );
+  if (!role || role.rolsuper || role.rolbypassrls || role.rolcreatedb ||
+      role.rolcreaterole !== (kind === "owner")) {
+    throw new Error(`Use the restricted ${kind} role documented in docs/LOCAL_SETUP.md.`);
+  }
+  console.log(role.rolname);
+} finally {
+  await client.end();
+}
+' "$1" "$2"
+}
+
+owner_role="$(database_role "$owner" owner)"
+runtime_role="$(database_role "$runtime" runtime)"
+
+isolated_database_sql() {
+  bun -e '
+import pg from "pg";
+const [url, phase, name, ownerRole, runtimeRole] = process.argv.slice(1);
+const database = pg.escapeIdentifier(name);
+const owner = pg.escapeIdentifier(ownerRole);
+const runtime = pg.escapeIdentifier(runtimeRole);
+const client = new pg.Client({ connectionString: url });
+try {
+  await client.connect();
+  if (phase === "create") {
+    await client.query(`CREATE DATABASE ${database} OWNER ${owner} TEMPLATE template0`);
+    await client.query(`REVOKE ALL ON DATABASE ${database} FROM PUBLIC`);
+    await client.query(`GRANT CONNECT, TEMPORARY ON DATABASE ${database} TO ${runtime}`);
+  } else {
+    await client.query(`GRANT USAGE ON SCHEMA public TO ${runtime}`);
+    await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${runtime}`);
+    await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${runtime}`);
+  }
+} finally {
+  await client.end();
+}
+' "$1" "$2" "$3" "$owner_role" "$runtime_role"
+}
+
+setup_isolated_database() {
+  local name="$1" isolated_owner
+  isolated_owner="$(database_url "$owner" "$name")"
+  echo "Provisioning isolated pharmacy test database $name" >&2
+  isolated_database_sql "$PHARMACY_DB_TEST_SUPERUSER_URL" create "$name"
+  EXTENSION_ADMIN_DATABASE_URL="$isolated_owner" bun prisma/prepare-extensions.ts
+  DATABASE_URL="$isolated_owner" MIGRATION_DATABASE_URL="$isolated_owner" bunx prisma migrate deploy
+  isolated_database_sql "$isolated_owner" grant "$name"
+}
+
+setup_isolated_database "$receipt_database"
+setup_isolated_database "$returns_database"
+receipt_runtime="$(database_url "$runtime" "$receipt_database")"
+returns_runtime="$(database_url "$runtime" "$returns_database")"
+
 # Restricted runtime connections.
 export TEST_DATABASE_URL="$runtime" DATABASE_URL="$runtime"
 export M8_TEST_RUNTIME_DATABASE_URL="$runtime" PHARMACY_SOP_TEST_RUNTIME_DATABASE_URL="$runtime"
@@ -103,10 +195,20 @@ admin_files=(
   src/lib/pharmacy/whatsapp/khata-reminder-rollout.db.test.ts
   src/lib/pharmacy/whatsapp/message-log.db.test.ts
 )
-mapfile -t files < <(git ls-files '*.db.test.ts' | grep -i pharmacy | grep -vxF -f <(printf '%s\n' "${admin_files[@]}") | sort)
-echo "Running $((${#files[@]} + ${#admin_files[@]})) pharmacy database suites against $host port $port, database $database" >&2
+isolated_files=("$receipt_file" "$returns_file")
+mapfile -t files < <(git ls-files '*.db.test.ts' | grep -i pharmacy | grep -vxF -f <(printf '%s\n' "${admin_files[@]}" "${isolated_files[@]}") | sort)
 
 status=0
+# Keep the same isolated databases for both passes to catch cross-run fixture leaks.
+for pass in 1 2; do
+  echo "Receipt identity pass $pass/2 on $receipt_database" >&2
+  DATABASE_URL="$receipt_runtime" WHA1364_RECEIPT_TEST_DATABASE_URL="$receipt_runtime" \
+    bunx vitest run --no-file-parallelism "$@" "$receipt_file" || status=$?
+  echo "Settlement returns pass $pass/2 on $returns_database" >&2
+  DATABASE_URL="$returns_runtime" PHARMACY_E2E=1 PHARMACY_E2E_DATABASE_URL="$returns_runtime" \
+    bunx vitest run --no-file-parallelism "$@" "$returns_file" || status=$?
+done
+echo "Running $((${#files[@]} + ${#admin_files[@]})) pharmacy database suites against $host port $port, database $database" >&2
 bunx vitest run --no-file-parallelism "$@" "${files[@]}" || status=$?
 DATABASE_URL="$owner" bunx vitest run --no-file-parallelism "$@" "${admin_files[@]}" || status=$?
 exit "$status"
