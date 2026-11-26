@@ -314,8 +314,12 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
-      const existing = await ctx.db.client.findUnique({ where: { id }, select: { id: true } });
+      const existing = await ctx.db.client.findUnique({
+        where: { id },
+        select: { id: true, logo: true },
+      });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Client not found' });
+      if (data.logo === existing.logo) delete data.logo;
       if (!data.logo) return ctx.db.client.update({ where: { id }, data });
       return ctx.db.$transaction(async (tx) => {
         await claimUploadOrThrow(tx, data.logo, ctx.session.user.id, { type: 'CLIENT_LOGO', id });

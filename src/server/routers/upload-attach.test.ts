@@ -47,7 +47,7 @@ function makeDb() {
     projectFile: { create: vi.fn(async ({ data }) => ({ id: 'pf_new', ...data })) },
     taskAttachment: { create: vi.fn(async ({ data }) => ({ id: 'ta_new', ...data })) },
     client: {
-      findUnique: vi.fn(async () => ({ id: 'client_1' })),
+      findUnique: vi.fn(async () => ({ id: 'client_1', logo: '/api/files/legacy.png' })),
       update: vi.fn(async () => ({ id: 'client_1' })),
       findMany: vi.fn(async () => [{ id: 'client_1' }]),
     },
@@ -197,4 +197,15 @@ it('claims the logo image inside the client update transaction', async () => {
     data: { ownerType: 'CLIENT_LOGO', ownerId: 'client_1', boundAt: expect.any(Date) },
   });
   expect(db.client.update).toHaveBeenCalledOnce();
+});
+
+it('edits a client when the form resends its unclaimable stored logo', async () => {
+  await clientsRouter
+    .createCaller(context('ADMIN'))
+    .update({ id: 'client_1', name: 'Updated', logo: '/api/files/legacy.png' });
+  expect(db.uploadedFile.findFirst).not.toHaveBeenCalled();
+  expect(db.client.update).toHaveBeenCalledWith({
+    where: { id: 'client_1' },
+    data: { name: 'Updated' },
+  });
 });
