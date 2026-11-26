@@ -43,7 +43,9 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
         await db.pharmacyBranch.create({
           data: { id, name: id, code: id, addressLine: 'Test', city: 'Lahore', provinceCode: 'PB' },
         });
-        const seeded = await seedVisualReport(db, id, id, day, 50, id === branch ? 1048 : null);
+        const seeded = await seedVisualReport(db, id, id, day, {
+          receiptNumber: id === branch ? 1048 : null,
+        });
         if (id === branch) medicine = seeded.medicine;
       }
     });
@@ -93,7 +95,7 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
       await db.pharmacyBranch.create({
         data: { id, code: id, name: id, addressLine: 'Test', city: 'Lahore', provinceCode: 'PB' },
       });
-      await seedVisualReport(db, id, id, day, 0);
+      await seedVisualReport(db, id, id, day, { cost: 0 });
       await expectPostedMargin(db, id, day, 810, 1);
     });
   });
@@ -185,7 +187,7 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
       const meds: string[] = [];
       for (let n = 0; n < 12; n++) {
         const name = 'Rank ' + String(n).padStart(2, '0');
-        const { medicine } = await seedVisualReport(db, id, id + '_' + n, day, 5 + n);
+        const { medicine } = await seedVisualReport(db, id, id + '_' + n, day, { cost: 5 + n });
         await db.medicine.update({ where: { id: medicine }, data: { productName: name } });
         meds.push(medicine);
       }
@@ -202,6 +204,104 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
         expect(report.rows.map((row) => row.key)).toEqual(expected);
         if (chart !== 'returnMedicine')
           expect(report).toMatchObject({ excludedLines: 12, postedCurrencies: ['PKR'] });
+      }
+    });
+  });
+  it('reconciles a cash and card split with the shift tender breakdown', async () => {
+    await scoped.withTenantDb(org, async (db) => {
+      const date = '2026-12-07',
+        id = org + '_split';
+      await db.pharmacyBranch.create({
+        data: { id, name: id, code: id, addressLine: 'Test', city: 'Lahore', provinceCode: 'PB' },
+      });
+      const { sale } = await seedVisualReport(db, id, id, date, { cashMinor: 350 });
+      const tenders = await db.pharmacyTender.findMany({ where: { branchId: id, saleId: sale } });
+      const shift = computeCashShiftFigures({
+        openingFloatMinor: 0,
+        tenders,
+        refunds: [],
+        movements: [],
+      });
+      const report = await readVisualChart(db, [{ id }], 'Asia/Karachi', {
+        chart: 'salesPayment',
+        preset: 'custom',
+        custom: { from: date, to: date },
+      });
+      const result = Object.fromEntries(report.rows.map((row) => [row.key, row.value]));
+      expect(result).toEqual({ CASH: 350, CARD: 550 });
+      expect(result).toEqual(
+        Object.fromEntries(shift.tenders.map((row) => [row.type, row.amountMinor]))
+      );
+    });
+  });
+
+  it('reconciles two branches across their different business-day cutoffs', async () => {
+    await scoped.withTenantDb(org, async (db) => {
+      const first = org + '_late',
+        other = org + '_midnight',
+        earlier = '2026-12-02',
+        later = '2026-12-03';
+      const at = new Date('2026-12-02T23:30:00Z'); // 04:30 locally on December 3.
+      const scope = await Promise.all(
+        (
+          [
+            [first, 5],
+            [other, 0],
+          ] as const
+        ).map(([id, hour]) =>
+          db.pharmacyBranch.create({
+            data: {
+              id,
+              code: id,
+              name: id,
+              addressLine: 'Test',
+              city: 'Lahore',
+              provinceCode: 'PB',
+              businessDayEndsAtHistory: [{ from: '2026-01-01', hour }],
+            },
+            select: { id: true, businessDayEndsAtHistory: true },
+          })
+        )
+      );
+      await seedVisualReport(db, first, first + '_cutoff', earlier, { at });
+      await seedVisualReport(db, other, other + '_cutoff', later, { at, cost: 20 });
+      await seedVisualReport(db, other, other + '_midday', earlier, { cost: 30 });
+      for (const [date, expected] of [
+        [earlier, 900],
+        [later, 630],
+      ] as const) {
+        const period = { from: date, to: date };
+        const command = await readPharmacyOwnerCommandCentre(db, {
+          ...period,
+          branchIds: scope.map((b) => b.id),
+          dayEnds: Object.fromEntries(scope.map((b) => [b.id, b.businessDayEndsAtHistory])),
+          timeZone: 'Asia/Karachi',
+        });
+        const report = await readVisualChart(db, scope, 'Asia/Karachi', {
+          chart: 'profitDay',
+          preset: 'custom',
+          custom: period,
+        });
+        let ledgerTotal = 0;
+        for (const b of scope) {
+          const postings = await grossMargin(
+            db,
+            { organizationId: org, branchId: b.id },
+            {
+              ...pharmacyBusinessDayRange(date, date, {
+                timeZone: 'Asia/Karachi',
+                dayEnd: b.businessDayEndsAtHistory,
+              }),
+              by: 'product',
+            }
+          );
+          ledgerTotal += postings.reduce((sum, row) => sum + row.grossMarginMinor, 0);
+        }
+        expect(command.metrics.marginMinor).toBe(expected);
+        expect(ledgerTotal).toBe(expected);
+        expect(report.rows).toMatchObject([
+          { key: date, amount: ledgerTotal, value: command.metrics.marginMinor },
+        ]);
       }
     });
   });

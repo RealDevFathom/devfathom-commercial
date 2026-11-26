@@ -6,11 +6,15 @@ export async function seedVisualReport(
   branch: string,
   prefix: string,
   day: string,
-  cost = 50,
-  receiptNumber: number | null = null
+  options: { cost?: number; receiptNumber?: number | null; at?: Date; cashMinor?: number } = {}
 ) {
   const id = (suffix: string) => prefix + '_' + suffix;
-  const at = new Date(day + 'T12:00:00Z');
+  const {
+    cost = 50,
+    receiptNumber = null,
+    at = new Date(day + 'T12:00:00Z'),
+    cashMinor = 0,
+  } = options;
   const businessDate = new Date(day + 'T00:00:00Z');
   const medicine = await db.medicine.create({
     data: { id: id('medicine'), productName: 'Sample tablets', productFamily: 'PHARMACEUTICAL' },
@@ -99,13 +103,27 @@ export async function seedVisualReport(
       branchId: branch,
       saleId: sale.id,
       type: 'CARD',
-      amountMinor: 900,
+      amountMinor: 900 - cashMinor,
       businessDate,
       actorId: 'sample-cashier',
       deviceId: prefix,
       createdAt: at,
     },
   });
+  if (cashMinor) {
+    await db.pharmacyTender.create({
+      data: {
+        branchId: branch,
+        saleId: sale.id,
+        type: 'CASH',
+        amountMinor: cashMinor,
+        businessDate,
+        actorId: 'sample-cashier',
+        deviceId: prefix,
+        createdAt: at,
+      },
+    });
+  }
   await db.pharmacyRefund.create({
     data: {
       branchId: branch,
