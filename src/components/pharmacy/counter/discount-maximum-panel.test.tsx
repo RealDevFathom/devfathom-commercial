@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => ({ data: { required: false } }) } },
     pharmacySales: {
       discountMaximum: { useQuery: () => mocks.query },
       saveDiscountMaximum: {

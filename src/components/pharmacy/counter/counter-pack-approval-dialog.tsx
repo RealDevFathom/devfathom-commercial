@@ -1,6 +1,5 @@
 'use client';
 
-import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -16,6 +15,7 @@ import {
   ApprovalFallback,
   ApprovalNames,
   useApprovalEntry,
+  UnavailableCounterApprover,
   type ApprovalEntry,
 } from './counter-approval-entry';
 import { useCounterApprovalCopy } from './counter-approval-copy';
@@ -139,10 +139,7 @@ export function CounterPackApprovalDialog({
                 <p role="status">Loading approvers…</p>
               ) : rows.length === 0 ? (
                 <p role="status">
-                  {pharmacist
-                    ? 'No pharmacist is available to approve this batch.'
-                    : 'No manager or owner has an active staff PIN. A manager or owner creates their own under Settings, Your PIN.'}{' '}
-                  <OwnPinLink />
+                  <UnavailableCounterApprover pharmacist={pharmacist} />
                 </p>
               ) : null}
             </ApprovalNames>

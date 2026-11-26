@@ -1591,6 +1591,33 @@ export async function allocateSettledCounterReceiptPrintJob(
   };
 }
 
+async function confirmOwnerDiscountSetting(
+  db: ScopedDb,
+  scope: LedgerScope,
+  pin: string,
+  action: 'pharmacy.maxDiscount' | 'pharmacy.billDiscount'
+) {
+  const result = pin
+    ? await verifyOwnerExportPin({ organizationId: scope.organizationId, userId: scope.actorId, pin, action })
+    : 'EMPTY';
+  if (result === 'OK') return;
+  const mode = await approvalSecretKindFor(db, scope.organizationId);
+  const method = mode === 'CODE' ? 'authenticator code' : 'PIN';
+  if (result === 'EMPTY')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: `Enter your own ${method} to confirm.` });
+  if (result === 'NO_PIN')
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: mode === 'CODE' ? APPROVAL_AUTHENTICATOR_SETUP_MESSAGE : NO_PIN_SET_MESSAGE,
+    });
+  if (result === 'LOCKED')
+    throw new TRPCError({
+      code: 'TOO_MANY_REQUESTS',
+      message: `Your ${method} is locked after too many wrong tries. Wait and try again.`,
+    });
+  throw new TRPCError({ code: 'FORBIDDEN', message: `That ${method} is not correct.` });
+}
+
 export const pharmacySalesRouter = router({
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))
@@ -1686,24 +1713,7 @@ export const pharmacySalesRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
       if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
         throw new TRPCError({ code: 'FORBIDDEN', message: MAX_DISCOUNT_CHANGE_REFUSED });
-      if (!input.pin)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
-      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
-      const pin = await verifyOwnerExportPin({
-        organizationId: scope.organizationId,
-        userId: scope.actorId,
-        pin: input.pin,
-        action: 'pharmacy.maxDiscount',
-      });
-      if (pin === 'NO_PIN')
-        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
-      if (pin === 'LOCKED')
-        throw new TRPCError({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
-        });
-      if (pin !== 'OK')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      await confirmOwnerDiscountSetting(ctx.db, scope, input.pin, 'pharmacy.maxDiscount');
       const saved = await ctx.db.$transaction((tx) =>
         saveMaxDiscountBps(txDb(tx), scope, input.maxDiscountBps)
       );
@@ -2914,24 +2924,7 @@ export const pharmacySalesRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
       if (!(await readMaxDiscountSettings(ctx.db, scope)).canChange)
         throw new TRPCError({ code: 'FORBIDDEN', message: BILL_DISCOUNT_CHANGE_REFUSED });
-      if (!input.pin)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Enter your own PIN to confirm.' });
-      // Its own tenant transaction, so a wrong-PIN strike commits even though we refuse.
-      const pin = await verifyOwnerExportPin({
-        organizationId: scope.organizationId,
-        userId: scope.actorId,
-        pin: input.pin,
-        action: 'pharmacy.billDiscount',
-      });
-      if (pin === 'NO_PIN')
-        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: NO_PIN_SET_MESSAGE });
-      if (pin === 'LOCKED')
-        throw new TRPCError({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
-        });
-      if (pin !== 'OK')
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'That PIN is not correct.' });
+      await confirmOwnerDiscountSetting(ctx.db, scope, input.pin, 'pharmacy.billDiscount');
       const saved = await ctx.db.$transaction((tx) =>
         saveBillDiscountEnabled(txDb(tx), scope, input.enabled)
       );

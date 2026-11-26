@@ -18,6 +18,7 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 vi.mock('@/lib/approval-authenticator', async () => {
   const { verifyOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
   return {
+    approvalSecretKindFor: vi.fn(async () => 'PIN'),
     verifyApprovalSecret: async (
       _db: unknown,
       input: { secret: string; credentialHash: string }

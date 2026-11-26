@@ -1,6 +1,6 @@
 'use client';
 
-import { OwnPinLink, PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
+import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { PHARMACY_COPY as copy } from '@/lib/pharmacy/plain-language';
 import { forwardRef, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
@@ -12,6 +12,7 @@ import {
   ApprovalFallback,
   ApprovalNames,
   useApprovalEntry,
+  UnavailableCounterApprover,
   type ApprovalEntry,
 } from './counter-approval-entry';
 import { useCounterApprovalCopy } from './counter-approval-copy';
@@ -1378,8 +1379,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                               <p role="status">Loading approvers…</p>
                             ) : approvers.length === 0 ? (
                               <p role="status">
-                                No manager or owner has an active staff PIN. A manager or owner
-                                creates their own under Settings, Your PIN. <OwnPinLink />
+                                <UnavailableCounterApprover />
                               </p>
                             ) : null}
                           </ApprovalNames>

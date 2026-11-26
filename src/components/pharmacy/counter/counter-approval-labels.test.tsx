@@ -53,14 +53,14 @@ describe('DEV-961 counter approval fields follow the authenticator setting', () 
     'ask for the approver’s current app code while it is on (provider: %s)',
     async (kind) => {
       inMode(kind, packDialog);
-      const input = await screen.findByLabelText('Approval code');
+      const input = await screen.findByLabelText('Authenticator code');
       expect(input).toHaveAccessibleDescription(/6-digit code from their authenticator app/);
       expect(screen.getByRole('dialog')).toHaveAccessibleDescription(/current authenticator code/);
       expect(input).toHaveAccessibleDescription(/no login enters their PIN/);
       cleanup();
       inMode(kind, discard);
       fireEvent.click(screen.getByRole('button', { name: /discard this attempt/i }));
-      expect(await screen.findByLabelText('Approval code')).toHaveAccessibleDescription(
+      expect(await screen.findByLabelText('Authenticator code')).toHaveAccessibleDescription(
         /6-digit code/
       );
     }
@@ -90,11 +90,11 @@ describe('DEV-961 the discount sheet says how a manager or owner approves', () =
       onClear={vi.fn()}
     />
   );
-  it.each([null, 'CODE'] as const)('with their approval code while it is on (%s)', (kind) => {
+  it.each([null, 'CODE'] as const)('with their authenticator code while it is on (%s)', (kind) => {
     inMode(kind, entry);
     fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
     expect(
-      screen.getByText(/a manager or owner approves with their approval code when you add the item/)
+      screen.getByText(/a manager or owner approves with their authenticator code when you add the item/)
     ).toBeInTheDocument();
   });
   it('with their PIN while the owner has it off', () => {
@@ -131,7 +131,7 @@ it.each([
       </ApprovalSecretKindContext.Provider>
     </CounterSessionContext.Provider>
   );
-  const input = screen.getByLabelText(mode === 'CODE' ? 'Approval code' : 'Approver PIN');
+  const input = screen.getByLabelText(mode === 'CODE' ? 'Authenticator code' : 'Approver PIN');
   if (codeFirst) {
     expect(screen.queryByLabelText('Approving manager or owner')).toBeNull();
     fireEvent.change(input, { target: { value: '1234' } });
@@ -165,7 +165,7 @@ it('offers only the returned names after a collision and requires an explicit ch
   );
   fireEvent.click(screen.getByRole('button', { name: /discard this attempt/i }));
   fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Fixture reason' } });
-  fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '123456' } });
+  fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '123456' } });
   const submit = screen.getByRole('button', { name: 'Discard payment attempt' });
   fireEvent.click(submit);
   expect(onDiscard).toHaveBeenCalledExactlyOnceWith({ pin: '123456', reason: 'Fixture reason' });
@@ -173,9 +173,9 @@ it('offers only the returned names after a collision and requires an explicit ch
   expect(screen.queryByRole('option', { name: 'Blair' })).toBeNull();
   expect(screen.getByLabelText('Approving manager or owner')).toHaveValue('');
   expect(submit).toBeDisabled();
-  expect(screen.getByLabelText('Approval code')).toHaveValue('');
+  expect(screen.getByLabelText('Authenticator code')).toHaveValue('');
   fireEvent.change(screen.getByLabelText('Approving manager or owner'), { target: { value: 'c' } });
-  fireEvent.change(screen.getByLabelText('Approval code'), { target: { value: '654321' } });
+  fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '654321' } });
   fireEvent.click(submit);
   expect(onDiscard).toHaveBeenLastCalledWith({
     matchingStaffProfileId: 'c',

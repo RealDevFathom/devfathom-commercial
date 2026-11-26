@@ -52,8 +52,8 @@ export type CounterApprovalCopy = {
 
 export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCopy> = {
   CODE: {
-    approverLabel: 'Approval code',
-    secretName: 'approval code',
+    approverLabel: 'Authenticator code',
+    secretName: 'authenticator code',
     managerInstruction:
       'A manager or owner enters their current authenticator code. A solo owner can enter their own code.',
     ownLabel: 'Your approval code',
@@ -69,11 +69,11 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
     witnessIntro:
       'Controlled medicine. A different pharmacist must witness this return with the current code from their authenticator app (a pharmacist with no login enters their PIN). Nothing is saved on this device.',
     discountApproval:
-      'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their approval code when you add the item.',
+      'Prescription, restricted and controlled medicines are never discounted. If you cannot give discounts on your own, a manager or owner approves with their authenticator code when you add the item.',
     discountApprovalLine:
-      'The server checks this line’s price and cost. If approval is required, a manager or owner enters their current approval code here.',
+      'The server checks this line’s price and cost. If approval is required, a manager or owner enters their current authenticator code here.',
     discountApprovalBill:
-      'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their approval code when you apply it.',
+      'Prescription, restricted and controlled medicines, and items that already have their own discount, voucher or promotion, are left out of a whole-bill discount and named. If you cannot give discounts on your own, a manager or owner approves with their authenticator code when you apply it.',
     discountSupervisorHow: (codeFirst) =>
       codeFirst
         ? 'They enter the current 6-digit code from their authenticator app on this till'

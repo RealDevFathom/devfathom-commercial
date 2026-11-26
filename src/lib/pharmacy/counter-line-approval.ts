@@ -32,6 +32,7 @@ import {
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   COUNTER_FEFO_APPROVAL_REQUIRED,
+  counterApprovalMessage,
 } from './counter-messages';
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
@@ -162,6 +163,11 @@ export class CounterApprovalDenied extends Error {
   }
 }
 
+async function approvalDenied(db: ScopedDb, scope: LedgerScope, kind: CounterApprovalKind) {
+  const mode = await approvalSecretKindFor(db, scope.organizationId);
+  return new CounterApprovalDenied(kind, counterApprovalMessage(DENIED_MESSAGE[kind], mode));
+}
+
 export function counterProofRequired(kind: CounterApprovalKind) {
   return new CounterApprovalDenied(
     kind,
@@ -218,7 +224,7 @@ export async function authorizeCounterApproval(
   const actor = (await db.user.findFirst({
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   })) as ActiveUser | null;
-  if (!actor) throw new CounterApprovalDenied(kind);
+  if (!actor) throw await approvalDenied(db, scope, kind);
   if (kind === 'FEFO_OVERRIDE' && (await mayApproveCounterLine(db, actor, kind))) {
     return {
       approvedByUserId: actor.id,
@@ -237,7 +243,7 @@ export async function authorizeCounterApproval(
       credentialId: null,
     };
   }
-  if (!input) throw new CounterApprovalDenied(kind);
+  if (!input) throw await approvalDenied(db, scope, kind);
   // Reserve before looking up the profile. Changing the chosen name, branch or action
   // cannot buy the signed-in requester more guesses. An accepted approval refunds only
   // its own reservation so concurrent failures keep counting.
@@ -247,7 +253,7 @@ export async function authorizeCounterApproval(
     scope.actorId,
   ]);
   const attempt = await rateLimit(requesterKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
-  if (!attempt.ok || !attempt.windowStartedAt) throw new CounterApprovalDenied(kind);
+  if (!attempt.ok || !attempt.windowStartedAt) throw await approvalDenied(db, scope, kind);
   const deviceId = 'counter' in input ? await verifiedCounterId(db, scope, input.counter) : null;
   // Named approvals also work when a browser sends a stale terminal session. Only
   // a verified session may charge a physical till or identify an unnamed approver.
@@ -256,7 +262,7 @@ export async function authorizeCounterApproval(
   if (deviceId) {
     const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, deviceId]);
     const reservation = await rateLimit(key, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
-    if (!reservation.ok || !reservation.windowStartedAt) throw new CounterApprovalDenied(kind);
+    if (!reservation.ok || !reservation.windowStartedAt) throw await approvalDenied(db, scope, kind);
     counterReservation = { key, attempt: reservation };
   }
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
@@ -278,7 +284,7 @@ export async function authorizeCounterApproval(
     { userId: scope.actorId, skipDrain: true }
   );
   // Throw only after the credential transaction has committed any failed attempt.
-  if (!approval) throw new CounterApprovalDenied(kind);
+  if (!approval) throw await approvalDenied(db, scope, kind);
   await refundRateLimit(requesterKey, LOCKOUT_DURATION_MS, attempt);
   if (counterReservation)
     await refundRateLimit(counterReservation.key, LOCKOUT_DURATION_MS, counterReservation.attempt);
@@ -313,11 +319,11 @@ export async function confirmCounterApproval(
       !approver ||
       !(await mayDiscountWithoutApproval(db, approver))
     )
-      throw new CounterApprovalDenied(kind);
+      throw await approvalDenied(db, scope, kind);
     return;
   }
   if (!approver || !(await mayApproveCounterLine(db, approver, kind))) {
-    throw new CounterApprovalDenied(kind);
+    throw await approvalDenied(db, scope, kind);
   }
   if (approval.credentialId === null) return;
   if (
@@ -339,7 +345,7 @@ export async function confirmCounterApproval(
     },
     select: { id: true },
   });
-  if (!credential) throw new CounterApprovalDenied(kind);
+  if (!credential) throw await approvalDenied(db, scope, kind);
 }
 
 /**

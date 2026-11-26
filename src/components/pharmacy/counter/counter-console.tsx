@@ -162,6 +162,7 @@ import {
 } from '@/lib/pharmacy/counter-keymap';
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
+  isCounterApprovalMessage,
   COUNTER_FEFO_APPROVAL_REQUIRED,
   COUNTER_DISCOUNT_NOTICES,
   COUNTER_ERROR_MESSAGES,
@@ -2497,7 +2498,7 @@ function ScopedPharmacyCounterConsole({
               !manualDiscount ||
               discountApproval ||
               !(error instanceof Error) ||
-              error.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED
+              !isCounterApprovalMessage(error.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
             )
               throw error;
             if (!scanIsCurrent()) return null;
@@ -2520,7 +2521,7 @@ function ScopedPharmacyCounterConsole({
             } catch (retryError) {
               if (
                 !(retryError instanceof Error) ||
-                retryError.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED
+                !isCounterApprovalMessage(retryError.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
               )
                 throw retryError;
               setNotice({
@@ -2539,7 +2540,7 @@ function ScopedPharmacyCounterConsole({
           if (
             overrideLotId &&
             error instanceof Error &&
-            error.message === COUNTER_FEFO_APPROVAL_REQUIRED &&
+            isCounterApprovalMessage(error.message, COUNTER_FEFO_APPROVAL_REQUIRED) &&
             scanIsCurrent()
           ) {
             added = await submitDialogApproval(

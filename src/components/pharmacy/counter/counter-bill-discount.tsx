@@ -9,6 +9,7 @@ import type { BillDiscountExclusion, BillDiscountRequest } from '@/lib/pharmacy/
 import { submitDialogApproval, type ApprovalEntry } from './counter-approval-entry';
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
+  isCounterApprovalMessage,
   counterErrorMessage,
 } from '@/lib/pharmacy/counter-messages';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -95,7 +96,7 @@ export function useCounterBillDiscount({
       try {
         outcome = await post();
       } catch (failure) {
-        if (!(failure instanceof Error) || failure.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED)
+        if (!(failure instanceof Error) || !isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED))
           throw failure;
         const approved = await submitDialogApproval(
           (matches) => (matches ? requestApproval(label, matches) : requestApproval(label)),
@@ -128,7 +129,7 @@ export function useCounterBillDiscount({
     } catch (failure) {
       return {
         error:
-          failure instanceof Error && failure.message === COUNTER_DISCOUNT_APPROVAL_REQUIRED
+          failure instanceof Error && isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
             ? `That ${approvalCopy.secretName} did not approve the discount, so it was not given. A manager or owner must enter their own ${approvalCopy.secretName}.`
             : counterErrorMessage(failure),
         leftOut: [],
@@ -158,6 +159,7 @@ export function CounterBillDiscountEntry({
   disabled: boolean;
 }) {
   const id = useId();
+  const approvalCopy = useCounterApprovalCopy();
   const bill = useCounterBillDiscount({ branchId, saleId, lines, requestApproval, onChanged });
   const [kind, setKind] = useState<BillDiscountRequest['kind']>('PERCENT');
   const [value, setValue] = useState('');
@@ -308,7 +310,7 @@ export function CounterBillDiscountEntry({
             Prescription, restricted and controlled medicines, and items that already have their own
             discount, voucher or promotion, are left out and named here. Give it before taking any
             payment. If you cannot give discounts on your own, a manager or owner approves with
-            their PIN.
+            their {approvalCopy.secretName}.
           </p>
           <Button type="submit" className="min-h-11" disabled={busy}>
             {bill.pending ? 'Applying…' : 'Apply to bill'}

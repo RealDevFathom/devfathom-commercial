@@ -63,7 +63,7 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 function fixture(options: { support?: boolean } = {}) {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const db = {
-    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    organization: { findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }), findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
     $transaction: transaction,
     $queryRaw: vi.fn(async () => []),
     pharmacyBranch: {

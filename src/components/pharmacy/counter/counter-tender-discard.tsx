@@ -1,6 +1,5 @@
 'use client';
 
-import { OwnPinLink } from '@/components/pharmacy/pin-aware-message';
 import { useEffect, useId, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -15,6 +14,7 @@ import {
   ApprovalFallback,
   ApprovalNames,
   useApprovalEntry,
+  UnavailableCounterApprover,
   type ApprovalEntry,
 } from './counter-approval-entry';
 const MIN_REASON = 3;
@@ -166,8 +166,7 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
           </p>
         ) : approvers.length === 0 ? (
           <p role="status" className="text-sm text-text-body">
-            No manager or owner has an active staff PIN. A manager or owner creates their own under
-            Settings, Your PIN. <OwnPinLink />
+            <UnavailableCounterApprover />
           </p>
         ) : null}
       </ApprovalNames>

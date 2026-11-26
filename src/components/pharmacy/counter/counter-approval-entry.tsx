@@ -1,6 +1,8 @@
 'use client';
 
 import { createContext, useContext, useState, type ReactNode } from 'react';
+import { OwnPinLink, PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
+import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { Button } from '@/components/ui/button';
 import { ApprovalSecretKindContext } from './counter-approval-copy';
 
@@ -62,6 +64,14 @@ export function useApprovalEntry(initialMatches?: string[]) {
       return matches ? rows.filter((row) => matches.includes(row.id)) : rows;
     },
   };
+}
+
+export function UnavailableCounterApprover({ pharmacist = false }: { pharmacist?: boolean }) {
+  const kind = useContext(ApprovalSecretKindContext);
+  const who = pharmacist ? 'pharmacist' : 'manager or owner';
+  if (kind === 'CODE')
+    return <>No {who} is available to approve. <PinAwareMessage message={APPROVAL_AUTHENTICATOR_SETUP_MESSAGE} /></>;
+  return <>{pharmacist ? 'No pharmacist is available to approve this batch.' : 'No manager or owner has an active staff PIN. A manager or owner creates their own under Settings, Your PIN.'} <OwnPinLink /></>;
 }
 
 export function ApprovalFallback({

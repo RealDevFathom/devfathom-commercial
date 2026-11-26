@@ -71,6 +71,14 @@ export const COUNTER_FEFO_APPROVAL_REQUIRED =
 export const COUNTER_DISCOUNT_APPROVAL_REQUIRED =
   'A discount needs a manager to approve it with their PIN.';
 
+export function counterApprovalMessage(pinMessage: string, mode: 'CODE' | 'PIN') {
+  return mode === 'CODE' ? pinMessage.replace('their PIN', 'their authenticator code') : pinMessage;
+}
+
+export function isCounterApprovalMessage(message: string, pinMessage: string) {
+  return message === pinMessage || message === counterApprovalMessage(pinMessage, 'CODE');
+}
+
 export const COUNTER_DISCOUNT_NOTICES = {
   PROMOTION_ABOVE_MAXIMUM:
     "This promotion is above the owner's maximum discount, so the item was added at full price.",

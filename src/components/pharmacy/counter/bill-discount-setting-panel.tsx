@@ -1,5 +1,6 @@
 'use client';
 
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import { useState } from 'react';
 import { PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { Button } from '@/components/ui/button';
@@ -15,6 +16,7 @@ import { trpc } from '@/lib/trpc';
  * floor, minimum margin and approvals as an item discount. Every change needs the owner's PIN.
  */
 export function BillDiscountSettingPanel({ branchId }: { branchId: string }) {
+  const method = useApprovalSecretKind() === 'CODE' ? 'authenticator code' : 'PIN';
   const query = trpc.pharmacySales.billDiscountSetting.useQuery({ branchId });
   const save = trpc.pharmacySales.saveBillDiscountSetting.useMutation();
   const [pin, setPin] = useState('');
@@ -42,7 +44,7 @@ export function BillDiscountSettingPanel({ branchId }: { branchId: string }) {
         When on, the cashier can give one discount on the whole bill, as a percentage or an amount,
         before taking payment. It is shared over the bill&apos;s items by price, and the same limits
         apply as for an item discount: your maximum discount, the cost floor and the branch&apos;s
-        minimum margin, and a manager&apos;s PIN unless the cashier&apos;s role may give discounts.
+        minimum margin, and a manager&apos;s {method} unless the cashier&apos;s role may give discounts.
         Prescription, restricted and controlled medicines, and items with their own discount,
         voucher or promotion, are left out and the cashier is told. When off, nothing at the counter
         changes.
@@ -86,7 +88,7 @@ export function BillDiscountSettingPanel({ branchId }: { branchId: string }) {
           }}
         >
           <div className="space-y-2">
-            <Label htmlFor={pinId}>Your PIN</Label>
+            <Label htmlFor={pinId}>Your {method}</Label>
             <Input
               id={pinId}
               className="min-h-11 w-32"

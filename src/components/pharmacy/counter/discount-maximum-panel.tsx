@@ -1,5 +1,6 @@
 'use client';
 
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -30,6 +31,7 @@ const DISCOUNT_RIGHT_LABEL = PERMISSION_LABELS['pharmacy:discount'];
  * not part of this form. Every change needs the owner's own PIN.
  */
 export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
+  const method = useApprovalSecretKind() === 'CODE' ? 'authenticator code' : 'PIN';
   const query = trpc.pharmacySales.discountMaximum.useQuery({ branchId });
   const save = trpc.pharmacySales.saveDiscountMaximum.useMutation();
   const [draft, setDraft] = useState<string | null>(null);
@@ -70,7 +72,7 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
         Once you set a maximum, no discount on a line can be more than this share of its price,
         whoever gives or approves it. A discount also never takes a line below its cost or the
         branch&apos;s minimum margin, and prescription, restricted and controlled medicines are
-        never discounted. By default a manager approves each discount with their PIN. To let a role
+        never discounted. By default a manager approves each discount with their {method}. To let a role
         give discounts up to your maximum without one, give that role the permission &ldquo;
         {DISCOUNT_RIGHT_LABEL}&rdquo; (pharmacy:discount) in a custom role.
       </p>
@@ -112,7 +114,7 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
         {canChange ? (
           <>
             <div className="space-y-2">
-              <Label htmlFor={pinId}>Your PIN</Label>
+              <Label htmlFor={pinId}>Your {method}</Label>
               <Input
                 id={pinId}
                 className="min-h-11 w-32"
