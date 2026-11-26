@@ -1,3 +1,4 @@
+import { receiptReferencePdf } from './waha-receipt';
 import { WHATSAPP_REPLIES } from './messages';
 import {
   WhatsAppProviderError,
@@ -64,6 +65,12 @@ export class WahaWhatsAppProvider implements WhatsAppProvider {
     });
     if (used.size !== expected || /[{}]/.test(text))
       throw new WhatsAppProviderError('TEMPLATE_NOT_CONFIGURED');
+    if (template === 'receiptLink')
+      return this.deliver(to, template, {
+        mime: 'application/pdf',
+        bytes: receiptReferencePdf(parameters[1], parameters[4]),
+        caption: text,
+      });
     return this.deliver(to, template, { text });
   }
   sendText({ to, body }: Parameters<WhatsAppProvider['sendText']>[0]) {

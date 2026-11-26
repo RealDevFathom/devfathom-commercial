@@ -22,3 +22,24 @@ it('selects WAHA explicitly and delivers approved parameters only within the req
   ).rejects.toThrow();
   expect(send).toHaveBeenCalledTimes(1);
 });
+
+it('dispatches the receipt link and neutral PDF together in one approved message', async () => {
+  send.mockClear();
+  const config = readWhatsAppConfig({
+    PHARMACY_WHATSAPP_PROVIDER: 'waha',
+    PHARMACY_WAHA_RECEIPT_EN: '{{1}} receipt {{2}}, {{3}}, {{4}}. Open {{5}}',
+  });
+  const provider = createWhatsAppProvider({ ...config, organizationId: 'synthetic-business' });
+  const token = (await import('node:crypto')).randomBytes(16).toString('hex');
+  const url = 'https://pharmacy.example.invalid/receipt/' + token;
+  await provider.sendTemplate({
+    to: '12025550101',
+    template: 'receiptLink',
+    parameters: ['Pharmacy', '42', 'PKR 10.00', 'Cash', url],
+  });
+  expect(send).toHaveBeenCalledTimes(1);
+  const content = send.mock.calls[0][3];
+  expect(content.mime).toBe('application/pdf');
+  expect(Buffer.from(content.bytes).subarray(0, 5).toString()).toBe('%PDF-');
+  expect(content.caption.endsWith(url)).toBe(true);
+});

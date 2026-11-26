@@ -112,11 +112,12 @@ async function reserveAndSend(
       })
     )
       throw new WhatsAppProviderError('WAHA_POLICY');
+    const wording = 'text' in content ? content.text : content.caption;
     if (
-      'text' in content &&
+      wording &&
       lintWhatsAppMessage({
         purpose: 'UTILITY',
-        template: content.text,
+        template: wording,
         catalogNames: await readTenantMedicineNames(db),
       }).outcome === 'BLOCK'
     )

@@ -4,7 +4,8 @@ import { z } from 'zod';
 import { wahaOrigin } from './waha-session';
 
 export type WahaContent =
-  { text: string } | { bytes: Uint8Array; mime: 'application/pdf' | 'image/png' | 'image/jpeg' };
+  | { text: string }
+  | { bytes: Uint8Array; caption?: string; mime: 'application/pdf' | 'image/png' | 'image/jpeg' };
 export class WahaFailure extends Error {
   constructor(
     readonly reason: 'UNAVAILABLE' | 'NOT_ON_WHATSAPP' | 'RESTRICTED' | 'UNKNOWN',
@@ -102,6 +103,7 @@ export class WahaClient {
         'POST',
         {
           ...target,
+          ...(content.caption ? { caption: content.caption } : {}),
           file: {
             mimetype: content.mime,
             filename: pdf
