@@ -63,7 +63,7 @@ export function CounterTenderDiscard({ disabled = false, loadApprovers, onDiscar
     return () => {
       current = false;
     };
-  }, [open, loadApprovers, reload]);
+  }, [open, loadApprovers, reload, setApproverId]);
 
   const locked = disabled || submitting;
   const ready =

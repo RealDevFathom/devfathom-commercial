@@ -434,7 +434,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       return () => {
         current = false;
       };
-    }, [wantsApprovers, loadKhataApprovers]);
+    }, [wantsApprovers, loadKhataApprovers, setApproverId]);
     const signupPatient = khataSignupPatient ?? null;
     const signupPatientId = signupPatient?.patientId ?? null;
     // Consent belongs to one person: a different payer must tick it again.

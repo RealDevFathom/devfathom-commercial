@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useState, type ReactNode } from 'react';
 import { OwnPinLink, PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { Button } from '@/components/ui/button';
@@ -47,13 +47,12 @@ export function useApprovalEntry(initialMatches?: ApprovalMatches) {
   const matches = canIdentify ? pendingMatches : undefined;
   const [profile, setProfile] = useState('');
   const [pin, setPin] = useState('');
-  useEffect(() => {
-    if (pendingMatches && !canIdentify) {
-      setMatches(undefined);
-      setProfile('');
-      setPin('');
-    }
-  }, [pendingMatches, canIdentify]);
+  // Drop a pending choice before rendering the named-only form.
+  if (pendingMatches && !canIdentify) {
+    setMatches(undefined);
+    setProfile('');
+    setPin('');
+  }
   const codeOnly = canIdentify && !byName && !matches;
   let entry: ApprovalEntry | undefined;
   if (codeOnly) {
