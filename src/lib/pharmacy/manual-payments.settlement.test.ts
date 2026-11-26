@@ -39,34 +39,28 @@ function fixture(input: Parameters<typeof applyPharmacyTender>[2], allowReferenc
     $queryRaw: vi.fn().mockResolvedValue([]),
     $executeRaw: vi.fn().mockResolvedValue(1),
     pharmacyMoneyIdempotencyKey: {
-      findUnique: vi
-        .fn()
-        .mockResolvedValue({
-          id: 'key',
-          commandType: 'tender',
-          payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
-          resultPayload: null,
-        }),
+      findUnique: vi.fn().mockResolvedValue({
+        id: 'key',
+        commandType: 'tender',
+        payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+        resultPayload: null,
+      }),
       update: vi.fn(),
     },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacySale: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          id: 'sale',
-          status: 'OPEN',
-          tenders: [],
-          lines: [{ quantity: 1, unitPriceMinor: 1000, discountMinor: 0, medicine: {} }],
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'sale',
+        status: 'OPEN',
+        tenders: [],
+        lines: [{ quantity: 1, unitPriceMinor: 1000, discountMinor: 0, medicine: {} }],
+      }),
     },
     pharmacyBranch: {
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({
-          manualPaymentSettings: { [input.type]: { destination: 'Shop till', allowReferenceSkip } },
-          manualPaymentRevision: 1,
-        }),
+      findFirst: vi.fn().mockResolvedValue({
+        manualPaymentSettings: { [input.type]: { destination: 'Shop till', allowReferenceSkip } },
+        manualPaymentRevision: 1,
+      }),
     },
     pharmacyTender: { create: vi.fn().mockResolvedValue({ id: 'tender', createdAt: new Date() }) },
     pharmacyDrawerMovement: { create: vi.fn() },
@@ -274,21 +268,19 @@ describe('DEV-713 manual card and wallet confirmation', () => {
           .mockResolvedValue({ id: 'sale', organizationId: 'org', branchId: 'branch' }),
       },
       pharmacyMoneyIdempotencyKey: {
-        findUnique: vi
-          .fn()
-          .mockResolvedValue({
-            organizationId: 'org',
-            deviceId: 'counter',
-            key: 'card-attempt',
-            commandType: 'tender',
-            payloadHash: hashOf(input),
-            resultPayload: {
-              tenderId: 'tender',
-              settled: true,
-              receiptNumber: 41,
-              remainingMinor: 0,
-            },
-          }),
+        findUnique: vi.fn().mockResolvedValue({
+          organizationId: 'org',
+          deviceId: 'counter',
+          key: 'card-attempt',
+          commandType: 'tender',
+          payloadHash: hashOf(input),
+          resultPayload: {
+            tenderId: 'tender',
+            settled: true,
+            receiptNumber: 41,
+            remainingMinor: 0,
+          },
+        }),
       },
       pharmacyTender: { findFirst: vi.fn().mockResolvedValue(tender) },
     };
@@ -300,6 +292,31 @@ describe('DEV-713 manual card and wallet confirmation', () => {
       status: 'UNKNOWN',
     });
   });
+});
+
+describe('DEV-1045 optional details in settlement', () => {
+  it.each(MANUAL_TENDER_TYPES)(
+    'records a configured %s with payer and an omitted reference',
+    async (type) => {
+      const input = { ...base, type };
+      const { db, scoped } = fixture(input);
+      db.$queryRaw.mockImplementation(async (sql) =>
+        sql.strings?.join('').includes('"requirePaymentDetails"')
+          ? [{ requirePaymentDetails: false }]
+          : []
+      );
+      await expect(applyPharmacyTender(scoped, scope, input)).resolves.toMatchObject({
+        settled: true,
+      });
+      expect(db.pharmacyTender.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          referenceSkipped: true,
+          confirmedById: scope.actorId,
+          payerName: base.payerName,
+        }),
+      });
+    }
+  );
 });
 
 describe('DEV-875 bank transfer capture', () => {

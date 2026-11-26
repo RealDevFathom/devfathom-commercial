@@ -98,6 +98,16 @@ function CounterLineRemove({
 
 const UNIT_WORD: Record<SaleUnitKind, string> = { PACK: 'Pack', STRIP: 'Strip', UNIT: 'Unit' };
 
+function smallestSizeNote(line: CounterCartLine, options: readonly SaleUnitOption[]) {
+  if (line.saleUnit === 'PACK' && line.canonicalUnitsPerSaleUnit === 1)
+    return 'One pack contains one unit.';
+  if (!options.length || options.some((option) => option.kind === 'UNIT')) return null;
+  const smallest = options.reduce((smallest, option) =>
+    option.canonicalUnitsPerSaleUnit < smallest.canonicalUnitsPerSaleUnit ? option : smallest
+  );
+  return `Not sold loose. The smallest sellable size is one ${smallest.kind.toLowerCase()}.`;
+}
+
 function CounterLineEditor({
   line,
   controls,
@@ -386,6 +396,9 @@ export function CounterCartPanel({
                     {plural(counterUnitNoun(line.dosageForm), line.canonicalUnits)} @{' '}
                     {formatMinor(line.unitPriceMinor)}
                     {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
+                  </p>
+                  <p className="text-xs text-text-muted empty:hidden">
+                    {smallestSizeNote(line, lineControls?.unitOptions(line) ?? [])}
                   </p>
                   <div className="mt-1.5 flex flex-wrap gap-1.5 empty:hidden">
                     {line.controlled ? (

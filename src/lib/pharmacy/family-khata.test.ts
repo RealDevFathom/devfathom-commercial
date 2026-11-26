@@ -388,6 +388,7 @@ describe('counter Khata ledger gate', () => {
     expect(db.pharmacyFamilyAccount.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
+          id: input.familyAccountId,
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           active: true,

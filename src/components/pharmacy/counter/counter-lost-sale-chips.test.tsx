@@ -25,7 +25,7 @@ describe('DEV-81 counter lost-sale chips', () => {
     expect(onChoose).toHaveBeenCalledExactlyOnceWith({ outcome: 'WENT_ELSEWHERE' });
   });
 
-  it('is non-modal and closes as Unknown after five seconds without a tap', () => {
+  it('DEV-1042: stays non-modal and open after the old timeout until deliberately dismissed', () => {
     vi.useFakeTimers();
     const onChoose = vi.fn();
     const onDismiss = vi.fn();
@@ -40,6 +40,10 @@ describe('DEV-81 counter lost-sale chips', () => {
     act(() => vi.advanceTimersByTime(4999));
     expect(onDismiss).not.toHaveBeenCalled();
     act(() => vi.advanceTimersByTime(1));
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Unknown' })).toBeVisible();
+    expect(onChoose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Skip' }));
     expect(onDismiss).toHaveBeenCalledOnce();
     expect(onChoose).not.toHaveBeenCalled();
   });

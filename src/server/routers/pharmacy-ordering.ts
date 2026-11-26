@@ -28,6 +28,7 @@ import {
   type PortalRequestKind,
 } from '@/lib/pharmacy/customer-portal';
 import { actorManagesBranchDrawers } from '@/lib/pharmacy/counter-capability';
+import { counterCustomerPhoneFilters } from '@/lib/pharmacy/counter-customer-phone';
 import { FamilyKhataError } from '@/lib/pharmacy/family-khata';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import { PharmacySettlementError } from '@/lib/pharmacy/settlement';
@@ -414,24 +415,38 @@ export const pharmacyOrderingRouter = router({
 
   // DEV-845: customers seen at the caller's assigned branches (an order, a sale
   // or a refill subscription there); every customer for a tenant admin or owner.
-  customers: staffProcedure.query(async ({ ctx }) => {
-    const organizationId = ctx.entitlements.organizationId;
-    const branchIds = await staffBranchIds(ctx);
-    if (branchIds?.length === 0) return [];
-    const atBranch = branchIds ? { some: { organizationId, branchId: { in: branchIds } } } : null;
-    return ctx.db.pharmacyCustomer.findMany({
-      where: {
-        organizationId,
-        active: true,
-        ...(atBranch
-          ? { OR: [{ orders: atBranch }, { sales: atBranch }, { refillSubscriptions: atBranch }] }
-          : {}),
-      },
-      select: { id: true, displayName: true, phoneLast4: true },
-      orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
-      take: 200,
-    });
-  }),
+  customers: staffProcedure
+    .input(z.object({ query: z.string().trim().max(120) }).optional())
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const branchIds = await staffBranchIds(ctx);
+      if (branchIds?.length === 0) return [];
+      const atBranch = branchIds ? { some: { organizationId, branchId: { in: branchIds } } } : null;
+      return ctx.db.pharmacyCustomer.findMany({
+        where: {
+          organizationId,
+          active: true,
+          ...(input?.query
+            ? {
+                AND: [
+                  {
+                    OR: [
+                      { displayName: { contains: input.query, mode: 'insensitive' as const } },
+                      ...counterCustomerPhoneFilters(input.query, organizationId),
+                    ],
+                  },
+                ],
+              }
+            : {}),
+          ...(atBranch
+            ? { OR: [{ orders: atBranch }, { sales: atBranch }, { refillSubscriptions: atBranch }] }
+            : {}),
+        },
+        select: { id: true, displayName: true, phoneLast4: true },
+        orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+        take: 10,
+      });
+    }),
 
   transition: staffProcedure
     .input(

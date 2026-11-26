@@ -7,6 +7,7 @@ import {
   MANUAL_CARD_APPROVAL_CODE,
   BANK_TRANSFER_REFERENCE_MAX_LENGTH,
   hasValidTenderProviderReference,
+  optionalCardCaptureSchema,
   manualCardCaptureSchema,
   manualTenderCaptureSchema,
 } from '@/lib/pharmacy/manual-payments';
@@ -15,7 +16,7 @@ export type TenderAttemptInput = inferRouterInputs<AppRouter>['pharmacySales']['
 export type TenderAttemptScope = { organizationId: string; accountId: string; branchId: string };
 export type TenderDraft = { amount: string; cashReceived: string };
 export type TenderAttempt = {
-  version: 1;
+  version: 1 | 2;
   scope: TenderAttemptScope;
   input: TenderAttemptInput;
   draft: TenderDraft;
@@ -30,7 +31,7 @@ const amountText = z
   .regex(/^\s*(?:\d{1,12}(?:\.\d{1,2})?)?\s*$/);
 const storedSchema = z
   .object({
-    version: z.literal(1),
+    version: z.union([z.literal(1), z.literal(2)]),
     scope: scopeSchema,
     input: z
       .object({
@@ -38,7 +39,17 @@ const storedSchema = z
         saleId: id,
         deviceId: id,
         businessDate: z.string().datetime({ offset: false }),
-        type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA', 'RAAST', 'JAZZCASH', 'EASYPAISA']),
+        type: z.enum([
+          'CASH',
+          'CARD',
+          'BANK_TRANSFER',
+          'WALLET',
+          'CREDIT',
+          'KHATA',
+          'RAAST',
+          'JAZZCASH',
+          'EASYPAISA',
+        ]),
         amountMinor: minor.positive(),
         cashReceivedMinor: minor.optional(),
         idempotencyKey: z.string().trim().min(1).max(160),
@@ -52,7 +63,10 @@ const storedSchema = z
         buyerName: z.string().trim().min(1).max(200).optional(),
       })
       .strict()
-      .refine(hasValidTenderProviderReference, { path: ['providerRef'], message: 'Invalid payment reference.' }),
+      .refine(hasValidTenderProviderReference, {
+        path: ['providerRef'],
+        message: 'Invalid payment reference.',
+      }),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
   })
   .strict();
@@ -90,20 +104,41 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   if (raw.length > 4096) throw new Error(TENDER_STORAGE_MESSAGE);
   const stored = storedSchema.parse(JSON.parse(raw));
   const input = stored.input;
+  if (stored.version === 2 && input.type !== 'CARD') throw new Error(TENDER_STORAGE_MESSAGE);
   const date = new Date(input.businessDate);
   if (isManualTender(input.type)) {
     if (input.approvalCode !== undefined) throw new Error(TENDER_STORAGE_MESSAGE);
-    manualTenderCaptureSchema.parse({ type: input.type, providerRef: input.providerRef,
-      payerName: input.payerName, referenceSkipped: input.referenceSkipped });
-  } else if (input.type === 'CARD' && input.approvalCode !== undefined) {
+    manualTenderCaptureSchema.parse({
+      type: input.type,
+      providerRef: input.providerRef,
+      payerName: input.payerName,
+      referenceSkipped: input.referenceSkipped,
+    });
+  } else if (input.type === 'CARD') {
     if (input.payerName !== undefined || input.referenceSkipped !== undefined)
       throw new Error(TENDER_STORAGE_MESSAGE);
-    manualCardCaptureSchema.parse({ providerRef: input.providerRef, approvalCode: input.approvalCode });
+    const schema =
+      stored.version === 1 && (input.providerRef !== undefined || input.approvalCode !== undefined)
+        ? manualCardCaptureSchema
+        : optionalCardCaptureSchema;
+    schema.parse({
+      providerRef: input.providerRef,
+      approvalCode: input.approvalCode,
+    });
   } else if (input.type === 'BANK_TRANSFER') {
     // Old uncertain transfers without references still need outcome recovery.
-    if (input.approvalCode !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined)
+    if (
+      input.approvalCode !== undefined ||
+      input.payerName !== undefined ||
+      input.referenceSkipped !== undefined
+    )
       throw new Error(TENDER_STORAGE_MESSAGE);
-  } else if (input.approvalCode !== undefined || input.providerRef !== undefined || input.payerName !== undefined || input.referenceSkipped !== undefined) {
+  } else if (
+    input.approvalCode !== undefined ||
+    input.providerRef !== undefined ||
+    input.payerName !== undefined ||
+    input.referenceSkipped !== undefined
+  ) {
     throw new Error(TENDER_STORAGE_MESSAGE);
   }
   if (

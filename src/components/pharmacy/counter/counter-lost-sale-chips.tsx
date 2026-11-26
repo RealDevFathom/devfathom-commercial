@@ -1,12 +1,12 @@
 'use client';
 
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
-import { LOST_SALES_DEFAULTS, type LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
+import type { LostSaleOutcome } from '@/lib/pharmacy/lost-sales';
 
 export const LOST_SALE_CHIPS: readonly { outcome: LostSaleOutcome; label: string }[] = [
   { outcome: 'SUBSTITUTE_TAKEN', label: 'Substitute taken' },
@@ -22,38 +22,20 @@ export type LostSaleChoice = {
   notifyPhone?: string;
 };
 
-/**
- * DEV-81: an optional, non-modal bottom panel after a short line is recorded.
- * One tap records the outcome. It never traps focus and never gates tender:
- * if nobody taps within five seconds it closes and the line stays UNKNOWN,
- * which the server already stored. Turning on notify-when-back pauses the
- * timer while the phone number is typed.
- */
 export function CounterLostSaleChips({
   requested,
   onChoose,
   onDismiss,
-  autoDismissMs = LOST_SALES_DEFAULTS.chipAutoDismissMs,
+  unmatched = false,
 }: {
   requested: string;
   onChoose: (choice: LostSaleChoice) => void;
   onDismiss: () => void;
-  autoDismissMs?: number;
+  unmatched?: boolean;
 }) {
   const [notify, setNotify] = useState(false);
   const [phone, setPhone] = useState('');
   const phoneId = useId();
-  const dismissRef = useRef(onDismiss);
-  useEffect(() => {
-    dismissRef.current = onDismiss;
-  }, [onDismiss]);
-
-  useEffect(() => {
-    if (notify) return;
-    const timer = window.setTimeout(() => dismissRef.current(), autoDismissMs);
-    return () => window.clearTimeout(timer);
-  }, [notify, autoDismissMs]);
-
   const phoneDigits = phone.replace(/[\s-]/g, '');
   const phoneValid = /^\+?\d{10,15}$/.test(phoneDigits);
   const phoneInvalid = notify && phone.length > 0 && !phoneValid;
@@ -63,6 +45,32 @@ export function CounterLostSaleChips({
       notify && phoneValid ? { outcome, notifyOptIn: true, notifyPhone: phoneDigits } : { outcome }
     );
 
+  useEffect(() => {
+    function shortcut(event: KeyboardEvent) {
+      if (
+        !(event.target instanceof HTMLElement) ||
+        !event.target.hasAttribute('data-counter-scan') ||
+        event.repeat ||
+        event.isComposing ||
+        !event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      )
+        return;
+      const chip = LOST_SALE_CHIPS[Number(event.key) - 1];
+      if (!chip) return;
+      event.preventDefault();
+      onChoose(
+        notify && phoneValid
+          ? { outcome: chip.outcome, notifyOptIn: true, notifyPhone: phoneDigits }
+          : { outcome: chip.outcome }
+      );
+    }
+    document.addEventListener('keydown', shortcut);
+    return () => document.removeEventListener('keydown', shortcut);
+  }, [notify, onChoose, phoneDigits, phoneValid]);
+
   return (
     <section
       aria-label="What happened to the short line"
@@ -70,23 +78,28 @@ export function CounterLostSaleChips({
     >
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <p className="text-sm font-medium text-text-strong">
-          Short: <span className="text-text-body">{requested}</span>
-        </p>
-        <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
-          Optional · {notify ? 'paused' : 'closes as Unknown in 5s'}
+          {unmatched
+            ? `Nothing matches '${requested}'. Was the customer asking for it?`
+            : `What happened to the shortage of ${requested}?`}
         </p>
       </div>
       <div className="mt-2 flex flex-wrap gap-2" role="group" aria-label="Outcome">
-        {LOST_SALE_CHIPS.map((chip) => (
+        {LOST_SALE_CHIPS.map((chip, index) => (
           <Button
             key={chip.outcome}
             type="button"
             variant="outline"
             size="touch"
             className="rounded-full px-4"
+            aria-label={chip.label}
+            aria-keyshortcuts={`Alt+${index + 1}`}
+            onMouseDown={(event) => event.preventDefault()}
             onClick={() => choose(chip.outcome)}
           >
-            {chip.label}
+            {chip.label}{' '}
+            <kbd aria-hidden="true" className="font-mono text-xs">
+              Alt+{index + 1}
+            </kbd>
           </Button>
         ))}
       </div>

@@ -46,6 +46,8 @@ export type LedgerScope = {
 };
 
 type CandidateRow = {
+  wholePackOnly?: boolean;
+  countable?: boolean;
   inventoryLotId: string;
   stockLocationId: string;
   organizationId: string;
@@ -165,10 +167,22 @@ async function loadCandidates(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   medicineId: string,
   lock: boolean,
-  counterHolds: boolean
+  counterHolds: boolean,
+  readCounterPackPolicy = false
 ): Promise<CandidateRow[]> {
+  // One catalogue lookup for the medicine in the post-lock snapshot. Inventory
+  // previews and operations that cannot open counter packs need no catalogue read.
+  const packPolicy = readCounterPackPolicy
+    ? Prisma.sql`,
+    (SELECT "wholePackOnly" FROM pharmacy_medicines WHERE id = ${medicineId}
+      AND "organizationId" = ${scope.organizationId}) AS "wholePackOnly",
+    EXISTS (SELECT FROM pharmacy_pack_levels pl JOIN pharmacy_presentations p
+      ON p.id=pl."presentationId" AND p."organizationId"=pl."organizationId"
+      WHERE pl.id=lot."packLevelId" AND pl."organizationId"=lot."organizationId"
+        AND p."medicineId"=batch."medicineId" AND p."dosageForm" ~* 'tablet|capsule') AS countable`
+    : Prisma.empty;
   const query = Prisma.sql`
-    SELECT ${candidateColumns(counterHolds)}
+    SELECT ${candidateColumns(counterHolds)}${packPolicy}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
@@ -526,7 +540,13 @@ export async function reverseMovements(
           sealedPackDelta: -original.sealedPackDelta,
           looseUnitDelta: -original.looseUnitDelta,
           actorId: scope.actorId,
-          reason: input.reason,
+          counterSaleId: original.counterSaleId,
+          reason:
+            original.counterSaleId &&
+            original.kind === 'SALE' &&
+            original.looseUnitDelta === original.quantityUnits
+              ? `${input.reason}. Returned as open units. Packs were not resealed.`
+              : input.reason,
           idempotencyKey: `${original.idempotencyKey}:reversal`,
           reversesMovementId: original.id,
           occurredAt: input.at,
@@ -538,6 +558,8 @@ export async function reverseMovements(
 }
 
 export type AllocateForSaleInput = {
+  /** Populated by the sale writer after checking the stored conversion. */
+  counterSale?: { id: string; unit: 'UNIT' | 'STRIP' | 'PACK'; unitsPerSaleUnit: number };
   medicineId: string;
   /** A shelf scan constrains the result; it never grants a FEFO override. */
   expectedInventoryLotId?: string;
@@ -574,7 +596,14 @@ export async function allocateForSale(
   input: AllocateForSaleInput
 ): Promise<AllocateForSaleResult> {
   const holds = await counterSetAsidesInForce(db, scope.organizationId);
-  const rows = await loadCandidates(db, scope, input.medicineId, true, holds);
+  const rows = await loadCandidates(
+    db,
+    scope,
+    input.medicineId,
+    true,
+    holds,
+    Boolean(input.counterSale)
+  );
   const byBucket = new Map(
     // Plans debit AVAILABLE only; blocked dispositions remain candidates for refusal evidence.
     rows
@@ -611,6 +640,16 @@ export async function allocateForSale(
       blockReasons.some((reason) => reason === 'RECALLED' || reason === 'QUARANTINED')
     ) {
       throw new PharmacyInventoryError('BLOCKED_STOCK');
+    }
+    if (shortOfStock && input.counterSale && !input.emergency) {
+      const available = candidates.reduce(
+        (sum, c, i) => sum + (blockReasons[i] === null ? c.availableUnits : 0),
+        0
+      );
+      throw new PharmacyInventoryError(
+        'INSUFFICIENT_STOCK',
+        `There is not enough safe stock on hand for this quantity. ${available} ${available === 1 ? 'unit' : 'units'} available.`
+      );
     }
     if (!shortOfStock || !input.emergency) throw error;
     return emergencyShortfall(db, scope, input, candidates, byBucket, input.emergency.reason);
@@ -833,10 +872,46 @@ async function postSaleMovements(
     const row = byBucket.get(`${allocation.inventoryLotId}:${allocation.stockLocationId}`);
     if (!row) throw new PharmacyInventoryError('NOT_FOUND');
 
-    // Maximize loose depletion subject to the remainder being whole sealed packs.
-    // Partial dispensing still requires explicit BREAK_PACK; never open one here.
+    const sale = input.counterSale;
+    if (
+      sale &&
+      row.wholePackOnly &&
+      (sale.unitsPerSaleUnit !== row.unitsPerPack || (row.unitsPerPack > 1 && sale.unit !== 'PACK'))
+    ) {
+      throw new PharmacyInventoryError(
+        'INVALID_ARRANGEMENT',
+        'This item is sold only as a whole pack.'
+      );
+    }
+    let availableLoose = row.looseUnits;
+    let availableSealed = row.sealedPacks;
+    if (
+      sale &&
+      sale.unit !== 'PACK' &&
+      row.countable &&
+      !row.wholePackOnly &&
+      row.unitsPerPack > 1
+    ) {
+      const plan = planBreakPack({ ...row, requiredLooseUnits: allocation.units });
+      for (let pack = 0; pack < plan.packsToBreak; pack++) {
+        await postPackOpening(db, scope, {
+          inventoryLotId: allocation.inventoryLotId,
+          stockLocationId: allocation.stockLocationId,
+          sealedPackDelta: -1,
+          looseUnitDelta: row.unitsPerPack,
+          at: input.at,
+          counterSaleId: sale.id,
+          reason: 'Pack opened at the counter',
+          idempotencyKey: `${input.idempotencyKeyPrefix}:${index}:open:${pack}`,
+        });
+      }
+      availableLoose += plan.looseUnitDelta;
+      availableSealed += plan.sealedPackDelta;
+    }
+    // Keep pack sales and reservations on their existing arrangement; a loose sale
+    // now has enough open units in this locked bucket to debit its entire allocation.
     const remainder = allocation.units % row.unitsPerPack;
-    const maxLoose = Math.min(row.looseUnits, allocation.units);
+    const maxLoose = row.wholePackOnly && sale ? 0 : Math.min(availableLoose, allocation.units);
     if (maxLoose < remainder) throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
     const fromLoose =
       remainder + Math.floor((maxLoose - remainder) / row.unitsPerPack) * row.unitsPerPack;
@@ -846,7 +921,7 @@ async function postSaleMovements(
       fromLoose < 0 ||
       !Number.isInteger(fromSealed / row.unitsPerPack) ||
       fromSealed < 0 ||
-      fromSealed / row.unitsPerPack > row.sealedPacks
+      fromSealed / row.unitsPerPack > availableSealed
     ) {
       throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
     }
@@ -858,6 +933,7 @@ async function postSaleMovements(
         inventoryLotId: allocation.inventoryLotId,
         stockLocationId: allocation.stockLocationId,
         kind: 'SALE',
+        counterSaleId: sale?.id,
         disposition: 'AVAILABLE',
         quantityUnits: -allocation.units,
         sealedPackDelta: -(fromSealed / row.unitsPerPack),
@@ -917,23 +993,38 @@ export async function breakPack(db: ScopedDb, scope: LedgerScope, input: BreakPa
   });
   if (plan.packsToBreak === 0) return { movement: null, ...plan };
 
-  const movement = await db.pharmacyStockMovement.create({
+  const movement = await postPackOpening(db, scope, { ...input, ...plan });
+  return { movement, ...plan };
+}
+
+function postPackOpening(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: Omit<BreakPackInput, 'requiredLooseUnits'> & {
+    sealedPackDelta: number;
+    looseUnitDelta: number;
+    counterSaleId?: string;
+    reason?: string;
+  }
+) {
+  return db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
+      actorId: scope.actorId,
       inventoryLotId: input.inventoryLotId,
       stockLocationId: input.stockLocationId,
       kind: 'BREAK_PACK',
       disposition: 'AVAILABLE',
       quantityUnits: 0,
-      sealedPackDelta: plan.sealedPackDelta,
-      looseUnitDelta: plan.looseUnitDelta,
-      actorId: scope.actorId,
+      sealedPackDelta: input.sealedPackDelta,
+      looseUnitDelta: input.looseUnitDelta,
+      counterSaleId: input.counterSaleId,
+      reason: input.reason,
       idempotencyKey: input.idempotencyKey,
       occurredAt: input.at,
     },
   });
-  return { movement, ...plan };
 }
 
 export type TransferInput = {

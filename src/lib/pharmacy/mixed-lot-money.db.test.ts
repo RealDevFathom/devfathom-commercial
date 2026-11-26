@@ -6,7 +6,11 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { createSale, addSaleLine, readReturnHistory, returnSaleLine } from '@/lib/pharmacy/sales';
 import { receiveLot } from '@/lib/pharmacy/stock-ledger';
-import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
+import {
+  applyPharmacyTender,
+  readPharmacyTenderOutcome,
+  refundPharmacyTender,
+} from '@/lib/pharmacy/settlement';
 import { readCounterReceipt, readCounterCart } from '@/lib/pharmacy/counter';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -356,9 +360,83 @@ test('enforces an upper MRP bound on the new billed gross in PostgreSQL', async 
   ).rejects.toThrow();
 });
 
+test.each([
+  ['CARD', 'No slip details'],
+  ['BANK_TRANSFER', 'No transfer details'],
+] as const)(
+  'DEV-1045 settles a %s with no details and labels its recorded payment',
+  async (type, label) => {
+    const f = await cart();
+    const input = {
+      saleId: f.sale.id,
+      deviceId: randomUUID(),
+      businessDate: day,
+      type,
+      amountMinor: 300,
+      idempotencyKey: randomUUID(),
+    };
+    const result = await tenant((db) => applyPharmacyTender(db, scope, input));
+    expect(result).toMatchObject({ settled: true, remainingMinor: 0 });
+    const history = await tenant((db) => readReturnHistory(db, scope, f.sale.id));
+    expect(history.tenders[0]).toMatchObject({ type, amountMinor: 300, paymentDetails: label });
+    const receipt = await tenant((db) =>
+      readCounterReceipt(db, scope, f.sale.id, { name: 'QA', currency: 'PKR' })
+    );
+    expect(receipt?.tenders[0]).toMatchObject({ type, amountMinor: 300, paymentDetails: label });
+  }
+);
+
+test('DEV-1045 recovers an accepted wallet tender with an omitted optional reference', async () => {
+  await tenant((db) =>
+    db.pharmacyBranch.update({
+      where: { id: scope.branchId },
+      data: {
+        requirePaymentDetails: false,
+        manualPaymentSettings: {
+          RAAST: { destination: 'Synthetic test till', allowReferenceSkip: false },
+        },
+      },
+    })
+  );
+  const sale = await cart();
+  const input = {
+    saleId: sale.sale.id,
+    deviceId: randomUUID(),
+    businessDate: day,
+    type: 'RAAST' as const,
+    amountMinor: 300,
+    payerName: 'Synthetic payer',
+    idempotencyKey: randomUUID(),
+  };
+  const result = await tenant((db) => applyPharmacyTender(db, scope, input));
+  expect(result).toMatchObject({ settled: true, replayed: false });
+  if (!('tenderId' in result)) throw new Error('Expected a new wallet tender');
+  expect(await tenant((db) => readPharmacyTenderOutcome(db, scope, input))).toEqual({
+    status: 'ACCEPTED',
+    replayUnsafe: true,
+    result: {
+      tenderId: result.tenderId,
+      remainingMinor: 0,
+      settled: true,
+      receiptNumber: result.receiptNumber,
+    },
+  });
+  expect(
+    await tenant((db) =>
+      readPharmacyTenderOutcome(db, scope, { ...input, payerName: 'Different payer' })
+    )
+  ).toMatchObject({ status: 'UNKNOWN', replayUnsafe: true });
+});
+
 test.each([undefined, '   '])(
   'DEV-875 rolls back a transfer without a reference (%j) and records valid evidence',
   async (providerRef) => {
+    await tenant((db) =>
+      db.pharmacyBranch.update({
+        where: { id: scope.branchId },
+        data: { requirePaymentDetails: true },
+      })
+    );
     const f = await cart();
     const input = {
       saleId: f.sale.id,

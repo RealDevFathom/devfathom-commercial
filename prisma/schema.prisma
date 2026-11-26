@@ -201,6 +201,8 @@ model PharmacyBranch {
   customerChurnScores             PharmacyCustomerChurnScore[]
   whatsappMessageLogs             PharmacyMessageLog[]
   aiUsages                        AIUsage[]
+  requirePaymentDetails            Boolean                        @default(false)
+  counterDefaultSaleUnit          PharmacySaleUnit             @default(UNIT)
   receiptLayout                   Json?
   receiptLayoutRevision           Int                          @default(0)
   manualPaymentSettings           Json?
@@ -653,6 +655,7 @@ model Ingredient {
 }
 
 model Medicine {
+  wholePackOnly                Boolean                              @default(false)
   id                           String                               @id @default(cuid())
   organizationId               String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   productName                  String
@@ -1359,6 +1362,7 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  counterStockMovements PharmacyStockMovement[]
   printJobs PharmacyPrintJob[]
   receiptNumberConsumptions PharmacyReceiptNumberConsumption[]
   portalRefillRequests      PharmacyCustomerPortalRequest[]
@@ -3246,6 +3250,8 @@ model PharmacyAllocationOverride {
 /// `looseUnitDelta` carry the physical arrangement so a BREAK_PACK (INV-04) is
 /// an explicit movement with a zero canonical total.
 model PharmacyStockMovement {
+  counterSaleId        String?
+  counterSale          PharmacySale? @relation(fields: [organizationId, branchId, counterSaleId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_stock_movements_counter_sale_fkey")
   id                   String                    @id @default(cuid())
   organizationId       String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId             String

@@ -8,38 +8,57 @@ export function isManualTender(type: string): type is ManualTenderType {
 }
 
 // Embedded raster only: no remote tracking URLs, SVG, or executable uploads.
-export const merchantQrSchema = z.string().max(350_000)
+export const merchantQrSchema = z
+  .string()
+  .max(350_000)
   .regex(/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/]+={0,2}$/);
 // Enabling a wallet is the branch's decision to accept it. Merchant details are
 // optional: the counter shows an IBAN, till number or QR only when configured.
-const destinationSchema = z.object({
-  destination: z.string().trim().max(120).default(''),
-  qrImageDataUrl: merchantQrSchema.optional(),
-  allowReferenceSkip: z.boolean().default(false),
-}).strict();
-export const manualPaymentSettingsSchema = z.object({
-  RAAST: destinationSchema.optional(),
-  JAZZCASH: destinationSchema.optional(),
-  EASYPAISA: destinationSchema.optional(),
-}).strict();
+const destinationSchema = z
+  .object({
+    destination: z.string().trim().max(120).default(''),
+    qrImageDataUrl: merchantQrSchema.optional(),
+    allowReferenceSkip: z.boolean().default(false),
+  })
+  .strict();
+export const manualPaymentSettingsSchema = z
+  .object({
+    RAAST: destinationSchema.optional(),
+    JAZZCASH: destinationSchema.optional(),
+    EASYPAISA: destinationSchema.optional(),
+  })
+  .strict();
 export type ManualPaymentSettings = z.infer<typeof manualPaymentSettingsSchema>;
-export const manualTenderCaptureSchema = z.object({
-  type: manualTenderTypeSchema,
-  providerRef: z.string().regex(/^\d{4,6}$/).optional(),
-  payerName: z.string().trim().min(1).max(100),
-  referenceSkipped: z.boolean().optional(),
-}).strict().refine((value) => value.referenceSkipped === true
-  ? value.providerRef === undefined : value.providerRef !== undefined, {
-  message: 'Enter the last 4–6 transaction ID digits, or explicitly skip under branch policy.',
-});
+export const manualTenderCaptureSchema = z
+  .object({
+    type: manualTenderTypeSchema,
+    providerRef: z
+      .string()
+      .regex(/^\d{4,6}$/)
+      .optional(),
+    payerName: z.string().trim().min(1).max(100),
+    referenceSkipped: z.boolean().optional(),
+  })
+  .strict()
+  .refine(
+    (value) =>
+      value.referenceSkipped === true
+        ? value.providerRef === undefined
+        : value.providerRef !== undefined,
+    {
+      message: 'Enter the last 4–6 transaction ID digits, or explicitly skip under branch policy.',
+    }
+  );
 
 // Signed offline rules carry permission only. QR image bytes stay out of the
 // replay wire payload, keeping the existing transport size limit intact.
-export const manualMerchantPoliciesSchema = z.object({
-  RAAST: z.object({ allowReferenceSkip: z.boolean() }).optional(),
-  JAZZCASH: z.object({ allowReferenceSkip: z.boolean() }).optional(),
-  EASYPAISA: z.object({ allowReferenceSkip: z.boolean() }).optional(),
-}).strict();
+export const manualMerchantPoliciesSchema = z
+  .object({
+    RAAST: z.object({ allowReferenceSkip: z.boolean() }).optional(),
+    JAZZCASH: z.object({ allowReferenceSkip: z.boolean() }).optional(),
+    EASYPAISA: z.object({ allowReferenceSkip: z.boolean() }).optional(),
+  })
+  .strict();
 export function manualMerchantPolicies(settings: ManualPaymentSettings) {
   const policies: z.infer<typeof manualMerchantPoliciesSchema> = {};
   for (const type of MANUAL_TENDER_TYPES) {
@@ -50,7 +69,10 @@ export function manualMerchantPolicies(settings: ManualPaymentSettings) {
 }
 
 export function validateManualTender(settings: unknown, capture: unknown) {
-  return validateManualTenderPolicy(manualMerchantPolicies(manualPaymentSettingsSchema.parse(settings ?? {})), capture);
+  return validateManualTenderPolicy(
+    manualMerchantPolicies(manualPaymentSettingsSchema.parse(settings ?? {})),
+    capture
+  );
 }
 export function validateManualTenderPolicy(policies: unknown, capture: unknown) {
   const parsed = manualTenderCaptureSchema.parse(capture);
@@ -75,12 +97,16 @@ export const MANUAL_CARD_PROVIDER = 'MANUAL_TERMINAL';
 export const MANUAL_CARD_REFERENCE = /^(?!\d{13,}$)[A-Za-z0-9]{4,24}$/;
 /** The approval code printed on the terminal slip. */
 export const MANUAL_CARD_APPROVAL_CODE = /^[A-Za-z0-9]{2,12}$/;
-export const manualCardCaptureSchema = z.object({
-  providerRef: z.string().trim().regex(MANUAL_CARD_REFERENCE),
-  approvalCode: z.string().trim().regex(MANUAL_CARD_APPROVAL_CODE),
-}).strict();
+export const manualCardCaptureSchema = z
+  .object({
+    providerRef: z.string().trim().regex(MANUAL_CARD_REFERENCE),
+    approvalCode: z.string().trim().regex(MANUAL_CARD_APPROVAL_CODE),
+  })
+  .strict();
 
-/** Bank statement reference, required for every new bank transfer. */
+export const optionalCardCaptureSchema = manualCardCaptureSchema.partial();
+
+/** Length limit when a bank statement reference is supplied. */
 export const BANK_TRANSFER_REFERENCE_MAX_LENGTH = 120;
 /** True when the text holds a 13-19 digit run (separators ignored): a possible card number. */
 export function looksLikeCardNumber(text: string): boolean {
@@ -131,10 +157,48 @@ function passesLuhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-export const bankTransferCaptureSchema = z.object({
-  providerRef: z.string().trim().min(1).max(BANK_TRANSFER_REFERENCE_MAX_LENGTH)
-    .refine((ref) => !looksLikeCardNumber(ref)),
-}).strict();
+export const bankTransferCaptureSchema = z
+  .object({
+    providerRef: z
+      .string()
+      .trim()
+      .min(1)
+      .max(BANK_TRANSFER_REFERENCE_MAX_LENGTH)
+      .refine((ref) => !looksLikeCardNumber(ref)),
+  })
+  .strict();
+
+export const optionalTransferCaptureSchema = bankTransferCaptureSchema.partial();
+
+export function paymentDetailLabel(tender: {
+  type: string;
+  provider?: string | null;
+  providerRef?: string | null;
+  approvalCode?: string | null;
+}) {
+  if (tender.type === 'BANK_TRANSFER') {
+    if (!tender.providerRef) return 'No transfer details';
+    return bankTransferCaptureSchema.safeParse({ providerRef: tender.providerRef }).success
+      ? tender.providerRef
+      : 'Reference unavailable';
+  }
+  if (tender.type === 'CARD' && tender.provider === MANUAL_CARD_PROVIDER)
+    return (
+      [
+        tender.providerRef &&
+        MANUAL_CARD_REFERENCE.test(tender.providerRef) &&
+        !looksLikeCardNumber(tender.providerRef)
+          ? tender.providerRef
+          : null,
+        tender.approvalCode && MANUAL_CARD_APPROVAL_CODE.test(tender.approvalCode)
+          ? tender.approvalCode
+          : null,
+      ]
+        .filter(Boolean)
+        .join(' · ') || 'No slip details'
+    );
+  return null;
+}
 
 /** Keep card-number protection on all existing wire paths; bank references have their own format. */
 export function hasValidTenderProviderReference(input: { type: string; providerRef?: string }) {
@@ -144,30 +208,60 @@ export function hasValidTenderProviderReference(input: { type: string; providerR
     : MANUAL_CARD_REFERENCE.test(input.providerRef);
 }
 
-const confirmerSchema = z.object({
-  /** The confirming user's id; absent on reports saved before it was recorded. */
-  id: z.string().min(1).optional(),
-  name: z.string().min(1),
-  count: z.number().int().positive().safe(),
-  amountMinor: z.number().int().nonnegative().safe(),
-}).strict();
-export const tenderTotalsSchema = z.array(z.object({
-  type: z.string().min(1),
-  amountMinor: z.number().int().nonnegative().safe(),
-  refundMinor: z.number().int().nonnegative().safe(),
-  netMinor: z.number().int().safe(),
-  /** Manually confirmed tenders (card terminal, wallets) by the person who confirmed them. */
-  confirmers: z.array(confirmerSchema).optional(),
-}).strict());
+const confirmerSchema = z
+  .object({
+    /** The confirming user's id; absent on reports saved before it was recorded. */
+    id: z.string().min(1).optional(),
+    name: z.string().min(1),
+    count: z.number().int().positive().safe(),
+    amountMinor: z.number().int().nonnegative().safe(),
+  })
+  .strict();
+export const tenderTotalsSchema = z.array(
+  z
+    .object({
+      type: z.string().min(1),
+      amountMinor: z.number().int().nonnegative().safe(),
+      refundMinor: z.number().int().nonnegative().safe(),
+      netMinor: z.number().int().safe(),
+      /** Manually confirmed tenders (card terminal, wallets) by the person who confirmed them. */
+      confirmers: z.array(confirmerSchema).optional(),
+      details: z
+        .array(z.object({ id: z.string(), label: z.string(), amountMinor: z.number().int() }))
+        .optional(),
+    })
+    .strict()
+);
 
 export function aggregateTenderTotals(
-  tenders: readonly { type: string; amountMinor: number; confirmedById?: string | null }[],
-  refunds: readonly { amountMinor: number; drawerSessionId: string | null; originalTender: { type: string } }[],
+  tenders: readonly {
+    id?: string;
+    type: string;
+    amountMinor: number;
+    confirmedById?: string | null;
+    provider?: string | null;
+    providerRef?: string | null;
+    approvalCode?: string | null;
+  }[],
+  refunds: readonly {
+    amountMinor: number;
+    drawerSessionId: string | null;
+    originalTender: { type: string };
+  }[],
   confirmerNames: ReadonlyMap<string, string> = new Map()
 ) {
   type Confirmer = z.infer<typeof confirmerSchema>;
-  const totals = new Map<string, { type: string; amountMinor: number; refundMinor: number; netMinor: number;
-    confirmers?: Map<string, Confirmer> }>();
+  const totals = new Map<
+    string,
+    {
+      type: string;
+      amountMinor: number;
+      refundMinor: number;
+      netMinor: number;
+      details?: { id: string; label: string; amountMinor: number }[];
+      confirmers?: Map<string, Confirmer>;
+    }
+  >();
   const row = (type: string) => {
     if (!totals.has(type)) totals.set(type, { type, amountMinor: 0, refundMinor: 0, netMinor: 0 });
     return totals.get(type)!;
@@ -175,22 +269,38 @@ export function aggregateTenderTotals(
   for (const tender of tenders) {
     const entry = row(tender.type);
     entry.amountMinor += tender.amountMinor;
+    const label = paymentDetailLabel(tender);
+    if (label && tender.id)
+      (entry.details ??= []).push({ id: tender.id, amountMinor: tender.amountMinor, label });
     if (!tender.confirmedById) continue;
     entry.confirmers ??= new Map();
     const name = confirmerNames.get(tender.confirmedById) ?? 'Unknown user';
-    const confirmer = entry.confirmers.get(tender.confirmedById) ??
-      { id: tender.confirmedById, name, count: 0, amountMinor: 0 };
+    const confirmer = entry.confirmers.get(tender.confirmedById) ?? {
+      id: tender.confirmedById,
+      name,
+      count: 0,
+      amountMinor: 0,
+    };
     confirmer.count += 1;
     confirmer.amountMinor += tender.amountMinor;
     entry.confirmers.set(tender.confirmedById, confirmer);
   }
   for (const refund of refunds)
-    row(refund.drawerSessionId ? 'CASH' : refund.originalTender.type).refundMinor += refund.amountMinor;
-  return tenderTotalsSchema.parse([...totals.values()].sort((a, b) => a.type.localeCompare(b.type))
-    .map(({ confirmers, ...value }) => ({
-      ...value,
-      netMinor: value.amountMinor - value.refundMinor,
-      ...(confirmers ? { confirmers: [...confirmers.values()]
-        .sort((a, b) => a.name.localeCompare(b.name) || a.id!.localeCompare(b.id!)) } : {}),
-    })));
+    row(refund.drawerSessionId ? 'CASH' : refund.originalTender.type).refundMinor +=
+      refund.amountMinor;
+  return tenderTotalsSchema.parse(
+    [...totals.values()]
+      .sort((a, b) => a.type.localeCompare(b.type))
+      .map(({ confirmers, ...value }) => ({
+        ...value,
+        netMinor: value.amountMinor - value.refundMinor,
+        ...(confirmers
+          ? {
+              confirmers: [...confirmers.values()].sort(
+                (a, b) => a.name.localeCompare(b.name) || a.id!.localeCompare(b.id!)
+              ),
+            }
+          : {}),
+      }))
+  );
 }

@@ -57,6 +57,7 @@ import {
 } from '@/lib/pharmacy/owner-data-export-pin';
 import {
   MAX_DISCOUNT_CHANGE_REFUSED,
+  isOrganizationOwner,
   readDiscountPolicySettings,
   readDiscountSuggestions,
   readMaxDiscountSettings,
@@ -974,7 +975,7 @@ function fail(error: unknown): never {
     // the branch cannot cover is the operator's to correct, never a 500.
     throw new TRPCError({
       code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
-      message: error.reason,
+      message: error.userMessage ?? error.reason,
     });
   }
   if (error instanceof PharmacyLoyaltyError) {
@@ -1521,6 +1522,90 @@ export async function allocateSettledCounterReceiptPrintJob(
 }
 
 export const pharmacySalesRouter = router({
+  saveCounterDefaultSaleUnit: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          previous: z.enum(['PACK', 'STRIP', 'UNIT']),
+          unit: z.enum(['PACK', 'STRIP', 'UNIT']),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (
+        ctx.support ||
+        ctx.session.user.isSupportSession ||
+        !(await isOrganizationOwner(ctx.db, scope.organizationId, scope.actorId))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner can change the starting sale unit.',
+        });
+      const saved = await ctx.db.pharmacyBranch.updateMany({
+        where: {
+          id: scope.branchId,
+          organizationId: scope.organizationId,
+          active: true,
+          counterDefaultSaleUnit: input.previous,
+        },
+        data: { counterDefaultSaleUnit: input.unit },
+      });
+      if (!saved.count)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'The branch setting changed. Reload before saving.',
+        });
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: scope.branchId,
+        metadata: { previous: input.previous, unit: input.unit },
+      });
+      return { unit: input.unit };
+    }),
+  saveCounterPaymentDetails: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          previous: z.boolean(),
+          required: z.boolean(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (
+        ctx.support ||
+        ctx.session.user.isSupportSession ||
+        !(await isOrganizationOwner(ctx.db, scope.organizationId, scope.actorId))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner can change the payment details requirement.',
+        });
+      const saved = await ctx.db.pharmacyBranch.updateMany({
+        where: {
+          id: scope.branchId,
+          organizationId: scope.organizationId,
+          active: true,
+          requirePaymentDetails: input.previous,
+        },
+        data: { requirePaymentDetails: input.required },
+      });
+      if (!saved.count)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'The branch setting changed. Reload before saving.',
+        });
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: scope.branchId,
+        metadata: { previous: input.previous, required: input.required },
+      });
+      return { required: input.required };
+    }),
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))
     .query(async ({ ctx, input }) => {
@@ -1766,13 +1851,21 @@ export const pharmacySalesRouter = router({
       return readDailyCloseEvidence(ctx.db, await scopeFor(ctx, input.branchId), input.closeId);
     }),
   khataAccounts: protectedProcedure
-    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          query: z.string().trim().max(120).optional(),
+        })
+        .strict()
+    )
     .query(async ({ ctx, input }) => {
       const scope = await khataScope(ctx, input.branchId, 'read');
       return ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
-        return readSaleKhataAccounts(db, scope, input.saleId);
+        return readSaleKhataAccounts(db, scope, input.saleId, { query: input.query });
       });
     }),
   khataStatement: protectedProcedure
@@ -5057,6 +5150,8 @@ export const pharmacySalesRouter = router({
           name: true,
           city: true,
           provinceCode: true,
+          counterDefaultSaleUnit: true,
+          requirePaymentDetails: true,
           businessDayEndsAtHistory: true,
         },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],

@@ -2,6 +2,8 @@
 
 import * as React from 'react';
 
+import { Combobox } from '@base-ui/react/combobox';
+import { Input } from './input';
 import { cn } from '@/lib/utils';
 import {
   Select,
@@ -13,11 +15,19 @@ import {
   SelectValue,
 } from './select';
 
-type SelectFieldProps = React.ComponentPropsWithRef<'select'>;
+type SelectFieldProps = React.ComponentPropsWithRef<'select'> & {
+  search?: {
+    value: string;
+    onChange: (query: string) => void;
+    placeholder: string;
+    loading?: boolean;
+  };
+};
 
 type Option = {
   value: string;
   label: string;
+  accessibleLabel?: string;
   disabled: boolean;
   hidden: boolean;
   group: string | null;
@@ -82,7 +92,7 @@ function changesOptions(record: MutationRecord, native: HTMLSelectElement): bool
   if (record.type === 'childList' || record.type === 'characterData') return true;
   return (
     (record.target instanceof HTMLOptionElement || record.target instanceof HTMLOptGroupElement) &&
-    ['value', 'label', 'disabled', 'hidden'].includes(record.attributeName ?? '')
+    ['value', 'label', 'aria-label', 'disabled', 'hidden'].includes(record.attributeName ?? '')
   );
 }
 
@@ -99,6 +109,7 @@ function changesOptions(record: MutationRecord, native: HTMLSelectElement): bool
 export function SelectField(allProps: SelectFieldProps) {
   const {
     children,
+    search,
     id,
     className,
     style,
@@ -116,6 +127,7 @@ export function SelectField(allProps: SelectFieldProps) {
     ...props
   } = allProps;
   const nativeRef = React.useRef<HTMLSelectElement>(null);
+  const searchRef = React.useRef<HTMLInputElement>(null);
   const triggerRef = React.useRef<HTMLButtonElement>(null);
   const generatedId = React.useId();
   const nativeId = id ?? `${generatedId}-native`;
@@ -163,6 +175,7 @@ export function SelectField(allProps: SelectFieldProps) {
         return {
           value: option.value,
           label: option.label,
+          accessibleLabel: option.getAttribute('aria-label') || undefined,
           disabled: option.disabled || (inGroup && group.disabled),
           hidden: option.hidden || (inGroup && group.hidden),
           group: inGroup ? group.label : null,
@@ -239,7 +252,8 @@ export function SelectField(allProps: SelectFieldProps) {
     // A parent's opening-focus effect can run while the initial native fallback
     // is still visible. Hand that existing focus to the trigger once it mounts;
     // focusing an already-focused native element would not emit another event.
-    if (nativeRef.current === document.activeElement) triggerRef.current?.focus();
+    if (nativeRef.current === document.activeElement)
+      (searchRef.current ?? triggerRef.current)?.focus();
     // React normally leaves a controlled native select at its reset selection
     // until its owner renders again. Internal presentation renders must not
     // accidentally reapply the controlled prop earlier than the native control.
@@ -327,6 +341,14 @@ export function SelectField(allProps: SelectFieldProps) {
     });
     return { groupedItems, labels };
   }, [options]);
+  function selectValue(value: string | null) {
+    const native = nativeRef.current;
+    if (!native || value === null || native.matches(':disabled') || native.value === value) return;
+    native.value = value;
+    native.dispatchEvent(new Event('input', { bubbles: true }));
+    native.dispatchEvent(new Event('change', { bubbles: true }));
+    sync();
+  }
   const selectedLabel = snapshot ? labels.get(snapshot.value) : undefined;
 
   return (
@@ -359,7 +381,7 @@ export function SelectField(allProps: SelectFieldProps) {
         }}
         onFocus={(event) => {
           if (snapshot && document.activeElement === event.currentTarget) {
-            triggerRef.current?.focus();
+            (searchRef.current ?? triggerRef.current)?.focus();
           }
           onFocus?.(event);
         }}
@@ -378,26 +400,70 @@ export function SelectField(allProps: SelectFieldProps) {
                 'validity' in control &&
                 !(control.validity as ValidityState).valid
             );
-          if (!form || firstInvalid === event.currentTarget) triggerRef.current?.focus();
+          if (!form || firstInvalid === event.currentTarget)
+            (searchRef.current ?? triggerRef.current)?.focus();
         }}
       >
         {children}
       </select>
-      {snapshot && (
+      {snapshot && search && (
+        <Combobox.Root<Option>
+          inline
+          open
+          autoHighlight
+          filter={null}
+          items={search.loading ? [] : options?.filter((option) => option.value && !option.hidden)}
+          value={options?.find((option) => option.value === snapshot.value) ?? null}
+          inputValue={search.value}
+          itemToStringLabel={(option) => option.label}
+          itemToStringValue={(option) => option.value}
+          isItemEqualToValue={(a, b) => a.value === b.value}
+          onInputValueChange={(text, details) => {
+            if (details.reason === 'input-change' || details.reason === 'input-clear')
+              search.onChange(text);
+          }}
+          onValueChange={(option) => {
+            if (option) selectValue(option.value);
+          }}
+          disabled={snapshot.disabled}
+        >
+          <Combobox.Input
+            render={<Input className="min-h-11" />}
+            ref={searchRef}
+            autoFocus={autoFocus}
+            aria-label={snapshot.label}
+            aria-describedby={describedBy}
+            maxLength={120}
+            placeholder={search.placeholder}
+          />
+          <Combobox.List
+            aria-label={snapshot.label}
+            aria-busy={search.loading}
+            className="max-h-48 overflow-auto"
+          >
+            {(option: Option) => (
+              <Combobox.Item
+                key={option.value}
+                value={option}
+                aria-label={option.accessibleLabel}
+                aria-description={option.accessibleLabel ? option.label : undefined}
+                disabled={option.disabled}
+                className="min-h-11 cursor-pointer rounded-sm px-3 py-2 text-sm text-text-body data-highlighted:bg-surface-sunken"
+              >
+                {option.label}
+                {snapshot.value === option.value ? ' · Selected' : ''}
+              </Combobox.Item>
+            )}
+          </Combobox.List>
+        </Combobox.Root>
+      )}
+      {snapshot && !search && (
         <Select
           inputRef={constrainHiddenInput}
           value={snapshot.value}
           items={snapshot.options}
           disabled={snapshot.disabled}
-          onValueChange={(value) => {
-            const native = nativeRef.current;
-            if (!native || value === null || native.matches(':disabled') || native.value === value)
-              return;
-            native.value = value;
-            native.dispatchEvent(new Event('input', { bubbles: true }));
-            native.dispatchEvent(new Event('change', { bubbles: true }));
-            sync();
-          }}
+          onValueChange={selectValue}
         >
           <SelectTrigger
             {...triggerAttributes}

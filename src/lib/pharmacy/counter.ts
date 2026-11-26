@@ -1,3 +1,4 @@
+import { paymentDetailLabel } from './manual-payments';
 import { readPrepaidAccount } from './prepaid-tiers';
 import { pricePrepaidSale } from './prepaid-discount';
 /**
@@ -139,6 +140,7 @@ export type CounterLabelLot = {
 };
 
 export type CounterSearchRow = CounterCatalogRow & {
+  barcodePackLevelId?: string | null;
   /** DEV-878: server-resolved suggestions for an unavailable search match. */
   stockAlternatives?: {
     ingredientRecorded: boolean;
@@ -234,6 +236,7 @@ async function matchMedicineIds(
 ): Promise<{
   matches: Map<string, { kind: CounterMatchKind; rank: number }>;
   labelLotId: string | null;
+  barcodePackLevelId?: string | null;
 }> {
   const trimmed = query.trim();
   if (trimmed.length < 2) throw new PharmacyCounterError('INVALID_QUERY');
@@ -251,7 +254,7 @@ async function matchMedicineIds(
           normalizedCode: normalized,
           presentation: { medicine: { saleable: true } },
         },
-        select: { presentation: { select: { medicineId: true } } },
+        select: { packLevelId: true, presentation: { select: { medicineId: true } } },
       })
     : null;
   if (barcode) {
@@ -259,7 +262,7 @@ async function matchMedicineIds(
     // fuzzy lookups keeps scan-to-cart to one indexed read, and a lone row lets
     // the scanner path add it without a pick list.
     remember(barcode.presentation.medicineId, 'BARCODE', 0);
-    return { matches, labelLotId: null };
+    return { matches, labelLotId: null, barcodePackLevelId: barcode.packLevelId };
   }
 
   // A shelf code resolves only inside this organization and branch. Invalid
@@ -411,7 +414,12 @@ export async function searchCounterCatalog(
 ): Promise<{ rows: CounterSearchRow[]; truncated: boolean }> {
   const limit = Math.min(Math.max(input.limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
   const at = input.at ?? new Date();
-  const { matches, labelLotId } = await matchMedicineIds(db, scope, input.query, limit);
+  const { matches, labelLotId, barcodePackLevelId } = await matchMedicineIds(
+    db,
+    scope,
+    input.query,
+    limit
+  );
   const medicineIds = [...matches.keys()];
   if (medicineIds.length > limit) {
     // Relevance must decide admission too, before hydration. Keep the original
@@ -429,6 +437,8 @@ export async function searchCounterCatalog(
     at,
     labelLotId
   );
+  for (const row of rows)
+    if (row.matchedOn === 'BARCODE') row.barcodePackLevelId = barcodePackLevelId ?? null;
   const unavailable = rows.filter((row) => !hasSellableUnit(row));
   const sourceById = new Map(medicines.map((medicine) => [medicine.id, medicine]));
   const ingredientSets = unavailable.flatMap((row) => {
@@ -917,6 +927,13 @@ async function hydrateCounterRows(
       }));
     }
 
+    if (medicine.wholePackOnly && priced) {
+      saleUnits = saleUnits.filter(
+        (option) =>
+          option.kind === 'PACK' && option.canonicalUnitsPerSaleUnit === priced.unitsPerPack
+      );
+    }
+
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
     // price is the charged price even when batches carry different increments.
     const roundingIncrementMinor = priced
@@ -1315,6 +1332,7 @@ export async function readCounterReceipt(
   const tenders = sale.tenders.map((tender) => ({
     tenderId: tender.id,
     type: tender.type,
+    ...(paymentDetailLabel(tender) ? { paymentDetails: paymentDetailLabel(tender) } : {}),
     amountMinor: tender.amountMinor,
     cashReceivedMinor: tender.cashReceivedMinor,
     changeGivenMinor: tender.changeGivenMinor,

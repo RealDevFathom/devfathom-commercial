@@ -1,3 +1,4 @@
+import { paymentDetailLabel } from './manual-payments';
 import { reversedTenderRefundIds } from './card-terminal/provider-refunds';
 import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PREPAID_PROVIDER } from './prepaid-tiers';
@@ -866,6 +867,13 @@ async function addSaleLineWithAllocation(
     medicineId: input.medicineId,
     ...(input.shelfLabelLotId ? { expectedInventoryLotId: input.shelfLabelLotId } : {}),
     requiredUnits: canonicalUnits,
+    counterSale: reservation
+      ? undefined
+      : {
+          id: input.saleId,
+          unit: input.saleUnit,
+          unitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+        },
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
     override,
@@ -1910,6 +1918,7 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
+    ...(paymentDetailLabel(tender) ? { paymentDetails: paymentDetailLabel(tender) } : {}),
     // DEV-863: a prepaid wallet tender is restored to the customer's balance, never paid in cash.
     prepaid: tender.provider === PREPAID_PROVIDER,
     amountMinor: tender.amountMinor,

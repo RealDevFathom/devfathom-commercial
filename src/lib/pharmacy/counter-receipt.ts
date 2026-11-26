@@ -81,6 +81,7 @@ export type CounterReceiptLine = {
 };
 
 export type CounterReceiptTender = {
+  paymentDetails?: string | null;
   tenderId: string;
   type: string;
   amountMinor: number;

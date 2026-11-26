@@ -1200,6 +1200,7 @@ export function ReturnForm({
                     >
                       {row.prepaid ? 'Prepaid balance' : row.type} · PKR{' '}
                       {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                      {row.paymentDetails && ` · ${row.paymentDetails}`}
                     </option>
                   ))}
                   <option value="none">No refund now — record the return only</option>
@@ -1338,6 +1339,7 @@ export function ReturnForm({
                   >
                     {row.prepaid ? 'Prepaid balance' : row.type} · PKR{' '}
                     {formatMinor(row.amountMinor - row.refundedMinor)} remaining
+                    {row.paymentDetails && ` · ${row.paymentDetails}`}
                   </option>
                 ))}
               </select>
@@ -1411,6 +1413,13 @@ export function ReturnForm({
           )}
           <section aria-label="Return and refund history" className="space-y-2">
             <h3 className="font-semibold">Return and refund history</h3>
+            {data.tenders
+              .filter((row) => row.paymentDetails)
+              .map((row) => (
+                <p key={row.id}>
+                  {row.type} · {formatMinor(row.amountMinor)} · {row.paymentDetails}
+                </p>
+              ))}
             {data.returns.length === 0 && <p>No returns recorded.</p>}
             {data.returns.map((row) => (
               <p key={row.id}>

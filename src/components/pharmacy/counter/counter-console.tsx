@@ -1,5 +1,6 @@
 'use client';
 
+import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
 import { browserUuid } from '@/lib/browser-uuid';
 import {
   enrolledCounterDeviceId,
@@ -53,6 +54,7 @@ import {
   type CounterLineChange,
   type CounterLotOverrideValue,
 } from './counter-cart';
+import { CounterBranchUnitSetting } from './counter-branch-unit-setting';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterActionBar, CounterFrame, CounterFrameContent } from './counter-frame';
@@ -158,7 +160,6 @@ import {
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   COUNTER_DISCOUNT_NOTICES,
-  COUNTER_ERROR_MESSAGES,
   counterBillMovedOn,
   counterErrorMessage,
   counterDrawerErrorMessage,
@@ -183,10 +184,10 @@ import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
   counterUnitNoun,
+  preferredSaleUnitOption,
   plural,
   looseSaleUnitOption,
   onHandInSaleUnitLabel,
-  preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
   type SaleUnitOption,
@@ -228,7 +229,6 @@ type Notice = {
   message: string;
   /** DEV-910: stays on screen until the cashier dismisses it. */
   persistent?: boolean;
-  inventoryBranchId?: string;
   printReceiptSaleId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
@@ -327,6 +327,51 @@ function hasValidBill(
     cart.totals.tenderedMinor >= 0 &&
     cart.totals.tenderedMinor <= cart.totals.netMinor
   );
+}
+
+function scannedSaleOption(row: CounterSearchRow) {
+  if (row.barcodePackLevelId)
+    return row.saleUnits.find((unit) => unit.packLevelId === row.barcodePackLevelId) ?? null;
+  return (
+    row.saleUnits.find((unit) => unit.kind === 'PACK') ??
+    (row.unitsPerPack === 1 ? row.saleUnits[0] : null) ??
+    null
+  );
+}
+
+function counterAddOption(row: CounterSearchRow, kind: SaleUnitKind) {
+  if (counterUnitNoun(row.dosageForm) === 'unit')
+    return preferredSaleUnitOption(row.saleUnits, row.dosageForm);
+  const requested =
+    kind === 'UNIT'
+      ? looseSaleUnitOption(row.saleUnits)
+      : row.saleUnits.find((option) => option.kind === kind);
+  return (
+    requested ??
+    row.saleUnits.reduce<SaleUnitOption | null>(
+      (smallest, option) =>
+        !smallest || option.canonicalUnitsPerSaleUnit < smallest.canonicalUnitsPerSaleUnit
+          ? option
+          : smallest,
+      null
+    )
+  );
+}
+
+function billContents(cart: CounterCart) {
+  return JSON.stringify([
+    cart.status,
+    cart.totals,
+    cart.lines.map((line) => [
+      line.saleLineId,
+      line.quantity,
+      line.saleUnit,
+      line.canonicalUnits,
+      line.unitPriceMinor,
+      line.discountMinor,
+      line.lineTotalMinor,
+    ]),
+  ]);
 }
 
 /**
@@ -860,14 +905,18 @@ function ScopedPharmacyCounterConsole({
   // DEV-508: Void and Shift+F4 open a reason-and-confirm dialog; nothing is voided until confirmed.
   const [voidOpen, setVoidOpen] = useState(false);
   const online = useBrowserOnline();
+  const promptedTerms = useRef(new Map<string, Set<string>>());
   // DEV-81: the short line whose optional outcome chips are showing.
   const [lostSaleCapture, setLostSaleCapture] = useState<{
     branchId: string;
-    demandId: string;
+    demandId?: string;
     requested: string;
   } | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
+  const autoRead = useRef<string | null>(null);
+  const [balanceFailure, setBalanceFailure] = useState<string | null>(null);
+  const [balanceAnnouncement, setBalanceAnnouncement] = useState('');
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
   const tenderInFlight = useRef(false);
   const [recoveryBranch, setRecoveryBranch] = useState('');
@@ -902,9 +951,8 @@ function ScopedPharmacyCounterConsole({
   // DEV-977B (Counter v2, A6): the result the arrows are on. Moving through results no longer
   // stages a line; Enter adds the highlighted one in one step.
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  // DEV-977B: "Adds as" (F3 pack, F4 strip, F5 unit), chosen before or while searching. Null
-  // adds each medicine in its usual unit.
-  const [addUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
+  // An explicit cashier choice belongs to the current bill.
+  const [billUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
   // DEV-977B: the sale units of medicines added from search, so their bill line can switch unit.
   const knownSaleUnits = useRef(new Map<string, readonly SaleUnitOption[]>());
   // DEV-977B: retry keys for a line change or removal whose answer was lost.
@@ -1186,7 +1234,7 @@ function ScopedPharmacyCounterConsole({
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
-    { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
+    { enabled: Boolean(branchId && saleId), staleTime: 30_000, retry: false }
   );
   // DEV-623: every unpaid bill in the branch, so none is stranded with its stock.
   const openBillsQuery = trpc.pharmacySales.openBills.useQuery(
@@ -1384,24 +1432,45 @@ function ScopedPharmacyCounterConsole({
   }, [utils]);
 
   const setActiveSale = useCallback(
-    (nextSaleId: string | null) => {
+    (nextSaleId: string | null, keepBillUnit = false) => {
       discardReceiptIntent();
       setReceiptSettlement(null);
       setSettledChange(null);
       setReceiptOpen(false);
+      setLostSaleCapture(null);
+      const draftKey = JSON.stringify([branchId, null]);
+      if (keepBillUnit && nextSaleId && promptedTerms.current.has(draftKey))
+        promptedTerms.current.set(
+          JSON.stringify([branchId, nextSaleId]),
+          promptedTerms.current.get(draftKey)!
+        );
+      promptedTerms.current.delete(draftKey);
       setSaleId(nextSaleId);
+      autoRead.current = null;
+      setBalanceFailure(null);
+      setBalanceAnnouncement('');
+      if (!keepBillUnit) setAddUnit(null);
       setCustomerId(null);
       setRedeemPoints(0);
       setTenderOutcome(null);
       setTenderReadRequired(false);
       setRestoredAttempt(null);
     },
-    [discardReceiptIntent]
+    [branchId, discardReceiptIntent]
   );
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const cart = cartQuery.data ?? null;
+  const configuredBranch = branches.find((branch) => branch.id === branchId);
+  const branchDefault = configuredBranch?.counterDefaultSaleUnit ?? 'UNIT';
+  // Once the branch is known, pin its starting choice for the lifetime of this bill.
+  if (saleId && configuredBranch && billUnit === null) setAddUnit(branchDefault);
+  const addUnit = billClosed(cart, saleId) ? branchDefault : (billUnit ?? branchDefault);
+  const addUnitFor = useCallback(
+    (row: CounterSearchRow) => counterAddOption(row, addUnit),
+    [addUnit]
+  );
   const patient = patientPanelQuery.data ?? null;
   const patientAddress = patient ? patientAddressDraft : '';
   const locationName = activeRow?.storage.locationName?.trim() || activeRow?.storage.locationKind;
@@ -1545,16 +1614,37 @@ function ScopedPharmacyCounterConsole({
   const paidMinor = currentBill ? cart.totals.tenderedMinor : 0;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
+  const billScope = JSON.stringify([branchId, saleId]);
+  const failedBalanceRead = balanceFailure === billScope;
+  const lastPayable = useRef<{ scope: string; contents: string } | null>(null);
+  const previousBill =
+    lastPayable.current?.scope === billScope ? lastPayable.current.contents : null;
+  const sameVerifiedBill = Boolean(
+    currentBill && previousBill && previousBill === billContents(cart)
+  );
+  const changedInSheet =
+    paymentOpen &&
+    !tenderOutcome &&
+    !pending &&
+    currentBill &&
+    previousBill !== null &&
+    !sameVerifiedBill;
   const billState: CounterTenderBillState =
     !saleId || !branchId
       ? 'idle'
       : storageError
         ? 'error'
-        : !recoveryReady || cartQuery.isFetching || cartQuery.isLoading || refreshingTenderBill
+        : !recoveryReady ||
+            (cartQuery.isFetching && !sameVerifiedBill) ||
+            cartQuery.isLoading ||
+            refreshingTenderBill
           ? 'loading'
-          : cartQuery.isError || unknownTender
+          : cartQuery.isError || unknownTender || failedBalanceRead
             ? 'error'
-            : tenderReadRequired || cartQuery.isStale || cartQuery.isPlaceholderData
+            : tenderReadRequired ||
+                (cartQuery.isStale && !sameVerifiedBill) ||
+                cartQuery.isPlaceholderData ||
+                changedInSheet
               ? 'stale'
               : !cartQuery.isSuccess || !currentBill || cart.lines.length === 0
                 ? 'unavailable'
@@ -1566,6 +1656,22 @@ function ScopedPharmacyCounterConsole({
                   : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
                     ? 'ready'
                     : 'unavailable';
+
+  useEffect(() => {
+    if (billState !== 'ready' || !currentBill) return;
+    const contents = billContents(cart);
+    const previous = lastPayable.current;
+    if (
+      paymentOpen &&
+      !tenderOutcome &&
+      previous?.scope === billScope &&
+      previous.contents !== contents
+    )
+      setBalanceAnnouncement(
+        `This bill changed. New balance: Rs ${formatMinor(cart.totals.netMinor - cart.totals.tenderedMinor)}`
+      );
+    lastPayable.current = { scope: billScope, contents };
+  }, [billScope, billState, cart, currentBill, paymentOpen, tenderOutcome]);
   // #1254: opening the drawer moves no money for this bill, so the bill re-read a
   // refused payment demands must not lock "Open drawer", the usual fix for that refusal.
   const drawerBusy =
@@ -1793,29 +1899,31 @@ function ScopedPharmacyCounterConsole({
       ? 'Check the payment outcome before taking more money.'
       : storageError
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
-        : tenderReadRequired
-          ? 'Refresh this bill to verify payment before taking more money.'
-          : packBlocked
-            ? 'Resolve the pack check or remove the blocked line before taking payment.'
-            : blocked
-              ? 'Resolve the safety block in the prescription panel before taking payment.'
-              : billState === 'idle'
-                ? 'Add an item to start a sale before taking payment.'
-                : billState === 'loading'
-                  ? 'Checking the bill. Please wait before taking payment.'
-                  : billState === 'error' || billState === 'stale'
-                    ? 'Refresh the bill to check the balance before taking payment.'
-                    : billState === 'settled'
-                      ? 'This bill is already paid. Start a new sale.'
-                      : billState === 'unavailable'
-                        ? cart?.status === 'HELD'
-                          ? 'Resume this bill before taking payment.'
-                          : currentBill && lineCount === 0
-                            ? 'Add an item to this bill before taking payment.'
-                            : 'Refresh the bill or start a new sale before taking payment.'
-                        : busy
-                          ? 'Wait for the current counter action to finish before taking payment.'
-                          : null;
+        : failedBalanceRead
+          ? 'Could not check the bill balance. Refresh the bill to try again.'
+          : tenderReadRequired
+            ? 'Refresh this bill to verify payment before taking more money.'
+            : packBlocked
+              ? 'Resolve the pack check or remove the blocked line before taking payment.'
+              : blocked
+                ? 'Resolve the safety block in the prescription panel before taking payment.'
+                : billState === 'idle'
+                  ? 'Add an item to start a sale before taking payment.'
+                  : billState === 'loading'
+                    ? 'Checking the bill balance…'
+                    : billState === 'error' || billState === 'stale'
+                      ? 'Refresh the bill to check the balance before taking payment.'
+                      : billState === 'settled'
+                        ? 'This bill is already paid. Start a new sale.'
+                        : billState === 'unavailable'
+                          ? cart?.status === 'HELD'
+                            ? 'Resume this bill before taking payment.'
+                            : currentBill && lineCount === 0
+                              ? 'Add an item to this bill before taking payment.'
+                              : 'Refresh the bill or start a new sale before taking payment.'
+                          : busy
+                            ? 'Wait for the current counter action to finish before taking payment.'
+                            : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -1892,6 +2000,10 @@ function ScopedPharmacyCounterConsole({
         (outcomeInFlight.current && resolution !== 'accepted')
       )
         return false;
+      const original =
+        hasValidBill(cartQuery.data, saleId) && !cartQuery.isPlaceholderData
+          ? billContents(cartQuery.data)
+          : null;
       setRefreshingTenderBill(true);
       let confirmed: CounterReceiptSettlement | null = null;
       try {
@@ -1916,7 +2028,13 @@ function ScopedPharmacyCounterConsole({
         // invalidate() alone can resolve after a failed read. Inspect an explicit
         // refetch before permitting another money movement.
         const read = await cartQuery.refetch({ throwOnError: true });
-        if (!read.isSuccess || !hasValidBill(read.data, saleId)) {
+        if (currentSaleId.current !== saleId) return false;
+        if (
+          !read.isSuccess ||
+          read.isPlaceholderData ||
+          read.isStale ||
+          !hasValidBill(read.data, saleId)
+        ) {
           setTenderReadRequired(true);
           return false;
         }
@@ -1968,6 +2086,20 @@ function ScopedPharmacyCounterConsole({
             return false;
           }
         }
+        if (currentSaleId.current !== saleId) return false;
+        const previous = lastPayable.current;
+        const contents = billContents(read.data);
+        if (read.data.status === 'OPEN') lastPayable.current = { scope: billScope, contents };
+        setBalanceFailure(null);
+        if (
+          !resolution &&
+          ((original && original !== contents) ||
+            (previous?.scope === billScope && previous.contents !== contents))
+        ) {
+          setBalanceAnnouncement(
+            `This bill changed. New balance: Rs ${formatMinor(read.data.totals.netMinor - read.data.totals.tenderedMinor)}`
+          );
+        }
         setTenderReadRequired(false);
         if (confirmed) {
           setReceiptSettlement(confirmed);
@@ -1976,7 +2108,7 @@ function ScopedPharmacyCounterConsole({
         }
         return true;
       } catch {
-        setTenderReadRequired(true);
+        if (currentSaleId.current === saleId) setTenderReadRequired(true);
         return false;
       } finally {
         if (!confirmed || attemptRef.current) {
@@ -1993,6 +2125,7 @@ function ScopedPharmacyCounterConsole({
       }
     },
     [
+      billScope,
       branchAuthorized,
       branchId,
       cartQuery,
@@ -2007,6 +2140,38 @@ function ScopedPharmacyCounterConsole({
       utils,
     ]
   );
+
+  // A cart whose query expires has no observer-triggered fetch until focus/remount. Verify
+  // it here as well as in the open sheet. Payment attempts retain their own recovery path.
+  useEffect(() => {
+    if (billState === 'ready' || billState === 'settled') autoRead.current = null;
+    if (
+      billState !== 'stale' ||
+      !canSettlePayments ||
+      pending ||
+      tenderReadRequired ||
+      attempt ||
+      unknownTender ||
+      failedBalanceRead ||
+      autoRead.current === billScope
+    )
+      return;
+    autoRead.current = billScope;
+    void refreshTenderBill().then((ok) => {
+      if (!ok && currentSaleId.current === saleId) setBalanceFailure(billScope);
+    });
+  }, [
+    attempt,
+    billScope,
+    billState,
+    canSettlePayments,
+    failedBalanceRead,
+    pending,
+    refreshTenderBill,
+    saleId,
+    unknownTender,
+    tenderReadRequired,
+  ]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -2134,29 +2299,32 @@ function ScopedPharmacyCounterConsole({
     [authenticatePack, branchAuthorized, branchId, busy, query]
   );
 
-  const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
-    const label = counterLabelScanDecision(row);
-    if (label.kind === 'BLOCKED') {
-      setActiveRow(null);
-      setQuantityText('');
-      setSaleUnit(null);
-      setLotOverride(null);
-      setNotice({ tone: 'danger', message: label.message });
-      return;
-    }
-    // DEV-977 phase 3: staging another medicine replaces a pack waiting for authorisation.
-    setPendingPack(null);
-    focusQuantityOnStage.current = focusQuantity;
-    quantityReviewed.current = false;
-    setHighlightId(null);
-    if (focusQuantity) setResultsDismissed(true);
-    setActiveRow(row);
-    setQuantityText('1');
-    setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
-    setLotOverride(
-      label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
-    );
-  }, []);
+  const stageRow = useCallback(
+    (row: CounterSearchRow, focusQuantity = true) => {
+      const label = counterLabelScanDecision(row);
+      if (label.kind === 'BLOCKED') {
+        setActiveRow(null);
+        setQuantityText('');
+        setSaleUnit(null);
+        setLotOverride(null);
+        setNotice({ tone: 'danger', message: label.message });
+        return;
+      }
+      // DEV-977 phase 3: staging another medicine replaces a pack waiting for authorisation.
+      setPendingPack(null);
+      focusQuantityOnStage.current = focusQuantity;
+      quantityReviewed.current = false;
+      setHighlightId(null);
+      if (focusQuantity) setResultsDismissed(true);
+      setActiveRow(row);
+      setQuantityText('1');
+      setSaleUnit(addUnitFor(row)?.kind ?? null);
+      setLotOverride(
+        label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
+      );
+    },
+    [addUnitFor]
+  );
 
   const changeQuantity = useCallback((text: string) => {
     quantityReviewed.current = true;
@@ -2167,6 +2335,20 @@ function ScopedPharmacyCounterConsole({
     if (activeRow && focusQuantityOnStage.current) quantityRef.current?.focus();
     focusQuantityOnStage.current = false;
   }, [activeRow]);
+
+  const offerMissingItem = useCallback(
+    (requested: string) => {
+      if (currentSaleId.current !== saleId) return;
+      const term = normalizeMedicineText(requested);
+      const terms = promptedTerms.current.get(billScope) ?? new Set<string>();
+      if (!term || terms.has(term)) return;
+      terms.add(term);
+      promptedTerms.current.set(billScope, terms);
+      setResultsDismissed(false);
+      setLostSaleCapture({ branchId, requested });
+    },
+    [billScope, branchId, saleId]
+  );
 
   // DEV-705, DEV-977B: Enter that beats the search debounce runs the search now and highlights
   // its first result; nothing is added until the cashier presses Enter on what they see.
@@ -2184,13 +2366,13 @@ function ScopedPharmacyCounterConsole({
         if (result.rows[0]) {
           setResultsDismissed(false);
           setHighlightId(result.rows[0].medicineId);
-        }
+        } else offerMissingItem(text.trim());
       } catch (error) {
         if (search.revision === scannerRevision.current)
           setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       }
     },
-    [branchId, runSearch, utils]
+    [branchId, offerMissingItem, runSearch, utils]
   );
 
   const openSale = useCallback(async () => {
@@ -2206,7 +2388,7 @@ function ScopedPharmacyCounterConsole({
           void utils.pharmacySales.drawerStatus.invalidate();
         throw error;
       });
-    setActiveSale(created.id);
+    setActiveSale(created.id, true);
     void refetchOpenBills();
     return created.id;
   }, [branchId, createSale, currentCounterDeviceId, refetchOpenBills, setActiveSale, utils]);
@@ -2231,7 +2413,7 @@ function ScopedPharmacyCounterConsole({
         : unitOption && scannedRow
           ? unitOption
           : scannedRow
-            ? (scannedRow.saleUnits[0] ?? null)
+            ? scannedSaleOption(scannedRow)
             : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
@@ -2360,12 +2542,13 @@ function ScopedPharmacyCounterConsole({
         const voucher = heldVoucher;
         let discountApproval: CounterApprovalPin | undefined;
         const attemptKeys: string[] = [];
+        let postedOption = option;
         const postLine = (lineSaleId: string, approval?: CounterApprovalPin) => {
           const selection = JSON.stringify([
             lineSaleId,
             row.medicineId,
-            option.packLevelId,
-            option.kind,
+            postedOption.packLevelId,
+            postedOption.kind,
             units,
             overrideLotId,
             row.labelLot?.inventoryLotId,
@@ -2420,10 +2603,10 @@ function ScopedPharmacyCounterConsole({
                 }
               : {}),
             presentationId: row.presentationId,
-            packLevelId: option.packLevelId,
-            saleUnit: option.kind,
+            packLevelId: postedOption.packLevelId,
+            saleUnit: postedOption.kind,
             quantity: units,
-            canonicalUnitsPerSaleUnit: option.canonicalUnitsPerSaleUnit,
+            canonicalUnitsPerSaleUnit: postedOption.canonicalUnitsPerSaleUnit,
             ...(row.labelLot ? { shelfLabelLotId: row.labelLot.inventoryLotId } : {}),
             // Retries keep the key until a confirmed add; the next completed
             // scanner gesture must allocate another item, even for the same code.
@@ -2530,6 +2713,27 @@ function ScopedPharmacyCounterConsole({
           if (!read.isSuccess || !billClosed(read.data, activeSaleId)) throw error;
           if (!scanIsCurrent()) return;
           clearBill();
+          if (scannedRow && !scannedPack) {
+            const nextOption = counterAddOption(row, branchDefault);
+            if (nextOption && nextOption.kind !== postedOption.kind) {
+              if (
+                manualDiscount ||
+                voucher ||
+                !counterSelectionPreview(row, nextOption, units)?.sufficient
+              ) {
+                stageRow(row, false);
+                setSaleUnit(nextOption.kind);
+                setQuantityText(String(units));
+                setNotice({
+                  tone: 'warning',
+                  message:
+                    'The previous bill closed. Review the stock and price for this item on the new bill.',
+                });
+                return;
+              }
+              postedOption = nextOption;
+            }
+          }
           startedNextBill = true;
           activeSaleId = await openSale();
           if (!scanIsCurrent()) return;
@@ -2547,7 +2751,7 @@ function ScopedPharmacyCounterConsole({
         lastAddOutcome.current = 'added';
         for (const unit of row.saleUnits)
           knownSaleUnits.current.set(unit.packLevelId, row.saleUnits);
-        catalogueCache.sold(row.medicineId, units * option.canonicalUnitsPerSaleUnit);
+        catalogueCache.sold(row.medicineId, units * postedOption.canonicalUnitsPerSaleUnit);
         await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
@@ -2573,7 +2777,7 @@ function ScopedPharmacyCounterConsole({
             : null;
         setNotice({
           tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName}${unitOption ? ` (${unitOption.levelLabel.toLowerCase()})` : ''} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName}${unitOption ? ` (${postedOption.levelLabel.toLowerCase()})` : ''} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -2600,9 +2804,6 @@ function ScopedPharmacyCounterConsole({
         setNotice({
           tone: counterErrorTone(error),
           message,
-          ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
-            ? { inventoryBranchId: branchId }
-            : {}),
           ...setupNotice(error),
         });
         if (counterSetupReason(error)) void refetchSaleReadiness();
@@ -2618,6 +2819,8 @@ function ScopedPharmacyCounterConsole({
     [
       activeRow,
       addLine,
+      addUnitFor,
+      branchDefault,
       heldVoucher,
       heldDiscount,
       catalogueCache,
@@ -2687,8 +2890,9 @@ function ScopedPharmacyCounterConsole({
               { branchId, query: search.query },
               { staleTime: 10_000 }
             );
-        if (revision !== scannerRevision.current || result.rows.length !== 1 || barcodeBusy.current)
-          return;
+        if (revision !== scannerRevision.current || barcodeBusy.current) return;
+        if (result.rows.length === 0) offerMissingItem(scan.text);
+        if (result.rows.length !== 1) return;
         const row = result.rows[0]!;
         if (!cached && !search.serializedPack) catalogueCache.put(branchId, search.query, row);
         const serialized = search.serializedPack;
@@ -2701,12 +2905,13 @@ function ScopedPharmacyCounterConsole({
         }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
-        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
+        const scanOption = scannedSaleOption(row);
+        const scanPreview = counterSelectionPreview(row, scanOption, 1);
         // DEV-977B (Counter v2): a scan adds in one step. Only an exception (a non-FEFO shelf
         // sticker, or not enough stock) opens the line form, so the cashier can act on it.
         if (label.kind === 'OVERRIDE' || (!serialized && !scanPreview?.sufficient)) {
           stageRow(row, false);
-          setSaleUnit(row.saleUnits[0]?.kind ?? null);
+          setSaleUnit(scanOption?.kind ?? null);
           // Barcode entry keeps its one-item default; manual selection starts empty.
           setQuantityText('1');
         }
@@ -2733,21 +2938,18 @@ function ScopedPharmacyCounterConsole({
         setScanSettles((count) => count + 1);
       }
     },
-    [addToCart, branchId, busy, catalogueCache, query, runSearch, setupNotice, stageRow, utils]
-  );
-
-  /** DEV-977B: the unit a result is added in: "Adds as" when it sells that way, else its usual. */
-  const addUnitFor = useCallback(
-    (row: CounterSearchRow): SaleUnitOption | null => {
-      const preferred =
-        addUnit === 'UNIT'
-          ? looseSaleUnitOption(row.saleUnits)
-          : addUnit
-            ? (row.saleUnits.find((option) => option.kind === addUnit) ?? null)
-            : null;
-      return preferred ?? preferredSaleUnitOption(row.saleUnits, row.dosageForm) ?? null;
-    },
-    [addUnit]
+    [
+      addToCart,
+      branchId,
+      busy,
+      catalogueCache,
+      offerMissingItem,
+      query,
+      runSearch,
+      setupNotice,
+      stageRow,
+      utils,
+    ]
   );
 
   /**
@@ -2949,7 +3151,10 @@ function ScopedPharmacyCounterConsole({
   );
 
   const queueScan = useCallback(
-    (code: string) => setScanQueue((queue) => [...queue, { code, branchId }]),
+    (code: string) => {
+      setLostSaleCapture(null);
+      setScanQueue((queue) => [...queue, { code, branchId }]);
+    },
     [branchId]
   );
 
@@ -3116,10 +3321,17 @@ function ScopedPharmacyCounterConsole({
     [branchId, busy, heldSaleId, refetchOpenBills, refreshCart, saleId, setActiveSale, transition]
   );
 
-  const loadKhataAccounts = useCallback(async () => {
-    if (!saleId) return [];
-    return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
-  }, [branchId, saleId, utils]);
+  const loadKhataAccounts = useCallback(
+    async (query?: string) => {
+      if (!saleId) return [];
+      return utils.client.pharmacySales.khataAccounts.query({
+        branchId,
+        saleId,
+        ...(query ? { query } : {}),
+      });
+    },
+    [branchId, saleId, utils]
+  );
   const loadKhataApprovers = useCallback(
     () => utils.client.pharmacySales.khataOverLimitApprovers.query({ branchId }),
     [branchId, utils]
@@ -3257,7 +3469,6 @@ function ScopedPharmacyCounterConsole({
       tenderInFlight.current = true;
       setPending('tender');
       setTenderOutcome(null);
-      setTenderReadRequired(true);
       discardReceiptIntent();
       setReceiptSettlement(null);
       let dispatched = false;
@@ -3269,6 +3480,40 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
           throw new Error(TENDER_STORAGE_MESSAGE);
         }
+        // Reserve the print window during the gesture, but do not persist or dispatch a
+        // payment until an uncached read confirms the exact bill the cashier reviewed.
+        const printReservation = autoPrint ? reserveCounterBrowserPrint() : undefined;
+        let verified;
+        try {
+          verified = await utils.client.pharmacySales.counterCart.query({ branchId, saleId });
+          if (currentSaleId.current !== saleId || !hasValidBill(verified, saleId))
+            throw new Error('Bill unavailable');
+        } catch {
+          printReservation?.cancel();
+          setBalanceFailure(billScope);
+          setTenderReadRequired(true);
+          tenderInFlight.current = false;
+          setPending(null);
+          return {
+            status: 'rejected',
+            message: 'Could not check the bill balance. Refresh the bill to try again.',
+          };
+        }
+        if (!cart || billContents(verified) !== billContents(cart)) {
+          printReservation?.cancel();
+          lastPayable.current = { scope: billScope, contents: billContents(verified) };
+          utils.pharmacySales.counterCart.setData({ branchId, saleId }, verified);
+          const message = `This bill changed. New balance: Rs ${formatMinor(verified.totals.netMinor - verified.totals.tenderedMinor)}`;
+          setBalanceAnnouncement(message);
+          tenderInFlight.current = false;
+          setPending(null);
+          return { status: 'rejected', message };
+        }
+        if (readTenderAttempt(recoveryScope).status !== 'empty') {
+          printReservation?.cancel();
+          throw new Error(TENDER_STORAGE_MESSAGE);
+        }
+        setTenderReadRequired(true);
         const payload: TenderAttempt['input'] = {
           branchId,
           saleId,
@@ -3312,7 +3557,12 @@ function ScopedPharmacyCounterConsole({
           ...(input.buyerName !== undefined ? { buyerName: input.buyerName } : {}),
         };
         sentKey = payload.idempotencyKey;
-        const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
+        const original: TenderAttempt = {
+          version: payload.type === 'CARD' ? 2 : 1,
+          scope: recoveryScope,
+          input: payload,
+          draft,
+        };
         // Persistence and read-back must succeed before any money write starts.
         persistTenderAttempt(original);
         attemptRef.current = original;
@@ -3322,8 +3572,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           receiptNumber: null,
           autoPrint,
-          // Still inside the native payment gesture: no await precedes this.
-          printReservation: autoPrint ? reserveCounterBrowserPrint() : undefined,
+          printReservation,
         };
         receiptIntent.current = intent;
         dispatched = true;
@@ -3389,6 +3638,8 @@ function ScopedPharmacyCounterConsole({
     },
     [
       autoPrint,
+      cart,
+      billScope,
       billState,
       blocked,
       branchId,
@@ -3672,7 +3923,14 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
       return;
     }
-    const capturedUnits = activeRow ? shortfallUnits : quantity;
+    if (!activeRow) {
+      setNotice({
+        tone: 'info',
+        message: 'Press Enter on an unmatched search to record what the customer asked for.',
+      });
+      return;
+    }
+    const capturedUnits = shortfallUnits;
     if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
       setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
       return;
@@ -3685,11 +3943,11 @@ function ScopedPharmacyCounterConsole({
         ...(demandSaleId ? { saleId: demandSaleId } : {}),
         ...(deviceId ? { terminalId: deviceId } : {}),
         requestedQty: Math.max(requestedCanonicalUnits ?? quantity, capturedUnits),
-        ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
+        requestedMedicineId: activeRow.medicineId,
         requestedText: requested,
         saleUnit: 'UNIT',
         quantity: capturedUnits,
-        reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
+        reason: 'STOCKOUT',
         inventoryRuleSnapshot: {
           query: query.trim(),
           requestedQuantity: quantity,
@@ -3706,7 +3964,10 @@ function ScopedPharmacyCounterConsole({
         tone: 'success',
         message: `Recorded a shortage of ${capturedUnits} ${plural(counterUnitNoun(activeRow?.dosageForm), capturedUnits)} for ${requested}.`,
       });
-      if (demand?.id) setLostSaleCapture({ branchId, demandId: demand.id, requested });
+      if (demand?.id) {
+        setResultsDismissed(false);
+        setLostSaleCapture({ branchId, demandId: demand.id, requested });
+      }
       focusSearch();
     } catch (error) {
       setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
@@ -3736,12 +3997,37 @@ function ScopedPharmacyCounterConsole({
     (choice: LostSaleChoice) => {
       const capture = lostSaleCapture;
       setLostSaleCapture(null);
-      if (!capture) return;
-      setDemandOutcome
-        .mutateAsync({ branchId: capture.branchId, demandId: capture.demandId, ...choice })
-        .catch((error: unknown) => setNotice({ tone: 'warning', message: messageFrom(error) }));
+      if (!capture || capture.branchId !== branchId || !branchAuthorized || busy) return;
+      const save = capture.demandId
+        ? setDemandOutcome.mutateAsync({ branchId, demandId: capture.demandId, ...choice })
+        : captureDemand.mutateAsync({
+            branchId,
+            ...(demandSaleId ? { saleId: demandSaleId } : {}),
+            ...(deviceId ? { terminalId: deviceId } : {}),
+            requestedText: capture.requested,
+            requestedQty: 1,
+            quantity: 1,
+            saleUnit: 'UNIT',
+            reason: 'NOT_CARRIED',
+            inventoryRuleSnapshot: { source: 'COUNTER_NO_MATCH_CHOICE' },
+            ...choice,
+          });
+      void save.catch((error: unknown) =>
+        setNotice({ tone: 'warning', message: messageFrom(error) })
+      );
+      focusSearch();
     },
-    [lostSaleCapture, setDemandOutcome]
+    [
+      branchAuthorized,
+      branchId,
+      busy,
+      captureDemand,
+      demandSaleId,
+      deviceId,
+      focusSearch,
+      lostSaleCapture,
+      setDemandOutcome,
+    ]
   );
   const dismissLostSaleChips = useCallback(() => setLostSaleCapture(null), []);
 
@@ -3959,6 +4245,7 @@ function ScopedPharmacyCounterConsole({
               ? looseSaleUnitOption(options)
               : (options.find((entry) => entry.kind === kind) ?? null);
           if (option) {
+            setAddUnit(kind);
             setSaleUnit(option.kind);
             return;
           }
@@ -4413,6 +4700,14 @@ function ScopedPharmacyCounterConsole({
         <div
           className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
         >
+          {actionsOpen && branchAuthorized && (
+            <CounterBranchUnitSetting
+              key={branchId}
+              branchId={branchId}
+              value={branchDefault}
+              requirePaymentDetails={configuredBranch?.requirePaymentDetails ?? false}
+            />
+          )}
           <CounterPackCheck
             key={`pack:${branchId}:${saleId}`}
             branchId={branchId}
@@ -4613,20 +4908,6 @@ function ScopedPharmacyCounterConsole({
                   <div className="min-w-0 space-y-2 text-sm">
                     <p className="text-text-body">{notice.message}</p>
                     {notice.setup ? <CounterSetupNextStep advice={notice.setup} /> : null}
-                    {notice.inventoryBranchId ? (
-                      <Link
-                        href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        prefetch={false}
-                        className={buttonVariants({
-                          variant: 'outline',
-                          className: 'h-auto min-h-11 whitespace-normal',
-                        })}
-                      >
-                        Open Inventory to review pack breaking (new tab)
-                      </Link>
-                    ) : null}
                   </div>
                   {notice.persistent ? (
                     <Button
@@ -4640,15 +4921,6 @@ function ScopedPharmacyCounterConsole({
                   ) : null}
                 </div>
               ) : null}
-              {lostSaleCapture && lostSaleCapture.branchId === branchId ? (
-                <CounterLostSaleChips
-                  key={lostSaleCapture.demandId}
-                  requested={lostSaleCapture.requested}
-                  onChoose={chooseLostSaleOutcome}
-                  onDismiss={dismissLostSaleChips}
-                />
-              ) : null}
-
               {dayClosed ? (
                 <div
                   role="status"
@@ -4835,6 +5107,7 @@ function ScopedPharmacyCounterConsole({
                             : 'counter-search-help'
                         }
                         onDraftChange={(text) => {
+                          setLostSaleCapture(null);
                           scannerRevision.current += 1;
                           setResultsDismissed(false);
                           // Results follow the field once it is too short to search;
@@ -4861,10 +5134,15 @@ function ScopedPharmacyCounterConsole({
                           // DEV-977B (Counter v2): Escape closes the results over the bill.
                           if (
                             event.key === 'Escape' &&
-                            resultsShown &&
+                            (resultsShown ||
+                              lostSaleCapture ||
+                              scannerInFlight.current ||
+                              event.currentTarget.value.trim()) &&
                             !event.nativeEvent.isComposing
                           ) {
                             event.preventDefault();
+                            scannerRevision.current += 1;
+                            setLostSaleCapture(null);
                             setResultsDismissed(true);
                             setHighlightId(null);
                             return;
@@ -5035,7 +5313,7 @@ function ScopedPharmacyCounterConsole({
                               aria-checked={checked}
                               aria-keyshortcuts={chordFor(kind)}
                               title={chordFor(kind)}
-                              onClick={() => setAddUnit(checked ? null : kind)}
+                              onClick={() => setAddUnit(kind)}
                               className={`min-h-11 px-3 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 ${
                                 checked
                                   ? 'bg-text-strong text-surface-card'
@@ -5060,7 +5338,7 @@ function ScopedPharmacyCounterConsole({
             <div
               data-counter-results=""
               className={
-                searchState === 'idle'
+                searchState === 'idle' && !lostSaleCapture
                   ? 'sr-only'
                   : resultsDismissed
                     ? 'hidden'
@@ -5077,30 +5355,41 @@ function ScopedPharmacyCounterConsole({
                 </div>
               ) : null}
               <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
-                <CounterSearchResults
-                  rows={
-                    searchCurrent && !searchQuery.isPlaceholderData
-                      ? (searchQuery.data?.rows ?? [])
-                      : []
-                  }
-                  state={searchState}
-                  query={trimmedQuery}
-                  disabled={busy || !branchAuthorized}
-                  disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
-                  activeMedicineId={
-                    highlightId ??
-                    activeRow?.medicineId ??
-                    (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
-                  }
-                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                  onSelect={stageRow}
-                  onAdd={addRowNow}
-                  slow={slowSearch}
-                  onCaptureDemand={() => void captureShortfall()}
-                  onRetry={() => {
-                    if (searchCurrent) void searchQuery.refetch();
-                  }}
-                />
+                {lostSaleCapture?.branchId === branchId ? (
+                  <CounterLostSaleChips
+                    key={lostSaleCapture.demandId ?? lostSaleCapture.requested}
+                    requested={lostSaleCapture.requested}
+                    unmatched={!lostSaleCapture.demandId}
+                    onChoose={chooseLostSaleOutcome}
+                    onDismiss={dismissLostSaleChips}
+                  />
+                ) : (
+                  <CounterSearchResults
+                    rows={
+                      searchCurrent && !searchQuery.isPlaceholderData
+                        ? (searchQuery.data?.rows ?? [])
+                        : []
+                    }
+                    state={searchState}
+                    query={trimmedQuery}
+                    disabled={busy || !branchAuthorized}
+                    disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
+                    activeMedicineId={
+                      highlightId ??
+                      activeRow?.medicineId ??
+                      (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
+                    }
+                    error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                    onSelect={stageRow}
+                    onAdd={addRowNow}
+                    slow={slowSearch}
+                    emptySearchHint="Press Enter if the customer was asking for this item."
+                    onCaptureDemand={() => void captureShortfall()}
+                    onRetry={() => {
+                      if (searchCurrent) void searchQuery.refetch();
+                    }}
+                  />
+                )}
               </div>
               {searchState === 'ready' && searchRows.length > 0 ? (
                 <p
@@ -5571,6 +5860,16 @@ function ScopedPharmacyCounterConsole({
               {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
             </p>
           )}
+          {balanceAnnouncement && !paymentOpen && (
+            <p role="status" className="text-sm text-text-body">
+              {balanceAnnouncement}
+            </p>
+          )}
+          {failedBalanceRead && !paymentOpen && (
+            <Button variant="outline" onClick={() => void refreshTenderBill()}>
+              Refresh bill
+            </Button>
+          )}
           {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
             <Button variant="outline" className="min-h-11 w-full" onClick={openPayment}>
               Review payment status
@@ -5766,6 +6065,7 @@ function ScopedPharmacyCounterConsole({
           ref={tenderRef}
           prepaidBalanceMinor={currentBill ? cart.prepaidBalanceMinor : undefined}
           confirmedChangeMinor={confirmedChangeMinor}
+          requirePaymentDetails={configuredBranch?.requirePaymentDetails ?? true}
           manualSettings={manualSettings.data?.settings}
           drawerOpen={drawerQuery.isSuccess ? Boolean(openDrawerSession) : undefined}
           manualSettingsLoading={manualSettings.isLoading}
@@ -5807,16 +6107,19 @@ function ScopedPharmacyCounterConsole({
           }
           onDiscardAttempt={discardPaymentAttempt}
           loadDiscardApprovers={loadDiscardApprovers}
+          balanceAnnouncement={balanceAnnouncement}
           error={
-            storageError
-              ? TENDER_STORAGE_MESSAGE
-              : cartQuery.isError
-                ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
-                : tenderReadRequired && pending !== 'tender'
-                  ? tenderOutcome?.status === 'accepted'
-                    ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
-                    : 'Refresh this bill to verify its current state.'
-                  : null
+            failedBalanceRead
+              ? 'Could not check the bill balance. Refresh the bill to try again.'
+              : storageError
+                ? TENDER_STORAGE_MESSAGE
+                : cartQuery.isError
+                  ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
+                  : tenderReadRequired && pending !== 'tender'
+                    ? tenderOutcome?.status === 'accepted'
+                      ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
+                      : 'Refresh this bill to verify its current state.'
+                    : null
           }
           onRetry={() => void refreshTenderBill()}
           onTender={takePayment}

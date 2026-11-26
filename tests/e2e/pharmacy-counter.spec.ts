@@ -740,10 +740,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).toContainText('Earliest expiry');
   await expect(allocation).not.toContainText('Batch override');
 
-  // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
-  // with a single match adds one of its first sale unit (scan-to-add, 699d5c1d; pinned by
-  // counter-console.test.tsx "adds a barcode on Enter only when the search returns that
-  // single medicine"). Nothing is added unless the scan matched exactly this medicine.
+  // This receipt includes a whole pack in addition to the two strips.
   await scan(page, otc.barcode);
   await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
@@ -1183,7 +1180,12 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         .getByRole('group', { name: 'Payment method', exact: true })
         .getByRole('button', { name: 'Khata', exact: true })
     );
-    await page.getByLabel('Family Khata account').selectOption(familyId);
+    const accountSearch = page.getByRole('combobox', { name: 'Family Khata account' });
+    await expect(accountSearch).toBeFocused();
+    await accountSearch.fill('Counter test family');
+    await expect(page.getByRole('option', { name: /Counter test family/ }).first()).toBeVisible();
+    await accountSearch.press('ArrowDown');
+    await accountSearch.press('Enter');
     await page.getByLabel('Amount', { exact: true }).fill('1.00');
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
     await expect(page.getByText('Payment recorded.', { exact: true })).toBeVisible();
@@ -1221,7 +1223,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         for (const reducedMotion of ['no-preference', 'reduce'] as const) {
           await page.emulateMedia({ reducedMotion });
           await page
-            .getByLabel('Family Khata account')
+            .getByRole('combobox', { name: 'Family Khata account' })
             .locator('..')
             .screenshot({
               path: testInfo.outputPath(`khata-${width}-${theme}-${reducedMotion}.png`),
@@ -1233,7 +1235,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await override.focus();
     await override.press('Space');
     await page
-      .getByLabel('Family Khata account')
+      .getByRole('combobox', { name: 'Family Khata account' })
       .locator('..')
       .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
     // The signed-in admin approves as themselves with a fresh password re-entry.
@@ -2694,6 +2696,204 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await expect(card).toBeVisible({ timeout: 15_000 });
   await pressControl(gotIt);
   await expect(dialog).toBeHidden();
+});
+
+test('DEV-1049 cashier sells a unit from sealed stock and takes exact cash', async ({ page }) => {
+  const { organizationId, branchId, stockLocationId } = PHARMACY_E2E;
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const tag = randomUUID();
+  const name = 'Sealed tablets ' + tag.slice(0, 8);
+  await db.connect();
+  try {
+    // A private barcode-free item keeps this case independent of every other bill and rerun.
+    await db.query('BEGIN');
+    await db.query("SELECT set_config('app.current_organization_id', $1, true)", [organizationId]);
+    await db.query(
+      `INSERT INTO pharmacy_medicines
+      (id, "organizationId", "productName", "productFamily", otc, saleable, "updatedAt")
+      VALUES ($1, $2, $3, 'PHARMACEUTICAL', true, true, now())`,
+      [tag, organizationId, name]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_presentations
+      (id, "organizationId", "medicineId", "dosageForm", presentation, "updatedAt")
+      VALUES ($1,$2,$1,'Tablet','Box of 10 tablets',now())`,
+      [tag, organizationId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_pack_levels
+      (id, "organizationId", "presentationId", "versionGroupId", version, level, "unitsPerParent", "effectiveFrom")
+      VALUES ($1,$2,$1,$1,1,'BOX',10,now())`,
+      [tag, organizationId]
+    );
+    await db.query('COMMIT');
+  } finally {
+    await db.end();
+  }
+  await openCounter(page);
+  const printedExpiry = new Date(Date.now() + 365 * 86_400_000).toISOString();
+  const batch = await trpcMutation<{ id: string }>(
+    page,
+    'pharmacyInventory.registerBatch',
+    {
+      medicineId: tag,
+      batchNumber: tag,
+      printedExpiry,
+      expiryPrecision: 'DAY',
+    },
+    ['printedExpiry']
+  );
+  await trpcMutation(
+    page,
+    'pharmacyInventory.receiveLot',
+    {
+      branchId,
+      manufacturingBatchId: batch.id,
+      packLevelId: tag,
+      stockLocationId,
+      unitsPerPack: 10,
+      supplierName: 'Synthetic distributor',
+      supplierInvoiceRef: tag,
+      unitCostMinor: 50,
+      printedMrpMinor: 1000,
+      printedExpiry,
+      expiryPrecision: 'DAY',
+      quantityUnits: 10,
+      idempotencyKey: tag,
+    },
+    ['printedExpiry']
+  );
+  await openDrawer(page);
+  await search(page, name);
+  await addFirstResult(page, name);
+  await expect(billLine(page, name).getByRole('radio', { name: 'Unit' })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await expect(page.getByText(/break a pack in Inventory/i)).toHaveCount(0);
+  await tenderCash(page, '1.00');
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter / });
+  await expect(receipt).toContainText(name);
+  await expect(receipt).toContainText('1.00');
+});
+
+test('DEV-1041: a scanned box and typed tablet use their respective server prices', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const { otc } = PHARMACY_E2E.medicines;
+  await scan(page, otc.barcode);
+  await expect(billLine(page, otc.name)).toContainText('1 × pack');
+  await search(page, otc.name);
+  await addFirstResult(page, otc.name);
+  await expect(billLine(page, otc.name).last()).toContainText('2.50');
+  await expect(page.getByLabel('Bill total')).toContainText('252.50');
+  await expect(
+    page.getByLabel('Bill total').getByRole('button', { name: /Take payment/ })
+  ).toBeEnabled();
+});
+
+test('DEV-1042: unmatched searches leave the bill, totals and keyboard focus in place', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const field = page.getByLabel('Scan or search');
+  const positions = () =>
+    page.evaluate(() =>
+      [
+        '#counter-search',
+        '[aria-label="Cart"]',
+        '#counter-bill-total',
+        '[aria-label="Phone payment"]',
+      ].map((selector) => {
+        const el = document.querySelector(selector);
+        if (!el) throw new Error('Missing ' + selector);
+        const rect = el.getBoundingClientRect();
+        return [rect.x, rect.y, rect.width, rect.height];
+      })
+    );
+  const writes: Request[] = [];
+  page.on('request', (req) => {
+    if (
+      req.method() === 'POST' &&
+      /pharmacySales\.(captureDemand|setDemandOutcome)/.test(req.url())
+    )
+      writes.push(req);
+  });
+  for (const width of [1366, 375]) {
+    await page.setViewportSize({ width, height: width === 375 ? 812 : 768 });
+    await field.focus();
+    const word = 'syntheticmissing' + width;
+    await field.fill(word);
+    await expect(page.getByText(`Nothing in this catalog matches “${word}”.`)).toBeVisible();
+    const prompt = page.getByRole('region', { name: 'What happened to the short line' });
+    await expect(prompt).toHaveCount(0);
+    const original = await positions();
+    await field.press('Enter');
+    await expect(prompt).toContainText(
+      `Nothing matches '${word}'. Was the customer asking for it?`
+    );
+    await expect(field).toBeFocused();
+    expect(await positions()).toEqual(original);
+    await expect(prompt.getByRole('button', { name: 'Unknown' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Alt+5'
+    );
+    await field.press('Escape');
+    await expect(prompt).toHaveCount(0);
+    await expect(field).toBeFocused();
+    await field.press('Enter');
+    await expect(page.getByText(`Nothing in this catalog matches “${word}”.`)).toBeAttached();
+    await expect(prompt).toHaveCount(0);
+  }
+  expect(writes).toHaveLength(0);
+});
+
+for (const [method, detail] of [
+  ['Card', 'No slip details'],
+  ['Bank transfer', 'No transfer details'],
+] as const) {
+  test(`DEV-1045 records a synthetic ${method} with empty references`, async ({ page }) => {
+    await openCounter(page);
+    await openDrawer(page);
+    await search(page, PHARMACY_E2E.medicines.otc.name);
+    await addFirstResult(page, PHARMACY_E2E.medicines.otc.name);
+    await expect(billLine(page, PHARMACY_E2E.medicines.otc.name)).toBeVisible();
+    await page.getByLabel('Scan or search').press('F9');
+    const sheet = page.getByRole('dialog', { name: /^Take payment/ });
+    await pressControl(sheet.getByRole('button', { name: method, exact: true }));
+    await pressControl(sheet.getByRole('button', { name: 'Take payment', exact: true }));
+    const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter / });
+    await expect(receipt).toContainText(detail);
+    await expect(receipt).toContainText('2.50');
+  });
+}
+
+test('DEV-1046 returns keyboard focus to a prefilled Khata sign-up on an unmatched term', async ({
+  page,
+}) => {
+  await openCounter(page);
+  await openDrawer(page);
+  await scan(page, PHARMACY_E2E.medicines.otc.barcode);
+  await expect(billLine(page, PHARMACY_E2E.medicines.otc.name)).toBeVisible();
+  await page.getByLabel('Scan or search').press('F9');
+  const sheet = page.getByRole('dialog', { name: /^Take payment/ });
+  await pressControl(sheet.getByRole('button', { name: 'Khata', exact: true }));
+  const box = sheet.getByRole('combobox', { name: 'Family Khata account' });
+  await expect(box).toBeFocused();
+  for (const [query, label] of [
+    ['Synthetic Family', 'Customer name'],
+    ['03001234567', 'Phone'],
+  ]) {
+    await box.fill(query);
+    await expect(sheet.getByText(`No account found for '${query}'.`)).toBeVisible();
+    await pressControl(sheet.getByRole('button', { name: 'Sign this customer up' }));
+    await expect(sheet.getByLabel(label, { exact: true })).toHaveValue(query);
+    await box.focus();
+  }
 });
 
 test('day close — open sell count lock and print Z-report', async ({ page, context }) => {

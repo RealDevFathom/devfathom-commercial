@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label';
 import { useCounterApprovalCopy } from './counter-approval-copy';
 import { Textarea } from '@/components/ui/textarea';
 import { CounterChangeDue } from './counter-change-due';
+import { SelectField } from '@/components/ui/select-field';
 import { KhataLimitMeter } from './counter-khata-limit';
 import { CounterTenderDiscard, type CounterTenderDiscardInput } from './counter-tender-discard';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -25,6 +26,8 @@ import {
   MANUAL_CARD_APPROVAL_CODE,
   MANUAL_CARD_REFERENCE,
   manualCardCaptureSchema,
+  optionalCardCaptureSchema,
+  optionalTransferCaptureSchema,
   manualTenderCaptureSchema,
   type ManualPaymentSettings,
 } from '@/lib/pharmacy/manual-payments';
@@ -80,6 +83,8 @@ export type CounterTenderBillState =
   'idle' | 'loading' | 'error' | 'stale' | 'unavailable' | 'ready' | 'settled';
 
 export type KhataAccount = {
+  maskedPhone?: string;
+  linkedPayer?: boolean;
   id: string;
   displayName: string;
   creditLimitMinor: number;
@@ -95,6 +100,7 @@ export type CounterTenderPanelProps = {
   tenders?: readonly CounterCartTender[];
   /** Receipt total retained after the parent has verified this bill's settlement. */
   confirmedChangeMinor?: number;
+  requirePaymentDetails?: boolean;
   manualSettings?: ManualPaymentSettings;
   /**
    * This counter's cash drawer: `false` once the server reports none open,
@@ -105,7 +111,7 @@ export type CounterTenderPanelProps = {
   manualSettingsLoading?: boolean;
   manualSettingsError?: boolean;
   onReloadManualSettings?: () => void;
-  loadKhataAccounts?: () => Promise<KhataAccount[]>;
+  loadKhataAccounts?: (query?: string) => Promise<KhataAccount[]>;
   reauthenticateOwner?: (password: string, totp: string) => Promise<void>;
   /** DEV-290: managers or owners who may approve an over-limit Khata charge with their PIN. */
   loadKhataApprovers?: () => Promise<KhataApprover[]>;
@@ -128,6 +134,7 @@ export type CounterTenderPanelProps = {
   queued?: boolean;
   disabled?: boolean;
   error?: string | null;
+  balanceAnnouncement?: string;
   initialDraft?: TenderDraft & {
     type: CounterTenderType;
     payerName?: string;
@@ -198,6 +205,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       queued = false,
       disabled = false,
       error,
+      balanceAnnouncement,
       onRetry,
       onTender,
       initialDraft,
@@ -213,6 +221,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       signUpKhata,
       khataSignupPatient,
       cashMemo = false,
+      requirePaymentDetails = false,
       manualSettings,
       manualSettingsLoading = false,
       manualSettingsError = false,
@@ -224,6 +233,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
   ) {
     const approvalCopy = useCounterApprovalCopy();
     const [accounts, setAccounts] = useState<KhataAccount[]>([]);
+    const [accountSearch, setAccountSearch] = useState('');
     const [accountId, setAccountId] = useState('');
     const [khataLoading, setKhataLoading] = useState(false);
     const [khataError, setKhataError] = useState('');
@@ -344,11 +354,17 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     const manual = isManualTender(type);
     const bankTransfer = type === 'BANK_TRANSFER';
     const transferCapture = bankTransfer
-      ? bankTransferCaptureSchema.safeParse({ providerRef })
+      ? (requirePaymentDetails
+          ? bankTransferCaptureSchema
+          : optionalTransferCaptureSchema
+        ).safeParse({ ...(providerRef !== '' ? { providerRef } : {}) })
       : null;
     const manualCard = type === 'CARD';
     const cardCapture = manualCard
-      ? manualCardCaptureSchema.safeParse({ providerRef, approvalCode })
+      ? (requirePaymentDetails ? manualCardCaptureSchema : optionalCardCaptureSchema).safeParse({
+          ...(providerRef !== '' ? { providerRef } : {}),
+          ...(approvalCode !== '' ? { approvalCode } : {}),
+        })
       : null;
     const merchant = manual ? manualSettings?.[type] : undefined;
     useEffect(() => {
@@ -364,7 +380,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       ? manualTenderCaptureSchema.safeParse({
           type,
           payerName,
-          ...(referenceSkipped ? { referenceSkipped: true } : { providerRef }),
+          ...(referenceSkipped || (!requirePaymentDetails && providerRef === '')
+            ? { referenceSkipped: true }
+            : { providerRef }),
         })
       : null;
     const account = accounts.find((row) => row.id === accountId);
@@ -379,23 +397,32 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       setKhataLoading(true);
       setKhataError('');
       setAccounts([]);
-      void loadKhataAccounts()
-        .then((rows) => {
-          if (!live) return;
-          setAccounts(rows);
-          setAccountId(rows.length === 1 ? rows[0]!.id : '');
-        })
-        .catch(() => {
-          if (live)
-            setKhataError('Khata accounts could not be loaded. Refresh the bill and retry.');
-        })
-        .finally(() => {
-          if (live) setKhataLoading(false);
-        });
+      const load = () =>
+        void loadKhataAccounts(accountSearch.trim() || undefined)
+          .then((rows) => {
+            if (!live) return;
+            setAccounts(rows);
+            setAccountId(
+              accountSearch.trim()
+                ? ''
+                : (rows.find((row) => row.linkedPayer)?.id ??
+                    (rows.length === 1 ? rows[0]!.id : ''))
+            );
+          })
+          .catch(() => {
+            if (live)
+              setKhataError('Khata accounts could not be loaded. Refresh the bill and retry.');
+          })
+          .finally(() => {
+            if (live) setKhataLoading(false);
+          });
+      const timer = accountSearch ? window.setTimeout(load, 150) : undefined;
+      if (!timer) load();
       return () => {
         live = false;
+        window.clearTimeout(timer);
       };
-    }, [isKhata, loadKhataAccounts, khataReload]);
+    }, [isKhata, loadKhataAccounts, khataReload, accountSearch]);
     const wantsApprovers = isKhata && ownerOverride && Boolean(loadKhataApprovers);
     useEffect(() => {
       if (!wantsApprovers) return;
@@ -415,7 +442,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         current = false;
       };
     }, [wantsApprovers, loadKhataApprovers]);
-    const signupPatient = khataSignupPatient ?? null;
+    const signupPatient = accountSearch.trim() ? null : (khataSignupPatient ?? null);
     const signupPatientId = signupPatient?.patientId ?? null;
     // Consent belongs to one person: a different payer must tick it again.
     useEffect(() => {
@@ -446,6 +473,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         setSignupName('');
         setSignupPhone('');
         setSignupConsent(false);
+        setAccountSearch('');
         setKhataReload((value) => value + 1);
       } catch (error) {
         setSignupError(
@@ -540,6 +568,27 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                                     ? 'Choose a family Khata account before taking payment.'
                                                     : 'A manager or owner must approve the credit limit increase first.';
 
+    const lockNote = (
+      <p className="min-h-8 text-xs text-text-muted" aria-live="polite">
+        {editable
+          ? null
+          : takingPayment
+            ? 'Locked while payment is being recorded.'
+            : unknown
+              ? 'Locked until the payment outcome is confirmed.'
+              : state === 'loading' || (state === 'stale' && !error)
+                ? 'Locked while the bill balance is being checked.'
+                : state === 'stale' || state === 'error'
+                  ? 'Locked until the bill balance is verified.'
+                  : state === 'settled'
+                    ? 'This bill has been paid.'
+                    : state === 'idle'
+                      ? 'Add an item to start a bill.'
+                      : state === 'unavailable'
+                        ? 'This bill is unavailable for payment.'
+                        : 'Locked while the counter finishes its current action.'}
+      </p>
+    );
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
       submissionRef.current = true;
@@ -731,6 +780,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       )
         return;
       const target = event.target;
+      if (
+        event.defaultPrevented ||
+        (target instanceof HTMLElement && target.getAttribute('role') === 'combobox')
+      )
+        return;
       const textField =
         target instanceof HTMLInputElement &&
         !['checkbox', 'radio', 'button', 'submit', 'reset', 'file'].includes(target.type);
@@ -763,6 +817,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             >
               Payment method
             </p>
+
             <div
               role="group"
               aria-labelledby="tender-type-label"
@@ -885,7 +940,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               />
             ) : null}
           </section>
-          {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
+          {!takingPayment && (state === 'error' || (state === 'stale' && Boolean(error))) ? (
             <Button
               type="button"
               variant="outline"
@@ -896,6 +951,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </Button>
           ) : null}
 
+          {balanceAnnouncement && (
+            <p role="status" className="text-sm font-medium text-text-strong">
+              {balanceAnnouncement}
+            </p>
+          )}
           {blocked ? (
             <div
               id="tender-blocked"
@@ -916,6 +976,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}. Pay the rest with another
                 tender.
               </p>
+
               <Label htmlFor="tender-prepaid-pin">Customer’s prepaid PIN</Label>
               <Input
                 id="tender-prepaid-pin"
@@ -993,7 +1054,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {bankTransfer ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-              <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
+              <div className="flex flex-wrap items-baseline gap-1">
+                <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
+                {!requirePaymentDetails && (
+                  <span id="bank-transfer-reference-optional" className="text-sm text-text-muted">
+                    (optional)
+                  </span>
+                )}
+              </div>
               <Input
                 id="bank-transfer-reference"
                 ref={providerRefInput}
@@ -1001,10 +1069,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 autoComplete="off"
                 value={providerRef}
                 maxLength={BANK_TRANSFER_REFERENCE_MAX_LENGTH}
-                required
+                required={requirePaymentDetails}
                 disabled={!editable}
                 aria-invalid={providerRef !== '' && !transferCapture?.success}
-                aria-describedby="bank-transfer-help"
+                aria-describedby={
+                  requirePaymentDetails
+                    ? 'bank-transfer-help'
+                    : 'bank-transfer-help bank-transfer-reference-optional'
+                }
                 onChange={(event) => setProviderRef(event.target.value)}
               />
               <p id="bank-transfer-help" className="text-sm text-text-muted">
@@ -1021,10 +1093,19 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 slip; you are recorded as the person who confirmed this payment. Take JazzCash,
                 Easypaisa or Raast under Wallet, not Card.
               </p>
-              <Label htmlFor="manual-card-reference">
-                Card last 4 digits or terminal reference
-              </Label>
+
+              <div className="flex flex-wrap items-baseline gap-1">
+                <Label htmlFor="manual-card-reference">
+                  Card last 4 digits or terminal reference
+                </Label>
+                {!requirePaymentDetails && (
+                  <span id="manual-card-reference-optional" className="text-sm text-text-muted">
+                    (optional)
+                  </span>
+                )}
+              </div>
               <Input
+                required={requirePaymentDetails}
                 id="manual-card-reference"
                 className="min-h-11 font-mono"
                 autoComplete="off"
@@ -1032,11 +1113,23 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 maxLength={24}
                 disabled={!editable}
                 aria-invalid={providerRef !== '' && !MANUAL_CARD_REFERENCE.test(providerRef.trim())}
-                aria-describedby="manual-card-help"
+                aria-describedby={
+                  requirePaymentDetails
+                    ? 'manual-card-help'
+                    : 'manual-card-help manual-card-reference-optional'
+                }
                 onChange={(event) => setProviderRef(event.target.value)}
               />
-              <Label htmlFor="manual-card-approval">Approval code</Label>
+              <div className="flex flex-wrap items-baseline gap-1">
+                <Label htmlFor="manual-card-approval">Approval code</Label>
+                {!requirePaymentDetails && (
+                  <span id="manual-card-approval-optional" className="text-sm text-text-muted">
+                    (optional)
+                  </span>
+                )}
+              </div>
               <Input
+                required={requirePaymentDetails}
                 id="manual-card-approval"
                 className="min-h-11 font-mono"
                 autoComplete="off"
@@ -1046,12 +1139,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 aria-invalid={
                   approvalCode !== '' && !MANUAL_CARD_APPROVAL_CODE.test(approvalCode.trim())
                 }
-                aria-describedby="manual-card-help"
+                aria-describedby={
+                  requirePaymentDetails
+                    ? 'manual-card-help'
+                    : 'manual-card-help manual-card-approval-optional'
+                }
                 onChange={(event) => setApprovalCode(event.target.value)}
               />
               <p id="manual-card-help" className="text-sm text-text-muted">
                 Letters and digits only: 4–24 for the reference, 2–12 for the approval code. Never
-                enter the full card number.
+                enter the full card number. Slip details help settle disputes.
               </p>
             </div>
           ) : null}
@@ -1114,9 +1211,19 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     disabled={!editable}
                     onChange={(event) => setPayerName(event.target.value)}
                   />
-                  <Label htmlFor="manual-provider-reference">
-                    Transaction ID (last 4–6 digits)
-                  </Label>
+                  <div className="flex flex-wrap items-baseline gap-1">
+                    <Label htmlFor="manual-provider-reference">
+                      Transaction ID (last 4–6 digits)
+                    </Label>
+                    {!requirePaymentDetails && (
+                      <span
+                        id="manual-provider-reference-optional"
+                        className="text-sm text-text-muted"
+                      >
+                        (optional)
+                      </span>
+                    )}
+                  </div>
                   <Input
                     ref={providerRefInput}
                     id="manual-provider-reference"
@@ -1128,7 +1235,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     aria-invalid={
                       !referenceSkipped && providerRef !== '' && !/^\d{4,6}$/.test(providerRef)
                     }
-                    aria-describedby="manual-reference-help"
+                    aria-describedby={
+                      requirePaymentDetails
+                        ? 'manual-reference-help'
+                        : 'manual-reference-help manual-provider-reference-optional'
+                    }
                     onChange={(event) => setProviderRef(event.target.value)}
                   />
                   <p id="manual-reference-help" className="text-sm text-text-muted">
@@ -1158,11 +1269,27 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           {isKhata ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
               <Label htmlFor="khata-account">Family Khata account</Label>
-              <select
+              <SelectField
+                autoFocus
+                search={{
+                  value: accountSearch,
+                  loading: khataLoading,
+                  placeholder: 'Search by name or phone',
+                  onChange: (term) => {
+                    setAccountSearch(term);
+                    setAccountId('');
+                    setAccounts([]);
+                    setOwnerOverride(false);
+                    setSignupConsent(false);
+                    const phone = /^[+\d\s()-]+$/.test(term);
+                    setSignupName(phone ? '' : term);
+                    setSignupPhone(phone ? term : '');
+                  },
+                }}
                 id="khata-account"
                 className="h-11 w-full rounded-sm border border-border-default bg-surface-card px-3 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                 value={accountId}
-                disabled={!editable || khataLoading}
+                disabled={!editable}
                 onChange={(event) => {
                   setAccountId(event.target.value);
                   setOwnerOverride(false);
@@ -1170,19 +1297,39 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               >
                 <option value="">Choose family account</option>
                 {accounts.map((row) => (
-                  <option key={row.id} value={row.id}>
+                  <option key={row.id} value={row.id} aria-label={row.displayName}>
                     {row.displayName}
+                    {row.maskedPhone && ` · ${row.maskedPhone}`} · Rs{' '}
+                    {formatMinor(Math.max(0, row.creditLimitMinor - row.balanceMinor))} available
                   </option>
                 ))}
-              </select>
+              </SelectField>
               {khataLoading ? <p role="status">Loading Khata ledger…</p> : null}
               {khataError ? <p role="alert">{khataError}</p> : null}
               {!khataLoading && !khataError && !accounts.length ? (
                 signUpKhata ? (
                   <div className="space-y-3">
                     <p className="text-sm text-text-body">
-                      No Khata account on this bill. Sign the customer up to open one.
+                      {accountSearch
+                        ? `No account found for '${accountSearch}'.`
+                        : 'No Khata account on this bill. Sign the customer up to open one.'}
+                      {accountSearch && (
+                        <Button
+                          type="button"
+                          variant="link"
+                          onClick={() =>
+                            document
+                              .getElementById(
+                                signupPatient ? 'khata-signup-consent' : 'khata-signup-name'
+                              )
+                              ?.focus()
+                          }
+                        >
+                          Sign this customer up
+                        </Button>
+                      )}
                     </p>
+
                     {signupPatient ? (
                       <p className="text-sm text-text-strong">Payer: {signupPatient.displayName}</p>
                     ) : (
@@ -1220,6 +1367,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     <Label className="flex min-h-11 items-center gap-2">
                       <input
                         type="checkbox"
+                        id="khata-signup-consent"
                         checked={signupConsent}
                         disabled={!editable || signupPending}
                         onChange={(event) => setSignupConsent(event.target.checked)}
@@ -1586,6 +1734,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           <CounterChangeDue minor={confirmedChangeMinor ?? recordedChangeMinor} />
 
+          {lockNote}
           {summaryExtra}
         </section>
       </div>

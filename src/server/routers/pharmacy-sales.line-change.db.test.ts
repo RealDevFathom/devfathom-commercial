@@ -248,7 +248,13 @@ let itemCount = 0;
 async function stockedItem(
   name: string,
   lots: Array<{ expiresAt: string; units: number; mrp: number }>,
-  flags: { rx?: boolean } = {}
+  flags: {
+    rx?: boolean;
+    openedUnits?: number;
+    unitsPerPack?: number;
+    boxOfThreeStrips?: boolean;
+    dosageForm?: string;
+  } = {}
 ): Promise<StockedItem> {
   itemCount += 1;
   const tag = `${itemCount}-${suffix}`;
@@ -261,7 +267,11 @@ async function stockedItem(
         rx: flags.rx ?? false,
         otc: !flags.rx,
         saleable: true,
-        presentations: { create: { presentation: 'Tablet, 10 per strip' } },
+        presentations: {
+          create: flags.boxOfThreeStrips
+            ? { dosageForm: 'Tablet', presentation: '3 x 10 tablets' }
+            : { presentation: '10 per pack', dosageForm: flags.dosageForm ?? 'Tablet' },
+        },
       },
       include: { presentations: true },
     });
@@ -270,8 +280,8 @@ async function stockedItem(
         presentationId: medicine.presentations[0]!.id,
         versionGroupId: `strip-${tag}`,
         version: 1,
-        level: 'STRIP',
-        unitsPerParent: 10,
+        level: flags.boxOfThreeStrips ? 'BOX' : 'STRIP',
+        unitsPerParent: flags.unitsPerPack ?? 10,
         effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
       },
     });
@@ -290,7 +300,7 @@ async function stockedItem(
         manufacturingBatchId: batch.id,
         packLevelId: packLevel.id,
         stockLocationId: locationId,
-        unitsPerPack: 10,
+        unitsPerPack: flags.unitsPerPack ?? 10,
         supplierName: 'Distributor Ltd',
         supplierInvoiceRef: `INV-${index}-${tag}`,
         unitCostMinor: 100,
@@ -304,7 +314,7 @@ async function stockedItem(
       await ledger.breakPack(tx, scope, {
         inventoryLotId: received.lot.id,
         stockLocationId: locationId,
-        requiredLooseUnits: lot.units,
+        requiredLooseUnits: flags.openedUnits ?? lot.units,
         idempotencyKey: `break-${index}-${tag}`,
         at: new Date('2026-02-01T00:00:00.000Z'),
       });
@@ -494,6 +504,183 @@ afterAll(async () => {
   if (databaseUrl)
     await retirePharmacyRegulatoryRules(withPlatformDb, [rulesId, otherRulesId, outsiderRulesId]);
   await disconnect?.();
+});
+
+describeIfDatabase('DEV-1049 counter pack opening', () => {
+  const stock = (units: number, openedUnits = 0, unitsPerPack = 10) =>
+    stockedItem('Synthetic counter pack', [{ expiresAt: '2032-01-01', units, mrp: 2000 }], {
+      openedUnits,
+      unitsPerPack,
+    });
+  const history = (item: StockedItem) =>
+    withTenantDb(ids.org, (db) =>
+      db.pharmacyStockMovement.findMany({
+        where: { inventoryLotId: item.lots[0]!, branchId: ids.branch },
+        orderBy: { id: 'asc' },
+      })
+    );
+  const balance = (item: StockedItem) =>
+    withTenantDb(ids.org, (db) =>
+      db.pharmacyStockBalance.findFirstOrThrow({
+        where: {
+          inventoryLotId: item.lots[0]!,
+          stockLocationId: locationId,
+          disposition: 'AVAILABLE',
+        },
+      })
+    );
+  it.each([
+    { quantity: 5, opened: 0, packs: 1, left: 5 },
+    { quantity: 23, opened: 0, packs: 3, left: 7 },
+    { quantity: 12, opened: 10, packs: 1, left: 8 },
+    { quantity: 5, opened: 10, packs: 0, left: 5 },
+  ])(
+    'sells $quantity with $opened already open and opens $packs packs',
+    async ({ quantity, opened, packs, left }) => {
+      const item = await stock(40, opened);
+      const { saleId, lineIds } = await bill(ids.cashier, [(id) => loose(item, id, quantity)]);
+      const movements = await history(item);
+      const openedHere = movements.filter((m) => m.reason === 'Pack opened at the counter');
+      expect(openedHere).toHaveLength(packs);
+      for (const m of openedHere)
+        expect(m).toMatchObject({
+          counterSaleId: saleId,
+          inventoryLotId: item.lots[0],
+          actorId: ids.cashier,
+          kind: 'BREAK_PACK',
+          quantityUnits: 0,
+          sealedPackDelta: -1,
+          looseUnitDelta: 10,
+        });
+      expect(movements.filter((m) => m.kind === 'SALE')).toEqual([
+        expect.objectContaining({
+          quantityUnits: -quantity,
+          looseUnitDelta: -quantity,
+          sealedPackDelta: 0,
+        }),
+      ]);
+      expect(await balance(item)).toMatchObject({
+        onHandUnits: 40 - quantity,
+        looseUnits: left,
+        sealedPacks: 4 - opened / 10 - packs,
+      });
+      await act(ids.cashier, (api) => api.removeLine(remove({ saleId, saleLineId: lineIds[0]! })));
+      expect(await balance(item)).toMatchObject({
+        onHandUnits: 40,
+        looseUnits: left + quantity,
+        sealedPacks: 4 - opened / 10 - packs,
+      });
+      expect((await history(item)).find((m) => m.kind === 'ADJUSTMENT')?.reason).toContain(
+        'Returned as open units'
+      );
+    }
+  );
+  it('opens for strips and a prepayment void returns open units', async () => {
+    const item = await stock(30);
+    const { saleId } = await bill(ids.cashier, [(id) => strip(item, id, 2)]);
+    expect(
+      (await history(item)).filter((m) => m.reason === 'Pack opened at the counter')
+    ).toHaveLength(2);
+    await act(ids.cashier, (api) =>
+      api.transition({
+        branchId: ids.branch,
+        saleId,
+        action: 'void',
+        voidReason: { code: 'WRONG_ITEMS' },
+      })
+    );
+    expect(await balance(item)).toMatchObject({ onHandUnits: 30, sealedPacks: 1, looseUnits: 20 });
+    expect((await history(item)).find((m) => m.kind === 'ADJUSTMENT')?.reason).toContain(
+      'Returned as open units'
+    );
+  });
+  it('dispenses a ten-tablet strip from a sealed box, leaving the other two strips open', async () => {
+    const item = await stockedItem(
+      'Synthetic three-strip box',
+      [{ expiresAt: '2032-01-01', units: 60, mrp: 3000 }],
+      { openedUnits: 0, unitsPerPack: 30, boxOfThreeStrips: true }
+    );
+    const { saleId } = await bill(ids.cashier, [(id) => strip(item, id, 1)]);
+    expect((await cartOf(saleId)).lines[0]).toMatchObject({
+      saleUnit: 'STRIP',
+      canonicalUnits: 10,
+      lineTotalMinor: 1000,
+    });
+    expect(await balance(item)).toMatchObject({ onHandUnits: 50, sealedPacks: 1, looseUnits: 20 });
+    expect((await history(item)).filter((m) => m.kind === 'BREAK_PACK')).toEqual([
+      expect.objectContaining({
+        counterSaleId: saleId,
+        reason: 'Pack opened at the counter',
+        sealedPackDelta: -1,
+        looseUnitDelta: 30,
+        quantityUnits: 0,
+      }),
+    ]);
+  });
+  it('reports the available units on shortage without writing movements', async () => {
+    const item = await stock(10);
+    const before = await history(item);
+    await expect(bill(ids.cashier, [(id) => loose(item, id, 11)])).rejects.toThrow(
+      /10 units available/i
+    );
+    expect(await history(item)).toEqual(before);
+  });
+  it('two cashiers competing for the final units can open and sell them only once', async () => {
+    const item = await stock(10);
+    const attempts = await Promise.allSettled(
+      [ids.cashier, ids.cashierB].map((user) => bill(user, [(id) => loose(item, id, 10)]))
+    );
+    expect(attempts.filter((a) => a.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.find((a) => a.status === 'rejected')).toMatchObject({
+      reason: expect.objectContaining({ message: expect.stringMatching(/0 units available/i) }),
+    });
+    expect(
+      (await history(item)).filter((m) => m.reason === 'Pack opened at the counter')
+    ).toHaveLength(1);
+    expect(await balance(item)).toMatchObject({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
+    await expectStockMatchesBills(item.medicineId, 10);
+  });
+  it('review: a syrup cannot auto-open at the counter', async () => {
+    const item = await stockedItem(
+      'Synthetic syrup',
+      [{ expiresAt: '2032-01-01', units: 20, mrp: 2000 }],
+      { openedUnits: 0, dosageForm: 'Syrup' }
+    );
+    await expect(bill(ids.cashier, [(id) => loose(item, id, 1)])).rejects.toThrow();
+    expect((await history(item)).filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(0);
+    await bill(ids.cashier, [(id) => ({ ...strip(item, id, 1), saleUnit: 'PACK' })]);
+    expect(await balance(item)).toMatchObject({ sealedPacks: 1, looseUnits: 0 });
+  });
+  it('does not break single-unit packs or whole-pack-only catalogue items', async () => {
+    const single = await stock(4, 0, 1);
+    await bill(ids.cashier, [(id) => loose(single, id, 1)]);
+    expect((await history(single)).filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(0);
+    const whole = await stock(20);
+    await withTenantDb(ids.org, (db) =>
+      db.medicine.update({ where: { id: whole.medicineId }, data: { wholePackOnly: true } })
+    );
+    const { searchCounterCatalog } = await import('@/lib/pharmacy/counter');
+    const catalogue = await withTenantDb(ids.org, async (db) => {
+      const medicine = await db.medicine.findFirstOrThrow({
+        where: { id: whole.medicineId },
+        select: { productName: true },
+      });
+      return searchCounterCatalog(
+        db,
+        { organizationId: ids.org, branchId: ids.branch },
+        { query: medicine.productName }
+      );
+    });
+    expect(catalogue.rows.find((row) => row.medicineId === whole.medicineId)?.saleUnits).toEqual([
+      expect.objectContaining({ kind: 'PACK', canonicalUnitsPerSaleUnit: 10 }),
+    ]);
+    await expect(bill(ids.cashier, [(id) => loose(whole, id, 1)])).rejects.toThrow(
+      'This item is sold only as a whole pack.'
+    );
+    await bill(ids.cashier, [(id) => ({ ...strip(whole, id, 1), saleUnit: 'PACK' })]);
+    expect(await balance(whole)).toMatchObject({ onHandUnits: 10, sealedPacks: 1, looseUnits: 0 });
+    expect((await history(whole)).filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(0);
+  });
 });
 
 describeIfDatabase('DEV-977B change and remove a bill line', () => {

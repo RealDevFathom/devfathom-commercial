@@ -506,3 +506,82 @@ suite('khata reminder PostgreSQL balance and idempotency', () => {
     expect(await claim('c', '2026-10-22')).toBeTruthy();
   });
 });
+
+suite('DEV-1046 search', () => {
+  beforeAll(async () => {
+    await inScope(a, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: a.saleId } });
+      const payerCustomerId = sale.customerId!;
+      await db.pharmacyCustomer.update({
+        where: { id: payerCustomerId },
+        data: { phoneLast4: '9876' },
+      });
+      const accounts = Array.from({ length: 1000 }, (_, i) => ({
+        id: `search_${suffix}_${i}`,
+        displayName: `Synthetic ${String(i).padStart(4, '0')}`,
+        organizationId: a.organizationId,
+        branchId: a.branchId,
+        payerCustomerId,
+        creditLimitMinor: 2000,
+      }));
+      await db.pharmacyFamilyAccount.createMany({ data: accounts });
+      await db.pharmacyFamilyMember.createMany({
+        data: accounts.map((account) => ({
+          organizationId: a.organizationId,
+          branchId: a.branchId,
+          familyAccountId: account.id,
+          customerId: payerCustomerId,
+        })),
+      });
+    });
+  }, 60_000);
+  it('finds an eligible family by the middle of a consented phone number and returns only its mask', async () => {
+    await inScope(a, async (db) => {
+      const customer = await db.pharmacyCustomer.findFirstOrThrow({
+        where: { sales: { some: { id: a.saleId } } },
+      });
+      await db.pharmacyPatient.update({
+        where: { id: customer.patientId },
+        data: { phone: '+923001239876' },
+      });
+      const { writePatientConsent } = await import('./consent-writer');
+      const consent = {
+        patientId: customer.patientId,
+        purpose: 'LOYALTY' as const,
+        channel: 'IN_PERSON' as const,
+      };
+      await writePatientConsent(db, a.organizationId, a.actorId, { ...consent, granted: true });
+      const found = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '300123' });
+      expect(found).toHaveLength(10);
+      expect(found[0]?.maskedPhone).toBe('•••• 9876');
+      expect(JSON.stringify(found)).not.toContain('300123');
+      expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '03211119876' })).toEqual(
+        []
+      );
+      await writePatientConsent(db, a.organizationId, a.actorId, { ...consent, granted: false });
+      expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '300123' })).toEqual([]);
+    });
+  });
+  it('returns one masked page from 1,000 eligible accounts and resolves a later account by ID', async () => {
+    await inScope(a, async (db) => {
+      const start = performance.now();
+      const results = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: 'Synthetic' });
+      expect(results).toHaveLength(10);
+      expect(results[0]).toMatchObject({ displayName: 'Synthetic 0000', maskedPhone: '•••• 9876' });
+      expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '987' })).toHaveLength(10);
+      const last = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '0999' });
+      expect(last.map((row) => row.id)).toEqual([`search_${suffix}_999`]);
+      expect(
+        await khata.readSaleKhataStatement(db, a, a.saleId, `search_${suffix}_999`)
+      ).toMatchObject({
+        account: { id: `search_${suffix}_999` },
+      });
+      expect(results[0]).not.toHaveProperty('phone');
+      expect(results[0]).not.toHaveProperty('payer');
+      console.info(
+        'DEV-1046: three capped searches plus exact statement, milliseconds',
+        Math.round(performance.now() - start)
+      );
+    });
+  });
+});

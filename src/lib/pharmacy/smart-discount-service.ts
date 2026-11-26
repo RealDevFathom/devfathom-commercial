@@ -31,7 +31,7 @@ export async function readMaxDiscountBps(db: ScopedDb, organizationId: string) {
 }
 
 /** The live identity the owner check reads, never the session role. */
-async function isOrganizationOwner(db: ScopedDb, organizationId: string, userId: string) {
+export async function isOrganizationOwner(db: ScopedDb, organizationId: string, userId: string) {
   const user = await db.user.findFirst({
     where: { id: userId, organizationId },
     select: {

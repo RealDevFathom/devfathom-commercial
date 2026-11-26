@@ -3,6 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { counterCustomerPhoneFilters } from './counter-customer-phone';
 import { writePatientConsent } from './consent-writer';
 import { linkCustomerToSale } from './customer-loyalty';
 import { auditPatientRead } from './patient-prescriptions';
@@ -357,36 +358,89 @@ export async function readKhataBalance(
 }
 
 /** Account membership is checked against the sale's server-read customer. */
-export async function readSaleKhataAccounts(db: ScopedDb, scope: FamilyKhataScope, saleId: string) {
+export async function readSaleKhataAccounts(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  saleId: string,
+  filter: { query?: string; accountId?: string } = {}
+) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     select: { customerId: true },
   });
   if (!sale?.customerId) return [];
-  const accounts = await db.pharmacyFamilyAccount.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      active: true,
-      members: { some: { customerId: sale.customerId } },
-    },
-    select: {
-      id: true,
-      displayName: true,
-      creditLimitMinor: true,
-      members: { where: { customerId: sale.customerId }, select: { id: true } },
-    },
-    orderBy: { id: 'asc' },
-  });
-  return Promise.all(
-    accounts.map(async (account) => ({
-      id: account.id,
-      displayName: account.displayName,
-      creditLimitMinor: account.creditLimitMinor,
-      memberId: account.members[0]!.id,
-      balanceMinor: await readKhataBalance(db, scope, account.id),
-    }))
-  );
+  const term = filter.query?.trim();
+  const where = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    active: true,
+    members: { some: { customerId: sale.customerId } },
+    ...(filter.accountId ? { id: filter.accountId } : {}),
+    ...(term
+      ? {
+          OR: [
+            { displayName: { contains: term, mode: 'insensitive' as const } },
+            { payer: { displayName: { contains: term, mode: 'insensitive' as const } } },
+            ...counterCustomerPhoneFilters(term, scope.organizationId).map((payer) => ({ payer })),
+          ],
+        }
+      : {}),
+  };
+  const select = {
+    id: true,
+    displayName: true,
+    creditLimitMinor: true,
+    payerCustomerId: true,
+    payer: { select: { phoneLast4: true } },
+    members: { where: { customerId: sale.customerId }, select: { id: true } },
+  } as const;
+  const orderBy = [{ displayName: 'asc' as const }, { id: 'asc' as const }];
+  const accounts = await db.pharmacyFamilyAccount.findMany({ where, select, orderBy, take: 10 });
+  if (
+    !term &&
+    !filter.accountId &&
+    accounts.length === 10 &&
+    !accounts.some((account) => account.payerCustomerId === sale.customerId)
+  ) {
+    const payerAccount = await db.pharmacyFamilyAccount.findFirst({
+      where: { ...where, payerCustomerId: sale.customerId },
+      select,
+      orderBy,
+    });
+    if (payerAccount) accounts.splice(9, 1, payerAccount);
+  }
+  // The page needs one aggregate read, even when ten eligible accounts match.
+  const balances = new Map<string, number>();
+  if (accounts.length > 1) {
+    const totals = await db.pharmacyKhataEvent.groupBy({
+      by: ['familyAccountId', 'kind'],
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        familyAccountId: { in: accounts.map((account) => account.id) },
+      },
+      _sum: { amountMinor: true },
+    });
+    for (const total of totals)
+      balances.set(
+        total.familyAccountId,
+        (balances.get(total.familyAccountId) ?? 0) +
+          (total.kind === 'PAYMENT' ? -1 : 1) * (total._sum.amountMinor ?? 0)
+      );
+  } else if (accounts[0]) {
+    balances.set(accounts[0].id, await readKhataBalance(db, scope, accounts[0].id));
+  }
+  return accounts.map((account) => ({
+    id: account.id,
+    displayName: account.displayName,
+    creditLimitMinor: account.creditLimitMinor,
+    memberId: account.members[0]!.id,
+    ...(account.payer?.phoneLast4
+      ? { maskedPhone: `•••• ${account.payer.phoneLast4.slice(-4)}` }
+      : {}),
+    ...(account.payerCustomerId === sale.customerId ? { linkedPayer: true } : {}),
+    balanceMinor: balances.get(account.id) ?? 0,
+  }));
 }
 
 export async function readSaleKhataStatement(
@@ -398,9 +452,9 @@ export async function readSaleKhataStatement(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR SHARE`
   );
-  const account = (await readSaleKhataAccounts(db, scope, saleId)).find(
-    (row) => row.id === familyAccountId
-  );
+  const account = (
+    await readSaleKhataAccounts(db, scope, saleId, { accountId: familyAccountId })
+  ).find((row) => row.id === familyAccountId);
   if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const rows = await db.pharmacyKhataEvent.findMany({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
@@ -432,9 +486,9 @@ export async function authorizeKhataCharge(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
   );
-  const account = (await readSaleKhataAccounts(db, scope, input.saleId)).find(
-    (row) => row.id === input.familyAccountId
-  );
+  const account = (
+    await readSaleKhataAccounts(db, scope, input.saleId, { accountId: input.familyAccountId })
+  ).find((row) => row.id === input.familyAccountId);
   if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const projected = account.balanceMinor + input.amountMinor;
   if (
