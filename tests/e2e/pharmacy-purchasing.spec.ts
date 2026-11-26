@@ -332,7 +332,11 @@ test('an outside supplier confirms one order, proposes a date and attaches a PDF
   const shortExpiry = new Date(Date.now() + 10_000);
   const shortLink = await page.request.post('/api/trpc/pharmacySupplierLinks.issue', {
     data: {
-      json: { ...fixture.supplierOrder, expiresAt: shortExpiry.toISOString() },
+      json: {
+        ...fixture.supplierOrder,
+        purchaseOrderId: fixture.expiryOrderId,
+        expiresAt: shortExpiry.toISOString(),
+      },
       meta: { values: { expiresAt: ['Date'] } },
     },
   });
