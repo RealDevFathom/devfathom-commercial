@@ -148,6 +148,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyInventory.stockSignalDashboard': ['signed-in'],
   'pharmacyInventory.stockSignalDigest': ['signed-in'],
   'pharmacyInventory.temperatureZoneStatuses': ['signed-in'],
+  'pharmacyInventory.stockValuation': ['signed-in'],
   'pharmacyInventory.transfer': ['pharmacy:inventory'],
   'pharmacyInventory.transferBoard': ['pharmacy:inventory'],
   'pharmacyInventory.writeOff': ['pharmacy:inventory'],

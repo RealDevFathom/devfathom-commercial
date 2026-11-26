@@ -24,15 +24,19 @@ export type ReportScope = {
   organizationId: string;
   /** Omit to report across every branch in the organization. */
   branchId?: string;
+  /** Explicit admitted set for a multi-branch read. An empty set reads nothing. */
+  branchIds?: readonly string[];
 };
 
 type JournalReportScope = Omit<ReportScope, 'organizationId'> & {
   organizationId: string | Prisma.Sql;
-  branchIds?: string[];
 };
 
 function branchFilter(scope: JournalReportScope) {
-  if (scope.branchIds) return Prisma.sql`AND line."branchId" IN (${Prisma.join(scope.branchIds)})`;
+  if (scope.branchIds)
+    return scope.branchIds.length
+      ? Prisma.sql`AND line."branchId" IN (${Prisma.join(scope.branchIds)})`
+      : Prisma.sql`AND FALSE`;
   return scope.branchId
     ? Prisma.sql`AND line."branchId" = ${scope.branchId}`
     : Prisma.sql`AND TRUE`;
@@ -46,6 +50,7 @@ export type ValuationRow = {
   manufacturingBatchId: string | null;
   unitCostMinor: number | null;
   valueMinor: number;
+  inTransitValueMinor?: bigint;
 };
 
 /**
@@ -61,7 +66,8 @@ export type ValuationRow = {
 export async function perpetualValuation(
   db: ScopedDb,
   scope: ReportScope,
-  at: Date
+  at: Date,
+  options: { splitTransit?: boolean } = {}
 ): Promise<ValuationRow[]> {
   return db.$queryRaw<ValuationRow[]>(Prisma.sql`
     SELECT line."branchId",
@@ -71,6 +77,13 @@ export async function perpetualValuation(
            lot."manufacturingBatchId",
            lot."unitCostMinor",
            SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END)::int AS "valueMinor"
+           ${
+             options.splitTransit
+               ? Prisma.sql`,
+             COALESCE(SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor"::bigint ELSE -line."amountMinor"::bigint END)
+               FILTER (WHERE line."accountCode" = 'INVENTORY_IN_TRANSIT'), 0)::bigint AS "inTransitValueMinor"`
+               : Prisma.empty
+           }
       FROM "finance_journal_lines" line
       JOIN "finance_journal_entries" entry
         ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
@@ -87,6 +100,15 @@ export async function perpetualValuation(
               batch."medicineId", lot."manufacturingBatchId", lot."unitCostMinor"
     HAVING SUM(CASE WHEN line."side" = 'DEBIT' THEN line."amountMinor" ELSE -line."amountMinor" END) <> 0
      ORDER BY line."branchId", line."lotId", line."locationId"`);
+}
+
+/** Identical headline for the Finance ledger and Inventory, including unallocated postings. */
+export function postedInventoryValue(
+  rows: readonly Pick<ValuationRow, 'valueMinor'>[],
+  unallocatedMinor: bigint
+): bigint | null {
+  if (!rows.every(({ valueMinor }) => Number.isSafeInteger(valueMinor))) return null;
+  return rows.reduce((sum, row) => sum + BigInt(row.valueMinor), unallocatedMinor);
 }
 
 /**

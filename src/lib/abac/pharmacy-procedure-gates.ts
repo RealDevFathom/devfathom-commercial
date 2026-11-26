@@ -715,6 +715,13 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'auditedProtectedProcedure + admittedScopeFor: any signed-in member assigned to the branch; workspace admin with pharmacy:inventory at any branch',
     lines: ['manage-stock/workspace-administrator-reach-stock'],
   },
+  'pharmacyInventory.stockValuation': {
+    gate: 'auditedProtectedProcedure + admittedScopeFor: quantities in admitted branches; business rollup only for an active tenant ADMIN; money only with reports:financial or existing pharmacy finance:read',
+    lines: [
+      'manage-stock/workspace-administrator-reach-stock',
+      'financial-reports/see-stock-cost-value',
+    ],
+  },
   'pharmacyInventory.transfer': {
     gate: 'inventoryControl -> pharmacy:inventory (assigned branch / admin exception); moves a lot between two locations in one branch',
     lines: [

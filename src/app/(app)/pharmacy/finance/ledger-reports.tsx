@@ -1,3 +1,4 @@
+import { postedInventoryValue } from '@/lib/pharmacy/finance-reports';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import type { ReactNode } from 'react';
 import { Button } from '@/components/ui/button';
@@ -236,7 +237,7 @@ export function ValuationLedger({
 }) {
   const labels = labelsOf(report);
   const unallocated = BigInt(report.unallocatedValueMinor ?? 0);
-  const lotTotal = total(report.rows.map((row) => row.valueMinor));
+  const postedValue = postedInventoryValue(report.rows, unallocated);
   const rows: ReactNode[][] = report.rows.map((row) => [
     named(labels.branches, row.branchId),
     row.lotId ? named(labels.lots, row.lotId) : unknown,
@@ -258,7 +259,7 @@ export function ValuationLedger({
       {rows.length > 0 && (
         <Stat
           label="Posted inventory value"
-          value={money(lotTotal === null ? null : lotTotal + unallocated, report.currency)}
+          value={money(postedValue, report.currency)}
           valueClassName="break-words text-xl"
           sub="Stock on hand plus stock in transit, at cost, up to the selected date."
         />
