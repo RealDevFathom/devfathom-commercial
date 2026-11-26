@@ -204,3 +204,16 @@ describe('DEV-240 member- and tenant-bound rail read', () => {
     ]);
   });
 });
+
+it('excludes Finance when its module is disabled even for a holder of finance read', async () => {
+  const { hasModule } = await import('@/lib/entitlements');
+  vi.mocked(hasModule).mockImplementation((_, key) => key !== 'pharmacy-finance');
+  mocks.can.mockImplementation(async (_, key) => key === 'finance:read');
+  try {
+    expect((await caller({ id: 'owner', role: 'ADMIN' }).navigation()).capabilities).not.toContain(
+      'finance:read'
+    );
+  } finally {
+    vi.mocked(hasModule).mockReturnValue(true);
+  }
+});

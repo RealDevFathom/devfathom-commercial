@@ -1,4 +1,5 @@
 import { canAccessPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
+import { hasModule } from '@/lib/entitlements';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -79,7 +80,9 @@ export const pharmacyAccessRouter = router({
             reportsGranted = reportBranches === 'ALL';
             allowed = reportsGranted || reportBranches.length > 0;
           } else if (capability === 'finance:read') {
-            allowed = await canAccessPharmacyFinance(user, options);
+            allowed =
+              hasModule(ctx.entitlements, 'pharmacy-finance') &&
+              (await canAccessPharmacyFinance(user, options));
             if (allowed && user.role !== 'ADMIN') {
               const org = ctx.entitlements.organizationId;
               allowed = Boolean(
