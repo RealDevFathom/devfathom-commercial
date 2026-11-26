@@ -1321,6 +1321,15 @@ export async function assertBranchCashier(db: ScopedDb, scope: LedgerScope, cash
     throw new PharmacySettlementError('CASHIER_NOT_ASSIGNED');
 }
 
+/** Hold the current branch mode until a new drawer or terminal attempt has committed. */
+export async function lockPharmacyCashMode(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>
+) {
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_branches
+    WHERE id = ${scope.branchId} AND "organizationId" = ${scope.organizationId} FOR SHARE`);
+}
+
 export async function openPharmacyDrawer(
   db: ScopedDb,
   scope: LedgerScope,
@@ -1337,6 +1346,7 @@ export async function openPharmacyDrawer(
     throw new PharmacySettlementError('INVALID_AMOUNT');
   if (options.requireCurrentBusinessDate)
     await requireCurrentPharmacyBusinessDate(db, scope, input.businessDate);
+  await lockPharmacyCashMode(db, scope);
   await requirePharmacyDayOpen(db, scope, input.businessDate);
   const operatingCashierId = input.operatingCashierId ?? scope.actorId;
   if (operatingCashierId !== scope.actorId)
