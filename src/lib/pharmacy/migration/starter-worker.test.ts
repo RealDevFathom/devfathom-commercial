@@ -49,3 +49,32 @@ it('gives an active foreground transaction priority without checking out a conne
   expect(mocks.load).toHaveBeenCalledTimes(1);
   expect(mocks.pause.mock.calls).toEqual([[100], [500]]);
 });
+
+it('makes bounded progress even when every foreground check is busy', async () => {
+  let attempts = 0;
+  mocks.find.mockImplementation(async () =>
+    !mocks.load.mock.calls.length && ++attempts <= 25 ? { organizationId: 'qa-c' } : null
+  );
+  mocks.available.mockImplementation(async (_sql, graceExpired) => [
+    { available: graceExpired === true },
+  ]);
+  mocks.load.mockResolvedValue(250);
+  expect(await processStarterImports()).toEqual({ processed: 250, failed: 0 });
+  expect(attempts).toBeGreaterThan(1);
+});
+
+it('gives foreground work more time after a costly write transaction', async () => {
+  mocks.find.mockResolvedValueOnce({ organizationId: 'qa-d' }).mockResolvedValue(null);
+  let now = 0;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  try {
+    mocks.load.mockImplementation(async () => {
+      now += 200;
+      return 250;
+    });
+    expect(await processStarterImports()).toEqual({ processed: 250, failed: 0 });
+    expect(mocks.pause.mock.calls[0]![0]).toBeGreaterThanOrEqual(2000);
+  } finally {
+    clock.mockRestore();
+  }
+});

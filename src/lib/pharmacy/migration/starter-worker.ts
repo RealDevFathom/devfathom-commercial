@@ -7,6 +7,7 @@ export async function processStarterImports() {
   const result = { processed: 0, failed: 0 };
   if (!starterProductCount) return result;
   const deadline = Date.now() + 90_000;
+  let deferrals = 0;
   const deferred = new Set<string>();
   // One transaction per batch. Rotate by last progress so smaller pharmacies can finish too.
   while (Date.now() < deadline) {
@@ -19,31 +20,35 @@ export async function processStarterImports() {
     );
     if (!next) break;
     try {
+      const started = Date.now();
       const processed = await withTenantDb(
         next.organizationId,
         async (db) => {
           // Read activity metadata only. Never collect SQL text or tenant request data.
           // Only one import writer runs at a time, including overlapping cron calls.
           const [slot] = await db.$queryRaw<{ available: boolean }[]>`
-            SELECT NOT EXISTS (
+            SELECT (${deferrals >= 20}::boolean OR NOT EXISTS (
               SELECT 1 FROM pg_stat_activity
               WHERE datname=current_database() AND usename=current_user AND pid<>pg_backend_pid()
                 AND backend_type='client backend' AND xact_start IS NOT NULL
-            ) AND pg_try_advisory_xact_lock(hashtextextended('pharmacy.starter.worker',0)) AS available`;
+            )) AND pg_try_advisory_xact_lock(hashtextextended('pharmacy.starter.worker',0)) AS available`;
           return slot?.available ? loadStarterBatch(db, next.organizationId) : null;
         },
         { skipDrain: true }
       );
       if (processed === null) {
+        deferrals++;
         await wait(100);
         continue;
       }
+      deferrals = 0;
       result.processed += processed;
       if (!processed) deferred.add(next.organizationId);
       else {
         // Give foreground transactions time between writes, outside both the connection
         // and the tenant row lock. The committed cursor survives a worker timeout here.
-        await wait(500);
+        const writeMs = Date.now() - started;
+        await wait(Math.max(500, Math.min(5000, 15 * writeMs)));
       }
     } catch (error) {
       deferred.add(next.organizationId);
