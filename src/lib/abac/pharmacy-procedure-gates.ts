@@ -1496,10 +1496,6 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'dispense-prescriptions/everything-record-prescriptions',
     ],
   },
-  'pharmacyPrescriptions.fill': {
-    gate: "capabilityProcedure('pharmacy:dispense'); non-controlled lines only; + branch assignment (counterBranchAssignmentDenial) when a dispensing branchId is sent (DEV-962)",
-    lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
-  },
   'pharmacyPrescriptions.readPatient': {
     gate: "capabilityProcedure('pharmacy:prescriptions')",
     lines: [
