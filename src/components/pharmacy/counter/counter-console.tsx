@@ -328,6 +328,16 @@ function hasValidBill(
   );
 }
 
+function scannedSaleOption(row: CounterSearchRow) {
+  if (row.barcodePackLevelId)
+    return row.saleUnits.find((unit) => unit.packLevelId === row.barcodePackLevelId) ?? null;
+  return (
+    row.saleUnits.find((unit) => unit.kind === 'PACK') ??
+    (row.unitsPerPack === 1 ? row.saleUnits[0] : null) ??
+    null
+  );
+}
+
 function counterAddOption(row: CounterSearchRow, kind: SaleUnitKind) {
   const requested =
     kind === 'UNIT'
@@ -2373,7 +2383,7 @@ function ScopedPharmacyCounterConsole({
         : unitOption && scannedRow
           ? unitOption
           : scannedRow
-            ? addUnitFor(scannedRow)
+            ? scannedSaleOption(scannedRow)
             : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
@@ -2865,7 +2875,7 @@ function ScopedPharmacyCounterConsole({
         }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
-        const scanOption = addUnitFor(row);
+        const scanOption = scannedSaleOption(row);
         const scanPreview = counterSelectionPreview(row, scanOption, 1);
         // DEV-977B (Counter v2): a scan adds in one step. Only an exception (a non-FEFO shelf
         // sticker, or not enough stock) opens the line form, so the cashier can act on it.
@@ -2900,7 +2910,6 @@ function ScopedPharmacyCounterConsole({
     },
     [
       addToCart,
-      addUnitFor,
       branchId,
       busy,
       catalogueCache,

@@ -8840,12 +8840,30 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     });
   }
 
-  it.each(['search', 'scan'])(
-    'DEV-1041: %s adds one loose unit from a multi-unit pack',
-    async (source) => {
+  it.each([
+    ['search', undefined, 'UNIT', 1],
+    ['scan', 'box', 'PACK', 100],
+    ['scan', undefined, 'PACK', 100],
+    ['scan', 'strip', 'STRIP', 10],
+  ] as const)(
+    'DEV-1041: %s at level %s adds one %s',
+    async (source, barcodePackLevelId, expectedUnit, expectedUnits) => {
       const row = {
         ...twoUnitRow(),
-        dosageForm: 'Powder',
+        dosageForm: 'Tablet',
+        onHandUnits: 300,
+        barcodePackLevelId,
+        saleUnits: [
+          {
+            ...STRIP,
+            kind: 'PACK' as const,
+            packLevelId: 'box',
+            levelLabel: 'BOX',
+            canonicalUnitsPerSaleUnit: 100,
+          },
+          { ...STRIP, packLevelId: 'strip' },
+          LOOSE,
+        ],
         printedMrpMinor: 58600,
         unitsPerPack: 100,
       };
@@ -8863,8 +8881,8 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
         expect(mocks.mutations.addLine).toHaveBeenCalledWith(
           expect.objectContaining({
             quantity: 1,
-            saleUnit: 'UNIT',
-            canonicalUnitsPerSaleUnit: 1,
+            saleUnit: expectedUnit,
+            canonicalUnitsPerSaleUnit: expectedUnits,
           })
         )
       );

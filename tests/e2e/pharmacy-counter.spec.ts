@@ -741,7 +741,6 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).not.toContainText('Batch override');
 
   // This receipt includes a whole pack in addition to the two strips.
-  await page.getByLabel('Scan or search').press('F3');
   await scan(page, otc.barcode);
   await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
@@ -2780,20 +2779,18 @@ test('DEV-1049 cashier sells a unit from sealed stock and takes exact cash', asy
   await expect(receipt).toContainText('1.00');
 });
 
-test('DEV-1041: scan and search each sell one unit at the server price', async ({ page }) => {
+test('DEV-1041: a scanned box and typed tablet use their respective server prices', async ({
+  page,
+}) => {
   await openCounter(page);
   await openDrawer(page);
-  const { otc, syrup } = PHARMACY_E2E.medicines;
+  const { otc } = PHARMACY_E2E.medicines;
   await scan(page, otc.barcode);
-  const tablet = billLine(page, otc.name);
-  await expect(tablet.getByRole('radio', { name: 'Unit' })).toHaveAttribute('aria-checked', 'true');
-  await expect(tablet).toContainText('2.50');
-  await search(page, syrup.name);
-  await addFirstResult(page, syrup.name);
-  const loose = billLine(page, syrup.name);
-  await expect(loose.getByRole('radio', { name: 'Unit' })).toHaveAttribute('aria-checked', 'true');
-  await expect(loose).toContainText(PHARMACY_E2E_EXPECTED.syrupUnitPrice);
-  await expect(page.getByLabel('Bill total')).toContainText('5.50');
+  await expect(billLine(page, otc.name)).toContainText('1 × pack');
+  await search(page, otc.name);
+  await addFirstResult(page, otc.name);
+  await expect(billLine(page, otc.name).last()).toContainText('2.50');
+  await expect(page.getByLabel('Bill total')).toContainText('252.50');
   await expect(
     page.getByLabel('Bill total').getByRole('button', { name: /Take payment/ })
   ).toBeEnabled();
@@ -2863,7 +2860,8 @@ for (const [method, detail] of [
   test(`DEV-1045 records a synthetic ${method} with empty references`, async ({ page }) => {
     await openCounter(page);
     await openDrawer(page);
-    await scan(page, PHARMACY_E2E.medicines.otc.barcode);
+    await search(page, PHARMACY_E2E.medicines.otc.name);
+    await addFirstResult(page, PHARMACY_E2E.medicines.otc.name);
     await expect(billLine(page, PHARMACY_E2E.medicines.otc.name)).toBeVisible();
     await page.getByLabel('Scan or search').press('F9');
     const sheet = page.getByRole('dialog', { name: /^Take payment/ });
