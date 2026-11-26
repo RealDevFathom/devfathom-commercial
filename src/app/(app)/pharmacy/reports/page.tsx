@@ -215,6 +215,9 @@ export default async function PharmacyReportsPage({
       'staffCapacity',
       'staffMinimum',
     ].some((key) => key in query);
+  if (visual && !selectedReport && !catalog.permissions.financial) {
+    redirect(operationalReportsHref(query));
+  }
   if (visual) {
     const initialPeriod =
       query.from || query.to

@@ -37,6 +37,7 @@ const commandCentre = vi.fn(async () => ({
 const reportAccess = vi.hoisted(() => ({
   can: vi.fn(async (..._args: unknown[]) => true),
   session: true,
+  financial: true,
 }));
 vi.mock('@/lib/abac', () => ({
   can: reportAccess.can,
@@ -150,7 +151,11 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
         input.supplierId ? null : [],
       acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
-        permissions: { operational: true, financial: true, owner: true },
+        permissions: {
+          operational: true,
+          financial: reportAccess.financial,
+          owner: reportAccess.financial,
+        },
         reports: [
           {
             key: 'sales-margin',
@@ -900,4 +905,22 @@ it('opens the visual reports without reading the legacy command centre', async (
   const element = await VisualEntry({ searchParams: Promise.resolve({}) });
   expect(commandCentre).not.toHaveBeenCalled();
   expect(element).toBeDefined();
+});
+
+it('sends an operational-only reader directly to their scoped operational reports', async () => {
+  const { default: Entry } = await import('./page');
+  reportAccess.financial = false;
+  try {
+    await expect(
+      Entry({
+        searchParams: Promise.resolve({ branch: 'b1', from: '2026-11-23', to: '2026-11-24' }),
+      })
+    ).rejects.toMatchObject({
+      digest: expect.stringContaining(
+        '/pharmacy/reports/operations?branch=b1&from=2026-11-23&to=2026-11-24'
+      ),
+    });
+  } finally {
+    reportAccess.financial = true;
+  }
 });
