@@ -934,6 +934,19 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
           commandKey: id('postjournal'),
         })
       );
+      expect(
+        await inTenant((db) =>
+          db.auditLog.count({
+            where: {
+              organizationId,
+              actorId: userId(maker),
+              action: 'pharmacyGeneralJournal.post',
+              outcome: 'SUCCESS',
+              targetId: next.id,
+            },
+          })
+        )
+      ).toBe(1);
       const reversal = await checked('manage', (api) =>
         api.reverse({
           branchId,
@@ -1160,12 +1173,53 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       code: 'FORBIDDEN',
       message: 'Only an administrator can change the supplier payment approval limit.',
     });
+    const invoice = await callerFor(financeEmployee).record({
+      branchId,
+      createKey: id('limit-bill'),
+      reference: id('limit-bill'),
+      payeeName: 'Synthetic supplier',
+      supplierInvoiceRef: id('limit-invoice'),
+      invoiceDate: day(-1),
+      dueDate: day(1),
+      amountMinor: 3000,
+      currency: 'PKR',
+      description: 'Supplies',
+      evidenceReference: 'Slip',
+    });
+    const billPayment = (amountMinor: number, key: string) => ({
+      branchId,
+      invoiceId: invoice.id,
+      amountMinor,
+      commandKey: id(key),
+      reference: id(key),
+      fundingAccount: 'BANK' as const,
+      paidAt: new Date().toISOString(),
+    });
+    const ap = callerFor(financePayer);
     await set(null);
     expect((await pay((await create(101, 'unlimited')).id)).status).toBe('POSTED');
+    await expect(ap.pay(billPayment(101, 'ap-unlimited'))).resolves.toMatchObject({
+      amountMinor: 101,
+    });
     await set(100);
     try {
       for (const amount of [99, 100])
         expect((await pay((await create(amount, 'limit-' + amount)).id)).status).toBe('POSTED');
+      for (const amount of [99, 100])
+        await expect(ap.pay(billPayment(amount, 'ap-limit-' + amount))).resolves.toMatchObject({
+          amountMinor: amount,
+        });
+      const above = billPayment(101, 'ap-above');
+      await expect(ap.pay(above)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Enter the approving administrator’s PIN or authenticator code.',
+      });
+      const approved = await ap.pay({
+        ...above,
+        approverEmail: userId(owner) + '@ap-approvers.test',
+        pin: PIN,
+      });
+      expect((await ap.pay(above)).id).toBe(approved.id);
       const draft = await create(101, 'above-limit');
       await expect(pay(draft.id)).rejects.toMatchObject({
         code: 'FORBIDDEN',
@@ -1174,6 +1228,12 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       await expect(
         pay(draft.id, { approverEmail: userId(financeEmployee) + '@ap-approvers.test', pin: PIN })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        pay(draft.id, { approverEmail: userId(owner) + '@ap-approvers.test', pin: '1111' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Enter the approving administrator’s PIN or authenticator code.',
+      });
       const credentials = { approverEmail: userId(owner) + '@ap-approvers.test', pin: PIN };
       expect((await pay(draft.id, credentials)).status).toBe('POSTED');
       expect((await pay(draft.id)).id).toBe(draft.id);
@@ -1192,6 +1252,18 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
         amountMinor: 101,
         selfApproval: false,
       });
+      expect(
+        await inTenant((db) =>
+          db.auditLog.findFirst({
+            where: {
+              organizationId,
+              actorId: userId(owner),
+              action: 'pharmacyFinance.setSupplierPaymentLimit',
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        )
+      ).toMatchObject({ metadata: { previousLimitMinor: null, limitMinor: 100 } });
       expect(JSON.stringify(approvals[0]?.metadata)).not.toContain(PIN);
     } finally {
       await set(null);
