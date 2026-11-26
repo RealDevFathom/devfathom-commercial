@@ -33,10 +33,10 @@ export default async function RepeatPurchasingPage({
   const timeZone = ctx.organization?.timezone;
   const zone = workspaceZoneLabel(timeZone);
   const rawAsOf = scalar(query.asOf);
-  // The picker is minute precision and read on the organization's clock; default
-  // to the current minute so the frozen cutoff round-trips through the form.
+  // The picker displays only a wall-clock minute. Carry the cutoff separately
+  // so submitting the same minute preserves even the later fall-back instant.
   const asOf = rawAsOf
-    ? workspaceInstantFromInput(rawAsOf, timeZone)
+    ? workspaceInstantFromInput(rawAsOf, timeZone, scalar(query.originalAsOf))
     : `${now.toISOString().slice(0, 16)}:00Z`;
   const from = scalar(query.from) ?? pharmacyCalendarDayOffset(timeZone, -179, now);
   const to = scalar(query.to) ?? pharmacyCalendarDayOffset(timeZone, -90, now);
@@ -74,6 +74,7 @@ export default async function RepeatPurchasingPage({
       </Link>
       <SectionCard title="Enrollment and observation" titleLevel={2}>
         <form className="grid gap-4 md:grid-cols-2" action="/pharmacy/reports/repeat-purchasing">
+          <input type="hidden" name="originalAsOf" value={asOf} />
           <label className="text-sm text-text-body">
             Enrollment from ({zone})
             <Input className="mt-1 min-h-11" type="date" name="from" defaultValue={from} required />
