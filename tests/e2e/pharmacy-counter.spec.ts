@@ -544,12 +544,14 @@ async function qaShots(
   name: string,
   {
     focus,
+    previous,
     widths = QA_KEYBOARD_WIDTHS,
     dir = QA_DIR,
     reducedMotion = 'reduce',
   }: {
     /** A control inside the panel: it takes the keyboard focus for the shot. */
     focus: Locator;
+    previous?: Locator;
     widths?: readonly number[];
     dir?: string;
     reducedMotion?: 'reduce' | 'no-preference';
@@ -564,9 +566,18 @@ async function qaShots(
         (value) => document.documentElement.setAttribute('data-theme', value),
         theme
       );
+      // Let the new viewport and theme paint before entering the dialog's tab cycle.
+      // The responsive dialog restores focus when its layout changes.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) =>
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+          )
+      );
       // Focus arrives from the keyboard (Shift+Tab, Tab), so :focus-visible draws its ring.
       await focus.focus();
       await page.keyboard.press('Shift+Tab');
+      if (previous) await expect(previous).toBeFocused();
       await page.keyboard.press('Tab');
       await expect(focus).toBeFocused();
       expect(
@@ -2130,6 +2141,7 @@ test('Counter v2 — controlled medicine: patient, prescription or emergency sup
   for (const reducedMotion of ['no-preference', 'reduce'] as const) {
     await qaShots(page, 'controlled-void-' + reducedMotion, {
       focus: restore.getByLabel('Approving pharmacist'),
+      previous: restore.getByRole('button', { name: 'Close' }),
       widths: QA_STATE_WIDTHS,
       reducedMotion,
     });
@@ -2897,6 +2909,7 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
     await expect(page.getByRole('region', { name: /^Receipt \d+/ })).toContainText(med.name, {
       timeout: 15000,
     });
+    await page.screenshot({ path: QA_DIR + '/controlled-solo-paid-receipt.png' });
     const records = await db.query(
       `SELECT r.*,d."actorUserId",a.metadata,s.status FROM pharmacy_controlled_register_entries r
       JOIN pharmacy_pharmacist_review_decisions d ON d.id=r."signatureRef" AND d."organizationId"=r."organizationId"
