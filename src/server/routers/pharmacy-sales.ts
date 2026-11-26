@@ -22,7 +22,6 @@ import {
   mayApproveCounterLine,
   type CounterApproval,
   type CounterApprovalKind,
-  type CounterApprovalInput,
 } from '@/lib/pharmacy/counter-line-approval';
 import { assertRxSaleAllowed, PharmacyRxSaleDenied } from '@/lib/pharmacy/rx-sale-gate';
 import { readPharmacistCheckPolicy } from '@/lib/pharmacy/pharmacist-check-policy';
@@ -313,18 +312,26 @@ const maximumWords = (bps: number) =>
 const counterApprovalPin = z
   .object({ staffProfileId: z.string().trim().min(1).max(128), pin: z.string().regex(/^\d{4,8}$/) })
   .strict();
-// The code-only form carries the enrolled terminal's actor- and branch-bound proof.
+// Anonymous approval is meaningful only with the independently verified till session.
 const counterLineApproval = z.union([
   counterApprovalPin,
-  z.strictObject({
-    staffProfileId: z.string().trim().min(1).max(128).optional(),
-    pin: z.string().regex(/^\d{6}$/),
-    counter: z.strictObject({
-      deviceId: z.string().min(1).max(160),
-      sessionToken: z.string().min(1).max(4096),
-    }),
-  }),
+  z.strictObject({ pin: z.string().regex(/^\d{6}$/) }),
 ]);
+type CounterLineApprovalRequest = z.infer<typeof counterLineApproval>;
+
+function authorizeSaleApproval(
+  ctx: TRPCContext,
+  db: ScopedDb,
+  scope: LedgerScope,
+  kind: CounterApprovalKind,
+  input?: CounterLineApprovalRequest
+) {
+  if (!input) return authorizeCounterApproval(db, scope, kind, input);
+  const counter = ctx.approvalCounter;
+  if (counter) return authorizeCounterApproval(db, scope, kind, { ...input, counter });
+  if ('staffProfileId' in input) return authorizeCounterApproval(db, scope, kind, input);
+  throw new CounterApprovalDenied(kind);
+}
 const tenderInput = z
   .object({
     branchId,
@@ -353,7 +360,7 @@ const tenderInput = z
      * DEV-290: a manager's or owner's staff PIN entered at the cashier's till to approve the
      * over-limit charge. Verified by the server; never stored, hashed or replayed.
      */
-    overLimitApproval: counterApprovalPin.optional(),
+    overLimitApproval: counterLineApproval.optional(),
     // Wallets: last 4–6 transaction digits. Manual card: last 4 digits or terminal
     // reference, never a full card number. Bank transfers use the bank statement reference.
     // Each tender's shape is enforced in settlement.
@@ -381,10 +388,11 @@ const tenderInput = z
     path: ['providerRef'],
     message: 'Invalid payment reference.',
   });
-// Outcome reads and discard replays never carry a terminal session.
-const tenderWriteInput = tenderInput.safeExtend({
-  overLimitApproval: counterLineApproval.optional(),
-});
+// The outcome and write have the same public type. Only a write takes an anonymous code.
+const tenderReadInput = tenderInput.refine(
+  (input) => !input.overLimitApproval || 'staffProfileId' in input.overLimitApproval,
+  { message: 'Approval codes are only accepted when taking payment.' }
+);
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -573,12 +581,12 @@ type CounterLineRequest = Omit<
   SaleLineInput,
   'override' | 'approvedByUserId' | 'approvalPolicy' | 'voucherCashierPinVerified' | 'scannedPack'
 > & {
-  discountApproval?: CounterApprovalInput;
+  discountApproval?: CounterLineApprovalRequest;
   /** DEV-819: the redeeming cashier's own PIN, required with a voucher. */
   voucherPin?: string;
-  override?: { inventoryLotId: string; reason: string; approval?: CounterApprovalInput };
+  override?: { inventoryLotId: string; reason: string; approval?: CounterLineApprovalRequest };
   /** DEV-843: a manager or owner PIN approves a scanned pack that is not from the FEFO lot. */
-  scannedPack?: { payload: string; approval?: CounterApprovalInput };
+  scannedPack?: { payload: string; approval?: CounterLineApprovalRequest };
 };
 
 /**
@@ -651,7 +659,13 @@ async function approvedLineInput(
     lineInput.voucherCashierPinVerified = true;
   }
   if ((input.discountMinor ?? 0) > 0) {
-    const approval = await authorizeCounterApproval(db, scope, 'DISCOUNT', input.discountApproval);
+    const approval = await authorizeSaleApproval(
+      ctx,
+      db,
+      scope,
+      'DISCOUNT',
+      input.discountApproval
+    );
     approvals.push({ kind: 'DISCOUNT', approval });
     lineInput.approvedByUserId = approval.approvedByUserId;
     lineInput.approvalPolicy = approval.approvalPolicy;
@@ -666,7 +680,8 @@ async function approvedLineInput(
     // pharmacist approval does not stand in. A wrong or ineligible PIN is refused outright;
     // a scan with no PIN may still sell a pack from the earliest-expiry lot.
     if (scannedPack.approval) {
-      const approval = await authorizeCounterApproval(
+      const approval = await authorizeSaleApproval(
+        ctx,
         db,
         scope,
         'SCANNED_PACK_FEFO',
@@ -686,7 +701,13 @@ async function approvedLineInput(
     }
   }
   if (override) {
-    const approval = await authorizeCounterApproval(db, scope, 'FEFO_OVERRIDE', override.approval);
+    const approval = await authorizeSaleApproval(
+      ctx,
+      db,
+      scope,
+      'FEFO_OVERRIDE',
+      override.approval
+    );
     approvals.push({ kind: 'FEFO_OVERRIDE', approval });
     lineInput.override = {
       inventoryLotId: override.inventoryLotId,
@@ -855,7 +876,7 @@ async function refundTenderInTransaction(
 
 const SOLE_APPROVER_PASSWORD_REAUTH = 'SOLE_APPROVER_PASSWORD_REAUTH';
 
-function ledgerTender(input: z.infer<typeof tenderWriteInput>) {
+function ledgerTender(input: z.infer<typeof tenderInput>) {
   // DEV-290: the approver's PIN is one-time evidence, never part of the idempotent payload.
   const { overLimitApproval, prepaidPin: customerPin, ...tender } = input;
   void overLimitApproval;
@@ -2574,7 +2595,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
+  tenderOutcome: protectedProcedure.input(tenderReadInput).query(async ({ ctx, input }) => {
     if (
       isManualTender(input.type) ||
       input.approvalCode !== undefined ||
@@ -2610,7 +2631,7 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
-          attempt: tenderInput,
+          attempt: tenderReadInput,
           reason: z.string().trim().min(3).max(500),
           approval: counterLineApproval,
         })
@@ -2628,7 +2649,8 @@ export const pharmacySalesRouter = router({
             ? await khataScope(ctx, attempt.branchId, 'write')
             : await requireCounterReceiptAccess(ctx, attempt.branchId, true);
         // Verified in its own transaction, so a wrong PIN keeps its lockout strike.
-        const approval = await authorizeCounterApproval(
+        const approval = await authorizeSaleApproval(
+          ctx,
           ctx.db as unknown as ScopedDb,
           scope,
           'TENDER_DISCARD',
@@ -2662,7 +2684,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  tender: protectedProcedure.input(tenderWriteInput).mutation(async ({ ctx, input }) => {
+  tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
     if (
       isManualTender(input.type) ||
       input.approvalCode !== undefined ||
@@ -2751,7 +2773,8 @@ export const pharmacySalesRouter = router({
       // PINs are verified before the transaction so a refusal still commits its lockout strike.
       const pinApproval =
         input.ownerOverride === true && input.overLimitApproval
-          ? await authorizeCounterApproval(
+          ? await authorizeSaleApproval(
+              ctx,
               ctx.db as unknown as ScopedDb,
               scope,
               'KHATA_OVER_LIMIT',
@@ -2952,7 +2975,8 @@ export const pharmacySalesRouter = router({
       });
       try {
         const scope = await requireCounterReceiptAccess(ctx, input.branchId, true);
-        const approval = await authorizeCounterApproval(
+        const approval = await authorizeSaleApproval(
+          ctx,
           ctx.db,
           scope,
           'DISCOUNT',
@@ -3023,7 +3047,8 @@ export const pharmacySalesRouter = router({
         // #520: PINs are verified before the sale transaction takes a connection.
         const approval = removal
           ? null
-          : await authorizeCounterApproval(
+          : await authorizeSaleApproval(
+              ctx,
               ctx.db as unknown as ScopedDb,
               scope,
               'DISCOUNT',

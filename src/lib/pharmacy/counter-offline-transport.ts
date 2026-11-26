@@ -48,7 +48,9 @@ async function counterPost(
   }
   if (!response.ok) {
     const code =
-      parsed && typeof parsed === 'object' && typeof (parsed as { error?: unknown }).error === 'string'
+      parsed &&
+      typeof parsed === 'object' &&
+      typeof (parsed as { error?: unknown }).error === 'string'
         ? (parsed as { error: string }).error
         : 'unexpected_response';
     throw new CounterRequestError(response.status, code);
@@ -72,20 +74,41 @@ export type CounterSignedSnapshot = {
   payload: unknown;
 };
 
+// Established in this tab only. The server rechecks the actor, branch and current device key.
+let approvalSession: { deviceId: string; sessionToken: string } | undefined;
+
+export function counterApprovalHeaders(
+  operations: readonly { type: string; path: string }[]
+): Record<string, string> {
+  if (
+    !approvalSession ||
+    !operations.some((op) => op.type === 'mutation' && op.path.startsWith('pharmacySales.'))
+  )
+    return {};
+  return {
+    'x-pharmacy-approval-device': approvalSession.deviceId,
+    'x-terminal-session': approvalSession.sessionToken,
+  };
+}
+
 /** Sets the httpOnly device cookie for the secret enrol/rotate just returned. */
 export async function bindCounterBrowser(secret: string): Promise<CounterBinding> {
+  approvalSession = undefined;
   return (await counterPost('/api/pharmacy/counter/bind', { secret })) as CounterBinding;
 }
 
 /** Clears this browser's device cookie. */
 export async function unbindCounterBrowser(): Promise<void> {
+  approvalSession = undefined;
   await counterPost('/api/pharmacy/counter/bind', null, undefined, 'DELETE');
 }
 
 export async function establishCounterSession(): Promise<CounterEstablished> {
+  approvalSession = undefined;
   const result = (await counterPost('/api/pharmacy/counter/establish', {})) as CounterEstablished;
   if (!result || typeof result.sessionToken !== 'string' || !result.device)
     throw new CounterRequestError(502, 'unexpected_response');
+  approvalSession = { deviceId: result.device.id, sessionToken: result.sessionToken };
   return result;
 }
 

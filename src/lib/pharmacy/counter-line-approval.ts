@@ -376,7 +376,7 @@ async function verifyApproverPin(
     !(await verifyApprovalSecret(db, {
       organizationId: scope.organizationId,
       approverUserId: approver.id,
-      authenticatorOnly: method !== 'named',
+      authenticatorOnly: typeof method === 'object',
       credentialHash: credential.credentialHash,
       secret: input.pin,
       action: `pharmacy.counterApproval.${kind}`,
