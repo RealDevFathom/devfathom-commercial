@@ -29,12 +29,18 @@ vi.mock('@/lib/pharmacy/offline-cash-selling', async (original) => ({
   readOfflineCashSelling: async () => ({ enabled: true, available: true }),
 }));
 
-vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
-  authenticatePharmacyCommand: vi.fn(async () => undefined),
-  createSale: mocks.createSale,
-  addSaleLine: mocks.addSaleLine,
-}));
+vi.mock('@/lib/pharmacy/sales', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sales')>();
+  return {
+    ...actual,
+    // Exercise the real lease checks at the fixture's replay time.
+    validateLeasedReceiptReplay: (...args: Parameters<typeof actual.validateLeasedReceiptReplay>) =>
+      actual.validateLeasedReceiptReplay(args[0], args[1], args[2], Date.parse(SALE_AT)),
+    authenticatePharmacyCommand: vi.fn(async () => undefined),
+    createSale: mocks.createSale,
+    addSaleLine: mocks.addSaleLine,
+  };
+});
 
 vi.mock('@/lib/pharmacy/offline-command-log', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/offline-command-log')>()),
