@@ -7,6 +7,8 @@ import {
   isPharmacyActionForbidden,
   PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
   pharmacyActionErrorMessage,
+  SupplierPaymentRefusal,
+  supplierPaymentRefusalNotice,
 } from './action-error-message';
 
 describe('pharmacyActionErrorMessage', () => {
@@ -105,5 +107,21 @@ describe('isPharmacyActionForbidden', () => {
     expect(PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE).toBe(
       'You don’t have inventory access — ask an owner.'
     );
+  });
+});
+
+describe('supplier payment notices', () => {
+  it('uses the policy reason for a public notice and ignores other error text', () => {
+    const refusal = new SupplierPaymentRefusal('RECORDED_BY_PAYER');
+    refusal.message = 'internal detail';
+    expect(supplierPaymentRefusalNotice(refusal)).toBe(
+      'Someone else must pay an invoice you recorded.'
+    );
+    expect(supplierPaymentRefusalNotice(new SupplierPaymentRefusal('APPROVAL_REQUIRED'))).toBe(
+      'Enter the approving administrator’s PIN or authenticator code.'
+    );
+    expect(
+      supplierPaymentRefusalNotice(new TRPCError({ code: 'FORBIDDEN', message: 'internal detail' }))
+    ).toBeNull();
   });
 });

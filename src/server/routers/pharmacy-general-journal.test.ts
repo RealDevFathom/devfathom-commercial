@@ -58,6 +58,7 @@ function caller(context: Partial<TRPCContext> = {}) {
   return pharmacyGeneralJournalRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
+      pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyBranch: { findFirst: mocks.branchFindFirst },
     },
     entitlements: { organizationId: 'org_1', enabledModules: ['pharmacy-finance'], modules: [] },

@@ -400,6 +400,8 @@ export const navigation: NavItem[] = [
   {
     label: 'Finance',
     href: '/pharmacy/finance',
+    memberCapabilities: ['finance:read'],
+    memberModule: 'pharmacy-finance',
     icon: DollarSign,
     adminOnly: true,
     group: 'Pharmacy',
@@ -820,6 +822,13 @@ export function visibleNavigation(
         !item.pharmacyCapabilities.some((capability) => pharmacyCapabilities.includes(capability))
       )
         return false;
+      if (
+        item.memberModule &&
+        !isAdmin &&
+        entitlements.vertical === 'PHARMACY' &&
+        !isModuleGranted(item.memberModule, entitlements.enabledModules)
+      )
+        return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly)
         return (
@@ -828,8 +837,6 @@ export function visibleNavigation(
             item.memberCapabilities?.some((capability) => pharmacyCapabilities.includes(capability))
           )
         );
-      if (item.memberModule && !isAdmin && entitlements.vertical === 'PHARMACY')
-        return isModuleGranted(item.memberModule, entitlements.enabledModules);
       return true;
     })
     .map((item) =>

@@ -202,7 +202,20 @@ function fixture(
         title: '',
       },
     },
-    organization: null,
+    organization: {
+      id: organizationId,
+      slug: organizationId,
+      displayName: organizationId,
+      legalName: organizationId,
+      status: 'ACTIVE',
+      deploymentMode: 'SHARED',
+      timezone: 'Asia/Karachi',
+      locale: 'en-PK',
+      currency: 'PKR',
+      seatLimit: 10,
+      isDemo: false,
+      vertical,
+    },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -425,6 +438,16 @@ describe('organization/branch boundaries without provider fallback', () => {
       expect.objectContaining({ where: { organizationId: 'org-a', active: true } })
     );
     expect(f.db.$queryRaw).not.toHaveBeenCalled();
+    expect(f.db.pharmacyAnomalySignal.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses financial insights when the request has no resolved organization', async () => {
+    const f = fixture('PHARMACY');
+    const caller = app.createCaller({ ...f.context, organization: null });
+    await expect(caller.pharmacyReports.anomalySignals(f.range)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Organization is outside your report scope.',
+    });
     expect(f.db.pharmacyAnomalySignal.findMany).not.toHaveBeenCalled();
   });
 

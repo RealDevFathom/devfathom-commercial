@@ -1,3 +1,4 @@
+import { canOpenPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import {
   isPharmacyActionForbidden,
   PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
@@ -79,7 +80,7 @@ export default async function ChequeMaturityPage({
   if (
     !ctx ||
     !user?.id ||
-    user.role !== 'ADMIN' ||
+    !(await canOpenPharmacyFinance(ctx)) ||
     ctx.organization?.id !== ctx.entitlements.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-finance') ||
     !hasModule(ctx.entitlements, 'pharmacy-reports') ||
@@ -100,7 +101,7 @@ export default async function ChequeMaturityPage({
   }
 
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId: ctx.entitlements.organizationId, active: true },
+    where: financeBranchWhere(ctx.entitlements.organizationId, user),
     orderBy: { name: 'asc' },
     select: { id: true, name: true },
   });

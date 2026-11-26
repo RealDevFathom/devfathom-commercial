@@ -4920,6 +4920,7 @@ model PharmacyBookkeepingTransaction {
   chequeStatus     PharmacyChequeStatus      @default(NONE)
   bankReference    String?
   idempotencyKey   String
+  supplierDraftFunding String?
   createdByUserId  String
   postedAt         DateTime?
   reversedAt       DateTime?
@@ -6301,6 +6302,7 @@ model Organization {
   /// DEV-961: on by default for every organization. While on, a member who can approve
   /// anything must set up their authenticator before their account works. Only the owner
   /// can turn it off (audited); approvals then take permanent PINs as before.
+  supplierPaymentApprovalLimitMinor Int?
   requireApprovalAuthenticator  Boolean                        @default(true)
   /// DEV-908: the owner switches on recorded stock transfers between their own
   /// licensed branches. Off by default; controlled drugs never move this way.

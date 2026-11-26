@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
+import { supplierPaymentRefusalNotice } from '@/lib/pharmacy/action-error-message';
 import { AP_INVOICE_MAX_MINOR } from '@/lib/pharmacy/accounts/ap-invoices-schema';
 import { parseMajorToMinor } from '@/lib/pharmacy/khata-payment-slip';
 import { workspaceInstantFromInput } from '@/lib/timezone';
@@ -57,6 +58,8 @@ const PAY_REASONS: Record<string, string> = {
 
 function failure(error: unknown, reasons: Record<string, string>, fallback: string) {
   unstable_rethrow(error);
+  const paymentNotice = supplierPaymentRefusalNotice(error);
+  if (paymentNotice) return { status: 'error' as const, message: paymentNotice };
   if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)) {
     return {
       status: 'error' as const,
@@ -127,7 +130,10 @@ export async function payApInvoiceFromForm(
     const caller = pharmacyApInvoicesRouter.createCaller(ctx);
     // The picker reads the workspace clock; the server receives an instant with its zone.
     const paidAt = workspaceInstantFromInput(paidAtInput, ctx.organization?.timezone);
+    const pin = field(form, 'pin');
     await caller.pay({
+      ...(pin ? { pin } : {}),
+      ...(field(form, 'approverEmail') ? { approverEmail: field(form, 'approverEmail') } : {}),
       branchId: field(form, 'branchId'),
       invoiceId: field(form, 'invoiceId'),
       commandKey: field(form, 'commandKey'),

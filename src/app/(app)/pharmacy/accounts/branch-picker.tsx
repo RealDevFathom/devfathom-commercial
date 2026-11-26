@@ -1,18 +1,11 @@
+import { canOpenPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { createTRPCContext } from '@/server/trpc';
 
 export type BranchOption = { id: string; name: string };
 
-/**
- * DEV-103: the branches the accounts pages offer in their branch picker. Every accounts page
- * that takes a branch (supplier expense aging, general journal, journal entry lookup, posted cash
- * coverage, trial-balance control) is an owner finance read: its router refuses anyone who is not
- * an owner-level (ADMIN) member and any branch that is not an active branch of the signed-in
- * organization, and an owner may act at every such branch. So the picker lists exactly those, by
- * name, and nothing to anyone else. It reads only branch names; the page's router still checks
- * the chosen branch, so a branch typed into the URL that is not listed is still refused there.
- */
+/** Active branches available to the signed-in accounts reader. The router repeats admission on use. */
 export async function loadBranchOptions(): Promise<BranchOption[]> {
   try {
     const actor = await resolveTenantActor();
@@ -22,9 +15,9 @@ export async function loadBranchOptions(): Promise<BranchOption[]> {
       organization: actor.organization,
       support: actor.support,
     });
-    if (ctx.session?.user?.role !== 'ADMIN') return [];
+    if (!ctx.session?.user || !(await canOpenPharmacyFinance(ctx))) return [];
     return await ctx.db.pharmacyBranch.findMany({
-      where: { organizationId: actor.organization.id, active: true },
+      where: financeBranchWhere(actor.organization.id, ctx.session.user),
       orderBy: { name: 'asc' },
       select: { id: true, name: true },
     });

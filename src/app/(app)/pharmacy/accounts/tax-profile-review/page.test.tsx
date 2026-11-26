@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   hasModule: vi.fn(),
   branches: vi.fn(),
+  assignments: vi.fn(),
   workspace: vi.fn(),
   audit: vi.fn(),
 }));
@@ -30,7 +31,10 @@ function context() {
     organization: { id: 'org' },
     entitlements: { organizationId: 'org' },
     requestMeta: { ip: null, userAgent: null },
-    db: { pharmacyBranch: { findMany: mocks.branches } },
+    db: {
+      pharmacyBranchAssignment: { findMany: mocks.assignments },
+      pharmacyBranch: { findMany: mocks.branches },
+    },
   };
 }
 function profile(id: string, overrides: Partial<TaxProfileReviewDto> = {}): TaxProfileReviewDto {
@@ -85,6 +89,7 @@ beforeEach(() => {
     organization: ctx.organization,
   }));
   mocks.context.mockImplementation(async () => ctx);
+  mocks.assignments.mockResolvedValue([]);
   mocks.can.mockResolvedValue(true);
   mocks.hasModule.mockReturnValue(true);
   mocks.branches.mockResolvedValue([{ id: 'branch', name: 'Main branch' }]);
@@ -140,6 +145,22 @@ describe('tax profile review page', () => {
     noDownload();
     expect(mocks.branches).not.toHaveBeenCalled();
     expect(mocks.workspace).not.toHaveBeenCalled();
+  });
+
+  it('admits an employee with finance grants and an active branch assignment', async () => {
+    ctx.session.user.role = 'EMPLOYEE';
+    mocks.assignments.mockResolvedValue([{ branchId: 'branch' }]);
+    await show(selected);
+    expect(mocks.workspace).toHaveBeenCalledWith({ branchId: 'branch' });
+    expect(mocks.branches).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org',
+          active: true,
+          branchAssignments: { some: { organizationId: 'org', active: true, userId: 'owner' } },
+        },
+      })
+    );
   });
 
   it('never sends a foreign branch selection to the reader', async () => {

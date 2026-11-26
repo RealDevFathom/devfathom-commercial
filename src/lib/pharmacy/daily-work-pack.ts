@@ -140,19 +140,16 @@ const anomalyAmounts: Record<string, Record<string, string>> = {
   },
 };
 
-/** Composes existing readers only. Source clocks are intentionally not normalized into a fictional daily snapshot. */
-export async function readPharmacyDailyWorkPack(
-  db: ScopedDb,
+export function emptyPharmacyDailyWorkPack(
   input: PharmacyDailyWorkPackInput,
-  readAt = new Date()
-): Promise<PharmacyDailyWorkPack> {
-  const { window, asOf } = validateDailyWorkPackInput(input, readAt);
-  const result: PharmacyDailyWorkPack = {
+  readAt: Date
+): PharmacyDailyWorkPack {
+  return {
     version: 1,
     mode: 'read-only-preparation',
     scope: { organizationId: input.organizationId, branchIds: [...input.branchIds] },
     period: { from: input.from, to: input.to },
-    asOf: asOf.toISOString(),
+    asOf: new Date(input.asOf).toISOString(),
     readAt: readAt.toISOString(),
     permissions: { operational: true, financial: input.financial },
     completeness: {
@@ -166,6 +163,16 @@ export async function readPharmacyDailyWorkPack(
     groups: [],
     missingInputs: [],
   };
+}
+
+/** Composes existing readers only. Source clocks are intentionally not normalized into a fictional daily snapshot. */
+export async function readPharmacyDailyWorkPack(
+  db: ScopedDb,
+  input: PharmacyDailyWorkPackInput,
+  readAt = new Date()
+): Promise<PharmacyDailyWorkPack> {
+  const { window, asOf } = validateDailyWorkPackInput(input, readAt);
+  const result = emptyPharmacyDailyWorkPack(input, readAt);
   const catalog = pharmacyReportCatalog();
 
   for (const branchId of input.branchIds) {

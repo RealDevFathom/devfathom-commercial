@@ -1,3 +1,4 @@
+import { canOpenPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { formatWorkspaceDate, workspaceInstantFromInput } from '@/lib/timezone';
 import { browserUuid } from '@/lib/browser-uuid';
@@ -21,6 +22,7 @@ import { StatusPill } from '@/components/ui/status-pill';
 import {
   pharmacyActionErrorMessage,
   isPharmacyActionForbidden,
+  supplierPaymentRefusalNotice,
   PHARMACY_FINANCE_ACCESS_DENIED_MESSAGE,
   PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE,
 } from '@/lib/pharmacy/action-error-message';
@@ -86,7 +88,7 @@ export default async function PharmacyFinancePage({
 }) {
   const query = await searchParams;
   const ctx = await tenantContext();
-  if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN') {
+  if (!ctx?.session?.user || !(await canOpenPharmacyFinance(ctx))) {
     return (
       <div className="space-y-6">
         <PageHeader
@@ -95,16 +97,15 @@ export default async function PharmacyFinancePage({
           description="Bookkeeping, reconciliation, close, and tax profile controls."
         />
         <SectionCard title="Permission required">
-          <p className="text-sm text-text-muted">
-            An organization administrator must perform financial postings and approve tax versions.
-          </p>
+          <p className="text-sm text-text-muted">Ask your workspace owner for finance access.</p>
         </SectionCard>
       </div>
     );
   }
+  const isAdmin = ctx.session.user.role === 'ADMIN';
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
+    where: financeBranchWhere(organizationId, ctx.session.user),
     orderBy: { name: 'asc' },
     select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
@@ -161,13 +162,19 @@ export default async function PharmacyFinancePage({
     };
     try {
       const actionCtx = await tenantContext();
-      if (!actionCtx?.session?.user || actionCtx.session.user.role !== 'ADMIN')
-        throw new Error('Administrator access is required.');
+      if (!actionCtx?.session?.user || !(await canOpenPharmacyFinance(actionCtx)))
+        throw new Error('Finance permission is required.');
       const localNoon = (key: string) =>
         new Date(
           workspaceInstantFromInput(`${field(data, key)}T12:00`, actionCtx.organization?.timezone)
         );
       const actionCaller = pharmacyFinanceRouter.createCaller(actionCtx);
+      if (action === 'supplierLimit') {
+        const raw = field(data, 'limit');
+        const limitMinor = raw === '' ? null : typedAmount(financeAmountMinor(raw));
+        await actionCaller.setSupplierPaymentLimit({ branchId, limitMinor });
+        redirect(destination(branchId, 'Supplier payment approval limit saved.'));
+      }
       if (action === 'post') {
         const kind = field(data, 'transactionKind') as
           | 'SUPPLIER_PAYMENT'
@@ -192,6 +199,22 @@ export default async function PharmacyFinancePage({
           chequeDueAt: field(data, 'chequeDueAt') ? localNoon('chequeDueAt') : undefined,
           fundingAccount: field(data, 'fundingAccount') === 'CASH' ? 'CASH' : 'BANK',
           allocations: [],
+        });
+        redirect(
+          destination(
+            branchId,
+            kind === 'SUPPLIER_PAYMENT'
+              ? 'Supplier payment draft saved for approval.'
+              : 'Transaction posted and journal balanced.'
+          )
+        );
+      }
+      if (action === 'postSupplierDraft') {
+        await actionCaller.postSupplierPaymentDraft({
+          branchId,
+          draftId: field(data, 'draftId'),
+          pin: field(data, 'pin') || undefined,
+          approverEmail: field(data, 'approverEmail') || undefined,
         });
         redirect(destination(branchId, 'Transaction posted and journal balanced.'));
       }
@@ -293,15 +316,17 @@ export default async function PharmacyFinancePage({
       redirect(
         destination(
           branchId || branch.id,
-          isPharmacyActionForbidden(error)
-            ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
-            : pharmacyActionErrorMessage('finance'),
+          supplierPaymentRefusalNotice(error) ??
+            (isPharmacyActionForbidden(error)
+              ? PHARMACY_FINANCE_MANAGE_DENIED_MESSAGE
+              : pharmacyActionErrorMessage('finance')),
           'error'
         )
       );
     }
   }
 
+  const limit = workspace.supplierPaymentApprovalLimitMinor;
   const now = new Date();
   const timeZone = ctx.organization?.timezone;
   const dated = (value: Date | string) => formatWorkspaceDate(value, timeZone);
@@ -447,11 +472,15 @@ export default async function PharmacyFinancePage({
           </Button>
         </form>
       </SectionCard>
-      <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
-      <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
-      <DiscountMaximumPanel key={`discount-maximum-${branch.id}`} branchId={branch.id} />
-      <DayEndHourPanel key={`day-end-hour-${branch.id}`} branchId={branch.id} />
-      <BillDiscountSettingPanel key={`bill-discount-${branch.id}`} branchId={branch.id} />
+      {isAdmin && (
+        <>
+          <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
+          <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
+          <DiscountMaximumPanel key={`discount-maximum-${branch.id}`} branchId={branch.id} />
+          <DayEndHourPanel key={`day-end-hour-${branch.id}`} branchId={branch.id} />
+          <BillDiscountSettingPanel key={`bill-discount-${branch.id}`} branchId={branch.id} />
+        </>
+      )}
       <SectionCard
         title="Create POS settlement batch"
         eyebrow="Card · Raast · wallet · bank transfer"
@@ -549,6 +578,30 @@ export default async function PharmacyFinancePage({
         ) : null}
       </SectionCard>
       <div className="grid gap-6 xl:grid-cols-2">
+        {isAdmin && (
+          <SectionCard title="Supplier payment approval">
+            <form action={perform} className="grid gap-3">
+              <input type="hidden" name="branchId" value={branch.id} />
+              <input type="hidden" name="action" value="supplierLimit" />
+              <label className="text-sm">
+                Supplier payments above this amount need an administrator’s approval.
+                <Input
+                  type="number"
+                  name="limit"
+                  min="0"
+                  step="0.01"
+                  defaultValue={limit == null ? '' : (limit / 100).toFixed(2)}
+                />
+              </label>
+              <p className="text-sm text-text-muted">
+                Leave empty for no limit. The amount is measured in the payment currency.
+              </p>
+              <Button disabled={!workspace.mayManageAccounts} type="submit">
+                Save approval limit
+              </Button>
+            </form>
+          </SectionCard>
+        )}
         <SectionCard title="Record money movement" eyebrow="Cash and bank">
           <form action={perform} className="grid gap-4 sm:grid-cols-2">
             <input type="hidden" name="action" value="post" />
@@ -676,24 +729,26 @@ export default async function PharmacyFinancePage({
                     />
                   </div>
                   {period.status === 'CLOSED' ? (
-                    <form action={perform} className="mt-3 flex flex-wrap gap-2">
-                      <input type="hidden" name="action" value="reopen" />
-                      <input type="hidden" name="branchId" value={branch.id} />
-                      <input type="hidden" name="periodId" value={period.id} />
-                      <Input
-                        className="min-h-11 flex-1"
-                        name="reason"
-                        required
-                        placeholder="Reason for controlled reopen"
-                      />
-                      <Button
-                        disabled={!workspace.mayManageAccounts}
-                        type="submit"
-                        variant="secondary"
-                      >
-                        Reopen
-                      </Button>
-                    </form>
+                    isAdmin && (
+                      <form action={perform} className="mt-3 flex flex-wrap gap-2">
+                        <input type="hidden" name="action" value="reopen" />
+                        <input type="hidden" name="branchId" value={branch.id} />
+                        <input type="hidden" name="periodId" value={period.id} />
+                        <Input
+                          className="min-h-11 flex-1"
+                          name="reason"
+                          required
+                          placeholder="Reason for controlled reopen"
+                        />
+                        <Button
+                          disabled={!workspace.mayManageAccounts}
+                          type="submit"
+                          variant="secondary"
+                        >
+                          Reopen
+                        </Button>
+                      </form>
+                    )
                   ) : (
                     <p className="mt-2 text-xs text-text-muted">Reopened: {period.reopenReason}</p>
                   )}
@@ -743,7 +798,32 @@ export default async function PharmacyFinancePage({
                       />
                     </TableCell>
                     <TableCell>
-                      {item.status === 'POSTED' && isCounterKhataRepayment(item) ? (
+                      {item.status === 'PENDING' &&
+                      item.kind === 'SUPPLIER_PAYMENT' &&
+                      item.supplierDraftFunding ? (
+                        <form action={perform} className="grid gap-2">
+                          <input type="hidden" name="action" value="postSupplierDraft" />
+                          <input type="hidden" name="branchId" value={branch.id} />
+                          <input type="hidden" name="draftId" value={item.id} />
+                          <label className="text-sm">
+                            Approving administrator’s email (above the limit)
+                            <Input name="approverEmail" type="email" autoComplete="off" />
+                          </label>
+                          <label className="text-sm">
+                            Administrator approval PIN or code (when required)
+                            <Input
+                              name="pin"
+                              type="password"
+                              autoComplete="off"
+                              inputMode="numeric"
+                              maxLength={8}
+                            />
+                          </label>
+                          <Button type="submit" disabled={!workspace.mayManageAccounts}>
+                            Post supplier payment
+                          </Button>
+                        </form>
+                      ) : item.status === 'POSTED' && isCounterKhataRepayment(item) ? (
                         <span className="text-sm text-text-muted">
                           Counter khata receipt: also settled the khata and drawer, so it is not
                           reversed here.
@@ -920,62 +1000,71 @@ export default async function PharmacyFinancePage({
             </p>
           )}
         </SectionCard>
-        <SectionCard title="Publish tax profile" eyebrow="Tax · Accountant approval">
+        <SectionCard
+          title={isAdmin ? 'Publish tax profile' : 'Tax profiles'}
+          eyebrow="Tax · Accountant approval"
+        >
           <a
             href={`/pharmacy/accounts/tax-profile-review?${new URLSearchParams({ branch: branch.id })}`}
             className="mb-5 inline-flex min-h-11 items-center text-sm text-primary underline underline-offset-4 hover:text-primary-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           >
             Review recorded tax profile versions
           </a>
-          <form action={perform} className="grid gap-3 sm:grid-cols-2">
-            <input type="hidden" name="action" value="tax" />
-            <input type="hidden" name="branchId" value={branch.id} />
-            <label className="text-sm">
-              Profile name
-              <Input className="mt-1 min-h-11" name="profileName" required />
-            </label>
-            <label className="text-sm">
-              Accountant approval reference
-              <Input className="mt-1 min-h-11" name="approvalReference" required />
-            </label>
-            <label className="text-sm">
-              Effective from
-              <Input className="mt-1 min-h-11" name="effectiveFrom" type="date" required />
-            </label>
-            <label className="text-sm">
-              Effective to (optional)
-              <Input className="mt-1 min-h-11" name="effectiveTo" type="date" />
-            </label>
-            <label className="text-sm">
-              Medicine PCT / HS code
-              <Input className="mt-1 min-h-11" name="medicineHs" required />
-            </label>
-            <label className="text-sm">
-              Front-shop PCT / HS code
-              <Input className="mt-1 min-h-11" name="frontShopHs" required />
-            </label>
-            <label className="text-sm">
-              Rate (0–1)
-              <Input className="mt-1 min-h-11" name="rate" required placeholder="0.18" />
-            </label>
-            <label className="text-sm">
-              Price mode
-              <StudioSelect className={inputClass} name="priceMode">
-                <option value="INCLUSIVE">Tax inclusive</option>
-                <option value="EXCLUSIVE">Tax exclusive</option>
-              </StudioSelect>
-            </label>
-            <label className="text-sm sm:col-span-2">
-              SRO reference (always provisional)
-              <Input className="mt-1 min-h-11" name="sroReference" />
-              <span className="mt-1 block text-xs text-text-muted">
-                Verify against the final gazette before operational use.
-              </span>
-            </label>
-            <Button disabled={!workspace.mayManageAccounts} type="submit" className="sm:col-span-2">
-              Publish approved version
-            </Button>
-          </form>
+          {isAdmin && (
+            <form action={perform} className="grid gap-3 sm:grid-cols-2">
+              <input type="hidden" name="action" value="tax" />
+              <input type="hidden" name="branchId" value={branch.id} />
+              <label className="text-sm">
+                Profile name
+                <Input className="mt-1 min-h-11" name="profileName" required />
+              </label>
+              <label className="text-sm">
+                Accountant approval reference
+                <Input className="mt-1 min-h-11" name="approvalReference" required />
+              </label>
+              <label className="text-sm">
+                Effective from
+                <Input className="mt-1 min-h-11" name="effectiveFrom" type="date" required />
+              </label>
+              <label className="text-sm">
+                Effective to (optional)
+                <Input className="mt-1 min-h-11" name="effectiveTo" type="date" />
+              </label>
+              <label className="text-sm">
+                Medicine PCT / HS code
+                <Input className="mt-1 min-h-11" name="medicineHs" required />
+              </label>
+              <label className="text-sm">
+                Front-shop PCT / HS code
+                <Input className="mt-1 min-h-11" name="frontShopHs" required />
+              </label>
+              <label className="text-sm">
+                Rate (0–1)
+                <Input className="mt-1 min-h-11" name="rate" required placeholder="0.18" />
+              </label>
+              <label className="text-sm">
+                Price mode
+                <StudioSelect className={inputClass} name="priceMode">
+                  <option value="INCLUSIVE">Tax inclusive</option>
+                  <option value="EXCLUSIVE">Tax exclusive</option>
+                </StudioSelect>
+              </label>
+              <label className="text-sm sm:col-span-2">
+                SRO reference (always provisional)
+                <Input className="mt-1 min-h-11" name="sroReference" />
+                <span className="mt-1 block text-xs text-text-muted">
+                  Verify against the final gazette before operational use.
+                </span>
+              </label>
+              <Button
+                disabled={!workspace.mayManageAccounts}
+                type="submit"
+                className="sm:col-span-2"
+              >
+                Publish approved version
+              </Button>
+            </form>
+          )}
           <div className="mt-5 space-y-2">
             {workspace.taxProfiles.length ? (
               workspace.taxProfiles.map((profile) => (

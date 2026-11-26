@@ -19,7 +19,10 @@ const branchFindFirst = vi.fn();
 
 function ctx(overrides: Record<string, unknown> = {}) {
   return {
-    db: { pharmacyBranch: { findFirst: branchFindFirst } },
+    db: {
+      pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyBranch: { findFirst: branchFindFirst },
+    },
     entitlements: { organizationId: 'org_1', enabledModules: ['pharmacy-finance'], modules: [] },
     organization: { id: 'org_1' },
     requestMeta: { ip: '10.0.0.1', userAgent: 'test' },

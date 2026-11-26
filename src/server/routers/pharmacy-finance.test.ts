@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
+  assignments: vi.fn(),
   branchFindMany: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
@@ -57,6 +58,7 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
   return pharmacyFinanceRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
+      pharmacyBranchAssignment: { findMany: mocks.assignments },
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
       pharmacyPharmacovigilanceReport: {
         findFirst: mocks.reportFindFirst,
@@ -92,6 +94,7 @@ const input = { branchId: 'branch_1', from: '2026-09-01T00:00:00Z', to: '2026-09
 beforeEach(() => {
   vi.resetAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.assignments.mockResolvedValue([]);
   vi.mocked(hasModule).mockReturnValue(true);
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
@@ -688,5 +691,58 @@ describe('cash-flow forecast boundary', () => {
         salesCashEstimates: [{ id: 'sales', date: '2026-10-30', amountMinor: 1 }],
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+});
+
+it('reads an admitted ledger for a Finance employee and refuses an unassigned branch', async () => {
+  mocks.assignments.mockResolvedValue([{ branchId: input.branchId }]);
+  mocks.can.mockImplementation(async (_subject, action) =>
+    ['finance:read', 'reports:operational', 'reports:financial'].includes(action)
+  );
+  await expect(caller('EMPLOYEE').marginComparison(input)).resolves.toEqual({
+    differenceMinor: 42,
+  });
+  await expect(
+    caller('EMPLOYEE').marginComparison({ ...input, branchId: 'other' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your finance scope.' });
+  expect(mocks.comparison).toHaveBeenCalledTimes(1);
+});
+
+it('allows a Finance employee to import a bank line only for an assigned branch', async () => {
+  mocks.can.mockImplementation(async (_subject, action) =>
+    ['finance:read', 'finance:manage'].includes(action)
+  );
+  mocks.assignments.mockResolvedValue([{ branchId: input.branchId }]);
+  mocks.branchFindMany.mockResolvedValue([{ id: input.branchId }]);
+  const line = {
+    branchId: input.branchId,
+    statementRef: 'statement',
+    lineReference: 'line',
+    bookedAt: new Date(),
+    amountMinor: 100,
+    description: 'Deposit',
+  };
+  mocks.bankLineCreate.mockResolvedValue({ id: 'recorded' });
+  await expect(caller('EMPLOYEE').importBankLine(line)).resolves.toMatchObject({ id: 'recorded' });
+  await expect(
+    caller('EMPLOYEE').importBankLine({ ...line, branchId: 'other' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your finance scope.' });
+  expect(mocks.bankLineCreate).toHaveBeenCalledTimes(1);
+});
+
+it('reserves publishing a tax profile for administrators even at an assigned Finance branch', async () => {
+  mocks.assignments.mockResolvedValue([{ branchId: 'branch_1' }]);
+  await expect(
+    caller('EMPLOYEE').publishTaxProfile({
+      branchId: 'branch_1',
+      name: 'Synthetic tax',
+      effectiveFrom: '2026-11-01',
+      approvalReference: 'review',
+      idempotencyKey: 'tax1',
+      rules: [{ productClass: 'FRONT_SHOP', pctHsCode: '1234', priceMode: 'EXCLUSIVE', rate: '0' }],
+    })
+  ).rejects.toMatchObject({
+    code: 'FORBIDDEN',
+    message: 'Only an administrator can publish a tax profile.',
   });
 });

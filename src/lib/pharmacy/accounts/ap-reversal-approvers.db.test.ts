@@ -12,8 +12,8 @@
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { PHARMACY_MODULES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '@/server/trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -43,7 +43,16 @@ type Candidate = {
   organizationId: string;
   role: 'ADMIN' | 'EMPLOYEE';
   /** The manager and finance roles differ only in the finance grant. */
-  orgRole: 'owner' | 'finance' | 'manager' | 'system_finance' | 'owner-operator' | null;
+  orgRole:
+    | 'owner'
+    | 'finance'
+    | 'manager'
+    | 'system_finance'
+    | 'owner-operator'
+    | 'cashier'
+    | 'inventory'
+    | 'pharmacist'
+    | null;
   status: 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE';
   pin: boolean;
   deny?: string;
@@ -185,6 +194,39 @@ const financeScenarios = (['finance', 'owner-operator'] as const).map((roleKey, 
   const signer: Candidate = { ...maker, key: `${roleKey}_signer` };
   return { roleKey, maker, signer, branch: id(`finance_branch_${index}`) };
 });
+const financeEmployee: Candidate = {
+  ...administratorWithoutFinance,
+  key: 'finance_employee',
+  role: 'EMPLOYEE',
+  orgRole: 'system_finance',
+  pin: false,
+  assignedTo: branchId,
+};
+const readOnlyEmployee: Candidate = {
+  ...financeEmployee,
+  key: 'finance_read_only',
+  deny: 'finance:manage',
+};
+const employeeJobBranch = id('employee_jobs_branch');
+const financePayer: Candidate = { ...financeEmployee, key: 'finance_payer' };
+const employeeJobPayer = {
+  ...financePayer,
+  key: 'employee_job_payer',
+  assignedTo: employeeJobBranch,
+};
+const employeeJobMaker = {
+  ...financeEmployee,
+  key: 'employee_jobs_maker',
+  assignedTo: employeeJobBranch,
+};
+const excludedRoles = ['cashier', 'pharmacist', 'inventory', 'manager'] as const;
+const excludedEmployees = excludedRoles.map((orgRole): Candidate => ({
+  ...financeEmployee,
+  key: orgRole,
+  orgRole,
+  organizationId: pairOrganizationId,
+  assignedTo: pairBranchId,
+}));
 const userId = (candidate: Candidate) => id(candidate.key);
 const pairRecorder: Candidate = {
   key: 'pair_recorder',
@@ -320,6 +362,7 @@ beforeAll(async () => {
     }
     for (const [branch, org, code] of [
       [branchId, organizationId, `AA-${suffix}`],
+      [employeeJobBranch, organizationId, `AJ-${suffix}`],
       [otherBranchId, organizationId, `AB-${suffix}`],
       [id('branch_b'), otherOrganizationId, `AC-${suffix}`],
       [pairBranchId, pairOrganizationId, `AD-${suffix}`],
@@ -334,6 +377,20 @@ beforeAll(async () => {
         [branch, org, code]
       );
     }
+    for (const key of excludedRoles) {
+      const roleId = pairOrganizationId + '_' + key;
+      const template = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+      await client.query(
+        'INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$4,true,now())',
+        [roleId, pairOrganizationId, key, template.name]
+      );
+      for (const capability of template.capabilities) {
+        await client.query(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
+          [roleId + '_' + capability, pairOrganizationId, roleId, capability]
+        );
+      }
+    }
     const pinHash = await credentials.hashOperatorCredential('PIN', PIN);
     const people: Candidate[] = [
       {
@@ -345,6 +402,12 @@ beforeAll(async () => {
         pin: true,
       },
       ...candidates,
+      financeEmployee,
+      employeeJobMaker,
+      readOnlyEmployee,
+      financePayer,
+      employeeJobPayer,
+      ...excludedEmployees,
       rolelessAdministrator,
       readOnlyAdministrator,
       ownerWithManageDeny,
@@ -673,108 +736,117 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
     branch: branchId,
   };
   const testId = id;
-  describe.each([originalScenario, ...financeScenarios])(
-    '$roleKey',
-    ({ roleKey, maker, signer: otherSigner, branch: branchId }) => {
-      const id = (label: string) => testId(`${roleKey.replaceAll(' ', '-')}_${label}`);
-      it('reads, pays, offsets and reverses a supplier invoice through the AP procedures', async () => {
-        type Caller = ReturnType<typeof callerFor>;
-        const checked = <T>(
-          access: 'read' | 'manage',
-          call: (api: Caller) => Promise<T>,
-          signer?: Candidate
-        ) => checkFinance((ctx) => call(deps.router.createCaller(ctx)), signer ?? maker, access);
-        const amountMinor = 500;
-        const reason = 'Duplicate';
-        const invoice = await checked('manage', (api) =>
-          api.record({
+  describe.each([
+    originalScenario,
+    ...financeScenarios,
+    {
+      roleKey: 'employee Finance',
+      maker: employeeJobMaker,
+      signer: originalScenario.signer,
+      branch: employeeJobBranch,
+    },
+  ])('$roleKey', ({ roleKey, maker, signer: otherSigner, branch: branchId }) => {
+    const id = (label: string) => testId(`${roleKey.replaceAll(' ', '-')}_${label}`);
+    it('reads, pays, offsets and reverses a supplier invoice through the AP procedures', async () => {
+      type Caller = ReturnType<typeof callerFor>;
+      const checked = <T>(
+        access: 'read' | 'manage',
+        call: (api: Caller) => Promise<T>,
+        signer?: Candidate
+      ) => checkFinance((ctx) => call(deps.router.createCaller(ctx)), signer ?? maker, access);
+      const amountMinor = 500;
+      const reason = 'Duplicate';
+      const invoice = await checked('manage', (api) =>
+        api.record({
+          branchId,
+          createKey: id('record'),
+          reference: id('bill'),
+          payeeName: `Test supplier ${roleKey}`,
+          supplierInvoiceRef: id('supplier-invoice'),
+          invoiceDate: day(-5),
+          dueDate: day(-1),
+          amountMinor: 5_000,
+          currency: 'PKR',
+          description: 'Supplies',
+          evidenceReference: 'Slip',
+        })
+      );
+      const invoiceId = invoice.id;
+      await checked('read', (api) => api.list({ branchId }));
+      await checked('read', (api) => api.aging({ branchId, asOf: day(0) }));
+      await checked('read', (api) => api.payablesDrafts({ branchId, asOf: day(0) }));
+      await checked('read', (api) => api.creditSetOffs({ branchId }));
+      await checked('read', (api) => api.reversalAccess({ branchId }));
+      const matches = await checked('read', (api) =>
+        api.reversalSearch({ branchId, reference: invoice.reference })
+      );
+      expect(matches.invoices.map((row) => row.id)).toContain(invoiceId);
+      const supplierCreditId = await inTenant(async (db) => {
+        const supplier = await db.pharmacySupplier.create({
+          data: { organizationId, name: `Test supplier ${roleKey}` },
+        });
+        const credit = await db.pharmacySupplierCredit.create({
+          data: {
+            organizationId,
             branchId,
-            createKey: id('record'),
-            reference: id('bill'),
-            payeeName: `Test supplier ${roleKey}`,
-            supplierInvoiceRef: id('supplier-invoice'),
-            invoiceDate: day(-5),
-            dueDate: day(-1),
-            amountMinor: 5_000,
-            currency: 'PKR',
-            description: 'Supplies',
-            evidenceReference: 'Slip',
+            supplierId: supplier.id,
+            reference: id('credit'),
+            amountMinor,
+            receivedAt: new Date(),
+            recordedByUserId: recorderId,
+          },
+        });
+        return credit.id;
+      });
+      const request = (key: string) =>
+        checked('manage', (api) =>
+          api.requestCreditSetOff({
+            branchId,
+            invoiceId,
+            supplierCreditId,
+            amountMinor,
+            requestKey: id(key),
           })
         );
-        const invoiceId = invoice.id;
-        await checked('read', (api) => api.list({ branchId }));
-        await checked('read', (api) => api.aging({ branchId, asOf: day(0) }));
-        await checked('read', (api) => api.payablesDrafts({ branchId, asOf: day(0) }));
-        await checked('read', (api) => api.creditSetOffs({ branchId }));
-        await checked('read', (api) => api.reversalAccess({ branchId }));
-        const matches = await checked('read', (api) =>
-          api.reversalSearch({ branchId, reference: invoice.reference })
-        );
-        expect(matches.invoices.map((row) => row.id)).toContain(invoiceId);
-        const supplierCreditId = await inTenant(async (db) => {
-          const supplier = await db.pharmacySupplier.create({
-            data: { organizationId, name: `Test supplier ${roleKey}` },
-          });
-          const credit = await db.pharmacySupplierCredit.create({
-            data: {
-              organizationId,
-              branchId,
-              supplierId: supplier.id,
-              reference: id('credit'),
-              amountMinor,
-              receivedAt: new Date(),
-              recordedByUserId: recorderId,
-            },
-          });
-          return credit.id;
-        });
-        const request = (key: string) =>
-          checked('manage', (api) =>
-            api.requestCreditSetOff({
-              branchId,
-              invoiceId,
-              supplierCreditId,
-              amountMinor,
-              requestKey: id(key),
-            })
-          );
-        const first = await request('request1');
-        await checked(
-          'manage',
-          (api) =>
-            api.rejectCreditSetOff({
-              branchId,
-              setOffId: first.id,
-              decisionKey: id('reject'),
-              reason,
-            }),
-          otherSigner
-        );
-        const second = await request('request2');
-        await checked(
-          'manage',
-          (api) =>
-            api.approveCreditSetOff({
-              branchId,
-              setOffId: second.id,
-              decisionKey: id('approve'),
-              pin: PIN,
-            }),
-          otherSigner
-        );
-        await checked(
-          'manage',
-          (api) =>
-            api.reverseCreditSetOff({
-              branchId,
-              setOffId: second.id,
-              commandKey: id('undo'),
-              reason,
-              pin: PIN,
-            }),
-          otherSigner
-        );
-        const payment = await checked('manage', (api) =>
+      const first = await request('request1');
+      await checked(
+        'manage',
+        (api) =>
+          api.rejectCreditSetOff({
+            branchId,
+            setOffId: first.id,
+            decisionKey: id('reject'),
+            reason,
+          }),
+        otherSigner
+      );
+      const second = await request('request2');
+      await checked(
+        'manage',
+        (api) =>
+          api.approveCreditSetOff({
+            branchId,
+            setOffId: second.id,
+            decisionKey: id('approve'),
+            pin: PIN,
+          }),
+        otherSigner
+      );
+      await checked(
+        'manage',
+        (api) =>
+          api.reverseCreditSetOff({
+            branchId,
+            setOffId: second.id,
+            commandKey: id('undo'),
+            reason,
+            pin: PIN,
+          }),
+        otherSigner
+      );
+      const payment = await checked(
+        'manage',
+        (api) =>
           api.pay({
             branchId,
             invoiceId,
@@ -783,188 +855,228 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
             amountMinor,
             paidAt: new Date().toISOString(),
             fundingAccount: 'BANK',
-          })
-        );
-        await checked(
-          'manage',
-          (api) =>
-            api.reverseSettlement({
-              branchId,
-              settlementId: payment.id,
-              commandKey: id('reversepay'),
-              reason,
-              pin: PIN,
-            }),
-          otherSigner
-        );
-        const reversed = await checked(
-          'manage',
-          (api) =>
-            api.reverseInvoice({
-              branchId,
-              invoiceId,
-              commandKey: id('reversebill'),
-              reason,
-              pin: PIN,
-            }),
-          otherSigner
-        );
-        expect(reversed.status).toBe('REVERSED');
-      }, 60_000);
-
-      it('reads, drafts, cancels, posts and reverses through the general journal procedures', async () => {
-        const { pharmacyGeneralJournalRouter: router } =
-          await import('@/server/routers/pharmacy-general-journal');
-        const checked = <T>(
-          access: 'read' | 'manage',
-          call: (api: ReturnType<typeof router.createCaller>) => Promise<T>
-        ) => checkFinance((ctx) => call(router.createCaller(ctx)), maker, access);
-        const reason = 'Rent accrual';
-        const fields = {
-          branchId,
-          reference: id('journal'),
-          purpose: 'NONTRADE_OPERATING_ACCRUAL' as const,
-          occurredAt: new Date().toISOString(),
-          reason,
-          evidenceReference: 'Lease',
-          lines: [
-            { accountCode: 'OPERATING_EXPENSE', side: 'DEBIT' as const, amountMinor: 200 },
-            { accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT' as const, amountMinor: 200 },
-          ],
-        };
-        await checked('read', (api) => api.catalog({ branchId }));
-        const draft = await checked('manage', (api) =>
-          api.createDraft({ ...fields, createKey: id('draft') })
-        );
-        await checked('read', (api) => api.list({ branchId }));
-        await checked('read', (api) => api.get({ branchId, voucherId: draft.id }));
-        const edit = await checked('manage', (api) =>
-          api.updateDraft({
-            ...fields,
-            voucherId: draft.id,
-            expectedVersion: draft.version,
-            reason: 'Updated accrual',
-          })
-        );
-        await checked('manage', (api) =>
-          api.cancelDraft({ branchId, voucherId: draft.id, expectedVersion: edit.version, reason })
-        );
-        const next = await checked('manage', (api) =>
-          api.createDraft({ ...fields, reference: id('nextjournal'), createKey: id('nextdraft') })
-        );
-        await checked('manage', (api) =>
-          api.post({
+            ...(maker.role === 'ADMIN' ? { pin: PIN } : {}),
+          }),
+        maker.role === 'ADMIN' ? maker : employeeJobPayer
+      );
+      await checked(
+        'manage',
+        (api) =>
+          api.reverseSettlement({
             branchId,
-            voucherId: next.id,
-            expectedVersion: next.version,
-            commandKey: id('postjournal'),
-          })
-        );
-        const reversal = await checked('manage', (api) =>
-          api.reverse({
-            branchId,
-            voucherId: next.id,
-            commandKey: id('reversejournal'),
-            at: new Date().toISOString(),
+            settlementId: payment.id,
+            commandKey: id('reversepay'),
             reason,
-          })
-        );
-        expect(reversal.status).toBe('REVERSED');
-      }, 60_000);
+            pin: PIN,
+          }),
+        otherSigner
+      );
+      const reversed = await checked(
+        'manage',
+        (api) =>
+          api.reverseInvoice({
+            branchId,
+            invoiceId,
+            commandKey: id('reversebill'),
+            reason,
+            pin: PIN,
+          }),
+        otherSigner
+      );
+      expect(reversed.status).toBe('REVERSED');
+    }, 60_000);
 
-      it('reads statements and executes the bookkeeping procedures with their other gates intact', async () => {
-        const { pharmacyFinanceRouter: router } = await import('@/server/routers/pharmacy-finance');
-        const checked = <T>(
-          access: 'read' | 'manage',
-          call: (api: ReturnType<typeof router.createCaller>) => Promise<T>
-        ) => checkFinance((ctx) => call(router.createCaller(ctx)), maker, access);
-        const at = new Date();
-        const from = new Date(at.getTime() - 86_400_000);
-        const amountMinor = 100;
-        await checked('read', (api) => api.workspace({ branchId }));
-        await checked('read', (api) =>
-          api.financialStatements({ branchId, from: from.toISOString(), to: at.toISOString() })
-        );
-        const txn = await checked('manage', (api) =>
-          api.post({
-            branchId,
-            reference: id('bpay'),
-            kind: 'SUPPLIER_PAYMENT',
-            amountMinor,
-            occurredAt: at,
-            idempotencyKey: id('bpost'),
-          })
-        );
-        const { journalEntryLookupRouter } = await import('./journal-entry-lookup');
-        const entry = await checkFinance(
-          (ctx) =>
-            journalEntryLookupRouter.createCaller(ctx).lookup({
-              branchId,
-              entryId: txn.journalEntryId!,
-              from: from.toISOString(),
-              to: new Date(at.getTime() + 86_400_000).toISOString(),
-            }),
-          maker,
-          'read'
-        );
-        expect(entry.status).toBe('FOUND');
-        const bank = await checked('manage', (api) =>
-          api.importBankLine({
-            branchId,
-            statementRef: id('line'),
-            lineReference: id('bank'),
-            bookedAt: at,
-            amountMinor: -amountMinor,
-            description: 'Supplier payment',
-          })
-        );
-        await checked('manage', (api) =>
-          api.reconcile({ branchId, statementLineId: bank.id, transactionId: txn.id, amountMinor })
-        );
-        await checked('manage', (api) =>
-          api.reverse({
-            branchId,
-            transactionId: txn.id,
-            at,
-            idempotencyKey: id('breverse'),
-            reason: 'Duplicate',
-          })
-        );
-        const period = await checked('manage', (api) =>
-          api.closePeriod({ branchId, startsAt: from, endsAt: at })
-        );
-        await checked('manage', (api) =>
-          api.reopenPeriod({ branchId, periodId: period.id, reason: 'Review' })
-        );
-        const tender = await inTenant(async (db) => {
-          const sale = await db.pharmacySale.create({
-            data: { organizationId, branchId, createdByUserId: recorderId },
-          });
-          return db.pharmacyTender.create({
-            data: {
+    it('reads, drafts, cancels, posts and reverses through the general journal procedures', async () => {
+      const { pharmacyGeneralJournalRouter: router } =
+        await import('@/server/routers/pharmacy-general-journal');
+      const checked = <T>(
+        access: 'read' | 'manage',
+        call: (api: ReturnType<typeof router.createCaller>) => Promise<T>
+      ) => checkFinance((ctx) => call(router.createCaller(ctx)), maker, access);
+      const reason = 'Rent accrual';
+      const fields = {
+        branchId,
+        reference: id('journal'),
+        purpose: 'NONTRADE_OPERATING_ACCRUAL' as const,
+        occurredAt: new Date().toISOString(),
+        reason,
+        evidenceReference: 'Lease',
+        lines: [
+          { accountCode: 'OPERATING_EXPENSE', side: 'DEBIT' as const, amountMinor: 200 },
+          { accountCode: 'MANUAL_NONTRADE_ACCRUAL', side: 'CREDIT' as const, amountMinor: 200 },
+        ],
+      };
+      await checked('read', (api) => api.catalog({ branchId }));
+      const draft = await checked('manage', (api) =>
+        api.createDraft({ ...fields, createKey: id('draft') })
+      );
+      await checked('read', (api) => api.list({ branchId }));
+      await checked('read', (api) => api.get({ branchId, voucherId: draft.id }));
+      const edit = await checked('manage', (api) =>
+        api.updateDraft({
+          ...fields,
+          voucherId: draft.id,
+          expectedVersion: draft.version,
+          reason: 'Updated accrual',
+        })
+      );
+      await checked('manage', (api) =>
+        api.cancelDraft({ branchId, voucherId: draft.id, expectedVersion: edit.version, reason })
+      );
+      const next = await checked('manage', (api) =>
+        api.createDraft({ ...fields, reference: id('nextjournal'), createKey: id('nextdraft') })
+      );
+      await checked('manage', (api) =>
+        api.post({
+          branchId,
+          voucherId: next.id,
+          expectedVersion: next.version,
+          commandKey: id('postjournal'),
+        })
+      );
+      expect(
+        await inTenant((db) =>
+          db.auditLog.count({
+            where: {
               organizationId,
-              branchId,
-              saleId: sale.id,
-              type: 'BANK_TRANSFER',
-              businessDate: at,
-              actorId: recorderId,
-              deviceId: id('device'),
-              amountMinor,
+              actorId: userId(maker),
+              action: 'pharmacyGeneralJournal.post',
+              outcome: 'SUCCESS',
+              targetId: next.id,
             },
-          });
-        });
-        await checked('manage', (api) =>
-          api.createSettlementBatch({
-            branchId,
-            reference: id('batch'),
-            provider: 'Test Bank',
-            tenderType: 'BANK_TRANSFER',
-            businessDate: at,
-            tenderIds: [tender.id],
           })
-        );
-        await checked('manage', (api) =>
-          api.publishTaxProfile({
+        )
+      ).toBe(1);
+      const reversal = await checked('manage', (api) =>
+        api.reverse({
+          branchId,
+          voucherId: next.id,
+          commandKey: id('reversejournal'),
+          at: new Date().toISOString(),
+          reason,
+        })
+      );
+      expect(reversal.status).toBe('REVERSED');
+    }, 60_000);
+
+    it('reads statements and executes the bookkeeping procedures with their other gates intact', async () => {
+      const { pharmacyFinanceRouter: router } = await import('@/server/routers/pharmacy-finance');
+      const checked = <T>(
+        access: 'read' | 'manage',
+        call: (api: ReturnType<typeof router.createCaller>) => Promise<T>
+      ) => checkFinance((ctx) => call(router.createCaller(ctx)), maker, access);
+      const at = new Date();
+      const from = new Date(at.getTime() - 86_400_000);
+      const amountMinor = 100;
+      await checked('read', (api) => api.workspace({ branchId }));
+      await checked('read', (api) =>
+        api.financialStatements({ branchId, from: from.toISOString(), to: at.toISOString() })
+      );
+      const draft = await checked('manage', (api) =>
+        api.post({
+          branchId,
+          reference: id('bpay'),
+          kind: 'SUPPLIER_PAYMENT',
+          amountMinor,
+          occurredAt: at,
+          idempotencyKey: id('bpost'),
+        })
+      );
+      expect(draft.status).toBe('PENDING');
+      const command = { branchId, draftId: draft.id };
+      const makerApi = router.createCaller(contextFor(maker));
+      if (maker.role !== 'ADMIN')
+        await expect(makerApi.postSupplierPaymentDraft(command)).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: 'Someone else must pay an invoice you recorded.',
+        });
+      const payer = maker.role === 'ADMIN' ? maker : employeeJobPayer;
+      const pay = () =>
+        router.createCaller(contextFor(payer)).postSupplierPaymentDraft({
+          ...command,
+          ...(payer.role === 'ADMIN' ? { pin: PIN } : {}),
+        });
+      const txn = await pay();
+      expect(txn.status).toBe('POSTED');
+      expect((await pay()).journalEntryId).toBe(txn.journalEntryId);
+      const { journalEntryLookupRouter } = await import('./journal-entry-lookup');
+      const entry = await checkFinance(
+        (ctx) =>
+          journalEntryLookupRouter.createCaller(ctx).lookup({
+            branchId,
+            entryId: txn.journalEntryId!,
+            from: from.toISOString(),
+            to: new Date(at.getTime() + 86_400_000).toISOString(),
+          }),
+        maker,
+        'read'
+      );
+      expect(entry.status).toBe('FOUND');
+      const bank = await checked('manage', (api) =>
+        api.importBankLine({
+          branchId,
+          statementRef: id('line'),
+          lineReference: id('bank'),
+          bookedAt: at,
+          amountMinor: -amountMinor,
+          description: 'Supplier payment',
+        })
+      );
+      await checked('manage', (api) =>
+        api.reconcile({ branchId, statementLineId: bank.id, transactionId: txn.id, amountMinor })
+      );
+      await checked('manage', (api) =>
+        api.reverse({
+          branchId,
+          transactionId: txn.id,
+          at,
+          idempotencyKey: id('breverse'),
+          reason: 'Duplicate',
+        })
+      );
+      const period = await checked('manage', (api) =>
+        api.closePeriod({ branchId, startsAt: from, endsAt: at })
+      );
+      // Reopening is a separate administrator job, including when the employee closed the period.
+      const reopener = maker.role === 'ADMIN' ? maker : otherSigner;
+      await checkFinance(
+        (ctx) =>
+          router
+            .createCaller(ctx)
+            .reopenPeriod({ branchId, periodId: period.id, reason: 'Review' }),
+        reopener,
+        'manage'
+      );
+      const tender = await inTenant(async (db) => {
+        const sale = await db.pharmacySale.create({
+          data: { organizationId, branchId, createdByUserId: recorderId },
+        });
+        return db.pharmacyTender.create({
+          data: {
+            organizationId,
+            branchId,
+            saleId: sale.id,
+            type: 'BANK_TRANSFER',
+            businessDate: at,
+            actorId: recorderId,
+            deviceId: id('device'),
+            amountMinor,
+          },
+        });
+      });
+      await checked('manage', (api) =>
+        api.createSettlementBatch({
+          branchId,
+          reference: id('batch'),
+          provider: 'Test Bank',
+          tenderType: 'BANK_TRANSFER',
+          businessDate: at,
+          tenderIds: [tender.id],
+        })
+      );
+      await checkFinance(
+        (ctx) =>
+          router.createCaller(ctx).publishTaxProfile({
             branchId,
             name: 'Test tax',
             effectiveFrom: at,
@@ -973,9 +1085,370 @@ describeDb('DEV-969 pharmacy accounts require a live finance grant', () => {
             rules: [
               { productClass: 'FRONT_SHOP', pctHsCode: '1234', priceMode: 'EXCLUSIVE', rate: '0' },
             ],
+          }),
+        reopener,
+        'manage'
+      );
+    }, 60_000);
+  });
+});
+
+describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
+  it('records and pays a supplier bill and reads the branch ledger through the pharmacy routers', async () => {
+    const api = callerFor(financeEmployee);
+    const invoice = await api.record({
+      branchId,
+      createKey: id('employee-bill'),
+      reference: id('employee-bill'),
+      payeeName: 'Synthetic supplier',
+      supplierInvoiceRef: id('invoice'),
+      invoiceDate: day(-2),
+      dueDate: day(1),
+      amountMinor: 2000,
+      currency: 'PKR',
+      description: 'Office supplies',
+      evidenceReference: 'Slip',
+    });
+    const command = {
+      branchId,
+      invoiceId: invoice.id,
+      commandKey: id('employee-payment'),
+      reference: id('employee-payment'),
+      amountMinor: 1000,
+      paidAt: new Date().toISOString(),
+      fundingAccount: 'BANK' as const,
+    };
+    await expect(api.pay(command)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Someone else must pay an invoice you recorded.',
+    });
+    const payer = callerFor(financePayer);
+    const payment = await payer.pay(command);
+    expect((await payer.pay(command)).id).toBe(payment.id);
+    expect(payment.invoiceId).toBe(invoice.id);
+    const { pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance');
+    const finance = pharmacyFinanceRouter.createCaller(contextFor(financeEmployee));
+    const report = await finance.financialStatements({
+      branchId,
+      from: day(-3) + 'T00:00:00Z',
+      to: day(2) + 'T00:00:00Z',
+    });
+    expect(report.scope).toEqual({ organizationId, branchId });
+    expect(
+      (await finance.workspace({ branchId })).transactions.some(
+        (row) => row.id === payment.transactionId
+      )
+    ).toBe(true);
+    await expect(api.list({ branchId: otherBranchId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your finance scope.',
+    });
+    await expect(
+      finance.reopenPeriod({ branchId, periodId: id('locked'), reason: 'Review' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Administrator access is required to reopen a locked period.',
+    });
+  });
+  describe('supplier payment approval limit', () => {
+    let pharmacyFinanceRouter: (typeof import('@/server/routers/pharmacy-finance'))['pharmacyFinanceRouter'];
+    beforeAll(async () => {
+      ({ pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance'));
+    });
+    const api = (p: Candidate) => pharmacyFinanceRouter.createCaller(contextFor(p));
+    const owner = candidates.find((person) => person.key === 'owner_counter')!;
+    const set = (limitMinor: number | null) =>
+      api(owner).setSupplierPaymentLimit({ branchId, limitMinor });
+    const create = async (amountMinor: number, key: string) =>
+      api(financeEmployee).post({
+        branchId,
+        reference: id(key),
+        kind: 'SUPPLIER_PAYMENT',
+        amountMinor,
+        occurredAt: new Date(),
+        idempotencyKey: id(key),
+      });
+    const pay = (draftId: string, approval: { pin?: string; approverEmail?: string } = {}) =>
+      api(financePayer).postSupplierPaymentDraft({ branchId, draftId, ...approval });
+
+    afterEach(async () => {
+      await set(null);
+    });
+
+    const recordBill = (key: string) =>
+      callerFor(financeEmployee).record({
+        branchId,
+        createKey: id(key),
+        reference: id(key),
+        payeeName: 'Synthetic supplier',
+        supplierInvoiceRef: id(key + '-invoice'),
+        invoiceDate: day(-1),
+        dueDate: day(1),
+        amountMinor: 3000,
+        currency: 'PKR',
+        description: 'Supplies',
+        evidenceReference: 'Slip',
+      });
+    const billPayment = (invoiceId: string, amountMinor: number, key: string) => ({
+      branchId,
+      invoiceId,
+      amountMinor,
+      commandKey: id(key),
+      reference: id(key),
+      fundingAccount: 'BANK' as const,
+      paidAt: new Date().toISOString(),
+    });
+
+    it('restricts changes to administrators and audits the previous and new amount', async () => {
+      await expect(
+        api(financeEmployee).setSupplierPaymentLimit({ branchId, limitMinor: 100 })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only an administrator can change the supplier payment approval limit.',
+      });
+
+      await set(null);
+      await set(100);
+      expect(
+        await inTenant((db) =>
+          db.auditLog.findFirst({
+            where: {
+              organizationId,
+              actorId: userId(owner),
+              action: 'pharmacyFinance.setSupplierPaymentLimit',
+            },
+            orderBy: { createdAt: 'desc' },
           })
-        );
-      }, 60_000);
-    }
-  );
+        )
+      ).toMatchObject({ metadata: { previousLimitMinor: null, limitMinor: 100 } });
+    });
+
+    it.each([
+      { label: 'unset', limit: null, amount: 101 },
+      { label: 'below', limit: 100, amount: 99 },
+      { label: 'at', limit: 100, amount: 100 },
+    ])(
+      'permits independent direct and invoice payments with the amount $label the limit',
+      async ({ label, limit, amount }) => {
+        await set(limit);
+        expect((await pay((await create(amount, 'draft-' + label)).id)).status).toBe('POSTED');
+        const invoice = await recordBill('limit-bill-' + label);
+        await expect(
+          callerFor(financePayer).pay(billPayment(invoice.id, amount, 'ap-' + label))
+        ).resolves.toMatchObject({
+          amountMinor: amount,
+        });
+      }
+    );
+
+    it('requires administrator approval for an above-limit invoice payment and recognizes its replay', async () => {
+      await set(100);
+      const invoice = await recordBill('above-limit-bill');
+      const ap = callerFor(financePayer);
+      const above = billPayment(invoice.id, 101, 'ap-above');
+      await expect(ap.pay(above)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Enter the approving administrator’s PIN or authenticator code.',
+      });
+      const approved = await ap.pay({
+        ...above,
+        approverEmail: userId(owner) + '@ap-approvers.test',
+        pin: PIN,
+      });
+      expect((await ap.pay(above)).id).toBe(approved.id);
+    });
+
+    it('requires verified administrator approval and audits an above-limit direct posting once', async () => {
+      await set(100);
+      const draft = await create(101, 'above-limit');
+      await expect(pay(draft.id)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Enter the approving administrator’s PIN or authenticator code.',
+      });
+      await expect(
+        pay(draft.id, { approverEmail: userId(financeEmployee) + '@ap-approvers.test', pin: PIN })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(
+        pay(draft.id, { approverEmail: userId(owner) + '@ap-approvers.test', pin: '1111' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Enter the approving administrator’s PIN or authenticator code.',
+      });
+      const credentials = { approverEmail: userId(owner) + '@ap-approvers.test', pin: PIN };
+      expect((await pay(draft.id, credentials)).status).toBe('POSTED');
+      expect((await pay(draft.id)).id).toBe(draft.id);
+      const approvals = await inTenant((db) =>
+        db.auditLog.findMany({
+          where: {
+            organizationId,
+            action: 'pharmacyFinance.postSupplierPaymentDraft.approved',
+            actorId: userId(financePayer),
+          },
+        })
+      );
+      expect(approvals).toHaveLength(1);
+      expect(approvals[0]?.metadata).toMatchObject({
+        approverId: userId(owner),
+        amountMinor: 101,
+        selfApproval: false,
+      });
+      expect(JSON.stringify(approvals[0]?.metadata)).not.toContain(PIN);
+    });
+  });
+  it('reserves all five AP approval and reversal commands and refuses payment to a read-only employee', async () => {
+    const api = callerFor(financeEmployee);
+    expect((await api.reversalAccess({ branchId })).mayReverse).toBe(false);
+    const denied = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
+    const target = { branchId, setOffId: id('credit'), reason: 'Duplicate', pin: PIN };
+    await expect(
+      api.approveCreditSetOff({
+        branchId,
+        setOffId: target.setOffId,
+        decisionKey: id('approve'),
+        pin: PIN,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.rejectCreditSetOff({
+        branchId,
+        setOffId: target.setOffId,
+        decisionKey: id('reject'),
+        reason: target.reason,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.reverseCreditSetOff({ ...target, commandKey: id('reverse-credit') })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.reverseSettlement({
+        branchId,
+        settlementId: id('settlement'),
+        commandKey: id('reverse-pay'),
+        reason: target.reason,
+        pin: PIN,
+      })
+    ).rejects.toMatchObject(denied);
+    await expect(
+      api.reverseInvoice({
+        branchId,
+        invoiceId: id('invoice'),
+        commandKey: id('reverse-invoice'),
+        reason: target.reason,
+        pin: PIN,
+      })
+    ).rejects.toMatchObject(denied);
+    const reader = callerFor(readOnlyEmployee);
+    await expect(reader.list({ branchId })).resolves.toBeDefined();
+    await expect(
+      reader.pay({
+        branchId,
+        invoiceId: id('invoice'),
+        commandKey: id('readonly-pay'),
+        reference: 'Payment',
+        amountMinor: 100,
+        paidAt: new Date().toISOString(),
+        fundingAccount: 'BANK',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Finance permission is required.' });
+  });
+  it('refuses staff, settings, catalogue, stock and counter actions to the Finance employee', async () => {
+    const ctx = contextFor(financeEmployee);
+    ctx.entitlements.enabledModules = PHARMACY_MODULES.map((module) => module.key);
+    const { organizationAdminRouter } = await import('@/server/routers/organization-admin');
+    const { pharmacyInventoryRouter } = await import('@/server/routers/pharmacy-inventory');
+    const { pharmacyMedicineRouter } = await import('@/server/routers/pharmacy-medicine');
+    const { pharmacySalesRouter } = await import('@/server/routers/pharmacy-sales');
+    const organization = organizationAdminRouter.createCaller(ctx);
+    const forbidden = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
+    await expect(
+      organization.updateMember({
+        id: userId(financeEmployee),
+        status: 'ACTIVE',
+        role: 'EMPLOYEE',
+        department: 'Pharmacy',
+        title: 'Accountant',
+        organizationRoleId: organizationId + '_system_finance',
+      })
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      organization.updateBrand({
+        logoUrl: '',
+        markUrl: '',
+        faviconUrl: '',
+        primaryColor: '#000000',
+        accentColor: '#ffffff',
+        supportEmail: '',
+        fromName: null,
+      })
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      pharmacyInventoryRouter.createCaller(ctx).createCount({
+        branchId,
+        varianceThreshold: 0,
+        readings: [
+          {
+            inventoryLotId: id('lot'),
+            stockLocationId: id('location'),
+            countedSealedPacks: 1,
+            countedLooseUnits: 0,
+          },
+        ],
+      })
+    ).rejects.toMatchObject(forbidden);
+    await expect(pharmacyMedicineRouter.createCaller(ctx).catalogueEdits()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'Your role cannot open the catalogue queue. Ask a catalogue editor to submit the change or a catalogue reviewer to decide it.',
+    });
+    await expect(
+      pharmacySalesRouter.createCaller(ctx).openDrawer({
+        branchId,
+        deviceId: id('device'),
+        businessDate: new Date(),
+        openingFloatMinor: 0,
+      })
+    ).rejects.toMatchObject(forbidden);
+  });
+  it.each(excludedEmployees)('refuses $orgRole at their assigned branch', async (candidate) => {
+    const { pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance');
+    const finance = pharmacyFinanceRouter.createCaller(contextFor(candidate));
+    const forbidden = { code: 'FORBIDDEN', message: 'Finance permission is required.' };
+    await expect(finance.workspace({ branchId: pairBranchId })).rejects.toMatchObject(forbidden);
+    await expect(
+      finance.post({
+        branchId: pairBranchId,
+        kind: 'EXPENSE',
+        reference: 'Supplies',
+        amountMinor: 200,
+        occurredAt: new Date(),
+        idempotencyKey: id('denied-entry'),
+      })
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      finance.financialStatements({
+        branchId: pairBranchId,
+        from: day(-2) + 'T00:00:00Z',
+        to: day(1) + 'T00:00:00Z',
+      })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Financial report permission is required.',
+    });
+    const api = callerFor(candidate);
+    await expect(api.list({ branchId: pairBranchId })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Finance permission is required.',
+    });
+    await expect(
+      api.pay({
+        branchId: pairBranchId,
+        invoiceId: id('bill'),
+        commandKey: id('denied'),
+        reference: 'Payment',
+        amountMinor: 1000,
+        paidAt: new Date().toISOString(),
+        fundingAccount: 'BANK',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Finance permission is required.' });
+  });
 });

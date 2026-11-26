@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   settingUpsert: vi.fn(),
   userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
-  assignmentFindMany: vi.fn(),
+  assignmentFindMany: vi.fn(async (): Promise<{ branchId: string }[]> => []),
   userFindFirst: vi.fn(),
   userCount: vi.fn(),
   credentialFindFirst: vi.fn(),
@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   reportCreate: vi.fn(),
   reportUpdate: vi.fn(),
   reportUpdateManyAndReturn: vi.fn(),
+  replenishment: vi.fn(),
   stockDashboard: vi.fn(),
   stockDigest: vi.fn(),
   anomalyRead: vi.fn(),
@@ -54,6 +55,11 @@ vi.mock('@/lib/approval-authenticator', async () => {
       (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
   };
 });
+vi.mock('@/lib/pharmacy/replenishment-report', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/replenishment-report')>()),
+  readPharmacyReplenishmentReport: mocks.replenishment,
+}));
+
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
 }));
@@ -195,6 +201,7 @@ describe('normal Reports daily work pack', () => {
       (_entitlements, module) => module === 'pharmacy-reports'
     );
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.assignmentFindMany.mockResolvedValue([]);
     mocks.stockDashboard.mockResolvedValue([]);
     mocks.stockDigest.mockImplementation(async (_db, scope, actorId) => ({
       branchId: scope.branchId,
@@ -208,6 +215,48 @@ describe('normal Reports daily work pack', () => {
     mocks.expiryRead.mockResolvedValue([]);
     mocks.returnsRead.mockResolvedValue([]);
     mocks.creditsRead.mockResolvedValue([]);
+  });
+
+  it('includes financial work only for the Finance employee’s admitted branches', async () => {
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'other', name: 'Other' },
+    ]);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    const pack = await caller('EMPLOYEE').dailyWorkPack(input);
+    expect(pack.permissions.financial).toBe(true);
+    expect(pack.scope.branchIds).toEqual(['branch_1']);
+    expect(pack.sources.every((source) => source.scope.branchId === 'branch_1')).toBe(true);
+    await expect(
+      caller('EMPLOYEE').dailyWorkPack({ ...input, branchId: 'other' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+  });
+
+  it('shows replenishment costs only within the financial reader’s admitted branches', async () => {
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'other', name: 'Other' },
+    ]);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    const input = {
+      branchId: 'branch_1',
+      medicineId: 'medicine',
+      historyStartDate: '2026-02-01',
+      originDate: '2026-02-12',
+      horizonDays: 5,
+      method: 'RECENT_MEAN' as const,
+    };
+    const api = caller('EMPLOYEE');
+    await api.replenishment(input);
+    expect(mocks.replenishment).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ financial: true, authorizedBranchIds: ['branch_1'] }),
+      expect.any(Date)
+    );
+    await expect(api.replenishment({ ...input, branchId: 'other' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your report scope.',
+    });
   });
 
   it('works with Ask Fathom disabled and repeated normal caller reads create zero actions', async () => {
@@ -297,6 +346,7 @@ describe('normal Reports daily work pack', () => {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.branchFindFirst.mockReset();
+  mocks.assignmentFindMany.mockReset().mockResolvedValue([]);
   mocks.transaction.mockImplementation((run) => run(mocks.comparisonTx));
 });
 
@@ -569,12 +619,26 @@ describe('pharmacy owner digest capability boundary', () => {
     expect(mocks.comparisonRead).not.toHaveBeenCalled();
   });
 
-  it('denies branch comparison to a non-owner even with financial capability', async () => {
+  it('compares only assigned branches for a non-administrator with both report permissions', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational' || action === 'reports:financial'
+    );
+    mocks.branchFindMany.mockResolvedValue([
+      { id: 'branch_1', name: 'Main' },
+      { id: 'other', name: 'Sibling' },
+    ]);
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'branch_1' }]);
+    await caller('EMPLOYEE').branchComparison({ from: '2026-10-01', to: '2026-10-07' });
+    expect(
+      mocks.comparisonRead.mock.calls[0][1].branches.map((branch: { id: string }) => branch.id)
+    ).toEqual(['branch_1']);
+  });
+  it('refuses branch comparison to a financial reader without an admitted branch', async () => {
     mocks.can.mockResolvedValue(true);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
     await expect(
       caller('EMPLOYEE').branchComparison({ from: '2026-10-01', to: '2026-10-07' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
     expect(mocks.comparisonRead).not.toHaveBeenCalled();
   });
   it('denies digest reads without reports:financial before tenant data access', async () => {

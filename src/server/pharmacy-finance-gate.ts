@@ -5,7 +5,7 @@ import {
 } from '@/lib/abac/pharmacy-finance-actions';
 import { requirePharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { tagProcedureGate } from './procedure-gate-tag';
-import { adminProcedure } from './trpc';
+import { adminProcedure, contextualCapabilityProcedure } from './trpc';
 
 export const pharmacyFinanceGate = (action: PharmacyFinanceAction) =>
   tagProcedureGate(
@@ -21,6 +21,16 @@ export const pharmacyFinanceGate = (action: PharmacyFinanceAction) =>
     },
     { kind: 'capability', action }
   );
+
+// Preserve explicit administrator revocations on the existing administrator path.
+export const pharmacyFinanceMemberProcedure = contextualCapabilityProcedure(
+  (ctx) => (ctx.session?.user.role === 'ADMIN' ? ['admin:access'] : [PHARMACY_FINANCE_READ]),
+  'Finance permission is required.'
+);
+
+export const pharmacyFinanceMemberMutation = pharmacyFinanceMemberProcedure.use(
+  pharmacyFinanceGate(PHARMACY_FINANCE_MANAGE)
+);
 
 export const pharmacyAccountMutation = adminProcedure.use(
   pharmacyFinanceGate(PHARMACY_FINANCE_MANAGE)

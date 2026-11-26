@@ -1,7 +1,6 @@
 import { workspaceTimezone } from '@/lib/timezone';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { financialStatements } from '@/lib/pharmacy/financial-statements';
 import { forecastPharmacyCashFlow } from '@/lib/pharmacy/cash-flow-forecast';
@@ -27,6 +26,7 @@ import {
   createSettlementBatch,
   PharmacyBookkeepingError,
   postBookkeepingTransaction,
+  postSupplierPaymentDraft,
   reconcileBankLine,
   reconcileSettlementBankLine,
   reopenAccountingPeriod,
@@ -38,10 +38,13 @@ import {
   PHARMACY_FINANCE_MANAGE,
   PHARMACY_FINANCE_READ,
 } from '@/lib/abac/pharmacy-finance-actions';
-import { canManagePharmacyAccounts } from '@/lib/pharmacy/finance-access';
-import { pharmacyFinanceGate } from '../pharmacy-finance-gate';
+import {
+  canManagePharmacyAccounts,
+  requireFinanceBranchAssignment,
+} from '@/lib/pharmacy/finance-access';
+import { pharmacyFinanceGate, pharmacyFinanceMemberProcedure } from '../pharmacy-finance-gate';
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { contextualCapabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const id = z.string().trim().min(1).max(128);
 const moneyMinor = z.number().int().positive().max(999_999_999);
@@ -50,7 +53,7 @@ const periodBoundary = z.union([z.iso.date(), at]);
 
 // Server pages also use a standalone caller, where the root router prefix is
 // absent. Enforce bookkeeping licensing here as well as in the module registry.
-const bookkeepingProcedure = adminProcedure
+const bookkeepingProcedure = pharmacyFinanceMemberProcedure
   .use(({ ctx, next }) => {
     if (
       !hasModule(ctx.entitlements, 'pharmacy-finance') ||
@@ -61,7 +64,12 @@ const bookkeepingProcedure = adminProcedure
     }
     return next({ ctx });
   })
-  .use(pharmacyFinanceGate(PHARMACY_FINANCE_READ));
+  .use(pharmacyFinanceGate(PHARMACY_FINANCE_READ))
+  .input(z.object({ branchId: id }))
+  .use(async ({ ctx, input, next }) => {
+    await requireFinanceBranchAssignment(ctx, input.branchId);
+    return next();
+  });
 
 const bookkeepingMutation = bookkeepingProcedure.use(pharmacyFinanceGate(PHARMACY_FINANCE_MANAGE));
 
@@ -100,29 +108,20 @@ const cashFlowForecastInput = z.object({
   payables: z.array(forecastPayable).max(10_000),
 });
 
-const ledgerReportProcedure = adminProcedure
+const ledgerReportProcedure = contextualCapabilityProcedure(
+  (ctx) =>
+    ctx.session?.user.role === 'ADMIN'
+      ? ['admin:access', 'reports:operational', 'reports:financial']
+      : ['reports:operational', 'reports:financial'],
+  'Financial report permission is required.'
+)
   .input(z.object({ branchId: id }))
   .use(async ({ ctx, input, next }) => {
-    if (ctx.session.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
+    if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Owner financial reports access is required.',
       });
-    }
-    for (const action of ['reports:operational', 'reports:financial'] as const) {
-      if (
-        !(await can(subjectFromSession(ctx.session.user), action, undefined, {
-          db: ctx.db,
-          source: 'TRPC',
-          ip: ctx.requestMeta.ip,
-        }))
-      ) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Financial report permission is required.',
-        });
-      }
-    }
     const organizationId = ctx.entitlements.organizationId;
     if (!organizationId || organizationId !== ctx.organization?.id) {
       throw new TRPCError({
@@ -130,6 +129,7 @@ const ledgerReportProcedure = adminProcedure
         message: 'Organization is outside your report scope.',
       });
     }
+    await requireFinanceBranchAssignment(ctx, input.branchId);
     const branch = await ctx.db.pharmacyBranch.findFirst({
       where: { organizationId, id: input.branchId, active: true },
       select: { id: true },
@@ -420,7 +420,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  marginComparison: adminProcedure
+  marginComparison: ledgerReportProcedure
     .input(
       z
         .object({
@@ -431,37 +431,10 @@ export const pharmacyFinanceRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      if (ctx.session!.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: 'Owner financial reports access is required.',
-        });
-      }
-      for (const action of ['reports:operational', 'reports:financial'] as const) {
-        if (
-          !(await can(subjectFromSession(ctx.session!.user), action, undefined, {
-            db: ctx.db,
-            source: 'TRPC',
-            ip: ctx.requestMeta.ip,
-          }))
-        ) {
-          throw new TRPCError({
-            code: 'FORBIDDEN',
-            message: 'Financial report permission is required.',
-          });
-        }
-      }
-      const organizationId = ctx.entitlements.organizationId;
-      const branch = await ctx.db.pharmacyBranch.findFirst({
-        where: { organizationId, id: input.branchId, active: true },
-        select: { id: true },
-      });
-      if (!branch)
-        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
       const period = { from: new Date(input.from), to: new Date(input.to) };
       try {
         marginComparisonPeriods(period.from, period.to);
-        return await grossMarginComparison(ctx.db, { organizationId, branchId: branch.id }, period);
+        return await grossMarginComparison(ctx.db, ctx.reportScope, period);
       } catch (error) {
         if (error instanceof RangeError)
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
@@ -527,6 +500,15 @@ export const pharmacyFinanceRouter = router({
         }),
       ]);
       return {
+        supplierPaymentApprovalLimitMinor:
+          ctx.session.user.role === 'ADMIN'
+            ? (
+                await ctx.db.organization.findUniqueOrThrow({
+                  where: { id: organizationId },
+                  select: { supplierPaymentApprovalLimitMinor: true },
+                })
+              ).supplierPaymentApprovalLimitMinor
+            : null,
         mayManageAccounts: await canManagePharmacyAccounts(ctx),
         branch,
         transactions,
@@ -569,7 +551,79 @@ export const pharmacyFinanceRouter = router({
       try {
         const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          postBookkeepingTransaction(txDb(tx), scoped, input)
+          postBookkeepingTransaction(
+            txDb(tx),
+            scoped,
+            input,
+            input.kind === 'SUPPLIER_PAYMENT' ? { saveSupplierDraft: true } : {}
+          )
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  setSupplierPaymentLimit: bookkeepingMutation
+    .input(
+      z
+        .object({ branchId: id, limitMinor: z.number().int().min(0).max(2_147_483_647).nullable() })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only an administrator can change the supplier payment approval limit.',
+        });
+      const organizationId = ctx.entitlements.organizationId;
+      return ctx.db.$transaction(async (tx) => {
+        const [previous] = await tx.$queryRaw<
+          { limitMinor: number | null }[]
+        >`SELECT "supplierPaymentApprovalLimitMinor" AS "limitMinor" FROM organizations WHERE id=${organizationId} FOR UPDATE`;
+        if (!previous) throw new TRPCError({ code: 'NOT_FOUND' });
+        const saved = await tx.organization.update({
+          where: { id: organizationId },
+          data: { supplierPaymentApprovalLimitMinor: input.limitMinor },
+          select: { supplierPaymentApprovalLimitMinor: true },
+        });
+        await tx.auditLog.create({
+          data: {
+            organizationId,
+            actorId: ctx.session.user.id,
+            action: 'pharmacyFinance.setSupplierPaymentLimit',
+            category: 'PHARMACY',
+            operation: 'UPDATE',
+            source: 'TRPC',
+            outcome: 'SUCCESS',
+            metadata: { previousLimitMinor: previous.limitMinor, limitMinor: input.limitMinor },
+          },
+        });
+        return saved;
+      });
+    }),
+
+  postSupplierPaymentDraft: bookkeepingMutation
+    .input(
+      z
+        .object({
+          branchId: id,
+          draftId: id,
+          approverEmail: z.email().max(254).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scoped = await scope(ctx, input.branchId);
+      try {
+        return await ctx.db.$transaction((tx) =>
+          postSupplierPaymentDraft(txDb(tx), scoped, input.draftId, {
+            pin: input.pin,
+            approverEmail: input.approverEmail,
+          })
         );
       } catch (error) {
         fail(error);
@@ -611,6 +665,14 @@ export const pharmacyFinanceRouter = router({
     }),
 
   reopenPeriod: bookkeepingMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Administrator access is required to reopen a locked period.',
+        });
+      return next();
+    })
     .input(z.object({ branchId: id, periodId: id, reason: z.string().trim().min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -695,6 +757,14 @@ export const pharmacyFinanceRouter = router({
     }),
 
   publishTaxProfile: bookkeepingMutation
+    .use(({ ctx, next }) => {
+      if (ctx.session.user.role !== 'ADMIN')
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only an administrator can publish a tax profile.',
+        });
+      return next();
+    })
     .input(
       z.object({
         branchId: id,

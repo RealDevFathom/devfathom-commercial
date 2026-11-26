@@ -3,6 +3,7 @@ import 'server-only';
 import { TRPCError } from '@trpc/server';
 import { can, subjectFromSession } from '@/lib/abac';
 import { evaluateSessionUser, temporaryPasswordBlocks } from '@/lib/auth/session-state';
+import { requireFinanceBranchAssignment } from '@/lib/pharmacy/finance-access';
 import { hasModule } from '@/lib/entitlements';
 import { pharmacyBusinessDayRange } from '@/lib/pharmacy/business-day';
 import type { TRPCContext } from '@/server/trpc';
@@ -14,18 +15,30 @@ import {
   type FiscalExceptionRegister,
 } from './fiscal-exceptions';
 
-export type FiscalExceptionContext = Pick<TRPCContext,
-  'db' | 'session' | 'organization' | 'entitlements' | 'requestMeta'>;
+export type FiscalExceptionContext = Pick<
+  TRPCContext,
+  'db' | 'session' | 'organization' | 'entitlements' | 'requestMeta'
+>;
 
 const documentSelect = {
-  id: true, localReference: true, kind: true, integratorMode: true, status: true,
-  attempts: true, maxAttempts: true, nextAttemptAt: true, createdAt: true, updatedAt: true,
+  id: true,
+  localReference: true,
+  kind: true,
+  integratorMode: true,
+  status: true,
+  attempts: true,
+  maxAttempts: true,
+  nextAttemptAt: true,
+  createdAt: true,
+  updatedAt: true,
 } as const;
 
-const denied = () => new TRPCError({
-  code: 'FORBIDDEN',
-  message: 'An active pharmacy workspace, ADMIN access, Reports access and both report capabilities are required.',
-});
+const denied = () =>
+  new TRPCError({
+    code: 'FORBIDDEN',
+    message:
+      'An active pharmacy workspace, Reports access, branch admission and both report capabilities are required.',
+  });
 
 /** Stem-local detail reader. All access checks precede fiscal/configuration reads. */
 export async function readFiscalExceptions(
@@ -37,23 +50,36 @@ export async function readFiscalExceptions(
   if (!evaluateSessionUser(user).ok || temporaryPasswordBlocks(user, 'fiscalExceptions.read'))
     throw denied();
   const organizationId = user.organizationId;
-  if (!organizationId || ctx.organization?.id !== organizationId ||
-    ctx.organization.status !== 'ACTIVE' || ctx.organization.vertical !== 'PHARMACY' ||
-    ctx.entitlements.organizationId !== organizationId || user.role !== 'ADMIN' ||
-    !hasModule(ctx.entitlements, 'pharmacy-reports')) throw denied();
+  if (
+    !organizationId ||
+    ctx.organization?.id !== organizationId ||
+    ctx.organization.status !== 'ACTIVE' ||
+    ctx.organization.vertical !== 'PHARMACY' ||
+    ctx.entitlements.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-reports')
+  )
+    throw denied();
 
   const subject = subjectFromSession(user);
   for (const capability of ['reports:operational', 'reports:financial'] as const) {
-    if (!await can(subject, capability, undefined, {
-      db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip,
-    })) throw denied();
+    if (
+      !(await can(subject, capability, undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }))
+    )
+      throw denied();
   }
   const parsed = fiscalExceptionInput.safeParse(input);
-  if (!parsed.success) throw new TRPCError({
-    code: 'BAD_REQUEST',
-    message: 'Choose an active branch, real calendar dates at most 92 days apart (the end date is not included), and a bounded page.',
-  });
+  if (!parsed.success)
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message:
+        'Choose an active branch, real calendar dates at most 92 days apart (the end date is not included), and a bounded page.',
+    });
   const filters = parsed.data;
+  await requireFinanceBranchAssignment(ctx, filters.branchId);
   const organization = await ctx.db.organization.findFirst({
     where: { id: organizationId, status: 'ACTIVE', vertical: 'PHARMACY' },
     select: { id: true },
@@ -64,10 +90,15 @@ export async function readFiscalExceptions(
     select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
   const branch = branchRow ? { id: branchRow.id, name: branchRow.name } : null;
-  if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your active report scope.' });
+  if (!branch)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your active report scope.',
+    });
 
   const config = await ctx.db.pharmacyFiscalConfiguration.findFirst({
-    where: { organizationId }, select: { integratorMode: true },
+    where: { organizationId },
+    select: { integratorMode: true },
   });
   const configuredMode = config?.integratorMode ?? 'OFF';
   if (configuredMode !== 'OFF' && configuredMode !== 'SANDBOX') throw denied();
@@ -83,7 +114,8 @@ export async function readFiscalExceptions(
   };
   const documents = await ctx.db.pharmacyFiscalDocument.findMany({
     where: {
-      organizationId, branchId: branch.id,
+      organizationId,
+      branchId: branch.id,
       status: { in: [...FISCAL_EXCEPTION_STATUSES] },
       createdAt: { gte: window.from, lt: window.to },
     },
@@ -104,9 +136,16 @@ export async function readFiscalExceptions(
     };
   });
   return {
-    organizationId, branch, filters, configuredMode, readAt, coverage: 'UNKNOWN', timeZone,
+    organizationId,
+    branch,
+    filters,
+    configuredMode,
+    readAt,
+    coverage: 'UNKNOWN',
+    timeZone,
     window: { from: window.from.toISOString(), to: window.to.toISOString() },
-    hasMoreAtRead, pageCapReached,
+    hasMoreAtRead,
+    pageCapReached,
     nextPage: hasMoreAtRead && !pageCapReached ? filters.page + 1 : null,
     rows,
   };

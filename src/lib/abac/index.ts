@@ -60,11 +60,12 @@ async function customDecision(
   // grants remain authoritative for it, including DENYs, without granting
   // tenant administrators the wider dispensing capability (`decideFromRules`).
   const roleRules = user.organizationRole?.permissions ?? [];
-  // Pharmacy's built-in finance grants are paired with tenant ADMIN. A personal grant
-  // is evaluated independently, and every role or personal DENY still participates.
+  // Finance employees can exercise their assigned grants. Other system roles keep
+  // their tenant-admin boundary, including the privileged Owner / Operator template.
   const effectiveRoleRules =
     checkSystemFinanceGrant &&
     user.organizationRole?.isSystem &&
+    user.organizationRole.key !== 'finance' &&
     user.organization?.vertical === 'PHARMACY'
       ? roleRules.filter((rule) => rule.capability !== action || rule.effect !== 'ALLOW')
       : roleRules;

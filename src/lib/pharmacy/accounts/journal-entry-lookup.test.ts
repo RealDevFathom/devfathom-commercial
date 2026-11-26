@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   branch: vi.fn(),
+  assignments: vi.fn(),
   journal: vi.fn(),
   audit: vi.fn(),
 }));
@@ -31,6 +32,7 @@ const input = {
 function caller(overrides: Partial<TRPCContext> = {}) {
   return journalEntryLookupRouter.createCaller({
     db: {
+      pharmacyBranchAssignment: { findMany: mocks.assignments },
       pharmacyBranch: { findFirst: mocks.branch },
       financeJournalEntry: { findFirst: mocks.journal },
     },
@@ -168,9 +170,9 @@ describe('exact posted-journal lookup', () => {
   });
 
   it('rejects an overlong lookup window before any database read', async () => {
-    await expect(
-      caller().lookup({ ...input, to: '2026-11-02T00:00:00Z' })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(caller().lookup({ ...input, to: '2026-11-02T00:00:00Z' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
     expect(mocks.branch).not.toHaveBeenCalled();
     expect(mocks.journal).not.toHaveBeenCalled();
   });
@@ -241,9 +243,7 @@ describe('exact posted-journal lookup', () => {
     [
       'out-of-range amount',
       {
-        lines: [
-          { id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 2_147_483_648 },
-        ],
+        lines: [{ id: 'line-1', accountCode: 'CASH', side: 'DEBIT', amountMinor: 2_147_483_648 }],
       },
     ],
   ])('returns no source detail for an invalid %s', async (_name, override) => {
@@ -326,4 +326,19 @@ describe('exact posted-journal lookup', () => {
     expect(mocks.journal).not.toHaveBeenCalled();
     expect(mocks.audit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILURE' }));
   });
+});
+
+it('lets an admitted Finance employee look up a journal entry', async () => {
+  mocks.can.mockImplementation(async (_subject, action) =>
+    ['finance:read', 'reports:operational', 'reports:financial'].includes(action)
+  );
+  mocks.assignments.mockResolvedValue([{ branchId: input.branchId }]);
+  await expect(
+    caller({
+      session: {
+        expires: 'later',
+        user: { id: 'accountant', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org_1' },
+      } as TRPCContext['session'],
+    }).lookup(input)
+  ).resolves.toEqual({ status: 'NOT_FOUND' });
 });

@@ -16,9 +16,11 @@ export type PharmacyProcedureGate =
   { gate: string; lines: readonly string[] } | { gate: string; none: string };
 
 const accountsGate =
-  'adminProcedure (admin:access) + ADMIN role, Pharmacy Finance module, finance:read (a live grant or the system Owner, subject to deny) and an active branch of the organization';
+  'Pharmacy Finance module, finance:read (a live grant or the system Owner, subject to deny) and an admitted active branch of the organization (administrators also require admin:access)';
 const bookkeepingGate =
-  'bookkeepingProcedure: admin:access + Pharmacy Finance module + finance:read (a live grant or the system Owner, subject to deny) + active branch';
+  'finance:read, Pharmacy Finance licence and admitted active branch (administrators also require admin:access)';
+const ledgerReportGate =
+  'reports:operational and reports:financial, Pharmacy Reports licence and admitted active branch (administrators also require admin:access)';
 
 export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedureGate>> = {
   'organizationAdmin.roleAccess': {
@@ -38,7 +40,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.approveCreditSetOff': {
-    gate: `${accountsGate} + finance:manage + actorMayRefund -> pharmacy:manage + own approval code; a different approver unless no other active ADMIN exists in the organization`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + actorMayRefund -> pharmacy:manage + own approval code; a different approver unless no other active ADMIN exists in the organization`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -54,7 +56,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.pay': {
-    gate: `${accountsGate} + finance:manage`,
+    gate: `${accountsGate} + finance:manage + independent payer or fresh administrator self-approval + administrator approval above the business limit for non-administrators`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyApInvoices.payablesDrafts': {
@@ -66,7 +68,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyApInvoices.rejectCreditSetOff': {
-    gate: `${accountsGate} + finance:manage + actorMayRefund -> pharmacy:manage`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + actorMayRefund -> pharmacy:manage`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -82,7 +84,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.reverseCreditSetOff': {
-    gate: `${accountsGate} + finance:manage + actorMayRefund -> pharmacy:manage + own approval code`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + actorMayRefund -> pharmacy:manage + own approval code`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -94,7 +96,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.reverseInvoice': {
-    gate: `${accountsGate} + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -102,7 +104,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyApInvoices.reverseSettlement': {
-    gate: `${accountsGate} + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
+    gate: `${accountsGate} + tenant ADMIN + admin:access + finance:manage + authorizeReversal -> pharmacy:manage + own approval code (own entry refused while another approver exists)`,
     lines: [
       'read-finance-accounts/view-accounts',
       'manage-finance-accounts/manage-transactions',
@@ -266,7 +268,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.cashFlowForecast': {
-    gate: 'ledgerReportProcedure: admin:access + ADMIN role + reports module + reports:operational AND reports:financial',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
@@ -281,14 +283,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.deliveryRadiusProfitability': {
-    gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/delivery-distance-profitability',
       'operational-reports/delivery-distance-profitability',
     ],
   },
   'pharmacyFinance.financialStatements': {
-    gate: 'ledgerReportProcedure: admin:access + ADMIN role + Pharmacy Reports module + reports:operational AND reports:financial + finance:read (a live grant or the system Owner, subject to deny), within an active branch',
+    gate: `${ledgerReportGate} + finance:read`,
     lines: [
       'read-finance-accounts/view-accounts',
       'financial-reports/workspace-administrator-use-operational-2',
@@ -296,7 +298,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyFinance.grossMargin': {
-    gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
@@ -307,21 +309,21 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.leakageReport': {
-    gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
     ],
   },
   'pharmacyFinance.marginComparison': {
-    gate: 'adminProcedure + inline ADMIN role, reports module, can(reports:operational) AND can(reports:financial)',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
     ],
   },
   'pharmacyFinance.perpetualValuation': {
-    gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
@@ -331,8 +333,16 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: `${bookkeepingGate} + finance:manage`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
+  'pharmacyFinance.postSupplierPaymentDraft': {
+    gate: `${bookkeepingGate} + finance:manage + independent payer or fresh administrator self-approval + administrator approval above the business limit for non-administrators`,
+    lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
+  },
   'pharmacyFinance.publishTaxProfile': {
-    gate: `${bookkeepingGate} + finance:manage`,
+    gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
+    lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
+  },
+  'pharmacyFinance.setSupplierPaymentLimit': {
+    gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.reconcile': {
@@ -340,7 +350,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.reopenPeriod': {
-    gate: `${bookkeepingGate} + finance:manage`,
+    gate: `${bookkeepingGate} + finance:manage + tenant ADMIN`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.reverse': {
@@ -348,7 +358,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.trueProfit': {
-    gate: 'ledgerReportProcedure: admin:access + reports:operational AND reports:financial (margin by item/category/hour/staff)',
+    gate: ledgerReportGate,
     lines: [
       'financial-reports/workspace-administrator-use-operational-2',
       'operational-reports/workspace-administrator-use-financial',
@@ -741,7 +751,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['receive-stock/open-purchasing-screens-read'],
   },
   'pharmacyJournalEntryLookup.lookup': {
-    gate: 'adminProcedure + ADMIN role + Pharmacy Reports module + reports:operational AND reports:financial + finance:read (a live grant or the system Owner, subject to deny), within an active branch',
+    gate: 'Pharmacy Reports module + reports:operational AND reports:financial + finance:read, within an admitted active branch (administrators also require admin:access)',
     lines: [
       'financial-reports/workspace-administrator-use-operational-3',
       'operational-reports/workspace-administrator-use-financial-2',
@@ -1854,21 +1864,21 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.anomalySignals': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.branchComparison': {
-    gate: 'reports:operational + requireFinancialReports + role ADMIN',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.branches': {
-    gate: 'auditedProtectedProcedure + pharmacy-reports module; reports:operational/Manager see more branches, others see their assigned branches',
+    gate: 'auditedProtectedProcedure + pharmacy-reports module; financial readers and Managers see admitted branches, operational-only holders retain their report scope, other members see active assignments',
     none: 'any signed-in member of the licensed workspace (branch picker list)',
   },
   'pharmacyReports.catalog': {
@@ -1879,14 +1889,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.categoryGrowth': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.commandCentre': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue hidden for branch-scoped Managers',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial within admitted active branches; organization-wide safety queue hidden for branch-scoped readers',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'operational-reports/see-stock-alert-lost',
@@ -1902,7 +1912,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.dailyWorkPack': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); anomaly/expiry items only for ADMIN + reports:financial',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); financial sources require reports:financial within admitted branches',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'run-branches/read-reports-centre-replenishment',
@@ -1926,7 +1936,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.expiryAdvice': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
@@ -1944,21 +1954,21 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.lostSalesRecovery': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/admin-view-repeat-lostsales-packflags',
       'operational-reports/admin-view-repeat-lostsales-packflags',
     ],
   },
   'pharmacyReports.marketing': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.packAuthenticationFlags': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + financialReportFilters (reports:financial) + role ADMIN',
     lines: [
       'financial-reports/admin-view-repeat-lostsales-packflags',
       'operational-reports/admin-view-repeat-lostsales-packflags',
@@ -1976,21 +1986,21 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['controlled-medicines/review-mark-ready-submit'],
   },
   'pharmacyReports.refreshAnomalies': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + financialReportFilters (reports:financial) + role ADMIN',
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
   'pharmacyReports.repeatPurchasing': {
-    gate: 'reports:operational + ownerFilters (reports:financial + role ADMIN)',
+    gate: 'reports:operational + reports:financial + admitted active branches',
     lines: [
       'financial-reports/admin-view-repeat-lostsales-packflags',
       'operational-reports/admin-view-repeat-lostsales-packflags',
     ],
   },
   'pharmacyReports.replenishment': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); order-planning scenario figures only for ADMIN + reports:financial',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); order-planning monetary figures require reports:financial within admitted active branches',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'run-branches/read-reports-centre-replenishment',

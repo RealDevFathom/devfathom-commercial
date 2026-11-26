@@ -31,7 +31,7 @@ export async function GET(request: Request) {
     else if (!parsed.success || !unique) response = failure(400);
     else {
       const { branch, before, after } = parsed.data;
-      // The existing Finance reader independently checks active session, ADMIN,
+      // The existing Finance reader independently checks active session, finance access,
       // licensing and active tenant branch scope on every download.
       const workspace = await pharmacyFinanceRouter
         .createCaller(ctx)

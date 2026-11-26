@@ -84,6 +84,7 @@ export async function verifyRefundPin(
     pin: string;
     action?: string;
     requestedById?: string;
+    administratorApproval?: true;
   },
   now = new Date()
 ): Promise<{ verified: true } | { blocked: string }> {
@@ -107,19 +108,27 @@ export async function verifyRefundPin(
     orderBy: { id: 'asc' },
   });
   if (!credential || isLockedOut(credential, now)) return { blocked: REFUND_PIN_BLOCKED };
-  if (
-    !(await verifyApprovalSecret(db, {
-      organizationId,
-      approverUserId: actorId,
-      credentialHash: credential.credentialHash,
-      secret: pin,
-      action: input.action ?? 'pharmacy.refund',
-      approverRight: 'pharmacy:manage',
-      purpose: input.requestedById && input.requestedById !== actorId ? 'APPROVAL' : 'OWN_ACTION',
-      requestedById: input.requestedById ?? actorId,
-      now,
-    }))
-  ) {
+  const credentialInput = {
+    organizationId,
+    approverUserId: actorId,
+    credentialHash: credential.credentialHash,
+    secret: pin,
+    action: input.action ?? 'pharmacy.refund',
+    requestedById: input.requestedById ?? actorId,
+    now,
+  };
+  const verified = input.administratorApproval
+    ? await verifyApprovalSecret(db, {
+        ...credentialInput,
+        approverRight: 'OWNER',
+        purpose: 'APPROVAL',
+      })
+    : await verifyApprovalSecret(db, {
+        ...credentialInput,
+        approverRight: 'pharmacy:manage',
+        purpose: input.requestedById && input.requestedById !== actorId ? 'APPROVAL' : 'OWN_ACTION',
+      });
+  if (!verified) {
     await db.restaurantOperatorCredential.update({
       where: { id: credential.id },
       data: registerFailedAttempt(credential, now),
@@ -146,6 +155,7 @@ export function authenticateRefundPin(input: {
   pin: string;
   /** The person requesting a different reviewer's approval. */
   requestedById?: string;
+  administratorApproval?: true;
   /** The refunding procedure, for the audit row. */
   action: string;
   /** DEV-881: another manager-PIN control reusing this check names its own policy. */

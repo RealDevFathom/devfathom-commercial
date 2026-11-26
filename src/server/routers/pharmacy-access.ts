@@ -1,3 +1,5 @@
+import { canAccessPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
+import { hasModule } from '@/lib/entitlements';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -36,6 +38,7 @@ export const PHARMACY_NAVIGATION_CAPABILITIES = [
   'pharmacy:safety',
   'pharmacy:inventory',
   'pharmacy:manage',
+  'finance:read',
 ] as const satisfies readonly Action[];
 
 export type PharmacyNavigationCapability = (typeof PHARMACY_NAVIGATION_CAPABILITIES)[number];
@@ -76,6 +79,22 @@ export const pharmacyAccessRouter = router({
             const reportBranches = await pharmacyReportAccess(ctx);
             reportsGranted = reportBranches === 'ALL';
             allowed = reportsGranted || reportBranches.length > 0;
+          } else if (capability === 'finance:read') {
+            allowed =
+              hasModule(ctx.entitlements, 'pharmacy-finance') &&
+              (await canAccessPharmacyFinance(user, options));
+            if (allowed && user.role !== 'ADMIN') {
+              const org = ctx.entitlements.organizationId;
+              allowed = Boolean(
+                org &&
+                ctx.organization?.id === org &&
+                (!user.organizationId || user.organizationId === org) &&
+                (await ctx.db.pharmacyBranch.findFirst({
+                  where: financeBranchWhere(org, user),
+                  select: { id: true },
+                }))
+              );
+            }
           } else allowed = await can(subject, capability, undefined, options);
           return allowed ? capability : null;
         })

@@ -1,3 +1,4 @@
+import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import type { Metadata } from 'next';
 
 import { PageHeader } from '@/components/ui/page-header';
@@ -93,11 +94,17 @@ export default async function AccountCodeReferencePage({
     );
   }
 
-  const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId: ctx.entitlements.organizationId, active: true },
+  const organizationId = ctx.entitlements.organizationId;
+  const activeBranches = await ctx.db.pharmacyBranch.findMany({
+    where: { organizationId, active: true },
     orderBy: [{ name: 'asc' }, { id: 'asc' }],
     select: { id: true, name: true },
   });
+  const assigned =
+    user.role === 'ADMIN'
+      ? null
+      : new Set(await assignedRegisterBranchIds(ctx.db, organizationId, user.id));
+  const branches = assigned ? activeBranches.filter(({ id }) => assigned.has(id)) : activeBranches;
   const branch = hasRequestedBranch
     ? branches.find(({ id }) => id === requestedBranch)
     : branches[0];

@@ -85,7 +85,12 @@ import { moduleForPath, moduleForProcedure } from '@/lib/module-catalog';
 import type { TRPCContext } from '../trpc';
 import { pharmacyApInvoicesRouter } from './pharmacy-ap-invoices';
 
-const TX = { tx: true };
+const TX = {
+  tx: true,
+  $queryRaw: async () => [{ limitMinor: null }],
+  pharmacyApInvoiceSettlement: { findFirst: async () => null },
+  pharmacyApInvoice: { findFirst: async () => ({ createdByUserId: 'another-maker' }) },
+};
 /** The command a reversal reaches: everything but the PIN, which the router checks. */
 const withoutPin = (input: object) =>
   Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'pin'));
@@ -94,6 +99,7 @@ function caller(context: Partial<TRPCContext> = {}) {
   return pharmacyApInvoicesRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
+      pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
       pharmacyBranch: { findFirst: mocks.branchFindFirst },
       pharmacySupplierCredit: { findMany: mocks.creditFindMany },
       pharmacyApCreditSetOff: { groupBy: mocks.setOffGroupBy },

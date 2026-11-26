@@ -48,3 +48,29 @@ it.each([
     await expect(canAccessPharmacyFinance(sessionAdmin, { db })).resolves.toBe(expected);
   }
 );
+
+it.each(['finance:read', 'finance:manage'] as const)(
+  'honors the built-in Finance employee grant for %s and its explicit revocation',
+  async (action) => {
+    const user = { id: 'accountant', role: 'EMPLOYEE', status: 'ACTIVE' };
+    const findUnique = vi.fn();
+    const db = { user: { findUnique } } as unknown as AuthzDb;
+    const member = {
+      ...user,
+      organization: { vertical: 'PHARMACY' },
+      organizationRole: {
+        key: 'finance',
+        isSystem: true,
+        permissions: [{ capability: action, effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    };
+    findUnique.mockResolvedValue(member);
+    await expect(canAccessPharmacyFinance(user, { db }, action)).resolves.toBe(true);
+    findUnique.mockResolvedValue({
+      ...member,
+      permissionOverrides: [{ capability: 'finance:*', effect: 'DENY' }],
+    });
+    await expect(canAccessPharmacyFinance(user, { db }, action)).resolves.toBe(false);
+  }
+);
