@@ -1,11 +1,8 @@
 import { z } from 'zod';
 
+import { matchesTenantRequestOrigin } from '@/lib/tenancy/tenant-request-origin';
 import { clientIp } from '@/lib/rate-limit';
-import {
-  isTenantLifecycleAccessible,
-  requestHost,
-  resolveOrganizationForRequest,
-} from '@/lib/tenancy/host';
+import { isTenantLifecycleAccessible, resolveOrganizationForRequest } from '@/lib/tenancy/host';
 
 export const tokenSchema = z.string().regex(/^wel_[0-9a-hjkmnp-tv-z]{26}$/);
 export const RATE_LIMITED = { ok: false, message: 'Please wait before trying again.' } as const;
@@ -15,8 +12,7 @@ export const INVALID = {
 } as const;
 
 export async function enrollmentContext(request: Request) {
-  const origin = request.headers.get('origin');
-  if (origin && new URL(origin).host.toLowerCase() !== requestHost(request)) return null;
+  if (!matchesTenantRequestOrigin(request)) return null;
   const organization = await resolveOrganizationForRequest(request);
   if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
   return { organization, ip: clientIp(request) };
