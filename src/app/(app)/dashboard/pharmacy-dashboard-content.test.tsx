@@ -126,7 +126,7 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.getAllByText('Restricted').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Financial reports access is required/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Stock actions' })).toBeVisible();
-    expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\b0\.00\b/)).not.toBeInTheDocument();
   });
 
   it('exposes the owner overview as a navigable business dashboard region', () => {
