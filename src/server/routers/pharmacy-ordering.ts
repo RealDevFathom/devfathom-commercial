@@ -444,7 +444,7 @@ export const pharmacyOrderingRouter = router({
         },
         select: { id: true, displayName: true, phoneLast4: true },
         orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
-        take: 10,
+        take: input === undefined ? 200 : 10,
       });
     }),
 
