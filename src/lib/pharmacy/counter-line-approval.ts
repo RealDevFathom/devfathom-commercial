@@ -14,7 +14,7 @@ import {
   registerFailedAttempt,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
-import { rateLimit, refundRateLimit } from '@/lib/rate-limit';
+import { rateLimit, refundRateLimit, type RateLimitResult } from '@/lib/rate-limit';
 import { counterBranchAssignmentDenial } from './counter-capability';
 import { CounterApprovalChoice } from './counter-approval-choice';
 import { verifyToken } from './counter-terminal-session';
@@ -244,12 +244,12 @@ export async function authorizeCounterApproval(
   // Named approvals also work when a browser sends a stale terminal session. Only
   // a verified session may charge a physical till or identify an unnamed approver.
   if (!input.staffProfileId && !deviceId) throw counterProofRequired(kind);
-  let counterReservation: { key: string; window: Date } | undefined;
+  let counterReservation: { key: string; attempt: RateLimitResult } | undefined;
   if (deviceId) {
     const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, deviceId]);
     const reservation = await rateLimit(key, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
     if (!reservation.ok || !reservation.windowStartedAt) throw new CounterApprovalDenied(kind);
-    counterReservation = { key, window: reservation.windowStartedAt };
+    counterReservation = { key, attempt: reservation };
   }
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');
   const approval = await withTenantDb(
@@ -274,9 +274,9 @@ export async function authorizeCounterApproval(
   );
   // Throw only after the credential transaction has committed any failed attempt.
   if (!approval) throw new CounterApprovalDenied(kind);
-  await refundRateLimit(requesterKey, LOCKOUT_DURATION_MS, attempt.windowStartedAt);
+  await refundRateLimit(requesterKey, LOCKOUT_DURATION_MS, attempt);
   if (counterReservation)
-    await refundRateLimit(counterReservation.key, LOCKOUT_DURATION_MS, counterReservation.window);
+    await refundRateLimit(counterReservation.key, LOCKOUT_DURATION_MS, counterReservation.attempt);
   if (approval instanceof CounterApprovalChoice) throw approval;
   return approval;
 }
@@ -421,11 +421,7 @@ async function verifyApproverPin(
     data: clearLockout(),
   });
   if (namedBudget?.windowStartedAt)
-    await refundApproverPinGuessTypedByAnother(
-      scope.organizationId,
-      approver.id,
-      namedBudget.windowStartedAt
-    );
+    await refundApproverPinGuessTypedByAnother(scope.organizationId, approver.id, namedBudget);
   const approvalPolicy = selfApproved
     ? 'SOLE_APPROVER_PIN_REAUTH'
     : kind === 'FEFO_OVERRIDE'
@@ -515,10 +511,10 @@ async function identifyCounterApprover(
     select: { userId: true, encryptedSecret: true, lastUsedStep: true },
     orderBy: { userId: 'asc' },
   });
-  const reservations = new Map<string, Date>();
+  const reservations = new Map<string, RateLimitResult>();
   const releaseReservations = async () => {
-    for (const [id, window] of reservations)
-      await refundApproverPinGuessTypedByAnother(scope.organizationId, id, window);
+    for (const [id, reservation] of reservations)
+      await refundApproverPinGuessTypedByAnother(scope.organizationId, id, reservation);
   };
   for (const { userId } of authenticators) {
     const budget = await spendApproverPinGuessTypedByAnother(scope.organizationId, userId);
@@ -526,7 +522,7 @@ async function identifyCounterApprover(
       await releaseReservations();
       return null;
     }
-    reservations.set(userId, budget.windowStartedAt);
+    reservations.set(userId, budget);
   }
   const matches: Array<{ userId: string; staffProfileId: string }> = [];
   let used = false;

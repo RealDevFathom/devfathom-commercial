@@ -1776,6 +1776,48 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     ).resolves.toEqual({ verified: true });
   });
 
+  it('DEV-961: repeated successful named approvals refund their exact PostgreSQL reservations on an unenrolled till', async () => {
+    const s = await shop('named_budget', { shifts: true, approvalAuthenticator: false });
+    const scope = s.as(s.cashier);
+    const { authorizeCounterApproval } = await import('./counter-line-approval');
+    const { rateLimitStorageKey } = await import('@/lib/rate-limit');
+    const keys = [
+      rateLimitStorageKey(
+        JSON.stringify(['pharmacy-approval-requester', scope.organizationId, scope.actorId])
+      ),
+      rateLimitStorageKey(`approver-pin-typed-by-another:${scope.organizationId}:${s.manager}`),
+    ];
+    const profile = await tenant(s.owner, (db) =>
+      db.restaurantStaffProfile.findFirstOrThrow({ where: { userId: s.manager } })
+    );
+    // Model one previous failure in a live window with a sub-millisecond start.
+    await tenant(scope, async (db) => {
+      for (const key of keys)
+        await db.$executeRaw`INSERT INTO rate_limit_buckets (key, count, "resetAt")
+          VALUES (${key}, 1, date_trunc('milliseconds', now()) + interval '15 minutes 0.000321 seconds')`;
+    });
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    try {
+      for (let i = 0; i < 6; i++)
+        await expect(
+          tenant(scope, (db) =>
+            authorizeCounterApproval(db, scope, 'DISCOUNT', {
+              staffProfileId: profile.id,
+              pin: MANAGER_PIN,
+            })
+          )
+        ).resolves.toMatchObject({ approvedByUserId: s.manager });
+      const counts = await tenant(
+        scope,
+        (db) => db.$queryRaw<{ count: number }[]>`
+        SELECT count FROM rate_limit_buckets WHERE key IN (${keys[0]}, ${keys[1]})`
+      );
+      expect(counts.map((row) => row.count)).toEqual([1, 1]);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it('DEV-961: a verified till resolves a unique previous-step code, refuses replay and asks which person on collision', async () => {
     const s = await shop('detect', { shifts: true, approvalAuthenticator: true });
     const { authorizeCounterApproval, CounterApprovalDenied } =

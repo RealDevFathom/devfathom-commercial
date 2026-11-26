@@ -1,6 +1,6 @@
 import 'server-only';
 
-import { clearRateLimit, rateLimit, refundRateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, rateLimit, refundRateLimit, type RateLimitResult } from '@/lib/rate-limit';
 import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/operator-credentials';
 
 /**
@@ -32,7 +32,7 @@ export function clearApproverPinGuessesTypedByAnother(organizationId: string, ap
 export function refundApproverPinGuessTypedByAnother(
   organizationId: string,
   approverId: string,
-  window: Date
+  reservation: RateLimitResult
 ) {
-  return refundRateLimit(budgetKey(organizationId, approverId), LOCKOUT_DURATION_MS, window);
+  return refundRateLimit(budgetKey(organizationId, approverId), LOCKOUT_DURATION_MS, reservation);
 }

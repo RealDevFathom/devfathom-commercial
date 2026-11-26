@@ -17,9 +17,11 @@ export interface RateLimitResult {
   remaining: number;
   /**
    * When the window this attempt was counted in opened, by the store's clock.
-   * Pass it to `refundRateLimit` to refund exactly that window.
+   * Pass the complete reservation to `refundRateLimit` to preserve store precision.
    */
   windowStartedAt?: Date;
+  /** PostgreSQL timestamps may include microseconds that a Date cannot represent. */
+  exactWindowStart?: string;
 }
 
 type Bucket = { count: number; resetAt: number };
@@ -40,7 +42,8 @@ ON CONFLICT (key) DO UPDATE SET
     WHEN rate_limit_buckets."resetAt" <= NOW() THEN EXCLUDED."resetAt"
     ELSE rate_limit_buckets."resetAt"
   END
-RETURNING count, "resetAt"
+RETURNING count, "resetAt",
+  ("resetAt" - ($2::int * INTERVAL '1 millisecond'))::text AS "exactWindowStart"
 `;
 
 const CLEAR_SQL = `DELETE FROM rate_limit_buckets WHERE key = $1`;
@@ -126,7 +129,7 @@ export function interpretRateLimitRow(
 type Query = (
   sql: string,
   params: unknown[]
-) => Promise<Array<{ count: number; resetAt: Date | string }>>;
+) => Promise<Array<{ count: number; resetAt: Date | string; exactWindowStart?: string }>>;
 
 let postgresCalls = 0;
 
@@ -154,7 +157,11 @@ async function postgresRateLimit(
     }
     const result = interpretRateLimitRow(Number(row.count), resetAt, limit);
     return result.ok
-      ? { ...result, windowStartedAt: new Date(resetAt.getTime() - windowMs) }
+      ? {
+          ...result,
+          windowStartedAt: new Date(resetAt.getTime() - windowMs),
+          exactWindowStart: row.exactWindowStart,
+        }
       : result;
   } catch (error) {
     console.error('[rate-limit] store unavailable', error instanceof Error ? error.name : 'error');
@@ -223,11 +230,17 @@ export async function clearRateLimit(key: string): Promise<void> {
  * sign-in refunds only its own unit, so failures from the same address stay
  * counted. The refund is skipped when the window has rolled over since
  * `spentAt`, because the unit being returned was never spent in the new window.
- * There is no clock tolerance: pass the charging result's `windowStartedAt`, or
+ * There is no clock tolerance: pass the complete charging result, or
  * a time recorded by the same store after the charge. A skewed clock can only
  * cause a refund to be skipped, never to reach a later window.
  */
-export async function refundRateLimit(key: string, windowMs: number, spentAt: Date): Promise<void> {
+export async function refundRateLimit(
+  key: string,
+  windowMs: number,
+  reservation: RateLimitResult | Date
+): Promise<void> {
+  const spentAt = reservation instanceof Date ? reservation : reservation.windowStartedAt;
+  if (!spentAt) return;
   const stored = rateLimitStorageKey(key);
   if (rateLimitBackend() === 'memory') {
     const bucket = buckets.get(stored);
@@ -239,7 +252,11 @@ export async function refundRateLimit(key: string, windowMs: number, spentAt: Da
   }
   const query = rateLimitQuery.current ?? defaultQuery;
   try {
-    await query(REFUND_SQL, [stored, windowMs, spentAt.toISOString()]);
+    const stamp =
+      reservation instanceof Date
+        ? spentAt.toISOString()
+        : (reservation.exactWindowStart ?? spentAt.toISOString());
+    await query(REFUND_SQL, [stored, windowMs, stamp]);
   } catch (error) {
     console.error('[rate-limit] refund failed', error instanceof Error ? error.name : 'error');
   }
