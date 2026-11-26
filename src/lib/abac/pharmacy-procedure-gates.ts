@@ -1877,6 +1877,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'operational-reports/run-seasonal-calendar-demandspike',
     ],
   },
+  'pharmacyReports.ownerWatch': {
+    gate: 'branchReports + dashboard branch scope; licensed operational queues require their actions, customer balances require reports:financial, supplier balances also require finance:read, historical register work also requires live ownership',
+    lines: [
+      'operational-reports/open-reports-centre-replenishment',
+      'financial-reports/see-sales-margin-cash',
+      'run-branches/read-reports-centre-replenishment',
+    ],
+  },
   'pharmacyReports.ownerTrading': {
     gate: 'branchReports + active assigned branches (all active branches for the owner); amounts require reports:financial',
     lines: [

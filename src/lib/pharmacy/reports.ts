@@ -305,7 +305,7 @@ type MoneyCounts = {
   cashVarianceMinor: number | null;
 };
 
-async function readKhataAgingMinor(
+export async function readKhataAgingMinor(
   db: Prisma.TransactionClient,
   branchIds: readonly string[]
 ): Promise<number> {

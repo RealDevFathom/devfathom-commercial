@@ -1,5 +1,7 @@
 'use client';
 
+import Link from 'next/link';
+import type { WatchRow } from '@/lib/pharmacy/owner-watch';
 import { useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { Button } from '@/components/ui/button';
@@ -105,12 +107,81 @@ function TradingPanel({
   );
 }
 
+function PositionPanels({ branchId, financial }: Pick<Props, 'branchId' | 'financial'>) {
+  const options = { retry: false, trpc: { context: { independentSection: true } } };
+  const work = trpc.pharmacyReports.ownerWatch.useQuery({ section: 'work', branchId }, options);
+  const suppliers = trpc.pharmacyReports.ownerWatch.useQuery(
+    { section: 'suppliers', branchId },
+    { ...options, enabled: financial }
+  );
+  const customers = trpc.pharmacyReports.ownerWatch.useQuery(
+    { section: 'customers', branchId },
+    { ...options, enabled: financial }
+  );
+  const groups: { group: WatchRow['group']; title: string; queries: (typeof work)[] }[] = [
+    {
+      group: 'attention',
+      title: 'Needs attention',
+      queries: financial ? [work, suppliers, customers] : [work],
+    },
+    ...(financial
+      ? [{ group: 'owed' as const, title: 'Money owed', queries: [suppliers, customers] }]
+      : []),
+  ];
+  return groups.map(({ group, title, queries }) => {
+    const rows = queries.flatMap((q) => q.data ?? []).filter((r) => r.group === group);
+    if (!rows.length && queries.every((q) => q.data)) return null;
+    return (
+      <SectionCard key={group} title={title} eyebrow="Current position">
+        <ul className="divide-y divide-border-subtle">
+          {rows.map((r) => (
+            <li key={r.label + (r.currency ?? '')}>
+              <Link
+                href={r.href}
+                className="flex min-h-11 items-center justify-between gap-3 rounded-control py-2 text-sm hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                <span>
+                  <span className="block font-medium">{r.label}</span>
+                  <span className="text-xs text-text-muted">{r.period}</span>
+                </span>
+                <span className="text-right font-mono tabular-nums">
+                  {r.value == null
+                    ? group === 'owed' || r.label.includes('due')
+                      ? 'See report'
+                      : 'Not calculated yet'
+                    : group === 'owed'
+                      ? reportMoney(r.value, r.currency)
+                      : r.value.toLocaleString()}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+        {queries.some((q) => q.isLoading) && (
+          <p role="status" className="text-sm text-text-muted">
+            Loading figures…
+          </p>
+        )}
+        {queries.some((q) => q.error) && (
+          <Button
+            variant="outline"
+            onClick={() => queries.filter((q) => q.error).forEach((q) => void q.refetch())}
+          >
+            Retry unavailable figures
+          </Button>
+        )}
+      </SectionCard>
+    );
+  });
+}
+
 export function TradingOverview({ branchId, financial, currency, branches }: Props) {
   const [profit, setProfit] = useState(false);
   const props = { branchId, currency };
   return (
     <div className="grid min-w-0 gap-4 lg:grid-cols-2">
       <TradingPanel {...props} section="summary" />
+      <PositionPanels branchId={branchId} financial={financial} />
       {financial && (
         <>
           <TradingPanel {...props} section="days" />

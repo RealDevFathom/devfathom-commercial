@@ -40,6 +40,7 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ pharmacyReports: { getPreferences: { setData: vi.fn() } } }),
     pharmacyReports: {
+      ownerWatch: { useQuery: () => query([]) },
       ownerTrading: { useQuery: () => query(undefined, { isLoading: true }) },
       branches: { useQuery: () => mounted.record('branches', state.branches) },
       catalog: { useQuery: () => mounted.record('catalog', state.catalog) },

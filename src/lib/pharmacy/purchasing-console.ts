@@ -515,21 +515,25 @@ export async function listRequisitions(db: ScopedDb, scope: PurchasingOrderScope
 
 export type RequisitionDetail = Awaited<ReturnType<typeof listRequisitions>>[number];
 
+export function purchaseOrderScopeWhere(scope: PurchasingOrderScope) {
+  return {
+    organizationId: scope.organizationId,
+    ...orderBranchFilter(scope),
+    AND: [
+      {
+        OR: [
+          { requisitionId: null },
+          { requisition: { branchId: null } },
+          { requisition: { branchId: { in: scope.branchIds } } },
+        ],
+      },
+    ],
+  };
+}
+
 export async function listPurchaseOrders(db: ScopedDb, scope: PurchasingOrderScope) {
   return db.pharmacyPurchaseOrder.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      ...orderBranchFilter(scope),
-      AND: [
-        {
-          OR: [
-            { requisitionId: null },
-            { requisition: { branchId: null } },
-            { requisition: { branchId: { in: scope.branchIds } } },
-          ],
-        },
-      ],
-    },
+    where: purchaseOrderScopeWhere(scope),
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       supplier: { select: { id: true, name: true, authorized: true } },

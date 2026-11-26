@@ -1,3 +1,11 @@
+import {
+  type WatchRow,
+  readCustomerPosition,
+  readOpenWork,
+  readSupplierPosition,
+} from '@/lib/pharmacy/owner-watch';
+import { isLiveOrganizationOwner } from '@/lib/pharmacy/owner-data-export';
+import { canAccessPharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { dashboardPeriods, readOwnerTrading } from '@/lib/pharmacy/owner-trading';
 import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
 import {
@@ -129,12 +137,17 @@ async function dashboardScope(ctx: TRPCContext, reportBranches: 'ALL' | string[]
   const available = await reportScope(ctx, reportBranches);
   const user = ctx.session?.user;
   if (!user?.id || user.organizationId !== available.organizationId)
-    return { ...available, branches: [] };
-  if (user.role === 'ADMIN') return available;
+    return { ...available, branches: [], owner: false };
+  if (await isLiveOrganizationOwner(ctx.db, available.organizationId, user.id))
+    return { ...available, owner: true };
   const assigned = new Set(
     await assignedRegisterBranchIds(ctx.db, available.organizationId, user.id)
   );
-  return { ...available, branches: available.branches.filter((branch) => assigned.has(branch.id)) };
+  return {
+    ...available,
+    owner: false,
+    branches: available.branches.filter((branch) => assigned.has(branch.id)),
+  };
 }
 
 const safety = capabilityProcedure('pharmacy:safety');
@@ -1046,6 +1059,129 @@ export const pharmacyReportsRouter = router({
         ctx.organization?.timezone
       );
     }),
+  ownerWatch: branchReports
+    .input(
+      z
+        .object({
+          section: z.enum(['work', 'suppliers', 'customers']),
+          branchId: z.string().min(1).max(128).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }): Promise<WatchRow[]> => {
+      const scope = await dashboardScope(ctx, ctx.reportBranches);
+      const selected = input.branchId
+        ? scope.branches.filter((b) => b.id === input.branchId)
+        : scope.branches;
+      if (!selected.length) return [];
+      const now = new Date(),
+        periods = dashboardPeriods(selected, ctx.organization?.timezone, now);
+      const user = ctx.session!.user;
+      const subject = subjectFromSession(user);
+      const env = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta?.ip ?? null };
+      const financial = await can(subject, 'reports:financial', undefined, env);
+      const branch = input.branchId;
+      const link = (path: string, key = 'branch') =>
+        branch ? `${path}?${new URLSearchParams({ [key]: branch })}` : path;
+      if (input.section === 'work') {
+        const purchasing =
+          hasModule(ctx.entitlements, 'pharmacy-procurement') &&
+          (await can(subject, 'pharmacy:procurement', undefined, env));
+        const access = {
+          inventory:
+            hasModule(ctx.entitlements, 'pharmacy-inventory') &&
+            (await can(subject, 'pharmacy:inventory', undefined, env)),
+          counter:
+            hasModule(ctx.entitlements, 'pharmacy-counter') &&
+            (await can(subject, 'pharmacy:counter', undefined, env)),
+          purchasing,
+          controlled: purchasing && financial && scope.owner,
+          includeUnscoped: !branch && scope.owner,
+        };
+        const rows = await readOpenWork(
+          ctx.db,
+          { organizationId: scope.organizationId, actorId: user.id },
+          periods,
+          access,
+          now
+        );
+        return rows.map((row) => ({ ...row, href: link(row.href) }));
+      }
+      if (!financial) return [];
+      if (input.section === 'suppliers') {
+        if (
+          !hasModule(ctx.entitlements, 'pharmacy-finance') ||
+          !(await canAccessPharmacyFinance(user, env))
+        )
+          return [];
+        const r = await readSupplierPosition(ctx.db, scope.organizationId, periods, now);
+        const href = link('/pharmacy/accounts/ap-aging');
+        const balances = r.balances.length
+          ? r.balances
+          : [
+              {
+                currency: ctx.organization?.currency ?? undefined,
+                total: r.complete ? 0 : null,
+                overdue: r.complete ? 0 : null,
+              },
+            ];
+        return [
+          ...balances.flatMap((b) => [
+            {
+              label: 'Owed to suppliers',
+              value: b.total,
+              currency: b.currency,
+              period: 'Outstanding supplier bills today',
+              group: 'owed' as const,
+              href,
+            },
+            {
+              label: 'Overdue to suppliers',
+              value: b.overdue,
+              currency: b.currency,
+              period: 'Past the bill due date',
+              group: 'owed' as const,
+              href,
+            },
+          ]),
+          {
+            label: 'Supplier bills due this week',
+            value: r.due,
+            period: 'Today through Sunday',
+            href,
+            group: 'attention',
+          },
+        ];
+      }
+      if (!hasModule(ctx.entitlements, 'pharmacy-counter')) return [];
+      const r = await readCustomerPosition(ctx.db, scope.organizationId, periods, user.id, now);
+      const href = link('/pharmacy/khata', 'branchId');
+      return [
+        {
+          label: 'Owed by customers',
+          value: r?.total ?? null,
+          currency: 'PKR',
+          period: 'Outstanding khata balances now',
+          href,
+          group: 'owed',
+        },
+        {
+          label: 'Overdue from customers',
+          value: r?.overdue ?? null,
+          currency: 'PKR',
+          period: 'Unsettled past-due credit now',
+          href,
+          group: 'owed',
+        },
+        {
+          label: 'Customer credit overdue',
+          value: r?.count ?? null,
+          period: 'Accounts overdue now',
+          href,
+          group: 'attention',
+        },
+      ];
+    }),
   ownerTrading: branchReports
     .input(
       z
@@ -1144,7 +1280,7 @@ export const pharmacyReportsRouter = router({
           // DEV-505: the safety queue is counted across the whole organization, so a
           // branch-scoped reader (a Manager) is not shown other branches' activity.
           metrics:
-            input.dashboard && ctx.session!.user.role !== 'ADMIN'
+            input.dashboard && (input.branchId || !('owner' in available && available.owner))
               ? { ...metrics, openRecalls: null, safetyQueue: null }
               : ctx.reportBranches === 'ALL'
                 ? metrics

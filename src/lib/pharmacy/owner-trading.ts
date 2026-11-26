@@ -14,7 +14,7 @@ export function dashboardPeriods(branches: Branch[], timeZone?: string | null, a
     return { ...branch, clock, today: pharmacyBusinessDay(clock, at) };
   });
 }
-type Period = ReturnType<typeof dashboardPeriods>[number];
+export type DashboardPeriod = ReturnType<typeof dashboardPeriods>[number];
 type Row = { key: string; value: number };
 export type TradingPoint = {
   label: string;
@@ -36,13 +36,13 @@ export function comparisonDays(rows: Row[]): TradingPoint[] {
   });
 }
 
-function periodsTable(periods: Period[]) {
+function periodsTable(periods: DashboardPeriod[]) {
   return Prisma.sql`(VALUES ${Prisma.join(periods.map((p) => Prisma.sql`(${p.id}::text, ${p.today}::date)`))}) AS period(id, today)`;
 }
 
 function margin(
   organizationId: string,
-  periods: Period[],
+  periods: DashboardPeriod[],
   days: number,
   endOffset: number,
   by: 'branch' | 'product'
@@ -71,7 +71,7 @@ function margin(
 export async function readOwnerTrading(
   db: ScopedDb,
   organizationId: string,
-  periods: Period[],
+  periods: DashboardPeriod[],
   section: TradingSection,
   financial: boolean
 ): Promise<TradingPoint[]> {

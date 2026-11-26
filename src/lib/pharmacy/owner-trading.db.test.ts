@@ -83,6 +83,29 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
           receivedAt: at,
         }
       );
+      const { postJournalEntry } = await import('@/lib/finance/journal');
+      await postJournalEntry(
+        db,
+        { organizationId: org, actorId: 'synthetic' },
+        {
+          sourceKind: 'PHARMACY_SALE_LINE',
+          sourceId: org,
+          description: 'Synthetic sale',
+          occurredAt: at,
+          idempotencyKey: org,
+          branchId: id,
+          lines: [
+            { accountCode: 'CASH', side: 'DEBIT', amountMinor: 925, branchId: id, productId: org },
+            {
+              accountCode: 'SALES_REVENUE',
+              side: 'CREDIT',
+              amountMinor: 925,
+              branchId: id,
+              productId: org,
+            },
+          ],
+        }
+      );
       await db.$executeRaw`INSERT INTO pharmacy_sales(id,"organizationId","branchId",status,"createdByUserId","businessDate","completedAt","receiptNumber","createdAt","updatedAt") VALUES (${org},${org},${id},'COMPLETED','synthetic','2026-10-09',${at},1,${at},${at})`;
       await db.$executeRaw`INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","discountMinor","discountKind","approvalPolicy","approvedByUserId","idempotencyKey") VALUES (${org},${org},${id},${org},${org},${org},${org},'PACK',2,1,2,500,1000,500,100,75,'DISCOUNT','synthetic','synthetic',${org})`;
       await db.$executeRaw`INSERT INTO pharmacy_tenders(id,"organizationId","branchId","saleId",type,"amountMinor","businessDate","actorId","deviceId","createdAt") VALUES (${org},${org},${id},${org},'CARD',925,'2026-10-09','synthetic','synthetic',${at})`;
@@ -190,5 +213,170 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       'pharmacy_dashboard_sale_days',
       'pharmacy_dashboard_stock_days',
     ]);
+  });
+
+  it('matches supplier report amounts, overdue portion and bills due before Sunday', async () => {
+    const { readSupplierPosition } = await import('./owner-watch');
+    const { readApAging } = await import('./accounts/ap-aging');
+    const { recordApInvoice } = await import('./accounts/ap-invoices');
+    const { computeDueBillReminders } = await import('./accounts/ap-payables-drafts');
+    await scoped.withTenantDb(org, async (db) => {
+      const scope = { organizationId: org, branchId: id, actorId: 'synthetic' };
+      for (const [dueDate, amountMinor] of [
+        ['2026-10-05', 1250],
+        ['2026-10-11', 3400],
+        ['2026-10-12', 1000],
+      ] as const) {
+        await recordApInvoice(
+          db,
+          scope,
+          {
+            branchId: id,
+            createKey: randomUUID(),
+            reference: dueDate,
+            payeeName: 'Synthetic supplier',
+            supplierInvoiceRef: dueDate,
+            invoiceDate: '2026-10-01',
+            dueDate,
+            amountMinor,
+            currency: 'PKR',
+            description: 'Synthetic invoice',
+            evidenceReference: 'Fixture',
+          },
+          at
+        );
+      }
+      const report = await readApAging(db, scope, periods[0]!.today, at, 'Asia/Karachi');
+      const result = await readSupplierPosition(db, org, periods, at);
+      expect(result.balances).toEqual([{ currency: 'PKR', total: 5650, overdue: 1250 }]);
+      expect(result.balances[0]!.total).toBe(report.totals[0]!.TOTAL);
+      expect(result.balances[0]!.overdue).toBe(report.totals[0]!.DAYS_1_30);
+      expect(result.due).toBe(computeDueBillReminders(report, 2)[0]!.dueSoonCount);
+    });
+  });
+
+  it('matches the customer ledger and its overdue report, restoring the branch', async () => {
+    const { readCustomerPosition } = await import('./owner-watch');
+    const { listKhataLedger } = await import('./family-khata');
+    await scoped.withTenantDb(org, async (db) => {
+      const scope = { organizationId: org, branchId: id, actorId: 'synthetic' };
+      await db.$queryRaw`SELECT set_config('app.current_branch_id',${id},true)`;
+      const patient = await db.pharmacyPatient.create({
+        data: { organizationId: org, displayName: 'Synthetic patient' },
+      });
+      const customer = await db.pharmacyCustomer.create({
+        data: { organizationId: org, patientId: patient.id, displayName: 'Synthetic customer' },
+      });
+      const family = await db.pharmacyFamilyAccount.create({
+        data: {
+          organizationId: org,
+          branchId: id,
+          payerCustomerId: customer.id,
+          displayName: 'Synthetic family',
+          creditLimitMinor: 5000,
+        },
+      });
+      const member = await db.pharmacyFamilyMember.create({
+        data: {
+          organizationId: org,
+          branchId: id,
+          familyAccountId: family.id,
+          customerId: customer.id,
+        },
+      });
+      await db.pharmacyKhataEvent.create({
+        data: {
+          ...scope,
+          kind: 'CHARGE',
+          familyAccountId: family.id,
+          memberId: member.id,
+          amountMinor: 1200,
+          dueAt: new Date('2026-09-01'),
+        },
+      });
+      const ledger = await listKhataLedger(db, scope, at);
+      const command = await readPharmacyOwnerCommandCentre(db, {
+        branchIds: [id],
+        from: '2026-10-09',
+        to: '2026-10-09',
+      });
+      await db.$queryRaw`SELECT set_config('app.current_branch_id','',true)`;
+      const result = await readCustomerPosition(db, org, periods, scope.actorId, at);
+      expect(result?.total).toBe(ledger.accounts[0]!.balanceMinor);
+      expect(result?.overdue).toBe(command.metrics.khataAgingMinor);
+      expect(result?.count).toBe(
+        ledger.accounts.filter((a) => a.balanceMinor > 0 && a.oldestOverdueAt).length
+      );
+      expect(result).toEqual({ total: 1200, overdue: 1200, count: 1 });
+      expect(
+        await db.$queryRaw`SELECT current_setting('app.current_branch_id',true) AS id`
+      ).toEqual([{ id: '' }]);
+    });
+  });
+  it('matches the unresolved queues and stock role dashboard for the same active branch', async () => {
+    const { readOpenWork } = await import('./owner-watch');
+    const { roleDashboard } = await import('./stock-signals-operations');
+    const { countOpenCardTerminalAttempts } = await import('./card-terminal/open-attempts');
+    const { listPurchaseOrders } = await import('./purchasing-console');
+    await scoped.withTenantDb(org, async (db) => {
+      const scope = { organizationId: org, branchId: id, actorId: 'synthetic' };
+      for (const kind of ['LOW_STOCK', 'NEAR_EXPIRY'] as const)
+        await db.pharmacyStockSignal.create({
+          data: {
+            organizationId: org,
+            branchId: id,
+            kind,
+            dedupKey: kind,
+            medicineId: org,
+            cause: 'synthetic',
+            ownerUserId: 'fixture',
+            dueAt: at,
+            explanation: 'Synthetic alert',
+            dataWindowStart: at,
+            dataWindowEnd: at,
+            sourceObservedAt: at,
+            freshnessSeconds: 3600,
+            confidence: 'EXACT',
+            neededUnits: 1,
+            onHandUnits: 1,
+            inboundUnits: 0,
+            computedAt: at,
+          },
+        });
+      const result = await readOpenWork(
+        db,
+        scope,
+        periods,
+        {
+          inventory: true,
+          counter: true,
+          purchasing: true,
+          controlled: false,
+          includeUnscoped: false,
+        },
+        at
+      );
+      const values = Object.fromEntries(result.map((row) => [row.label, row.value]));
+      const signals = await roleDashboard(db, scope, at);
+      expect(values['Low stock']).toBe(signals.find((s) => s.kind === 'LOW_STOCK')!.open);
+      expect(values['Expiring soon']).toBe(signals.find((s) => s.kind === 'NEAR_EXPIRY')!.open);
+      expect(values['Approvals waiting']).toBe(
+        (
+          await listPurchaseOrders(db, {
+            organizationId: org,
+            branchIds: [id],
+            includeUnscoped: false,
+          })
+        ).filter((r) => r.status === 'SUBMITTED').length
+      );
+      expect(values['Card payments unresolved']).toBe(
+        await countOpenCardTerminalAttempts(db, scope, new Date(periods[0]!.today))
+      );
+      expect(values['Drawers or shifts still open']).toBe(
+        await db.pharmacyDrawerSession.count({
+          where: { organizationId: org, branchId: id, status: 'OPEN' },
+        })
+      );
+    });
   });
 });
