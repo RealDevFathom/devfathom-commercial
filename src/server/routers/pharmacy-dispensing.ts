@@ -1,3 +1,4 @@
+import { Prisma } from '@/generated/prisma/client';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
@@ -70,11 +71,13 @@ function canReadQueuePatients(ctx: TRPCContext) {
 
 // The review item records its counter sale line as an id, without a Prisma
 // relation. Join on that exact line: one prescription can be filled at several branches.
-async function clinicalReviewScope(ctx: TRPCContext) {
+export async function clinicalReviewScope(ctx: TRPCContext, pendingBranches?: string[]) {
   const organizationId = ctx.entitlements?.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   const userId = ctx.session!.user.id;
-  if (await actorIsPharmacyOwner(ctx.db, organizationId, userId)) return { organizationId };
+  const owner = await actorIsPharmacyOwner(ctx.db, organizationId, userId);
+  if (owner && !pendingBranches) return { organizationId };
+  if (pendingBranches?.length === 0) return { organizationId, id: { in: [] as string[] } };
 
   const reviews = await ctx.db.$queryRaw<{ id: string }[]>`
     SELECT review.id
@@ -83,12 +86,22 @@ async function clinicalReviewScope(ctx: TRPCContext) {
       ON line."organizationId" = review."organizationId" AND line.id = review."saleLineId"
     JOIN pharmacy_branches branch
       ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
-    JOIN pharmacy_branch_assignments assignment
+    ${
+      owner
+        ? Prisma.empty
+        : Prisma.sql`JOIN pharmacy_branch_assignments assignment
       ON assignment."organizationId" = branch."organizationId" AND assignment."branchId" = branch.id
     JOIN users member
       ON member."organizationId" = assignment."organizationId" AND member.id = assignment."userId"
-    WHERE member.status = 'ACTIVE' AND review."organizationId" = ${organizationId} AND assignment."userId" = ${userId}
-      AND branch.active AND assignment.active
+      AND member.status='ACTIVE' AND assignment."userId"=${userId} AND assignment.active`
+    }
+    WHERE review."organizationId" = ${organizationId} AND branch.active
+      ${
+        pendingBranches
+          ? Prisma.sql`AND branch.id IN (${Prisma.join(pendingBranches)})
+        AND NOT EXISTS (SELECT 1 FROM pharmacy_pharmacist_review_decisions done WHERE done."organizationId"=review."organizationId" AND done."reviewItemId"=review.id AND done.kind='SIGN')`
+          : Prisma.empty
+      }
   `;
   return { organizationId, id: { in: reviews.map((review) => review.id) } };
 }

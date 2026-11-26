@@ -1,3 +1,4 @@
+import { readDashboardApprovals } from '../pharmacy-dashboard-approvals';
 import {
   type WatchRow,
   readCustomerPosition,
@@ -1071,7 +1072,7 @@ export const pharmacyReportsRouter = router({
     .input(
       z
         .object({
-          section: z.enum(['work', 'suppliers', 'customers']),
+          section: z.enum(['work', 'suppliers', 'customers', 'approvals']),
           branchId: z.string().min(1).max(128).optional(),
         })
         .strict()
@@ -1091,6 +1092,13 @@ export const pharmacyReportsRouter = router({
       const branch = input.branchId;
       const link = (path: string, key = 'branch') =>
         branch ? `${path}?${new URLSearchParams({ [key]: branch })}` : path;
+      if (input.section === 'approvals')
+        return readDashboardApprovals(
+          ctx,
+          selected.map((b) => b.id),
+          branch,
+          scope.owner
+        );
       if (input.section === 'work') {
         const purchasing =
           hasModule(ctx.entitlements, 'pharmacy-procurement') &&
@@ -1102,7 +1110,8 @@ export const pharmacyReportsRouter = router({
           counter:
             hasModule(ctx.entitlements, 'pharmacy-counter') &&
             (await can(subject, 'pharmacy:counter', undefined, env)),
-          purchasing,
+          // Purchase decisions load independently with the other approval queues.
+          purchasing: false,
           controlled: purchasing && financial && scope.owner,
           includeUnscoped: !branch && scope.owner,
         };

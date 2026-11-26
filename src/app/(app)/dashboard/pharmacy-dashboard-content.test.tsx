@@ -14,6 +14,7 @@ const state = vi.hoisted(() => ({
   catalog: undefined as unknown,
   command: undefined as unknown,
   expiry: undefined as { label: string; value: number }[] | undefined,
+  approvals: [] as { label: string; value: number; period: string; href: string; group: string }[],
   commandInput: undefined as unknown,
   zone: 'UTC',
   preferences: undefined as unknown,
@@ -41,7 +42,10 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ pharmacyReports: { getPreferences: { setData: vi.fn() } } }),
     pharmacyReports: {
-      ownerWatch: { useQuery: () => query([]) },
+      ownerWatch: {
+        useQuery: ({ section }: { section: string }) =>
+          query(section === 'approvals' ? state.approvals : []),
+      },
       ownerTrading: {
         useQuery: ({ section }: { section: string }) =>
           section === 'expiry' ? query(state.expiry) : query(undefined, { isLoading: true }),
@@ -104,6 +108,7 @@ const REPORT_HOOKS = [
 
 beforeEach(() => {
   state.expiry = undefined;
+  state.approvals = [];
   state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports'];
   mounted.hooks.length = 0;
   state.branches = query({ branches: [{ id: 'b1', name: 'Main' }] });
@@ -149,6 +154,35 @@ describe('PharmacyDashboardContent states', () => {
   it('reserves chart height while trading figures load', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.getByText('Loading trading today…')).toHaveClass('min-h-56');
+  });
+  it('shows an approval headline equal to precisely its linked authorized queues', () => {
+    state.approvals = [
+      {
+        label: 'Purchase orders',
+        value: 3,
+        group: 'approval',
+        period: 'Submitted',
+        href: '/pharmacy/purchasing/orders',
+      },
+      {
+        label: 'Stock counts',
+        value: 4,
+        group: 'approval',
+        period: 'Current',
+        href: '/pharmacy/inventory',
+      },
+    ];
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    const summary = screen.getByText('Approvals waiting').closest('summary')!;
+    expect(summary).toHaveTextContent('Approvals waiting7');
+    summary.click();
+    expect(screen.getByRole('link', { name: /Purchase orders/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/purchasing/orders'
+    );
+    expect(
+      screen.queryByRole('link', { name: /Supplier submission approvals/ })
+    ).not.toBeInTheDocument();
   });
   it('omits the money and cost tiles when only operational reports are granted', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);

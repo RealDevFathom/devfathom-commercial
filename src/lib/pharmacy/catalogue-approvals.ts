@@ -248,9 +248,10 @@ export const STALE_EDIT_MESSAGE =
  * submitted (for example because another edit on it was approved). A stale edit
  * can only be rejected; approving it is refused on the server.
  */
+export const pendingCatalogueEdits = { status: 'PENDING' } as const;
 export async function listPendingCatalogueEdits(db: ScopedDb) {
   const edits = await db.pharmacyCatalogueEdit.findMany({
-    where: { status: 'PENDING' },
+    where: pendingCatalogueEdits,
     include: {
       medicine: { select: { productName: true, updatedAt: true } },
       editor: { select: { name: true } },
@@ -324,7 +325,7 @@ export async function listPendingCatalogueEdits(db: ScopedDb) {
   }));
 }
 
-function commandIds(operation: string | undefined, changes: unknown) {
+export function commandIds(operation: string | undefined, changes: unknown) {
   const input =
     operation && operation !== 'UPDATE_MEDICINE' && changes && typeof changes === 'object'
       ? (changes as { json?: Record<string, unknown> }).json

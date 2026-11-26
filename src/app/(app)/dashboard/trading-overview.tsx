@@ -116,6 +116,10 @@ function TradingPanel({
 function PositionPanels({ branchId, financial }: Pick<Props, 'branchId' | 'financial'>) {
   const options = { retry: false, trpc: { context: { independentSection: true } } };
   const work = trpc.pharmacyReports.ownerWatch.useQuery({ section: 'work', branchId }, options);
+  const approvals = trpc.pharmacyReports.ownerWatch.useQuery(
+    { section: 'approvals', branchId },
+    options
+  );
   const suppliers = trpc.pharmacyReports.ownerWatch.useQuery(
     { section: 'suppliers', branchId },
     { ...options, enabled: financial }
@@ -128,7 +132,7 @@ function PositionPanels({ branchId, financial }: Pick<Props, 'branchId' | 'finan
     {
       group: 'attention',
       title: 'Needs attention',
-      queries: financial ? [work, suppliers, customers] : [work],
+      queries: financial ? [work, approvals, suppliers, customers] : [work, approvals],
     },
     ...(financial
       ? [{ group: 'owed' as const, title: 'Money owed', queries: [suppliers, customers] }]
@@ -136,10 +140,37 @@ function PositionPanels({ branchId, financial }: Pick<Props, 'branchId' | 'finan
   ];
   return groups.map(({ group, title, queries }) => {
     const rows = queries.flatMap((q) => q.data ?? []).filter((r) => r.group === group);
-    if (!rows.length && queries.every((q) => q.data)) return null;
+    const queues = group === 'attention' ? (approvals.data ?? []) : [];
+    if (!queues.length && !rows.length && queries.every((q) => q.data)) return null;
     return (
       <SectionCard key={group} title={title} eyebrow="Current position">
         <div className={group === 'owed' ? 'min-h-56' : 'min-h-[32rem]'}>
+          {queues.length > 0 && (
+            <details className="border-b border-border-subtle">
+              <summary className="min-h-11 cursor-pointer py-3 text-sm font-medium focus-visible:outline-ring">
+                <span>Approvals waiting</span>
+                <span className="float-right font-mono tabular-nums">
+                  {queues.reduce((sum, q) => sum + (q.value ?? 0), 0)}
+                </span>
+              </summary>
+              <ul className="divide-y divide-border-subtle pl-3">
+                {queues.map((q) => (
+                  <li key={q.label}>
+                    <Link
+                      className="flex min-h-11 items-center justify-between gap-3 rounded-control py-2 text-sm hover:bg-surface-sunken focus-visible:outline-ring"
+                      href={q.href}
+                    >
+                      <span>
+                        {q.label}
+                        <small className="block text-text-muted">{q.period}</small>
+                      </span>
+                      <span className="font-mono tabular-nums">{q.value}</span>
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           <ul className="divide-y divide-border-subtle">
             {rows.map((r) => (
               <li key={r.label + (r.currency ?? '')}>

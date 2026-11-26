@@ -20,7 +20,7 @@ export type WatchRow = {
   currency?: string;
   href: string;
   period: string;
-  group: 'attention' | 'owed';
+  group: 'attention' | 'owed' | 'approval';
 };
 export async function readSupplierPosition(
   db: ScopedDb,
