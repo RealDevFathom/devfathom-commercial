@@ -100,6 +100,7 @@ export function tasks(f: PharmacyFixture) {
         },
       ],
     });
+    assert('id' in receipt, 'The goods receipt must be accepted before it can be posted.');
     await receiver.pharmacyPurchasing.postGoodsReceipt({
       branchId,
       goodsReceiptId: receipt.id,
