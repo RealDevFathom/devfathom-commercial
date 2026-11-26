@@ -7,6 +7,11 @@ import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 import { lockProjectMembership } from '@/lib/projects/membership-lock';
 import {
+  TaskRuleError,
+  assertAssigneesAreProjectMembers,
+  assertReplyTargetInTask,
+} from '@/lib/projects/task-rules';
+import {
   assertProjectAccess,
   assertBoardAccess,
   assertColumnAccess,
@@ -25,6 +30,18 @@ function formatDue(date: Date): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+/** Run a shared task rule, answering a broken one as the BAD_REQUEST it always was. */
+async function taskRule(check: () => Promise<void>): Promise<void> {
+  try {
+    await check();
+  } catch (error) {
+    if (error instanceof TaskRuleError) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+    }
+    throw error;
+  }
 }
 
 // Build the deep link to a task on its board.
@@ -604,15 +621,9 @@ export const projectsRouter = router({
         });
         const uniqueAssignees = [...new Set(input.assigneeIds)];
         await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
-        const memberCount = await ctx.db.projectMember.count({
-          where: { projectId: col!.board.projectId, userId: { in: uniqueAssignees } },
-        });
-        if (memberCount !== uniqueAssignees.length) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'All assignees must be members of the project.',
-          });
-        }
+        await taskRule(() =>
+          assertAssigneesAreProjectMembers(ctx.db, col!.board.projectId, uniqueAssignees)
+        );
       }
 
       const maxOrder = await ctx.db.task.aggregate({
@@ -1384,18 +1395,7 @@ export const projectsRouter = router({
       await assertTaskAccess(ctx, input.taskId);
       // PROJ-06: a reply's parent must belong to the SAME task, else a parentId
       // from another task threads an orphaned reply across tasks.
-      if (input.parentId) {
-        const parent = await ctx.db.taskComment.findUnique({
-          where: { id: input.parentId },
-          select: { taskId: true },
-        });
-        if (!parent || parent.taskId !== input.taskId) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Reply target does not belong to this task.',
-          });
-        }
-      }
+      await taskRule(() => assertReplyTargetInTask(ctx.db, input.taskId, input.parentId));
       return ctx.db.taskComment.create({
         data: {
           content: input.content,
@@ -1584,15 +1584,9 @@ export const projectsRouter = router({
           where: { id: input.taskId },
           select: { column: { select: { board: { select: { projectId: true } } } } },
         });
-        const memberCount = await ctx.db.projectMember.count({
-          where: { projectId: t!.column.board.projectId, userId: { in: uniqueAssignees } },
-        });
-        if (memberCount !== uniqueAssignees.length) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'All assignees must be members of the project.',
-          });
-        }
+        await taskRule(() =>
+          assertAssigneesAreProjectMembers(ctx.db, t!.column.board.projectId, uniqueAssignees)
+        );
       }
 
       // Capture who was already assigned so we only email the *newly* added.
