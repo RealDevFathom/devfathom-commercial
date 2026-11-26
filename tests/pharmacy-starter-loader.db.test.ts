@@ -8,7 +8,7 @@ vi.mock('@/lib/pharmacy/migration/starter-products.json', () => ({
   default: Array.from({ length: 251 }, (_, i) => ({
     sourceId: String(i).padStart(4, '0'),
     legacyCode: i === 249 || i === 250 ? 'QA-shared-code' : 'QA-' + i,
-    name: 'QA catalogue ' + i,
+    name: i === 1 ? 'QA archived medicine' : 'QA catalogue ' + i,
     active: i !== 1,
     controlled: i === 0,
     class: i === 0 ? 'NARCOTICS' : null,
@@ -139,6 +139,20 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
             city: 'QA',
             provinceCode: 'PB',
           },
+        });
+        expect(
+          await db.medicine.findFirstOrThrow({ where: { productName: 'QA archived medicine' } })
+        ).toMatchObject({ saleable: false });
+        const { searchCounterCatalog } = await import('@/lib/pharmacy/counter');
+        const scope = { organizationId: b, branchId: branch.id };
+        const inactive = await searchCounterCatalog(db, scope, { query: 'QA archived medicine' });
+        expect(inactive.rows).toEqual([]);
+        const active = await searchCounterCatalog(db, scope, { query: 'QA catalogue 248' });
+        expect(active.rows).toHaveLength(1);
+        expect(active.rows[0]).toMatchObject({
+          displayName: 'QA catalogue 248',
+          onHandUnits: 0,
+          printedMrpMinor: null,
         });
         const batch = await db.pharmacyManufacturingBatch.create({
           data: { medicineId: existing.id, batchNumber: 'QA', expiresAt: new Date('2031-01-01') },

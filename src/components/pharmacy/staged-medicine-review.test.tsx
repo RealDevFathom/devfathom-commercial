@@ -16,20 +16,18 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
   pharmacyStagedReviewRouter: {
     createCaller: () => ({
       pharmacyMedicine: {
-        catalogueProducts: vi
-          .fn()
-          .mockResolvedValue({
-            products: [
-              {
-                id: 'local',
-                productName: 'QA inactive medicine',
-                manufacturer: null,
-                saleable: false,
-                controlled: true,
-              },
-            ],
-            more: false,
-          }),
+        catalogueProducts: vi.fn().mockResolvedValue({
+          products: [
+            {
+              id: 'local',
+              productName: 'QA inactive medicine',
+              manufacturer: null,
+              saleable: false,
+              controlled: true,
+            },
+          ],
+          more: false,
+        }),
         starterHistory: vi.fn().mockResolvedValue({ run: null, rows: [], more: false }),
         stagedBranches: mocks.branches,
         stagedBatches: mocks.batches,
