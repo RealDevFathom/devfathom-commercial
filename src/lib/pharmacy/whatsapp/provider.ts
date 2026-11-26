@@ -3,9 +3,8 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 
 /**
  * PH-B3 — pharmacy WhatsApp provider seam. `PHARMACY_WHATSAPP_PROVIDER`
- * selects `meta` (Meta WhatsApp Cloud API) or `mock` (the default, which never
- * touches the network). Every credential and template name comes from the
- * environment; see docs/pharmacy/whatsapp.md.
+ * selects Meta WhatsApp Cloud API, an organization-bound WAHA session, or
+ * the default offline mock. See docs/pharmacy/whatsapp.md for configuration.
  */
 
 export type WhatsAppTemplateKey =
