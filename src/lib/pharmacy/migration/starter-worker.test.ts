@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   find: vi.fn(),
   load: vi.fn(),
   pause: vi.fn(),
+  available: vi.fn(),
   scopes: [] as string[],
 }));
 vi.mock('node:timers/promises', () => ({ setTimeout: mocks.pause }));
@@ -14,7 +15,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: async (id: string, fn: (db: unknown) => unknown) => {
     mocks.scopes.push(id);
     try {
-      return await fn({});
+      return await fn({ $queryRaw: mocks.available });
     } finally {
       mocks.scopes.pop();
     }
@@ -23,6 +24,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 import { processStarterImports } from './starter-worker';
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.available.mockResolvedValue([{ available: true }]);
 });
 it('releases the tenant transaction before pacing the next background batch', async () => {
   mocks.find
@@ -33,4 +35,17 @@ it('releases the tenant transaction before pacing the next background batch', as
   mocks.pause.mockImplementation(async () => expect(mocks.scopes).toEqual([]));
   expect(await processStarterImports()).toEqual({ processed: 251, failed: 0 });
   expect(mocks.pause.mock.calls).toEqual([[500], [500]]);
+});
+
+it('gives an active foreground transaction priority without checking out a connection while waiting', async () => {
+  mocks.find
+    .mockResolvedValueOnce({ organizationId: 'qa-b' })
+    .mockResolvedValueOnce({ organizationId: 'qa-b' })
+    .mockResolvedValue(null);
+  mocks.available.mockResolvedValueOnce([{ available: false }]);
+  mocks.load.mockResolvedValueOnce(250);
+  mocks.pause.mockImplementation(async () => expect(mocks.scopes).toEqual([]));
+  expect(await processStarterImports()).toEqual({ processed: 250, failed: 0 });
+  expect(mocks.load).toHaveBeenCalledTimes(1);
+  expect(mocks.pause.mock.calls).toEqual([[100], [500]]);
 });
