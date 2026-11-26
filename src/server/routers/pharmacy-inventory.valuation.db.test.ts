@@ -347,7 +347,6 @@ beforeAll(async () => {
           dispatchedAt: offset(-1),
           lines: {
             create: {
-              organizationId: oid,
               sourceBranchId: main,
               sourceLotId: moving,
               sourceStockLocationId: store(main),
