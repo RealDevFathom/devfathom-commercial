@@ -41,7 +41,7 @@ describe.skipIf(!ownerUrl || !runtimeUrl)('recurring expenses on PostgreSQL', ()
         owner.query('SELECT record_send(t) AS bytes FROM transactions t ORDER BY id');
       const before = await snapshot();
       const sql = await readFile(
-        'prisma/migrations/20261126010000_recurring_expense_cycles/migration.sql',
+        'prisma/migrations/20261126010100_recurring_expense_cycles/migration.sql',
         'utf8'
       );
       await owner.query(sql);
