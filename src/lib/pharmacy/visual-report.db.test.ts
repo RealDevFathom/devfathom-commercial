@@ -46,6 +46,24 @@ describe.skipIf(!testUrl)('chart parity on the same PostgreSQL transaction evide
       }
     });
   });
+  it('provides tenant, branch and date indexes for the bounded chart reads', async () => {
+    await scoped.withTenantDb(org, async (db) => {
+      const indexes = await db.$queryRaw<
+        { indexname: string; indexdef: string }[]
+      >`SELECT indexname,indexdef FROM pg_indexes WHERE schemaname='public' AND indexname IN ('pharmacy_visual_sale_dates_idx','pharmacy_visual_return_dates_idx','pharmacy_visual_return_lines_idx')`;
+      expect(Object.fromEntries(indexes.map((row) => [row.indexname, row.indexdef]))).toEqual({
+        pharmacy_visual_sale_dates_idx: expect.stringContaining(
+          '("organizationId", "branchId", status, "businessDate")'
+        ),
+        pharmacy_visual_return_dates_idx: expect.stringContaining(
+          '("organizationId", "branchId", "createdAt")'
+        ),
+        pharmacy_visual_return_lines_idx: expect.stringContaining(
+          '("organizationId", "branchId", "returnId")'
+        ),
+      });
+    });
+  });
   it.each([...REPORT_CHARTS.Sales, ...REPORT_CHARTS.Returns, ...REPORT_CHARTS.Profit])(
     '%s reconciles and drills into only its branch and business day',
     async (chart) => {

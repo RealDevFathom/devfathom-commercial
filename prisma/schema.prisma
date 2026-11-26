@@ -1401,6 +1401,7 @@ model PharmacySale {
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, status, createdAt])
+  @@index([organizationId, branchId, status, businessDate], map: "pharmacy_visual_sale_dates_idx")
   @@map("pharmacy_sales")
 }
 
@@ -2308,6 +2309,7 @@ model PharmacySaleReturn {
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, originalSaleId])
+  @@index([organizationId, branchId, createdAt], map: "pharmacy_visual_return_dates_idx")
   @@map("pharmacy_sale_returns")
 }
 
@@ -2333,6 +2335,7 @@ model PharmacySaleReturnLine {
   @@unique([organizationId, id])
   @@unique([organizationId, stockMovementId])
   @@index([organizationId, saleLineId])
+  @@index([organizationId, branchId, returnId], map: "pharmacy_visual_return_lines_idx")
   @@map("pharmacy_sale_return_lines")
 }
 
