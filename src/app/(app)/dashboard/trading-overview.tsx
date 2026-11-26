@@ -29,7 +29,11 @@ function TradingPanel({
   branchId,
   currency,
   actions,
-}: Pick<Props, 'branchId' | 'currency'> & { section: TradingSection; actions?: React.ReactNode }) {
+  financial,
+}: Pick<Props, 'branchId' | 'currency' | 'financial'> & {
+  section: TradingSection;
+  actions?: React.ReactNode;
+}) {
   const query = trpc.pharmacyReports.ownerTrading.useQuery(
     { section, branchId },
     { retry: false, trpc: { context: { independentSection: true } } }
@@ -39,70 +43,72 @@ function TradingPanel({
   return (
     <SectionCard title={title} eyebrow={period}>
       {actions}
-      {query.error ? (
-        <div role="alert" className="space-y-2">
-          <p>This section could not load.</p>
-          <Button variant="outline" onClick={() => void query.refetch()}>
-            Try again
-          </Button>
-        </div>
-      ) : !query.data ? (
-        <p role="status" className="text-sm text-text-muted">
-          Loading {title.toLowerCase()}…
-        </p>
-      ) : section === 'summary' ? (
-        <>
-          {query.data.find((p) => p.label === 'Bills')?.value === 0 && (
-            <p className="mb-4 text-sm text-text-muted">No sales yet today.</p>
-          )}
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            {query.data.map((p) => {
-              const format = p.count ? (v: number) => v.toLocaleString() : money;
-              const delta = p.previous != null && p.value != null ? p.value - p.previous : null;
-              return (
-                <Stat
-                  key={p.label}
-                  label={p.label}
-                  valueClassName="text-xl break-words"
-                  value={p.value == null ? 'No recorded value' : format(p.value)}
-                  delta={
-                    delta === null
-                      ? undefined
-                      : `${format(Math.abs(delta))} ${delta === 0 ? 'change' : delta > 0 ? 'more' : 'less'}`
-                  }
-                  deltaDirection={
-                    delta === null || delta === 0 ? 'flat' : delta > 0 ? 'up' : 'down'
-                  }
-                  sub={
-                    p.previous != null
-                      ? `${format(p.previous)} last week`
-                      : 'No comparison recorded'
-                  }
-                />
-              );
-            })}
+      <div className={section === 'summary' && financial ? 'min-h-96 md:min-h-56' : 'min-h-56'}>
+        {query.error ? (
+          <div role="alert" className="space-y-2">
+            <p>This section could not load.</p>
+            <Button variant="outline" onClick={() => void query.refetch()}>
+              Try again
+            </Button>
           </div>
-        </>
-      ) : (
-        <BusinessChart
-          title={title}
-          points={query.data}
-          empty={
-            section === 'expiry'
-              ? 'No stock expiring in the next 90 days.'
-              : section === 'stock'
-                ? 'No available stock recorded in this period.'
-                : section === 'profits'
-                  ? 'No medicine profit recorded in the last 30 days.'
-                  : section === 'days' || section === 'medicines'
-                    ? 'No sales recorded in this period.'
-                    : 'No sales yet today.'
-          }
-          format={money}
-          line={section === 'days' || section === 'stock'}
-          comparison={section === 'days'}
-        />
-      )}
+        ) : !query.data ? (
+          <p role="status" className="min-h-56 text-sm text-text-muted">
+            Loading {title.toLowerCase()}…
+          </p>
+        ) : section === 'summary' ? (
+          <>
+            {query.data.find((p) => p.label === 'Bills')?.value === 0 && (
+              <p className="mb-4 text-sm text-text-muted">No sales yet today.</p>
+            )}
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+              {query.data.map((p) => {
+                const format = p.count ? (v: number) => v.toLocaleString() : money;
+                const delta = p.previous != null && p.value != null ? p.value - p.previous : null;
+                return (
+                  <Stat
+                    key={p.label}
+                    label={p.label}
+                    valueClassName="text-xl break-words"
+                    value={p.value == null ? 'No recorded value' : format(p.value)}
+                    delta={
+                      delta === null
+                        ? undefined
+                        : `${format(Math.abs(delta))} ${delta === 0 ? 'change' : delta > 0 ? 'more' : 'less'}`
+                    }
+                    deltaDirection={
+                      delta === null || delta === 0 ? 'flat' : delta > 0 ? 'up' : 'down'
+                    }
+                    sub={
+                      p.previous != null
+                        ? `${format(p.previous)} last week`
+                        : 'No comparison recorded'
+                    }
+                  />
+                );
+              })}
+            </div>
+          </>
+        ) : (
+          <BusinessChart
+            title={title}
+            points={query.data}
+            empty={
+              section === 'expiry'
+                ? 'No stock expiring in the next 90 days.'
+                : section === 'stock'
+                  ? 'No available stock recorded in this period.'
+                  : section === 'profits'
+                    ? 'No medicine profit recorded in the last 30 days.'
+                    : section === 'days' || section === 'medicines'
+                      ? 'No sales recorded in this period.'
+                      : 'No sales yet today.'
+            }
+            format={money}
+            line={section === 'days' || section === 'stock'}
+            comparison={section === 'days'}
+          />
+        )}
+      </div>
     </SectionCard>
   );
 }
@@ -133,43 +139,45 @@ function PositionPanels({ branchId, financial }: Pick<Props, 'branchId' | 'finan
     if (!rows.length && queries.every((q) => q.data)) return null;
     return (
       <SectionCard key={group} title={title} eyebrow="Current position">
-        <ul className="divide-y divide-border-subtle">
-          {rows.map((r) => (
-            <li key={r.label + (r.currency ?? '')}>
-              <Link
-                href={r.href}
-                className="flex min-h-11 items-center justify-between gap-3 rounded-control py-2 text-sm hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring"
-              >
-                <span>
-                  <span className="block font-medium">{r.label}</span>
-                  <span className="text-xs text-text-muted">{r.period}</span>
-                </span>
-                <span className="text-right font-mono tabular-nums">
-                  {r.value == null
-                    ? group === 'owed' || r.label.includes('due')
-                      ? 'See report'
-                      : 'Not calculated yet'
-                    : group === 'owed'
-                      ? reportMoney(r.value, r.currency)
-                      : r.value.toLocaleString()}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-        {queries.some((q) => q.isLoading) && (
-          <p role="status" className="text-sm text-text-muted">
-            Loading figures…
-          </p>
-        )}
-        {queries.some((q) => q.error) && (
-          <Button
-            variant="outline"
-            onClick={() => queries.filter((q) => q.error).forEach((q) => void q.refetch())}
-          >
-            Retry unavailable figures
-          </Button>
-        )}
+        <div className={group === 'owed' ? 'min-h-56' : 'min-h-[32rem]'}>
+          <ul className="divide-y divide-border-subtle">
+            {rows.map((r) => (
+              <li key={r.label + (r.currency ?? '')}>
+                <Link
+                  href={r.href}
+                  className="flex min-h-11 items-center justify-between gap-3 rounded-control py-2 text-sm hover:bg-surface-sunken focus-visible:outline-2 focus-visible:outline-ring"
+                >
+                  <span>
+                    <span className="block font-medium">{r.label}</span>
+                    <span className="text-xs text-text-muted">{r.period}</span>
+                  </span>
+                  <span className="text-right font-mono tabular-nums">
+                    {r.value == null
+                      ? group === 'owed' || r.label.includes('due')
+                        ? 'See report'
+                        : 'Not calculated yet'
+                      : group === 'owed'
+                        ? reportMoney(r.value, r.currency)
+                        : r.value.toLocaleString()}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+          {queries.some((q) => q.isLoading) && (
+            <p role="status" className="text-sm text-text-muted">
+              Loading figures…
+            </p>
+          )}
+          {queries.some((q) => q.error) && (
+            <Button
+              variant="outline"
+              onClick={() => queries.filter((q) => q.error).forEach((q) => void q.refetch())}
+            >
+              Retry unavailable figures
+            </Button>
+          )}
+        </div>
       </SectionCard>
     );
   });
@@ -177,7 +185,7 @@ function PositionPanels({ branchId, financial }: Pick<Props, 'branchId' | 'finan
 
 export function TradingOverview({ branchId, financial, currency, branches }: Props) {
   const [profit, setProfit] = useState(false);
-  const props = { branchId, currency };
+  const props = { branchId, currency, financial };
   return (
     <BusinessOverview summary={<TradingPanel {...props} section="summary" />}>
       {financial && <TradingPanel {...props} section="days" />}

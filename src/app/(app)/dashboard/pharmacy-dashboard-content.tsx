@@ -107,9 +107,13 @@ function WidgetState({
   const pending = query.isLoading || (!query.data && !query.error);
   if (pending || (item.key !== 'branches' && !metricsReady))
     return (
-      <div aria-label={`Loading ${item.label}`} role="status" className="space-y-3">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-4 w-full" />
+      <div aria-label={`Loading ${item.label}`} role="status" className="grid gap-5 sm:grid-cols-2">
+        {(item.metrics.length ? item.metrics : [item.key]).map((key) => (
+          <div key={key} className="min-h-20 space-y-3">
+            <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-4 w-full" />
+          </div>
+        ))}
       </div>
     );
   if (query.error) {
@@ -560,7 +564,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         </SectionCard>
       ) : !branches.data ? (
         <SectionCard title="Loading command centre">
-          <div role="status" aria-label="Loading command centre" className="space-y-3">
+          <div role="status" aria-label="Loading command centre" className="min-h-56 space-y-3">
             <Skeleton className="h-8 w-40" />
             <Skeleton className="h-4 w-full" />
           </div>

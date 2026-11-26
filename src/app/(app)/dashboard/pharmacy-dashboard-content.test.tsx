@@ -146,6 +146,10 @@ describe('PharmacyDashboardContent states', () => {
     ).toBeVisible();
     expect(screen.queryByRole('region', { name: 'Business dashboard' })).not.toBeInTheDocument();
   });
+  it('reserves chart height while trading figures load', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByText('Loading trading today…')).toHaveClass('min-h-56');
+  });
   it('omits the money and cost tiles when only operational reports are granted', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.queryByRole('heading', { name: "Today's trade" })).not.toBeInTheDocument();
