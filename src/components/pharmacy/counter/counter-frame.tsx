@@ -27,7 +27,7 @@ import { useBrowserOnline } from './use-browser-online';
  * carries the workspace identity, search, Ask Fathom, theme, notifications and the
  * account menu that bar offered, and opens the shell's navigation drawer for every
  * destination its module row offered. Below 768px the counter's name and its
- * connection and branch take the place of the workspace name.
+ * connection and device label take the place of the workspace name.
  */
 export function CounterTopBar({ statusLine }: { statusLine?: ReactNode }) {
   const chrome = useShellChrome();
@@ -122,7 +122,7 @@ export function CounterActionBar({
   return (
     <div
       data-counter-action-bar=""
-      className="relative flex min-h-14 items-center gap-2 border-b border-border-subtle bg-surface-card px-4 py-1.5 lg:px-6"
+      className="relative flex min-h-14 flex-wrap items-center gap-x-2 gap-y-1 md:flex-nowrap border-b border-border-subtle bg-surface-card px-4 py-1.5 lg:px-6"
     >
       {chrome ? (
         <Button

@@ -1301,12 +1301,11 @@ describe('PharmacyCounterConsole tender recovery', () => {
       expect(screen.getByLabelText('Amount')).toHaveValue('');
       expect(screen.getByLabelText('Cash received')).toHaveValue('');
       expect(screen.getByText('Settled')).toBeInTheDocument();
-      // DEV-977: the phone bar's "Take payment" also reads so; the payment panel's is the other.
-      const [panelSubmit, ...others] = screen
-        .getAllByText('Take payment')
-        .filter((text) => !text.closest('[aria-label="Phone payment"]'));
-      expect(others).toHaveLength(0);
-      expect(panelSubmit!.closest('button')).toBeDisabled();
+      expect(screen.getByText('Take payment').closest('button')).toBeDisabled();
+      const phone = within(screen.getByLabelText('Phone payment'));
+      expect(phone.getByText('Paid · receipt 42')).toBeInTheDocument();
+      expect(phone.getByText('250.00')).toBeInTheDocument();
+      expect(phone.queryByText('Take payment')).not.toBeInTheDocument();
       const receiptDrawer = screen.getByRole('dialog', { name: 'Receipt preview' });
       expect(within(receiptDrawer).getByRole('region', { name: 'Change due' })).toHaveTextContent(
         '50.00'
@@ -1419,8 +1418,11 @@ describe('PharmacyCounterConsole tender recovery', () => {
         fireEvent.click(within(receiptDrawer).getByRole('button', { name: 'Close' }));
         await waitFor(() => expect(receiptDrawer).not.toBeVisible());
       }
-      if (scenario === 'next-bill')
-        fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
+      if (scenario === 'next-bill') {
+        fireEvent.click(phone.getByRole('button', { name: 'Next bill' }));
+        expect(screen.queryByLabelText('Phone payment')).not.toBeInTheDocument();
+        expect(screen.getByLabelText('Scan or search')).toHaveFocus();
+      }
       if (scenario === 'branch') {
         fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
       }
@@ -2434,6 +2436,9 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
       screen.getByRole('form', { name: 'Open the cash drawer to start the shift' })
     ).toBeInTheDocument();
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Drawer closed');
+    expect(screen.queryByRole('heading', { name: 'Start a bill' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Phone payment')).not.toBeInTheDocument();
     // No scan field, so no bill can be built that payment would then refuse.
     expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
     expect(mocks.mutations.create).not.toHaveBeenCalled();
@@ -6719,8 +6724,12 @@ describe('DEV-618 counter composition', () => {
     expect(within(branch).getByRole('option', { name: 'Model Town' })).toBeInTheDocument();
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Bill open · 1 line');
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('Drawer open');
-    expect(screen.getByText('No safety blocks · 0 notes to pass on')).toBeInTheDocument();
-    expect(screen.getByText('Loyalty and khata · not linked')).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'No safety blocks · 0 notes to pass on' })
+    ).toHaveTextContent('No safety blocks');
+    expect(
+      screen.getByRole('button', { name: 'Loyalty and khata · not linked' })
+    ).toHaveTextContent('Loyalty and khata');
     expect(screen.getByRole('button', { name: 'More' })).toHaveAttribute('aria-expanded', 'false');
     // DEV-977: collapsed into More until 1280px, where the everyday actions join the row.
     expect(document.getElementById('counter-actions')).toHaveClass('hidden', 'xl:contents');
@@ -6740,10 +6749,44 @@ describe('DEV-618 counter composition', () => {
     expect(screen.getByLabelText('Bill status')).toHaveTextContent('No open bill');
   });
 
+  it('identifies each mismatched pack on the bill and gives the same remedy in payment and checks', () => {
+    const baseLine = cart().lines[0]!;
+    mocks.queries.counterCart!.data = cart({
+      lines: ['line-a', 'line-b'].map((saleLineId) => ({
+        ...baseLine,
+        saleLineId,
+        packCheckBlocked: true,
+      })),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const safety = screen.getByRole('button', { name: '2 safety blocks · payment locked' });
+    const bill = screen.getByRole('region', { name: 'Cart' });
+    expect(within(bill).getAllByText(/scanned pack does not match/)).toHaveLength(2);
+    const pay = within(screen.getByLabelText('Bill total')).getByRole('button', {
+      name: /^Take payment/,
+    });
+    expect(pay).toBeDisabled();
+    expect(pay).toHaveAccessibleDescription(/Open More, then Pack check/);
+    fireEvent.click(safety);
+    expect(mocks.rxPanelProps.mock.lastCall![0].alerts.map((alert) => alert.saleLineRef)).toEqual([
+      'line-a',
+      'line-b',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'F9' });
+    const tender = screen.getByRole('dialog', { name: /^Take payment/ });
+    expect(
+      within(tender).getByRole('button', { name: 'Take payment' })
+    ).toHaveAccessibleDescription(/Open More, then Pack check/);
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
   it('opens checks from context and Shift+F2 and keeps phone clearance', async () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const search = screen.getByLabelText('Scan or search');
-    expect(search.closest('[data-counter-console]')).toHaveClass('pb-28');
+    const footer = screen.getByLabelText('Phone payment');
+    expect(search.closest('[data-counter-console]')?.nextElementSibling).toBe(footer);
+    expect(footer).toHaveClass('shrink-0');
     fireEvent.click(screen.getByRole('button', { name: /No safety blocks/ }));
     let dialog = screen.getByRole('dialog', { name: 'Patient, prescription and checks' });
     const rx = within(dialog).getByTestId('rx-focus-target');
@@ -7357,19 +7400,14 @@ describe('DEV-41 cashier actions', () => {
     }
   );
 
-  it.each(['idle', 'loading', 'error', 'empty', 'held'])(
+  it.each(['loading', 'error', 'empty', 'held'])(
     'explains both disabled Pay buttons for %s',
     (state) => {
       if (state === 'loading') mocks.queries.counterCart!.isFetching = true;
       if (state === 'error') mocks.queries.counterCart!.isError = true;
       if (state === 'empty') mocks.queries.counterCart!.data = cart({ lines: [] });
       if (state === 'held') mocks.queries.counterCart!.data = cart({ status: 'HELD' });
-      render(
-        <PharmacyCounterConsole
-          initialSaleId={state === 'idle' ? undefined : 'sale-a'}
-          initialBranchId="branch-a"
-        />
-      );
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
       const buttons = screen.getAllByRole('button', { name: /^Take payment ?·/ });
       expect(buttons).toHaveLength(2);
       for (const button of buttons) {
@@ -7702,18 +7740,14 @@ describe('DEV-705 keyboard loose sale', () => {
 });
 
 describe('DEV-41 remaining disabled explanations', () => {
-  it('explains missing bills and clears reasons when Hold and Void become available', () => {
+  it('shows available bill options before the first item and editing actions on an open bill', () => {
     const view = render(<PharmacyCounterConsole initialBranchId="branch-a" />);
-    for (const name of [/^Hold/, /^Void$/]) {
-      const button = screen.getByRole('button', { name });
-      expect(button).toBeDisabled();
-      expect(button).toHaveAccessibleDescription(
-        'Start or resume an open bill to hold or void it.'
-      );
-    }
-    expect(screen.getByRole('button', { name: /^Resume/ })).toHaveAccessibleDescription(
-      'No bill is held on this counter. Use Open bills to find another bill.'
-    );
+    expect(screen.getByLabelText('Bill options')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Link customer' })).toBeEnabled();
+    expect(screen.queryByLabelText('Bill total')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Phone payment')).not.toBeInTheDocument();
+    for (const name of [/^Hold/, /^Void$/, /^Resume/])
+      expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
     view.unmount();
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     for (const name of [/^Hold/, /^Void$/]) {
@@ -8239,8 +8273,7 @@ describe('DEV-633 keyboard-only counter', () => {
     const { search } = searchResults();
     const active = () => mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId;
     const panel = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
-    // Arrows walk the search results only; the nested alternative is not a stop.
-    fireEvent.keyDown(search, { key: 'ArrowDown' });
+    // The first result is already highlighted. Arrows skip nested alternatives.
     expect(active()).toBe(rows[0]!.medicineId);
     fireEvent.keyDown(search, { key: 'ArrowDown' });
     expect(active()).toBe('second-result');
@@ -8301,7 +8334,7 @@ describe('DEV-633 keyboard-only counter', () => {
     expect(fireEvent.keyDown(quantity, { key: 'F6' })).toBe(false);
     await waitFor(() =>
       expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+        expect.objectContaining({ medicineId: 'second-result', quantity: 2 })
       )
     );
     await waitFor(() => expect(document.activeElement).toBe(search));
@@ -8312,7 +8345,6 @@ describe('DEV-633 keyboard-only counter', () => {
   // default quantity of 1 stays a proposal until the cashier has looked at it.
   it('adds the highlighted result once with Enter, in one step, with no line form', async () => {
     const { search } = searchResults();
-    fireEvent.keyDown(search, { key: 'ArrowDown' });
     fireEvent.keyDown(search, { key: 'ArrowDown' });
     expect(screen.queryByRole('region', { name: 'Next line' })).not.toBeInTheDocument();
     expect(fireEvent.keyDown(search, { key: 'Enter' })).toBe(false);
@@ -8337,7 +8369,7 @@ describe('DEV-633 keyboard-only counter', () => {
     expect(fireEvent.keyDown(quantity, { key: 'Enter' })).toBe(false);
     await waitFor(() =>
       expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 1 })
+        expect.objectContaining({ medicineId: 'second-result', quantity: 1 })
       )
     );
   });
@@ -8355,7 +8387,7 @@ describe('DEV-633 keyboard-only counter', () => {
       expect(fireEvent.keyDown(target, { key: 'Enter' })).toBe(false);
       await waitFor(() =>
         expect(mocks.mutations.addLine).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ medicineId: rows[0]!.medicineId, quantity: 2 })
+          expect.objectContaining({ medicineId: 'second-result', quantity: 2 })
         )
       );
     }
@@ -8389,11 +8421,10 @@ describe('DEV-633 keyboard-only counter', () => {
   it('keeps modified arrows and composing Enter with the scan field', () => {
     const { search } = searchResults();
     expect(fireEvent.keyDown(search, { key: 'ArrowDown', shiftKey: true })).toBe(true);
-    // DEV-977B: the first result stays highlighted until a plain arrow moves; the modified
-    // arrow moved nothing, so the first plain ArrowDown lands on the first result.
+    // A modified arrow leaves the highlighted row alone. A plain arrow moves to the next one.
     expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBe(rows[0]!.medicineId);
     fireEvent.keyDown(search, { key: 'ArrowDown' });
-    expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBe(rows[0]!.medicineId);
+    expect(mocks.searchProps.mock.calls.at(-1)![0].activeMedicineId).toBe('second-result');
     expect(fireEvent.keyDown(search, { key: 'Enter', isComposing: true })).toBe(true);
     expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
@@ -8561,9 +8592,9 @@ describe('DEV-977 Counter v2 sale screen (phase 1: frame, search, bill, totals)'
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const results = document.querySelector('[data-counter-results]')!;
     expect(results).toHaveClass('sr-only');
-    expect(document.getElementById('counter-scan-search')).toContainElement(results as HTMLElement);
+    expect(screen.getByLabelText('Scan or search')).toHaveAttribute('aria-controls', results.id);
     fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'para' } });
-    await waitFor(() => expect(results).toHaveClass('absolute', 'top-full'));
+    await waitFor(() => expect(results).toHaveClass('lg:row-start-3', 'lg:max-h-full'));
     expect(results).not.toHaveClass('sr-only');
     expect(within(results as HTMLElement).getByText('1 result')).toBeInTheDocument();
   });
@@ -8598,11 +8629,11 @@ describe('DEV-977 Counter v2 sale screen (phase 1: frame, search, bill, totals)'
     const results = document.querySelector('[data-counter-results]')!;
     const search = screen.getByLabelText('Scan or search');
     fireEvent.change(search, { target: { value: 'para' } });
-    await waitFor(() => expect(results).toHaveClass('absolute'));
+    await waitFor(() => expect(results).toHaveClass('lg:row-start-3'));
     // DEV-977B: arrowing highlights a row, stages nothing, and keeps the list open.
     fireEvent.keyDown(search, { key: 'ArrowDown' });
     expect(screen.queryByRole('region', { name: 'Next line' })).not.toBeInTheDocument();
-    expect(results).toHaveClass('absolute');
+    expect(results).toHaveClass('lg:row-start-3');
     expect(results).not.toHaveClass('hidden');
     // Choosing a row (a click on the results, or Enter) closes the list over the bill and
     // keeps the chosen medicine staged.
@@ -8617,6 +8648,10 @@ describe('DEV-977 Counter v2 sale screen (phase 1: frame, search, bill, totals)'
     expect(results).toHaveClass('hidden');
     fireEvent.change(search, { target: { value: 'parac' } });
     await waitFor(() => expect(results).not.toHaveClass('hidden'));
+    const bill = screen.getByRole('region', { name: 'Cart' });
+    act(() => bill.focus());
+    expect(results).toHaveClass('hidden');
+    expect(bill).toHaveFocus();
   });
 
   it('shows the server totals, the balance due and Take payment with its key', () => {
@@ -8725,6 +8760,19 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
         expect.objectContaining({ saleUnit: 'UNIT', canonicalUnitsPerSaleUnit: 1, quantity: 1 })
       )
     );
+  });
+
+  it('uses the chosen add unit when opening quantity or batch by pointer', async () => {
+    mocks.renderSearchResults = true;
+    mocks.queries.counterSearch = query({ rows: [twoUnitRow()], truncated: false });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const addsAs = screen.getByRole('radiogroup', { name: 'Adds as' });
+    fireEvent.click(within(addsAs).getByRole('radio', { name: /Strip/ }));
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'para' } });
+    fireEvent.click(await screen.findByRole('button', { name: /Quantity or batch first/ }));
+    const line = screen.getByRole('region', { name: 'Next line' });
+    expect(within(line).getByRole('radio', { name: /Strip of 10/i })).toBeChecked();
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
   });
 
   it('opens the line form instead of adding when the stock cannot cover one', () => {
@@ -8877,13 +8925,34 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     expect(mocks.mutations.removeLine).not.toHaveBeenCalled();
   });
 
+  it.each(['ready', 'empty', 'loading', 'error'] as const)(
+    'closes %s results by pointer and reopens the same query without adding a medicine',
+    async (state) => {
+      mocks.queries.counterSearch = {
+        ...query({ rows: state === 'ready' ? [barcodeRow()] : [], truncated: false }),
+        isFetching: state === 'loading',
+        isError: state === 'error',
+      };
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      const search = screen.getByLabelText('Scan or search');
+      fireEvent.change(search, { target: { value: 'para' } });
+      fireEvent.click(await screen.findByRole('button', { name: 'Close search results' }));
+      expect(document.getElementById('counter-search-results')).toHaveClass('hidden');
+      expect(search).toHaveValue('para');
+      expect(search).toHaveFocus();
+      fireEvent.click(search);
+      expect(screen.getByRole('button', { name: 'Close search results' })).toBeInTheDocument();
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    }
+  );
+
   it('closes the results with Escape and keeps what was typed', async () => {
     mocks.queries.counterSearch = query({ rows: [barcodeRow()], truncated: false });
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     const results = document.querySelector('[data-counter-results]')!;
     const search = screen.getByLabelText('Scan or search');
     fireEvent.change(search, { target: { value: 'para' } });
-    await waitFor(() => expect(results).toHaveClass('absolute'));
+    await waitFor(() => expect(results).toHaveClass('lg:row-start-3'));
     expect(fireEvent.keyDown(search, { key: 'Escape' })).toBe(false);
     expect(results).toHaveClass('hidden');
     expect(search).toHaveValue('para');
@@ -8978,7 +9047,7 @@ describe('DEV-977 phase 2B: the counter panels in the Counter v2 sheets', () => 
     expect(within(receipt).getByText('Receipt 42')).toHaveAttribute('data-slot', 'eyebrow');
     expect(within(receipt).getByRole('region', { name: 'Change due' })).toHaveTextContent('50.00');
     // The paid bill is marked by a check as well as its words.
-    const paid = screen.getByText('Paid · receipt 42');
+    const paid = within(screen.getByLabelText('Bill total')).getByText('Paid · receipt 42');
     expect(paid.querySelector('svg')).toHaveAttribute('aria-hidden', 'true');
   });
 });
