@@ -238,6 +238,10 @@ async function sendAndRecord(
   try {
     result = await send();
   } catch (error) {
+    if (error instanceof WhatsAppProviderError && error.reason === 'WAHA_POLICY') {
+      await update({ status: 'IGNORED', error: 'WAHA_POLICY' });
+      return 'PREPARED';
+    }
     const definitive =
       (error instanceof WhatsAppProviderError || error instanceof SmsProviderError) &&
       error.definitive;

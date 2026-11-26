@@ -78,7 +78,13 @@ export interface WhatsAppProvider {
 
 export class WhatsAppProviderError extends Error {
   constructor(
-    readonly reason: 'NOT_CONFIGURED' | 'TEMPLATE_NOT_CONFIGURED' | 'SEND_FAILED',
+    readonly reason:
+      | 'NOT_CONFIGURED'
+      | 'TEMPLATE_NOT_CONFIGURED'
+      | 'SEND_FAILED'
+      | 'WAHA_POLICY'
+      | 'WAHA_DISCONNECTED'
+      | 'NOT_ON_WHATSAPP',
     detail?: string,
     readonly definitive = reason !== 'SEND_FAILED'
   ) {
