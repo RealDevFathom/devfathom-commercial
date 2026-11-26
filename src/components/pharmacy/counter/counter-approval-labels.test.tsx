@@ -94,7 +94,9 @@ describe('DEV-961 the discount sheet says how a manager or owner approves', () =
     inMode(kind, entry);
     fireEvent.click(screen.getByRole('button', { name: 'Discount' }));
     expect(
-      screen.getByText(/a manager or owner approves with their authenticator code when you add the item/)
+      screen.getByText(
+        /a manager or owner approves with their authenticator code when you add the item/
+      )
     ).toBeInTheDocument();
   });
   it('with their PIN while the owner has it off', () => {
@@ -155,7 +157,10 @@ it('offers only the returned names after a collision and requires an explicit ch
     .mockResolvedValueOnce({
       status: 'unknown',
       message: 'Choose the approver',
-      approvalMatches: [{ id: 'a', proof: 'fixture-a' }, { id: 'c', proof: 'fixture-c' }],
+      approvalMatches: [
+        { id: 'a', proof: 'fixture-a' },
+        { id: 'c', proof: 'fixture-c' },
+      ],
     })
     .mockResolvedValueOnce({ status: 'rejected', message: 'Discarded' });
   render(
@@ -178,7 +183,8 @@ it('offers only the returned names after a collision and requires an explicit ch
   fireEvent.change(screen.getByLabelText('Authenticator code'), { target: { value: '654321' } });
   fireEvent.click(submit);
   expect(onDiscard).toHaveBeenLastCalledWith({
-    matchingStaffProfileId: 'c', choiceProof: 'fixture-c',
+    matchingStaffProfileId: 'c',
+    choiceProof: 'fixture-c',
     pin: '654321',
     reason: 'Fixture reason',
   });
@@ -189,15 +195,22 @@ it('discards the collision choice when the till loses its approval session', asy
     <CounterPackApprovalDialog
       medicineName="Local item"
       loadApprovers={loadStaff}
-      matches={[{ id: 'a', proof: 'fixture-a' }, { id: 'c', proof: 'fixture-c' }]}
+      matches={[
+        { id: 'a', proof: 'fixture-a' },
+        { id: 'c', proof: 'fixture-c' },
+      ]}
       onCancel={vi.fn()}
       onConfirm={vi.fn()}
     />
   );
-  const view = render(<CounterSessionContext.Provider value={true}>{dialog}</CounterSessionContext.Provider>);
+  const view = render(
+    <CounterSessionContext.Provider value={true}>{dialog}</CounterSessionContext.Provider>
+  );
   await screen.findByRole('option', { name: 'Casey' });
   expect(screen.queryByRole('option', { name: 'Blair' })).toBeNull();
-  view.rerender(<CounterSessionContext.Provider value={false}>{dialog}</CounterSessionContext.Provider>);
+  view.rerender(
+    <CounterSessionContext.Provider value={false}>{dialog}</CounterSessionContext.Provider>
+  );
   await screen.findByRole('option', { name: 'Blair' });
   expect(screen.queryByText(/more than one person matches/i)).toBeNull();
   expect(screen.getByLabelText('Approving manager or owner')).toHaveValue('');
@@ -211,10 +224,22 @@ it('continues a line approval only after a matching person is explicitly chosen'
   const request = vi
     .fn()
     .mockResolvedValueOnce({ pin: '123456' })
-    .mockResolvedValueOnce({ matchingStaffProfileId: 'c', choiceProof: 'fixture-c', pin: '654321' });
+    .mockResolvedValueOnce({
+      matchingStaffProfileId: 'c',
+      choiceProof: 'fixture-c',
+      pin: '654321',
+    });
   const send = vi.fn().mockRejectedValueOnce(collision).mockResolvedValueOnce('approved');
   await expect(submitDialogApproval(request, send)).resolves.toBe('approved');
-  expect(request.mock.calls).toEqual([[], [[{ id: 'a', proof: 'fixture-a' }, { id: 'c', proof: 'fixture-c' }]]]);
+  expect(request.mock.calls).toEqual([
+    [],
+    [
+      [
+        { id: 'a', proof: 'fixture-a' },
+        { id: 'c', proof: 'fixture-c' },
+      ],
+    ],
+  ]);
   expect(send.mock.calls).toEqual([
     [{ pin: '123456' }],
     [{ matchingStaffProfileId: 'c', choiceProof: 'fixture-c', pin: '654321' }],

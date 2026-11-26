@@ -6,7 +6,11 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import type { BillDiscountExclusion, BillDiscountRequest } from '@/lib/pharmacy/bill-discount';
-import { submitDialogApproval, type ApprovalEntry, type ApprovalMatches } from './counter-approval-entry';
+import {
+  submitDialogApproval,
+  type ApprovalEntry,
+  type ApprovalMatches,
+} from './counter-approval-entry';
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   isCounterApprovalMessage,
@@ -96,7 +100,10 @@ export function useCounterBillDiscount({
       try {
         outcome = await post();
       } catch (failure) {
-        if (!(failure instanceof Error) || !isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED))
+        if (
+          !(failure instanceof Error) ||
+          !isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
+        )
           throw failure;
         const approved = await submitDialogApproval(
           (matches) => (matches ? requestApproval(label, matches) : requestApproval(label)),
@@ -129,7 +136,8 @@ export function useCounterBillDiscount({
     } catch (failure) {
       return {
         error:
-          failure instanceof Error && isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
+          failure instanceof Error &&
+          isCounterApprovalMessage(failure.message, COUNTER_DISCOUNT_APPROVAL_REQUIRED)
             ? `That ${approvalCopy.secretName} did not approve the discount, so it was not given. A manager or owner must enter their own ${approvalCopy.secretName}.`
             : counterErrorMessage(failure),
         leftOut: [],

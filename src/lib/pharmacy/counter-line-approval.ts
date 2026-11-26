@@ -264,7 +264,8 @@ export async function authorizeCounterApproval(
   if (deviceId) {
     const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, deviceId]);
     const reservation = await rateLimit(key, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
-    if (!reservation.ok || !reservation.windowStartedAt) throw await approvalDenied(db, scope, kind);
+    if (!reservation.ok || !reservation.windowStartedAt)
+      throw await approvalDenied(db, scope, kind);
     counterReservation = { key, attempt: reservation };
   }
   const { withTenantDb } = await import('@/lib/tenancy/scoped-db');

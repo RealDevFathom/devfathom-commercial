@@ -2057,7 +2057,12 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     try {
       const submit = (pin: string, matchingStaffProfileId?: string, choiceProof?: string) =>
         tenant(scope, (db) =>
-          authorizeCounterApproval(db, scope, 'DISCOUNT', { pin, matchingStaffProfileId, choiceProof, counter })
+          authorizeCounterApproval(db, scope, 'DISCOUNT', {
+            pin,
+            matchingStaffProfileId,
+            choiceProof,
+            counter,
+          })
         );
       // An equally capable person with the same synthetic code but no active
       // branch assignment must never appear as a match or cause a collision.
@@ -2109,7 +2114,9 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
       vi.setSystemTime(later);
       const nextCode = codeAt(secret, later);
       await expect(submit(nextCode, second.id)).rejects.toBeInstanceOf(CounterApprovalDenied);
-      await expect(submit(nextCode, second.id, proof)).resolves.toMatchObject({ approvedByUserId: other });
+      await expect(submit(nextCode, second.id, proof)).resolves.toMatchObject({
+        approvedByUserId: other,
+      });
       const audit = await tenant(s.owner, (db) =>
         db.auditLog.findMany({
           where: { action: 'pharmacy.counterApproval.DISCOUNT' },
@@ -2117,14 +2124,23 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
         })
       );
       expect(audit.map((row) => row.actorId).sort()).toEqual([s.manager, other].sort());
-      for (const value of [previous, current, nextCode, proof, secret, deviceSecret, counter.sessionToken])
+      for (const value of [
+        previous,
+        current,
+        nextCode,
+        proof,
+        secret,
+        deviceSecret,
+        counter.sessionToken,
+      ])
         expect(JSON.stringify(audit).includes(value)).toBe(false);
       // Prime the live, independent counters directly. No attempt exercises an unpatched security control.
       const { rateLimit } = await import('@/lib/rate-limit');
       const { MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS } =
         await import('@/lib/restaurant/operator-credentials');
       const { rateLimitStorageKey } = await import('@/lib/rate-limit');
-      const { spendApproverPinGuessTypedByAnother } = await import('@/lib/approver-pin-guess-budget');
+      const { spendApproverPinGuessTypedByAnother } =
+        await import('@/lib/approver-pin-guess-budget');
       const budgetKeys = [s.manager, other].map((id) =>
         rateLimitStorageKey(`approver-pin-typed-by-another:${scope.organizationId}:${id}`)
       );
@@ -2139,15 +2155,21 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
       const fixtureCodes = [-30_000, 0, 30_000].map((delta) =>
         codeAt(secret, new Date(later.getTime() + delta))
       );
-      const nonmatching = ['111111', '222222', '333333', '444444'].find((value) => !fixtureCodes.includes(value))!;
+      const nonmatching = ['111111', '222222', '333333', '444444'].find(
+        (value) => !fixtureCodes.includes(value)
+      )!;
       await expect(submit(nonmatching)).rejects.toBeInstanceOf(CounterApprovalDenied);
-      const budgets = await tenant(scope, (db) =>
-        db.$queryRaw<{ count: number }[]>`SELECT count FROM rate_limit_buckets
+      const budgets = await tenant(
+        scope,
+        (db) =>
+          db.$queryRaw<{ count: number }[]>`SELECT count FROM rate_limit_buckets
           WHERE key IN (${budgetKeys[0]}, ${budgetKeys[1]})`
       );
       expect(budgets.map(({ count }) => count)).toEqual([MAX_FAILED_ATTEMPTS, MAX_FAILED_ATTEMPTS]);
       for (const id of [s.manager, other])
-        expect((await spendApproverPinGuessTypedByAnother(scope.organizationId, id)).ok).toBe(false);
+        expect((await spendApproverPinGuessTypedByAnother(scope.organizationId, id)).ok).toBe(
+          false
+        );
       for (let i = 0; i < MAX_FAILED_ATTEMPTS; i++)
         await rateLimit(
           JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]),

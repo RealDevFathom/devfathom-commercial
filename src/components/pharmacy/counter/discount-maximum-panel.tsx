@@ -72,8 +72,8 @@ export function DiscountMaximumPanel({ branchId }: { branchId: string }) {
         Once you set a maximum, no discount on a line can be more than this share of its price,
         whoever gives or approves it. A discount also never takes a line below its cost or the
         branch&apos;s minimum margin, and prescription, restricted and controlled medicines are
-        never discounted. By default a manager approves each discount with their {method}. To let a role
-        give discounts up to your maximum without one, give that role the permission &ldquo;
+        never discounted. By default a manager approves each discount with their {method}. To let a
+        role give discounts up to your maximum without one, give that role the permission &ldquo;
         {DISCOUNT_RIGHT_LABEL}&rdquo; (pharmacy:discount) in a custom role.
       </p>
       {query.isLoading ? <p role="status">Loading maximum discount…</p> : null}

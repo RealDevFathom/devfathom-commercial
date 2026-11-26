@@ -357,7 +357,9 @@ describe('counter FEFO-override approval (#520)', () => {
 
   it('verifies the explicitly named pharmacist even when the operator may approve on duty', async () => {
     const db = fixture(manager, ['cashier', 'manager']);
-    await expect(authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE', pin)).resolves.toMatchObject({
+    await expect(
+      authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE', pin)
+    ).resolves.toMatchObject({
       approvedByUserId: 'manager',
       credentialId: 'cred',
       approvalBranchId: scope.branchId,

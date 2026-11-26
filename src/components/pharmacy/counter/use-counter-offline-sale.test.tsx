@@ -75,7 +75,11 @@ import { readReconcileIndex, readReconcileRecord } from '@/lib/pharmacy/counter-
 import { useCounterOffline, type CounterOfflineView } from './use-counter-offline';
 import { CounterOfflinePanel } from './counter-offline-panel';
 
-const ENROLMENT = { ...FIXTURE_SCOPE, name: 'Front counter', enrolledAt: '2026-11-19T08:00:00.000Z' };
+const ENROLMENT = {
+  ...FIXTURE_SCOPE,
+  name: 'Front counter',
+  enrolledAt: '2026-11-19T08:00:00.000Z',
+};
 const KINDS: PharmacyOfflineSnapshotKind[] = ['CATALOG', 'PRICES', 'TAX', 'RULES', 'LOT_BALANCES'];
 const props = (online: boolean) => ({
   organizationId: FIXTURE_SCOPE.organizationId,
@@ -96,7 +100,10 @@ beforeEach(async () => {
     snapshotPublicKey: fixturePublicKey(),
     device: { id: FIXTURE_SCOPE.deviceId },
   });
-  h.snapshots.mockImplementation(async () => ({ publicKey: fixturePublicKey(), snapshots: issue() }));
+  h.snapshots.mockImplementation(async () => ({
+    publicKey: fixturePublicKey(),
+    snapshots: issue(),
+  }));
   // The receipt block a manager reserved when preparing this counter.
   const runtime = new PharmacyCounterRuntime(
     FIXTURE_SCOPE,
@@ -105,7 +112,9 @@ beforeEach(async () => {
     fixturePublicKey()
   );
   await runtime.hydrate();
-  await runtime.adoptLeases([{ leaseId: 'lease_a', blockStart: 501, blockEnd: 510, nextNumber: 501 }]);
+  await runtime.adoptLeases([
+    { leaseId: 'lease_a', blockStart: 501, blockEnd: 510, nextNumber: 501 },
+  ]);
 });
 afterEach(() => {
   window.localStorage.clear();
@@ -121,7 +130,12 @@ async function preparedOnline() {
 function oneTablet(view: CounterOfflineView, lotId = 'lot_panadol_a') {
   const row = view.rows.find((candidate) => candidate.inventoryLotId === lotId)!;
   const unit = row.saleUnits.find((option) => option.kind === 'UNIT')!;
-  return addToOfflineDraft(newOfflineDraft(view.operator?.userId ?? null, new Date()), row, unit, new Date());
+  return addToOfflineDraft(
+    newOfflineDraft(view.operator?.userId ?? null, new Date()),
+    row,
+    unit,
+    new Date()
+  );
 }
 
 describe('DEV-957 phase 2: selling offline through the counter', () => {
@@ -221,9 +235,11 @@ describe('DEV-957 phase 2: selling offline through the counter', () => {
     expect(h.unbind).toHaveBeenCalled();
     expect(h.clear).toHaveBeenCalled();
     // Nothing of the counter is left on this computer: no price list, receipt block or bill.
-    expect(await (h.driver as ReturnType<typeof createMemoryDriver>).read(
-      `${FIXTURE_SCOPE.organizationId}::${FIXTURE_SCOPE.branchId}::${FIXTURE_SCOPE.deviceId}`
-    )).toBeUndefined();
+    expect(
+      await (h.driver as ReturnType<typeof createMemoryDriver>).read(
+        `${FIXTURE_SCOPE.organizationId}::${FIXTURE_SCOPE.branchId}::${FIXTURE_SCOPE.deviceId}`
+      )
+    ).toBeUndefined();
     // Except the sale it took and never sent: kept read-only for a manager (review B2).
     const driver = h.driver as ReturnType<typeof createMemoryDriver>;
     const [entry] = await readReconcileIndex(driver);
@@ -286,7 +302,9 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Add a medicine to the offline bill')).toBeInTheDocument()
     );
-    expect(screen.getByText(/Ayesha Khan, who was signed in when this counter last connected/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Ayesha Khan, who was signed in when this counter last connected/)
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Add a medicine to the offline bill'), {
       target: { value: 'pana' },
     });
@@ -294,7 +312,9 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     expect(await screen.findByText('Rs 3.50 each', { exact: false })).toBeInTheDocument();
     const cash = screen.getByLabelText(/Cash received/);
     fireEvent.change(cash, { target: { value: '3.505' } });
-    expect(screen.getByText('Use at most 2 decimal places, for example 125.50.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Use at most 2 decimal places, for example 125.50.')
+    ).toBeInTheDocument();
     fireEvent.change(cash, { target: { value: '5' } });
     expect(screen.getByText('Rs 1.50')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Take cash Rs 3.50' }));
@@ -306,7 +326,9 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Take cash Rs 3.50' }));
     expect(await screen.findByText('Paid')).toBeInTheDocument();
     expect(screen.getByText(/Receipt 501/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Receipt 501')).toHaveTextContent('Counter Front counter, sold offline');
+    expect(screen.getByLabelText('Receipt 501')).toHaveTextContent(
+      'Counter Front counter, sold offline'
+    );
   });
 });
 
@@ -321,7 +343,9 @@ describe('DEV-957 phase 2: the paid sale stays on screen when it ends offline se
       fixturePublicKey()
     );
     await runtime.hydrate();
-    await runtime.adoptLeases([{ leaseId: 'lease_one', blockStart: 777, blockEnd: 777, nextNumber: 777 }]);
+    await runtime.adoptLeases([
+      { leaseId: 'lease_one', blockStart: 777, blockEnd: 777, nextNumber: 777 },
+    ]);
     await preparedOnline();
 
     function Counter() {

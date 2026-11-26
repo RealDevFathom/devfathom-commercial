@@ -28,7 +28,10 @@ const OUTSIDE = 'Branch is outside your scope.';
 
 const testRouter = router({
   approvalChoice: publicProcedure.query(() => {
-    const choice = new CounterApprovalChoice(['eligible-a', 'eligible-b'], ['fixture-a', 'fixture-b']);
+    const choice = new CounterApprovalChoice(
+      ['eligible-a', 'eligible-b'],
+      ['fixture-a', 'fixture-b']
+    );
     throw new TRPCError({ code: 'FORBIDDEN', message: choice.message, cause: choice });
   }),
   named: publicProcedure.query(() => {

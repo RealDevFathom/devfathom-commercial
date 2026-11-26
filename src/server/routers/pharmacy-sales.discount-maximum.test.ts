@@ -129,9 +129,13 @@ describe("DEV-66 changing the owner's maximum discount", () => {
   it('asks for the owner’s authenticator code when authenticator approval is enabled', async () => {
     const { db, caller } = fixture();
     db.organization.findFirst.mockResolvedValue({ requireApprovalAuthenticator: true });
-    await expect(caller.saveDiscountMaximum({ ...save, pin: '' })).rejects.toThrow('Enter your own authenticator code to confirm.');
+    await expect(caller.saveDiscountMaximum({ ...save, pin: '' })).rejects.toThrow(
+      'Enter your own authenticator code to confirm.'
+    );
     vi.mocked(verifyOwnerExportPin).mockResolvedValue('REJECTED');
-    await expect(caller.saveDiscountMaximum(save)).rejects.toThrow('That authenticator code is not correct.');
+    await expect(caller.saveDiscountMaximum(save)).rejects.toThrow(
+      'That authenticator code is not correct.'
+    );
   });
 
   it('refuses an empty PIN without checking it', async () => {

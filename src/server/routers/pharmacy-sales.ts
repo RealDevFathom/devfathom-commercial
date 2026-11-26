@@ -319,7 +319,10 @@ const counterLineApproval = z.union([
   z.strictObject({
     pin: z.string().regex(/^\d{6}$/),
     matchingStaffProfileId: z.string().trim().min(1).max(128).optional(),
-    choiceProof: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+    choiceProof: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
   }),
 ]);
 type CounterLineApprovalRequest = z.infer<typeof counterLineApproval>;
@@ -1599,7 +1602,12 @@ async function confirmOwnerDiscountSetting(
   action: 'pharmacy.maxDiscount' | 'pharmacy.billDiscount'
 ) {
   const result = pin
-    ? await verifyOwnerExportPin({ organizationId: scope.organizationId, userId: scope.actorId, pin, action })
+    ? await verifyOwnerExportPin({
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        pin,
+        action,
+      })
     : 'EMPTY';
   if (result === 'OK') return;
   const mode = await approvalSecretKindFor(db, scope.organizationId);

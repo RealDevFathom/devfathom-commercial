@@ -43,9 +43,19 @@ export function counterChoiceProof(
   staffProfileId: string,
   step: number
 ) {
-  return sessionMac('counter-approval-choice:v1\n' + JSON.stringify([
-    scope.organizationId, scope.branchId, scope.actorId, deviceId, kind, authenticatorId, staffProfileId, step,
-  ]));
+  return sessionMac(
+    'counter-approval-choice:v1\n' +
+      JSON.stringify([
+        scope.organizationId,
+        scope.branchId,
+        scope.actorId,
+        deviceId,
+        kind,
+        authenticatorId,
+        staffProfileId,
+        step,
+      ])
+  );
 }
 
 export function establishToken(ctx: {

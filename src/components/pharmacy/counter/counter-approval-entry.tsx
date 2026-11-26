@@ -18,12 +18,22 @@ export type ApprovalEntry = {
 export type ApprovalMatches = Array<{ id: string; proof: string }>;
 
 export function matchingProfiles(error: unknown): ApprovalMatches | undefined {
-  const data = (error as { data?: { matchingStaffProfileIds?: unknown; choiceProofs?: unknown } } | null)?.data;
+  const data = (
+    error as { data?: { matchingStaffProfileIds?: unknown; choiceProofs?: unknown } } | null
+  )?.data;
   const ids = data?.matchingStaffProfileIds;
   const proofs = data?.choiceProofs;
-  if (!Array.isArray(ids) || !Array.isArray(proofs) || ids.length < 2 || ids.length !== proofs.length)
+  if (
+    !Array.isArray(ids) ||
+    !Array.isArray(proofs) ||
+    ids.length < 2 ||
+    ids.length !== proofs.length
+  )
     return undefined;
-  if (!ids.every((id) => typeof id === 'string') || !proofs.every((proof) => typeof proof === 'string'))
+  if (
+    !ids.every((id) => typeof id === 'string') ||
+    !proofs.every((proof) => typeof proof === 'string')
+  )
     return undefined;
   return ids.map((id, index) => ({ id, proof: proofs[index] }));
 }
@@ -157,7 +167,12 @@ export async function submitDialogApproval<T>(
     if (!matches || entry.staffProfileId || entry.matchingStaffProfileId) throw error;
     const choice = await request(matches);
     if (!choice) return null;
-    if (!choice.matchingStaffProfileId || !matches.some((match) => match.id === choice.matchingStaffProfileId && match.proof === choice.choiceProof))
+    if (
+      !choice.matchingStaffProfileId ||
+      !matches.some(
+        (match) => match.id === choice.matchingStaffProfileId && match.proof === choice.choiceProof
+      )
+    )
       throw error;
     return submit(choice);
   }

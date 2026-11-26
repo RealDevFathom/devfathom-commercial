@@ -44,10 +44,10 @@ export function BillDiscountSettingPanel({ branchId }: { branchId: string }) {
         When on, the cashier can give one discount on the whole bill, as a percentage or an amount,
         before taking payment. It is shared over the bill&apos;s items by price, and the same limits
         apply as for an item discount: your maximum discount, the cost floor and the branch&apos;s
-        minimum margin, and a manager&apos;s {method} unless the cashier&apos;s role may give discounts.
-        Prescription, restricted and controlled medicines, and items with their own discount,
-        voucher or promotion, are left out and the cashier is told. When off, nothing at the counter
-        changes.
+        minimum margin, and a manager&apos;s {method} unless the cashier&apos;s role may give
+        discounts. Prescription, restricted and controlled medicines, and items with their own
+        discount, voucher or promotion, are left out and the cashier is told. When off, nothing at
+        the counter changes.
       </p>
       {query.isLoading ? <p role="status">Loading the whole-bill discount setting…</p> : null}
       {query.isError ? (

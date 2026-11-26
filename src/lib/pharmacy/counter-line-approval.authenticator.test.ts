@@ -137,12 +137,15 @@ describe('DEV-879 counter approvals with an authenticator code', () => {
   it.each([
     [true, 'authenticator code'],
     [false, 'PIN'],
-  ] as const)('names the configured method on a FEFO refusal (required: %s)', async (required, method) => {
-    const db = fixture({ required, holders: [] });
-    await expect(authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE')).rejects.toThrow(
-      `A non-FEFO batch needs a pharmacist to approve it with their ${method}.`
-    );
-  });
+  ] as const)(
+    'names the configured method on a FEFO refusal (required: %s)',
+    async (required, method) => {
+      const db = fixture({ required, holders: [] });
+      await expect(authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE')).rejects.toThrow(
+        `A non-FEFO batch needs a pharmacist to approve it with their ${method}.`
+      );
+    }
+  );
 
   it('allows named approval with a stale till session and limits an unenrolled cashier for 15 minutes', async () => {
     const db = {

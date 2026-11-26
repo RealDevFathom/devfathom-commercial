@@ -161,7 +161,10 @@ const t = initTRPC
         validation: validation?.fields ?? null,
         ...(reason ? { reason } : {}),
         ...(error.code === 'FORBIDDEN' && error.cause instanceof CounterApprovalChoice
-          ? { matchingStaffProfileIds: error.cause.staffProfileIds, choiceProofs: error.cause.choiceProofs }
+          ? {
+              matchingStaffProfileIds: error.cause.staffProfileIds,
+              choiceProofs: error.cause.choiceProofs,
+            }
           : {}),
       };
       delete data.stack;

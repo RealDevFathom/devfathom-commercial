@@ -1048,16 +1048,24 @@ describe('Khata router trust and recovery boundary', () => {
 
       it('refuses an anonymous approval without till proof before any charge or credential check', async () => {
         const f = fixture([counter], 'EMPLOYEE');
-        await expect(f.caller().tender({ ...overLimit, overLimitApproval: { pin: '000000' } }))
-          .rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Choose the approver by name') });
+        await expect(
+          f.caller().tender({ ...overLimit, overLimitApproval: { pin: '000000' } })
+        ).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+          message: expect.stringContaining('Choose the approver by name'),
+        });
         expect(authorizeCounterApproval).not.toHaveBeenCalled();
         expect(applyPharmacyTender).not.toHaveBeenCalled();
       });
 
       it('rejects code-only approval on tenderOutcome before reading the ledger', async () => {
         const f = fixture([counter], 'EMPLOYEE');
-        await expect(f.caller().tenderOutcome({ ...overLimit, overLimitApproval: { pin: '000000' } }))
-          .rejects.toMatchObject({ code: 'BAD_REQUEST', message: expect.stringContaining('only accepted when taking payment') });
+        await expect(
+          f.caller().tenderOutcome({ ...overLimit, overLimitApproval: { pin: '000000' } })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('only accepted when taking payment'),
+        });
         expect(readPharmacyTenderOutcome).not.toHaveBeenCalled();
         expect(authorizeCounterApproval).not.toHaveBeenCalled();
       });
