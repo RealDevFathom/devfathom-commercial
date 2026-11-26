@@ -4,6 +4,9 @@ SET LOCAL lock_timeout = '5s';
 -- failed. A new line for that medicine starts blocked while the bill holds a failed PACK_CHECK
 -- event for the medicine with no later successful one, whether the failed line is still on the
 -- bill or already moved to its void record. Only a successful check on the new line clears it.
+-- "Later" is a strictly greater "occurredAt", which the event trigger below stamps while the
+-- bill is locked. Two checks stamped in the same millisecond tie, and a tie keeps the block.
+-- The existing BEFORE INSERT trigger on pharmacy_sale_lines keeps calling this function.
 CREATE OR REPLACE FUNCTION pharmacy_recheck_readded_pack() RETURNS trigger
 LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
 BEGIN
@@ -33,6 +36,39 @@ BEGIN
   RETURN NEW;
 END $$;
 REVOKE ALL ON FUNCTION pharmacy_recheck_readded_pack() FROM PUBLIC;
-CREATE OR REPLACE TRIGGER pharmacy_recheck_readded_pack BEFORE INSERT ON pharmacy_sale_lines
-  FOR EACH ROW EXECUTE FUNCTION pharmacy_recheck_readded_pack();
+
+-- Every PACK_CHECK event, whoever writes it: lock the bill, stamp the event with the time it is
+-- written under that lock (not the transaction's start and not a caller's clock), and on a
+-- failed check block every line of that medicine still on the bill, not only the checked line.
+-- A successful check clears only its own line, in the procedure that records it.
+CREATE OR REPLACE FUNCTION pharmacy_record_pack_check() RETURNS trigger
+LANGUAGE plpgsql SET search_path = pg_catalog, public AS $$
+DECLARE
+  checked_medicine text;
+BEGIN
+  PERFORM 1 FROM public.pharmacy_sales WHERE id = NEW."saleId"
+    AND "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId" FOR UPDATE;
+  NEW."occurredAt" := clock_timestamp();
+  IF NEW.payload->>'matched' IS DISTINCT FROM 'true' THEN
+    SELECT "medicineId" INTO checked_medicine FROM public.pharmacy_sale_lines
+      WHERE id = NEW.payload->>'saleLineId'
+        AND "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId";
+    UPDATE public.pharmacy_sale_lines SET "packCheckBlocked" = true
+      WHERE "organizationId" = NEW."organizationId" AND "branchId" = NEW."branchId"
+        AND "saleId" = NEW."saleId" AND "medicineId" = checked_medicine
+        AND NOT "packCheckBlocked";
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION pharmacy_record_pack_check() FROM PUBLIC;
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger
+    WHERE tgname = 'pharmacy_record_pack_check'
+      AND tgrelid = 'public.pharmacy_sale_events'::regclass AND NOT tgisinternal) THEN
+    CREATE TRIGGER pharmacy_record_pack_check BEFORE INSERT ON public.pharmacy_sale_events
+      FOR EACH ROW WHEN (NEW.kind::text = 'PACK_CHECK')
+      EXECUTE FUNCTION pharmacy_record_pack_check();
+  END IF;
+END $$;
 COMMIT;

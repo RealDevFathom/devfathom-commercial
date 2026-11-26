@@ -805,6 +805,110 @@ describeDatabase('DEV-1054 a failed pack check follows the bill and the medicine
     await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
   }, 60_000);
 
+  it('blocks every line of the medicine already on the bill when one of them fails its check', async () => {
+    const { s, sale, line, add, pay, fail, pass } = await checkedBill('twolines');
+    const other = await billBy(s, s.cashier, [[700, 1]]);
+    const otherLine = other.lines[0]!;
+    const otherPresentationId = await tenant(s.owner, async (db) => {
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: otherLine.packLevelId } });
+      return pack.presentationId;
+    });
+    // Both lines of the medicine, and a different medicine, are on the bill before the check.
+    const second = await add(sale.id);
+    const different = await add(sale.id, { ...otherLine, presentationId: otherPresentationId });
+    expect(second.id).not.toBe(line.id);
+    expect(second.packCheckBlocked).toBe(false);
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+    const blocked = () =>
+      tenant(s.owner, async (db) =>
+        Object.fromEntries(
+          (
+            await db.pharmacySaleLine.findMany({
+              where: { id: { in: [line.id, second.id, different.id] } },
+              select: { id: true, packCheckBlocked: true },
+            })
+          ).map((row) => [row.id, row.packCheckBlocked])
+        )
+      );
+    expect(await blocked()).toEqual({ [line.id]: true, [second.id]: true, [different.id]: false });
+    await removeLine(s, s.cashier, sale.id, line, device);
+    await expect(pay(sale.id, 1700)).rejects.toThrow(/pack.check/i);
+    // The quantity of the other line cannot be changed around the failed check either.
+    await expect(
+      changeLine(s, s.cashier, sale.id, { ...line, id: second.id }, 2, device)
+    ).rejects.toThrow(/pack.check/i);
+    // A successful check clears only the line it was made on.
+    expect(await pass(second.id)).toMatchObject({ matched: true });
+    expect(await blocked()).toEqual({ [line.id]: true, [second.id]: false, [different.id]: false });
+    await pay(sale.id, 1700);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySale.findUniqueOrThrow({ where: { id: sale.id }, select: { status: true } })
+      )
+    ).toEqual({ status: 'COMPLETED' });
+  }, 60_000);
+
+  it('keeps a passed line blocked until it is checked again when another line of the medicine fails', async () => {
+    const { s, sale, line, add, pay, fail, pass } = await checkedBill('passthenfail');
+    const second = await add(sale.id);
+    expect(await pass(second.id)).toMatchObject({ matched: true });
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+    await removeLine(s, s.cashier, sale.id, line, device);
+    await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
+    expect(await pass(second.id)).toMatchObject({ matched: true });
+    await pay(sale.id);
+  }, 60_000);
+
+  it('orders checks by when they ran on the bill, not by the time a caller supplies', async () => {
+    const { s, sale, line, add, pay, pass } = await checkedBill('checkorder');
+    expect(await pass(line.id)).toMatchObject({ matched: true });
+    // A failed check written after the pass, carrying a timestamp from before it (a transaction
+    // that began earlier, or an application clock that runs behind). It is the latest outcome
+    // and must not read as superseded by the earlier pass.
+    await tenant(s.as(s.cashier), (db) =>
+      db.pharmacySaleEvent.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          actorId: s.cashier,
+          kind: 'PACK_CHECK',
+          payload: { saleLineId: line.id, scanId: 'synthetic-scan', matched: false },
+          occurredAt: new Date(Date.now() - 3_600_000),
+        },
+      })
+    );
+    const again = await add(sale.id);
+    expect(again.packCheckBlocked).toBe(true);
+    await removeLine(s, s.cashier, sale.id, line, device);
+    await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
+  }, 60_000);
+
+  it('blocks the lines of the medicine even when a caller records only the failed check event', async () => {
+    const { s, sale, line, add, pay } = await checkedBill('eventonly');
+    const second = await add(sale.id);
+    await tenant(s.as(s.cashier), (db) =>
+      db.pharmacySaleEvent.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          branchId: s.owner.branchId,
+          saleId: sale.id,
+          actorId: s.cashier,
+          kind: 'PACK_CHECK',
+          payload: { saleLineId: line.id, scanId: 'synthetic-scan', matched: false },
+        },
+      })
+    );
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySaleLine.count({
+          where: { id: { in: [line.id, second.id] }, packCheckBlocked: true },
+        })
+      )
+    ).toBe(2);
+    await expect(pay(sale.id, 2000)).rejects.toThrow(/pack.check/i);
+  }, 60_000);
+
   it('leaves a different medicine on the same bill and the same medicine on another bill unblocked', async () => {
     const { s, sale, line, add, pay, fail } = await checkedBill('unaffected');
     // A second medicine, received and first billed on a bill of its own.
