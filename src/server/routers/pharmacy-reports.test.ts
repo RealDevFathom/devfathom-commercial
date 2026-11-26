@@ -1865,3 +1865,57 @@ describe('DEV-74 branch seasonal calendar', () => {
     );
   });
 });
+
+describe('owner dashboard effective access', () => {
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    mocks.userFindFirst.mockResolvedValue({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+    });
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'assigned' }]);
+    mocks.branchFindMany.mockResolvedValue(
+      ['assigned', 'other'].map((id) => ({ id, name: id, businessDayEndsAtHistory: [] }))
+    );
+  });
+  it('restricts a titled administrator to assignments and returns operational sections without monetary values', async () => {
+    const dashboard = caller();
+    const scope = await dashboard.branches({ dashboard: true });
+    expect(scope.branches.map((b) => b.id)).toEqual(['assigned']);
+    await expect(
+      dashboard.ownerTrading({ section: 'profits', branchId: 'assigned' })
+    ).resolves.toEqual([]);
+    await expect(
+      dashboard.ownerWatch({ section: 'customers', branchId: 'assigned' })
+    ).resolves.toEqual([]);
+    await expect(
+      dashboard.ownerTrading({ section: 'summary', branchId: 'other' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+  it('admits the live system owner to every branch and a finance employee only to their assignment', async () => {
+    mocks.userFindFirst.mockResolvedValueOnce({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+      permissionOverrides: [],
+    });
+    expect((await caller().branches({ dashboard: true })).branches.map((b) => b.id)).toEqual([
+      'assigned',
+      'other',
+    ]);
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational' || action === 'reports:financial'
+    );
+    mocks.queryRaw.mockResolvedValue([{ label: 'Medicine', value: 250 }]);
+    const employee = caller('EMPLOYEE');
+    expect((await employee.branches({ dashboard: true })).branches.map((b) => b.id)).toEqual([
+      'assigned',
+    ]);
+    expect(await employee.ownerTrading({ section: 'profits', branchId: 'assigned' })).toEqual([
+      { label: 'Medicine', value: 250 },
+    ]);
+  });
+});
