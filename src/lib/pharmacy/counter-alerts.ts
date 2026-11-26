@@ -124,6 +124,7 @@ export type CounterAlertContext = {
    * makes the same decision from the stored setting. Absent means on.
    */
   pharmacistCheckOff?: boolean;
+  requireControlledWitness?: boolean;
 };
 
 const DAY_MS = 86_400_000;
@@ -157,7 +158,11 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
   }
 
   const needsPrescription = medicine.rx || medicine.controlled || medicine.restricted;
-  if (needsPrescription && context.pharmacistCheckOff === true) {
+  if (
+    needsPrescription &&
+    context.pharmacistCheckOff === true &&
+    !(medicine.controlled && context.requireControlledWitness)
+  ) {
     push(alerts, {
       key: `pharmacist-check-off:${line.ref}`,
       severity: 'CLINICAL_ADVICE',

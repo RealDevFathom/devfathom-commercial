@@ -123,7 +123,7 @@ export async function controlledSaleRestorationWitness(
   } catch (error) {
     if (!(error instanceof ControlledRestorationDenied)) throw error;
     const marker = await pharmacistCheckOffMarker(db, scope.organizationId);
-    if (!marker) throw error;
+    if (!marker || !(await branchAllowsControlledSelfApproval(db, scope))) throw error;
     return { witnessedByUserId: scope.actorId, signatureRef: marker };
   }
 }

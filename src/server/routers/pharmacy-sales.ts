@@ -77,7 +77,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
-import { BRANCH_NOT_ASSIGNED, NO_INDEPENDENT_PHARMACIST } from '@/lib/pharmacy/counter-setup';
+import { BRANCH_NOT_ASSIGNED } from '@/lib/pharmacy/counter-setup';
 import { readPharmacyApprovalStatus } from '@/lib/pharmacy/onboarding';
 import { RefusalReason } from '@/server/refusal-reason';
 import {
@@ -3145,8 +3145,9 @@ export const pharmacySalesRouter = router({
         return { ...readiness, canFixSetup: orgAdmin, ...(approval ? { approval } : {}) };
       return {
         ...readiness,
-        // Nobody needs to countersign while the check is off.
-        warnings: readiness.warnings.filter((warning) => warning !== NO_INDEPENDENT_PHARMACIST),
+        // This switch still governs ordinary prescriptions. A branch can independently
+        // require a countersign on every controlled line.
+        requireControlledWitness: !(await branchAllowsControlledSelfApproval(ctx.db, scope)),
         canFixSetup: orgAdmin,
         ...(approval ? { approval } : {}),
         pharmacistCheckOff: true as const,
@@ -3410,7 +3411,7 @@ export const pharmacySalesRouter = router({
           // entry, marked as written with the check switched off by the owner.
           if ((!mayDispense || !authorization) && !authorization?.selfApproval) {
             const pharmacistCheck = await readPharmacistCheckPolicy(db, scope.organizationId);
-            if (!pharmacistCheck.enabled) {
+            if (!pharmacistCheck.enabled && (await branchAllowsControlledSelfApproval(db, scope))) {
               await requirePharmacyTodayOpenForTrading(db, scope);
               const replay = await replaySaleLine(db, scope, lineInput);
               if (replay) return replay;
@@ -4110,7 +4111,7 @@ export const pharmacySalesRouter = router({
           ctx.db as unknown as ScopedDb,
           scope.organizationId
         );
-        return pharmacistCheck.enabled
+        return pharmacistCheck.enabled || !(await branchAllowsControlledSelfApproval(ctx.db, scope))
           ? history
           : { ...history, pharmacistCheckOff: true as const };
       } catch (error) {

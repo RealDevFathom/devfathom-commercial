@@ -48,7 +48,7 @@ const line = {
 
 type Stored = 'ON' | 'OFF' | 'MISSING';
 
-function cashierCaller(stored: Stored) {
+function cashierCaller(stored: Stored, requireSecondPharmacist = false) {
   const credential = vi.fn();
   const policy = vi.fn(async () =>
     stored === 'MISSING'
@@ -60,7 +60,11 @@ function cashierCaller(stored: Stored) {
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacySaleLine: { findFirst: vi.fn(async () => null) },
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (strings: TemplateStringsArray) =>
+      Array.isArray(strings) && strings.join(' ').includes('"requireSecondPharmacist"')
+        ? [{ requireSecondPharmacist }]
+        : []
+    ),
     pharmacyBranch: {
       findMany: async () => [{ id: 'branch-1' }],
       findFirst: async () => ({ id: 'branch-1' }),
@@ -222,4 +226,11 @@ it('DEV-1043 refuses a cashier requesting solo controlled approval even with the
     })
   ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   expect(addSaleLine).not.toHaveBeenCalled();
+});
+
+it('DEV-1043 requires an independent pharmacist at an opted-in branch even when the business check is OFF', async () => {
+  const f = cashierCaller('OFF', true);
+  await expect(f.caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(addSaleLine).not.toHaveBeenCalled();
+  expect(appendControlledSaleEntries).not.toHaveBeenCalled();
 });
