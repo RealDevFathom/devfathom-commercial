@@ -13,7 +13,6 @@ import {
   passwordResetRequestInput,
   supplierLinkGetInput,
   supplierLinkSubmitInput,
-  supplierLinkUploadInput,
 } from '@/lib/auth/anonymous-inputs';
 import { formatValidationError } from '@/lib/validation-error';
 
@@ -95,6 +94,5 @@ export const anonymousFallbackRouter = t.router({
   pharmacySupplierLinks: t.router({
     get: t.procedure.input(supplierLinkGetInput).query(unroutableSupplierLink),
     submit: t.procedure.input(supplierLinkSubmitInput).mutation(unroutableSupplierLink),
-    uploadDocument: t.procedure.input(supplierLinkUploadInput).mutation(unroutableSupplierLink),
   }),
 });

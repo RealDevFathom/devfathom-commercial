@@ -6,6 +6,7 @@ import {
 } from '@/lib/tenancy/demo-identity';
 
 import { cache } from 'react';
+import { SUPPLIER_DOCUMENT_UPLOAD_URL } from '@/lib/pharmacy/supplier-document-contract';
 import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
 import { headers } from 'next/headers';
 import { getServerActionRequestMetadata } from 'next/dist/server/lib/server-action-request-meta';
@@ -131,7 +132,13 @@ async function organizationForActor(
       ? await requireOrganizationForRequest(request, expectedOrganizationId)
       : await organizationForServerComponent(expectedOrganizationId);
   } catch (error) {
-    if (error instanceof TenantHostError) return null;
+    if (error instanceof TenantHostError) {
+      // This route reports the host denial as plain text. Other callers keep
+      // treating a host mismatch as no member session.
+      const path = request && new URL(request.url).pathname;
+      if (path !== SUPPLIER_DOCUMENT_UPLOAD_URL && path !== `${SUPPLIER_DOCUMENT_UPLOAD_URL}/`)
+        return null;
+    }
     throw error;
   }
 }

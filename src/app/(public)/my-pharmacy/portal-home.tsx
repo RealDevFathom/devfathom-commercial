@@ -71,13 +71,19 @@ function majorToMinor(value: string): number | null {
   return Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
 }
 
-function readFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-    reader.onerror = () => reject(new Error('The photo could not be read.'));
-    reader.readAsDataURL(file);
+async function uploadPrescription(photo: File, note: string) {
+  const form = new FormData();
+  form.set('file', photo);
+  if (note) form.set('note', note);
+  const response = await fetch('/api/pharmacy/portal/prescription-upload', {
+    method: 'POST',
+    body: form,
   });
+  if (response.headers.get('content-type')?.startsWith('text/plain') && !response.ok)
+    throw new Error(await response.text());
+  const result = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!response.ok || !result.ok)
+    throw new Error(result.message ?? 'This request could not be completed.');
 }
 
 async function post(action: 'request' | 'cancel' | 'sign-out', body: unknown) {
@@ -175,12 +181,7 @@ export function PortalHome() {
       if (!['image/png', 'image/jpeg', 'image/webp'].includes(photo.type))
         throw new Error('Choose a PNG, JPEG or WebP photo.');
       if (photo.size > 5 * 1024 * 1024) throw new Error('The photo must be 5 MB or smaller.');
-      await post('request', {
-        kind: 'RX_ORDER',
-        contentType: photo.type,
-        dataBase64: await readFile(photo),
-        ...(rxNote.trim() ? { note: rxNote.trim() } : {}),
-      });
+      await uploadPrescription(photo, rxNote.trim());
       setPhoto(null);
       setRxNote('');
     }, 'Prescription sent. A pharmacist will check it before your order is prepared.');

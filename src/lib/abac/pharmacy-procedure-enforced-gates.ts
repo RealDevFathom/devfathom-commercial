@@ -589,7 +589,6 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySupplierLinks.recordManual': ['pharmacy:procurement'],
   'pharmacySupplierLinks.revoke': ['pharmacy:procurement'],
   'pharmacySupplierLinks.submit': [],
-  'pharmacySupplierLinks.uploadDocument': [],
   'pharmacySupplierPriceLists.decide': ['admin:access'],
   'pharmacySupplierPriceLists.import': ['pharmacy:procurement'],
   'pharmacySupplierPriceLists.list': ['pharmacy:procurement'],

@@ -25,7 +25,7 @@ const post = (path: string, body: unknown) =>
   });
 
 describe('the anonymous allowlist', () => {
-  it('is exactly these eight procedures and nothing else', () => {
+  it('is exactly these seven procedures and nothing else', () => {
     // SUP-01 supplier PO action links are anonymous by design: their signed,
     // expiring token names exactly one supplier relationship and purchase order.
     expect([...ANONYMOUS_PROCEDURES].sort()).toEqual([
@@ -36,11 +36,10 @@ describe('the anonymous allowlist', () => {
       'passwordReset.validate',
       'pharmacySupplierLinks.get',
       'pharmacySupplierLinks.submit',
-      'pharmacySupplierLinks.uploadDocument',
     ]);
   });
 
-  it('routes the token-bearing seven by token and the email-bearing one by host', () => {
+  it('routes the token-bearing six by token and the email-bearing one by host', () => {
     expect([...ANONYMOUS_TOKEN_PROCEDURES].sort()).toEqual([
       'invitations.accept',
       'invitations.get',
@@ -48,7 +47,6 @@ describe('the anonymous allowlist', () => {
       'passwordReset.validate',
       'pharmacySupplierLinks.get',
       'pharmacySupplierLinks.submit',
-      'pharmacySupplierLinks.uploadDocument',
     ]);
     // `passwordReset.request` takes an email and no token, so a token cannot
     // name its tenant. Allowlisting it alongside the others without a separate
@@ -63,6 +61,7 @@ describe('the anonymous allowlist', () => {
     'invitations',
     'invitations.getAll',
     'auth.signIn',
+    'pharmacySupplierLinks.uploadDocument',
   ])('does not admit %s', (procedure) => {
     expect(ANONYMOUS_PROCEDURES.has(procedure)).toBe(false);
     expect(classifyAnonymousRequest(get(procedure))).toEqual({ kind: 'denied' });
