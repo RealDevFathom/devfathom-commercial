@@ -9,6 +9,7 @@ import { CounterCatalogueCache } from '@/lib/pharmacy/counter-catalogue-cache';
 
 import {
   useCallback,
+  useContext,
   useEffect,
   useMemo,
   useRef,
@@ -796,6 +797,7 @@ function ScopedPharmacyCounterConsole({
       : null;
   const controlledAuthorisable = controlledBlock === null;
   // DEV-961, DEV-977 phase 3: the Authorise sheet's wording follows the approvals setting.
+  const approvalMode = useContext(ApprovalSecretKindContext);
   const approvalCopy = useCounterApprovalCopy();
   // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
   // hand-off links to the substitution workspace (dispense or Pharmacy Safety).
@@ -2640,7 +2642,7 @@ function ScopedPharmacyCounterConsole({
         if (error instanceof Error && error.message === 'DAY_CLOSED')
           void utils.pharmacySales.tradingDayStatus.invalidate();
         catalogueCache.clear();
-        const message = counterSaleErrorMessage(error);
+        const message = counterSaleErrorMessage(error, approvalMode);
         if (row.restriction.controlled) setControlledError(message);
         setNotice({
           tone: counterErrorTone(error),
@@ -2678,6 +2680,7 @@ function ScopedPharmacyCounterConsole({
       lotOverride,
       controlledBlock,
       approvalCopy,
+      approvalMode,
       openSale,
       patientId,
       preview,
@@ -2854,12 +2857,15 @@ function ScopedPharmacyCounterConsole({
     [searchQuery.data]
   );
 
-  const lineChangeMessage = useCallback((error: unknown) => {
-    // A line change stays with the bill's cashier, as a void does.
-    if (error instanceof Error && error.message === 'NOT_BILL_OWNER')
-      return 'Another cashier opened this bill. Only that cashier or a manager or owner can change its lines.';
-    return counterSaleErrorMessage(error);
-  }, []);
+  const lineChangeMessage = useCallback(
+    (error: unknown) => {
+      // A line change stays with the bill's cashier, as a void does.
+      if (error instanceof Error && error.message === 'NOT_BILL_OWNER')
+        return 'Another cashier opened this bill. Only that cashier or a manager or owner can change its lines.';
+      return counterSaleErrorMessage(error, approvalMode);
+    },
+    [approvalMode]
+  );
 
   /** DEV-977B: changes the quantity or unit of a bill line, on the server, with its rules. */
   const changeBillLine = useCallback(

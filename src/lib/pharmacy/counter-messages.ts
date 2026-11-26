@@ -391,10 +391,10 @@ export const COUNTER_GENERIC_ERROR_MESSAGE = 'Request failed.';
  * onto the counter during the POS browser run. The shape is therefore checked
  * rather than trusted, and only prose is ever passed through.
  */
-export function counterErrorMessage(error: unknown): string {
+export function counterErrorMessage(error: unknown, mode: 'PIN' | 'CODE' = 'PIN'): string {
   if (!(error instanceof Error) || !error.message) return COUNTER_GENERIC_ERROR_MESSAGE;
   const mapped = COUNTER_ERROR_MESSAGES[counterReason(error)];
-  if (mapped) return mapped;
+  if (mapped) return counterApprovalMessage(mapped, mode);
   if (RAW_REASON_CODE.test(error.message)) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   return error.message;
 }
@@ -430,9 +430,10 @@ function trpcErrorCode(error: unknown): string | null {
  * failure, a network or client fault, serialized validation output, an unmapped code)
  * shows the generic counter sentence, so unexpected text never reaches the screen.
  */
-export function counterSaleErrorMessage(error: unknown): string {
+export function counterSaleErrorMessage(error: unknown, mode: 'PIN' | 'CODE' = 'PIN'): string {
   const reason = counterReason(error);
-  if (Object.hasOwn(COUNTER_ERROR_MESSAGES, reason)) return COUNTER_ERROR_MESSAGES[reason]!;
+  if (Object.hasOwn(COUNTER_ERROR_MESSAGES, reason))
+    return counterApprovalMessage(COUNTER_ERROR_MESSAGES[reason]!, mode);
   if (!(error instanceof Error) || !error.message) return COUNTER_UNKNOWN_ERROR_MESSAGE;
   const code = trpcErrorCode(error);
   const message = error.message.trim();
