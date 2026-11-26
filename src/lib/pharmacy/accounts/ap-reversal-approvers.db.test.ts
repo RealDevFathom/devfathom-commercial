@@ -12,7 +12,7 @@
  */
 import { randomBytes } from 'node:crypto';
 import pg from 'pg';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { PHARMACY_MODULES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { TRPCContext } from '@/server/trpc';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -1150,8 +1150,11 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       message: 'Administrator access is required to reopen a locked period.',
     });
   });
-  it('enforces the business payment threshold at posting and records the approving administrator', async () => {
-    const { pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance');
+  describe('supplier payment approval limit', () => {
+    let pharmacyFinanceRouter: (typeof import('@/server/routers/pharmacy-finance'))['pharmacyFinanceRouter'];
+    beforeAll(async () => {
+      ({ pharmacyFinanceRouter } = await import('@/server/routers/pharmacy-finance'));
+    });
     const api = (p: Candidate) => pharmacyFinanceRouter.createCaller(contextFor(p));
     const owner = candidates.find((person) => person.key === 'owner_counter')!;
     const set = (limitMinor: number | null) =>
@@ -1167,49 +1170,82 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
       });
     const pay = (draftId: string, approval: { pin?: string; approverEmail?: string } = {}) =>
       api(financePayer).postSupplierPaymentDraft({ branchId, draftId, ...approval });
-    await expect(
-      api(financeEmployee).setSupplierPaymentLimit({ branchId, limitMinor: 100 })
-    ).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: 'Only an administrator can change the supplier payment approval limit.',
+
+    afterEach(async () => {
+      await set(null);
     });
-    const invoice = await callerFor(financeEmployee).record({
+
+    const recordBill = (key: string) =>
+      callerFor(financeEmployee).record({
+        branchId,
+        createKey: id(key),
+        reference: id(key),
+        payeeName: 'Synthetic supplier',
+        supplierInvoiceRef: id(key + '-invoice'),
+        invoiceDate: day(-1),
+        dueDate: day(1),
+        amountMinor: 3000,
+        currency: 'PKR',
+        description: 'Supplies',
+        evidenceReference: 'Slip',
+      });
+    const billPayment = (invoiceId: string, amountMinor: number, key: string) => ({
       branchId,
-      createKey: id('limit-bill'),
-      reference: id('limit-bill'),
-      payeeName: 'Synthetic supplier',
-      supplierInvoiceRef: id('limit-invoice'),
-      invoiceDate: day(-1),
-      dueDate: day(1),
-      amountMinor: 3000,
-      currency: 'PKR',
-      description: 'Supplies',
-      evidenceReference: 'Slip',
-    });
-    const billPayment = (amountMinor: number, key: string) => ({
-      branchId,
-      invoiceId: invoice.id,
+      invoiceId,
       amountMinor,
       commandKey: id(key),
       reference: id(key),
       fundingAccount: 'BANK' as const,
       paidAt: new Date().toISOString(),
     });
-    const ap = callerFor(financePayer);
-    await set(null);
-    expect((await pay((await create(101, 'unlimited')).id)).status).toBe('POSTED');
-    await expect(ap.pay(billPayment(101, 'ap-unlimited'))).resolves.toMatchObject({
-      amountMinor: 101,
+
+    it('restricts changes to administrators and audits the previous and new amount', async () => {
+      await expect(
+        api(financeEmployee).setSupplierPaymentLimit({ branchId, limitMinor: 100 })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only an administrator can change the supplier payment approval limit.',
+      });
+
+      await set(null);
+      await set(100);
+      expect(
+        await inTenant((db) =>
+          db.auditLog.findFirst({
+            where: {
+              organizationId,
+              actorId: userId(owner),
+              action: 'pharmacyFinance.setSupplierPaymentLimit',
+            },
+            orderBy: { createdAt: 'desc' },
+          })
+        )
+      ).toMatchObject({ metadata: { previousLimitMinor: null, limitMinor: 100 } });
     });
-    await set(100);
-    try {
-      for (const amount of [99, 100])
-        expect((await pay((await create(amount, 'limit-' + amount)).id)).status).toBe('POSTED');
-      for (const amount of [99, 100])
-        await expect(ap.pay(billPayment(amount, 'ap-limit-' + amount))).resolves.toMatchObject({
+
+    it.each([
+      { label: 'unset', limit: null, amount: 101 },
+      { label: 'below', limit: 100, amount: 99 },
+      { label: 'at', limit: 100, amount: 100 },
+    ])(
+      'permits independent direct and invoice payments with the amount $label the limit',
+      async ({ label, limit, amount }) => {
+        await set(limit);
+        expect((await pay((await create(amount, 'draft-' + label)).id)).status).toBe('POSTED');
+        const invoice = await recordBill('limit-bill-' + label);
+        await expect(
+          callerFor(financePayer).pay(billPayment(invoice.id, amount, 'ap-' + label))
+        ).resolves.toMatchObject({
           amountMinor: amount,
         });
-      const above = billPayment(101, 'ap-above');
+      }
+    );
+
+    it('requires administrator approval for an above-limit invoice payment and recognizes its replay', async () => {
+      await set(100);
+      const invoice = await recordBill('above-limit-bill');
+      const ap = callerFor(financePayer);
+      const above = billPayment(invoice.id, 101, 'ap-above');
       await expect(ap.pay(above)).rejects.toMatchObject({
         code: 'FORBIDDEN',
         message: 'Enter the approving administrator’s PIN or authenticator code.',
@@ -1220,6 +1256,10 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
         pin: PIN,
       });
       expect((await ap.pay(above)).id).toBe(approved.id);
+    });
+
+    it('requires verified administrator approval and audits an above-limit direct posting once', async () => {
+      await set(100);
       const draft = await create(101, 'above-limit');
       await expect(pay(draft.id)).rejects.toMatchObject({
         code: 'FORBIDDEN',
@@ -1252,22 +1292,8 @@ describeDb('DEV-1034 employee finance jobs at an admitted branch', () => {
         amountMinor: 101,
         selfApproval: false,
       });
-      expect(
-        await inTenant((db) =>
-          db.auditLog.findFirst({
-            where: {
-              organizationId,
-              actorId: userId(owner),
-              action: 'pharmacyFinance.setSupplierPaymentLimit',
-            },
-            orderBy: { createdAt: 'desc' },
-          })
-        )
-      ).toMatchObject({ metadata: { previousLimitMinor: null, limitMinor: 100 } });
       expect(JSON.stringify(approvals[0]?.metadata)).not.toContain(PIN);
-    } finally {
-      await set(null);
-    }
+    });
   });
   it('reserves all five AP approval and reversal commands and refuses payment to a read-only employee', async () => {
     const api = callerFor(financeEmployee);
