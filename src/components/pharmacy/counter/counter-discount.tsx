@@ -486,7 +486,7 @@ export function CounterDiscountEntry({
                       <b className="font-semibold text-text-strong">
                         A manager or owner must approve a discount you cannot give on your own.
                       </b>{' '}
-                      {approvalCopy.discountSupervisorHow}{' '}
+                      {approvalCopy.discountSupervisorHow(form.codeOnly)}{' '}
                       {toLine
                         ? 'when you apply it to this line'
                         : toBill

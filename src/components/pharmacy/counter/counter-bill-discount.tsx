@@ -98,7 +98,7 @@ export function useCounterBillDiscount({
         if (!(failure instanceof Error) || failure.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED)
           throw failure;
         const approved = await submitDialogApproval(
-          (matches) => requestApproval(label, matches),
+          (matches) => (matches ? requestApproval(label, matches) : requestApproval(label)),
           post
         );
         if (!approved) {
