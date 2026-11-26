@@ -31,14 +31,18 @@ it.skipIf(!owner)(
       CREATE TEMP TABLE message_attachments(id text,"messageId" text,"organizationId" text,url text,"createdAt" timestamp default now());
       CREATE TEMP TABLE pharmacy_branch_regulatory_profiles(id text,"branchId" text,"organizationId" text,"licenceEvidenceFileRef" text,"qualifiedPersonCoverageRosterRef" text,"createdAt" timestamp default now());
       INSERT INTO clients(id,"organizationId",logo) VALUES ('client','org','/api/files/logo.png');
-      INSERT INTO messages VALUES ('message','org',NULL);
-      INSERT INTO message_attachments(id,"messageId","organizationId",url) VALUES ('attachment','message','org','/api/files/chat.pdf'),('extra','message','org','/api/files/logo.png');
+      INSERT INTO messages VALUES ('message','org',NULL), ('deleted','org',now());
+      INSERT INTO message_attachments(id,"messageId","organizationId",url) VALUES ('attachment','message','org','/api/files/chat.pdf'),('extra','message','org','/api/files/logo.png'), ('dead','deleted','org','/api/files/dead.pdf');
       INSERT INTO pharmacy_branch_regulatory_profiles(id,"branchId","organizationId","licenceEvidenceFileRef","qualifiedPersonCoverageRosterRef")
         VALUES ('v1','branch','org','/api/files/licence.pdf','/api/files/roster.pdf');
     `);
       const migration = (name: string) =>
         readFile('prisma/migrations/' + name + '/migration.sql', 'utf8');
       await db.query(await migration('20261117090100_uploaded_file_registry'));
+      // A later client reference in a different business cannot claim org's registration.
+      await db.query(
+        "INSERT INTO clients(id,\"organizationId\",logo) VALUES ('other-client','other','/api/files/logo.png')"
+      );
       const update = await migration('20261126010200_claim_shared_uploads');
       await db.query(update);
       await db.query("SET app.current_organization_id = 'org'");
@@ -47,6 +51,7 @@ it.skipIf(!owner)(
       const first = await snapshot();
       expect(first.map((row) => [row.name, row.ownerType, row.ownerId, row.uploadedById])).toEqual([
         ['chat.pdf', 'CHAT_ATTACHMENT', 'attachment', null],
+        ['dead.pdf', null, null, null],
         ['licence.pdf', 'PHARMACY_LICENCE_EVIDENCE', 'branch', null],
         ['logo.png', 'CLIENT_LOGO', 'client', null],
         ['roster.pdf', 'PHARMACY_COVERAGE_ROSTER', 'branch', null],

@@ -242,6 +242,8 @@ Do not point `test:rls` at a database containing data you need.
 
 ### Running the database-backed test suites
 
+For the shared upload backfill test, set `UPLOAD_REGISTRY_TEST_OWNER_URL` to the migration-owner connection for a migrated PostgreSQL 16 test database. Use a loopback host and a database name ending in `_test`. The owner role must have both `NOSUPERUSER` and `NOBYPASSRLS`. Run `bunx vitest run tests/shared-upload-bindings.db.test.ts`.
+
 `bun run test` **skips** the eight suites that need a real PostgreSQL unless `TEST_DATABASE_URL` is
 set. They report themselves skipped rather than passing vacuously, so a green run without that
 variable has not exercised them.
