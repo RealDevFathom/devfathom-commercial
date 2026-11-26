@@ -770,6 +770,7 @@ function BranchCounters({
       </p>
       <NoticeLine notice={notice} />
       <OfflineCashSellingSwitch branchId={branchId} />
+      <RefusedReceipts branchId={branchId} />
       <ReceiptNumberGaps branchId={branchId} />
     </div>
   );
@@ -836,6 +837,43 @@ function OfflineCashSellingSwitch({ branchId }: { branchId: string }) {
  * DEV-957 phase 2: receipt numbers a revoked counter, or one whose credential expired,
  * reserved and never printed. They are never reused; this explains each gap.
  */
+function RefusedReceipts({ branchId }: { branchId: string }) {
+  const history = trpc.pharmacyOffline.refusedReceipts.useQuery({ branchId }, { retry: false });
+  return (
+    <section className="space-y-2 border-t border-border-subtle pt-4">
+      <h3 className="text-sm font-semibold text-text-strong">Offline receipt reviews</h3>
+      {history.isLoading ? (
+        <p role="status">Loading receipt history…</p>
+      ) : history.isError ? (
+        <p role="alert" className="text-destructive">
+          Receipt history could not be loaded.{' '}
+          <Button variant="outline" onClick={() => void history.refetch()}>
+            Reload
+          </Button>
+        </p>
+      ) : !history.data?.length ? (
+        <p className="text-sm text-text-muted">
+          No offline receipts have been refused in this branch.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border-subtle text-sm">
+          {history.data.map((row) => (
+            <li key={row.id} className="space-y-1 py-2">
+              <strong>
+                Receipt {row.receiptNumber} · {row.device.name}
+              </strong>
+              <p>
+                {row.kind} · {when(row.createdAt, 'Unknown time')}
+              </p>
+              <p>{row.reason}</p>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function ReceiptNumberGaps({ branchId }: { branchId: string }) {
   const gaps = trpc.pharmacyOffline.receiptNumberGaps.useQuery({ branchId }, { retry: false });
   return (

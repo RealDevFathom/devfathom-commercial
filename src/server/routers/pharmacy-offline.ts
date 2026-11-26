@@ -154,6 +154,26 @@ export const pharmacyOfflineRouter = router({
    * DEV-957: the branch's counters for the enrolment screen. Only identifiers,
    * status and runway counts: never a secret hash, a snapshot or a payload.
    */
+  refusedReceipts: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      await scopeReceiptHistory(db, input.branchId);
+      return db.pharmacyOfflineReceiptEvent.findMany({
+        where: { organizationId, branchId: input.branchId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: {
+          id: true,
+          receiptNumber: true,
+          kind: true,
+          reason: true,
+          createdAt: true,
+          device: { select: { name: true } },
+        },
+      });
+    })
+  ),
   counters: adminProcedure.input(branchInput).query(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const db = tx as ScopedDb;
@@ -1450,8 +1470,85 @@ async function reportChainBreak(operation: CounterOperation, error: CounterChain
   }
 }
 
+async function scopeReceiptHistory(db: ScopedDb, branchId: string) {
+  await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branchId}, true)`;
+}
+
+type ReceiptEvidence = {
+  scope: LedgerScope;
+  deviceId: string;
+  command: CounterReplay;
+  commandSignature: string;
+  receiptSignature: string;
+};
+
+function receiptEvidence(
+  ctx: PharmacyCounterContext,
+  command: CounterReplay,
+  request: Request
+): ReceiptEvidence {
+  return {
+    scope: ctx.scope,
+    deviceId: ctx.deviceId,
+    command,
+    commandSignature: request.headers.get('x-command-signature') ?? '',
+    receiptSignature: request.headers.get('x-receipt-signature') ?? '',
+  };
+}
+
+async function appendReceiptEvent(
+  db: ScopedDb,
+  receipt: ReceiptEvidence,
+  kind: 'REFUSED' | 'REJECTED' | 'RETRIED' | 'QUARANTINED',
+  reason: string
+) {
+  const { scope, deviceId, command, commandSignature, receiptSignature } = receipt;
+  await scopeReceiptHistory(db, scope.branchId);
+  const evidence = { command, commandSignature, receiptSignature };
+  const id = snapshotPayloadHash([
+    scope.organizationId,
+    scope.branchId,
+    deviceId,
+    kind,
+    reason,
+    evidence,
+  ]);
+  await db.pharmacyOfflineReceiptEvent.createMany({
+    data: [
+      {
+        id,
+        ...scope,
+        deviceId,
+        commandKey: command.idempotencyKey,
+        sequence: command.sequence,
+        receiptNumber: command.leasedReceipt.receiptNumber,
+        kind,
+        reason,
+        commandHash: snapshotPayloadHash(command),
+        evidence: evidence as Prisma.InputJsonValue,
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
+
+function receiptRefusal(error: unknown): string | null {
+  if (error instanceof CounterTransportError)
+    return error.status === 409 || error.status === 403 ? error.code : null;
+  if (isAccountingPeriodClosedError(error)) return 'PERIOD_CLOSED';
+  if (
+    error instanceof Error &&
+    'reason' in error &&
+    typeof error.reason === 'string' &&
+    /^[A-Z_]+$/.test(error.reason)
+  )
+    return error.reason;
+  return null;
+}
+
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
+    let attempted: ReceiptEvidence | undefined;
     try {
       if (!(await rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000)).ok)
         throw new CounterTransportError('rate_limited', 429);
@@ -1861,15 +1958,26 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               },
             },
           });
+          await appendReceiptEvent(
+            db,
+            receiptEvidence(ctx, command, request),
+            'REJECTED',
+            rejection.reason
+          );
           return { commandId: recorded.command.id, status: 'REJECTED', replayed: false };
         }
-        return replayCounterCommand(
+        const receipt = receiptEvidence(ctx, command, request);
+        attempted = receipt;
+        const result = await replayCounterCommand(
           ctx,
           command,
           request.headers.get('x-command-signature') ?? '',
           request.headers.get('x-receipt-signature') ?? '',
           retry !== null
         );
+        if (retry && !result.replayed)
+          await appendReceiptEvent(db, receipt, 'RETRIED', retry.reason);
+        return result;
       };
       const result = await withTenantDb(
         actor.organization.id,
@@ -1895,6 +2003,18 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
       });
     } catch (error) {
       if (error instanceof CounterChainError) await reportChainBreak(operation, error);
+      const receipt = attempted;
+      const refusal = receiptRefusal(error);
+      if (receipt && refusal) {
+        try {
+          await withTenantDb(receipt.scope.organizationId, (db) =>
+            appendReceiptEvent(db, receipt, 'REFUSED', refusal)
+          );
+        } catch {
+          // An unrecorded refusal must be retried, never acknowledged locally.
+          return Response.json({ error: 'receipt_history_unavailable' }, { status: 503 });
+        }
+      }
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
       // DEV-877: the replay rolled back and its command stays PENDING; the

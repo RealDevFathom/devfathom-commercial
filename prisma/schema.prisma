@@ -15355,6 +15355,7 @@ model PharmacyRegisteredDevice {
   updatedAt                  DateTime             @updatedAt
 
   branch    PharmacyBranch               @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  receiptEvents PharmacyOfflineReceiptEvent[]
   snapshots PharmacyOfflineSnapshot[]
   commands  PharmacyOfflineCommand[]
   leases    PharmacyReceiptNumberLease[]
@@ -15398,6 +15399,25 @@ model PharmacyOfflineSnapshot {
 /// and reused on every attempt, so a lost response resolves to one server-side
 /// effect. The identity columns are immutable and no row is ever deleted; only
 /// the replay bookkeeping advances, and only away from PENDING.
+model PharmacyOfflineReceiptEvent {
+  id String @id
+  organizationId String
+  branchId String
+  deviceId String
+  commandKey String
+  sequence Int
+  receiptNumber Int
+  actorId String?
+  kind String
+  reason String
+  commandHash String
+  evidence Json
+  createdAt DateTime @default(now())
+  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([organizationId,branchId,deviceId,commandKey,createdAt],map:"offline_receipt_history")
+  @@map("pharmacy_offline_receipt_events")
+}
+
 model PharmacyOfflineCommand {
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))

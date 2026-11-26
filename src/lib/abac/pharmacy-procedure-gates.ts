@@ -1166,6 +1166,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: 'adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); read only',
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
   },
+  'pharmacyOffline.refusedReceipts': {
+    gate: 'adminProcedure (admin:access) + managedBranch: requires active branch and counterBranchAssignmentDenial, with branch-scoped receipt history RLS',
+    none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
+  },
   'pharmacyOffline.recordUnsentOfflineSale': {
     gate: "adminProcedure (admin:access) + managedBranch: an active branch and counterBranchAssignmentDenial (ADMIN role spans the organization; anyone else needs an active assignment to the branch); records a manager's account of one unsent offline sale a revoked counter kept, audited; books nothing",
     none: 'administrators only; anyone else with admin:access needs an active assignment to the branch',
