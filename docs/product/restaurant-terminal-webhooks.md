@@ -4,7 +4,7 @@ Send events to `/api/restaurant/webhooks/[source]` on the business's own host. E
 
 ## Provision and rotate
 
-A signed-in business admin with `restaurant:configure` calls the tRPC mutation `restaurantPayments.rotateTerminalWebhookSecret` with the branch ID and config ID. Use `restaurantPayments.getTerminalConfig` to list configuration IDs for the branch. Save the returned `secret` in the provider's secret store immediately. The rotation response is the only opportunity to read it. The previous configuration key works for 24 hours following rotation. A subsequent rotation replaces that previous key.
+In Restaurant Finance, select the branch and open Card terminal. Under Configured terminals, choose **Set signing key**. A business owner or active administrator with `restaurant:configure` calls the tRPC mutation `restaurantPayments.rotateTerminalWebhookSecret` with the branch ID and config ID. Use `restaurantPayments.getTerminalConfig` to list configuration IDs for the branch. Save the returned `secret` in the provider's secret store immediately. The rotation response is the only opportunity to read it. The previous configuration key works for 24 hours following rotation. A subsequent rotation replaces that previous key.
 
 ## Sign a delivery
 

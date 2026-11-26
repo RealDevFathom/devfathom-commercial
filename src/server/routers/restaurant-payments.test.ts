@@ -15,6 +15,7 @@ const D = (v: string) => new Prisma.Decimal(v);
 const mocks = vi.hoisted(() => ({
   can: vi.fn<(subject: unknown, action: unknown) => Promise<boolean>>(() => Promise.resolve(true)),
   rotate: vi.fn(),
+  findActor: vi.fn(),
   tenderFindMany: vi.fn(),
   refundFindMany: vi.fn(),
   paymentFindUnique: vi.fn(),
@@ -53,6 +54,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const db = {
   $executeRaw: mocks.rotate,
+  user: { findFirst: mocks.findActor },
   restaurantTender: { findMany: mocks.tenderFindMany },
   restaurantRefund: { findMany: mocks.refundFindMany },
   restaurantPayment: { findUnique: mocks.paymentFindUnique },
@@ -89,6 +91,11 @@ function caller(role = 'EMPLOYEE') {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
+  mocks.findActor.mockResolvedValue({
+    role: 'EMPLOYEE',
+    status: 'ACTIVE',
+    permissionOverrides: [],
+  });
   mocks.tenderFindMany.mockResolvedValue([]);
   mocks.refundFindMany.mockResolvedValue([]);
 });
@@ -348,11 +355,48 @@ describe('terminal webhook key administration', () => {
     });
     expect(mocks.rotate).not.toHaveBeenCalled();
   });
+  it('permits a live non-admin system owner and rejects an owner with an explicit deny', async () => {
+    const actor = {
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+      permissionOverrides: [],
+    };
+    mocks.requireBranchScope.mockResolvedValue(undefined);
+    mocks.findActor.mockResolvedValue(actor);
+    mocks.rotate.mockResolvedValue(1);
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'isolated-test-key');
+    try {
+      expect((await caller().rotateTerminalWebhookSecret(input)).secret).toHaveLength(43);
+      expect(mocks.findActor).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user_gm', organizationId: 'org-test' } })
+      );
+      mocks.findActor.mockResolvedValue({
+        ...actor,
+        permissionOverrides: [{ capability: '*', effect: 'DENY' }],
+      });
+      await expect(caller().rotateTerminalWebhookSecret(input)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      mocks.findActor.mockResolvedValue({ ...actor, role: 'ADMIN', status: 'INACTIVE' });
+      await expect(caller('ADMIN').rotateTerminalWebhookSecret(input)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.rotate).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
   it('returns a fresh secret once per rotation and passes only ciphertext to the scoped write', async () => {
     vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'test-only-key');
     try {
       mocks.requireBranchScope.mockResolvedValue(undefined);
       mocks.rotate.mockResolvedValue(1);
+      mocks.findActor.mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        permissionOverrides: [],
+      });
       const first = await caller('ADMIN').rotateTerminalWebhookSecret(input);
       const second = await caller('ADMIN').rotateTerminalWebhookSecret(input);
       expect(second.secret).toMatch(/^[A-Za-z0-9_-]{43}$/);

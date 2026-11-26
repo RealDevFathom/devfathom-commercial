@@ -1,3 +1,5 @@
+import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator-party';
+import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import { rotateTerminalWebhookKey } from '@/lib/restaurant/terminal-webhook-keys';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
@@ -41,12 +43,22 @@ const dateOnly = (value: Date): string => value.toISOString().slice(0, 10);
 const readProcedure = capabilityProcedure('money:read');
 const configureProcedure = capabilityProcedure('restaurant:configure');
 
+async function canManageWebhookKey(db: ScopedDb, organizationId: string, userId: string) {
+  const actor = await db.user.findFirst({
+    where: { id: userId, organizationId },
+    select: approvalAuthenticatorPartySelect(),
+  });
+  return Boolean(
+    actor && actor.status === 'ACTIVE' && (hasAllCapabilityAccess(actor) || actor.role === 'ADMIN')
+  );
+}
+
 export const restaurantPaymentsRouter = router({
   getTerminalConfig: configureProcedure
     .input(z.object({ branchId: ID }).strict())
     .query(async ({ ctx, input }) => {
       await requireRestaurantBranchScope(ctx, input.branchId);
-      return ctx.db.restaurantTerminalProviderConfig.findMany({
+      const configs = await ctx.db.restaurantTerminalProviderConfig.findMany({
         where: { branchId: input.branchId },
         orderBy: [{ source: 'asc' }, { externalTerminalId: 'asc' }],
         select: {
@@ -59,6 +71,14 @@ export const restaurantPaymentsRouter = router({
           updatedAt: true,
         },
       });
+      const user = ctx.session!.user;
+      const allowed = Boolean(
+        configs.length &&
+        user.organizationId &&
+        user.organizationId === ctx.organization?.id &&
+        (await canManageWebhookKey(ctx.db, user.organizationId, user.id))
+      );
+      return configs.map((config) => ({ ...config, canManageWebhookKey: allowed }));
     }),
 
   saveTerminalConfig: configureProcedure
@@ -120,9 +140,9 @@ export const restaurantPaymentsRouter = router({
     .mutation(async ({ ctx, input }) => {
       const user = ctx.session!.user;
       if (
-        user.role !== 'ADMIN' ||
         !user.organizationId ||
-        user.organizationId !== ctx.organization?.id
+        user.organizationId !== ctx.organization?.id ||
+        !(await canManageWebhookKey(ctx.db, user.organizationId, user.id))
       ) {
         throw new TRPCError({ code: 'FORBIDDEN' });
       }
