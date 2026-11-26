@@ -156,7 +156,7 @@ export function buildCounterBrowserReceipt(
   const paperWidth = format === 'THERMAL_58' ? 58 : 80;
   const body =
     receipt.receiptLayout !== undefined
-      ? designedReceiptHtml(receipt, locale, paperWidth, reprint)
+      ? designedReceiptHtml(receipt, locale, format, reprint)
       : `<pre>${receiptHtmlText(buildCounterReceiptPreview(receipt, locale, paperWidth, reprint), locale)}</pre>`;
   // All receipt content is escaped inert text. Physical print styles only.
   return `<!doctype html><html lang="${locale}" dir="${COUNTER_RECEIPT_DIRECTION[locale]}"><head>

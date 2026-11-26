@@ -108,6 +108,9 @@ function Preview({
         Sample sale. Legal identity, receipt number, items, totals, payments and copy marking are
         fixed.
       </p>
+      {layout.logo && layout.sections.includes('logo') && format !== 'A4' && (
+        <p className="text-sm text-text-muted">Logos print on A4 only</p>
+      )}
       <ReceiptPaperPreview html={html} title="Sample receipt" format={format} />
     </div>
   );
@@ -310,7 +313,7 @@ function Editor({
                 }}
               />
               <p className="text-sm text-text-muted">
-                PNG, JPEG or WebP, up to 1 MiB. Thermal printers use the printed branch name.
+                PNG, JPEG or WebP, up to 1 MiB. A4 receipts can include the logo.
               </p>
               {draft.logo && (
                 <>

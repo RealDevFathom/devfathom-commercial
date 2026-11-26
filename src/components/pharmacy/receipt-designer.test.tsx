@@ -111,3 +111,30 @@ it('names a prohibited phrase beside its field before a design can be saved', ()
   fireEvent.change(header, { target: { value: 'Thank you for visiting.' } });
   expect(screen.getByRole('button', { name: 'Save design' })).toBeEnabled();
 });
+
+it('explains the logo fallback while previewing either roll and shows the logo on A4', () => {
+  state.format = {
+    data: {
+      revision: 2,
+      registeredName: null,
+      receiptLogoPng: 'cG5n',
+      layout: {
+        ...receiptDesign(null),
+        logo: { assetId: '11111111-1111-4111-8111-111111111111', maxWidthMm: 32 },
+      },
+    },
+  };
+  render(<PharmacyReceiptDesigner canSave />);
+  const paper = selectFieldControl(screen.getByRole('combobox', { name: 'Preview paper' }));
+  for (const value of ['THERMAL_58', 'THERMAL', 'A4']) {
+    fireEvent.change(paper, { target: { value } });
+    const html = screen.getByTitle('Sample receipt').getAttribute('srcdoc');
+    if (value === 'A4') {
+      expect(html).toContain('<img');
+      expect(screen.queryByText('Logos print on A4 only')).not.toBeInTheDocument();
+    } else {
+      expect(html).not.toContain('<img');
+      expect(screen.getByText('Logos print on A4 only')).toBeVisible();
+    }
+  }
+});

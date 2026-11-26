@@ -1,3 +1,4 @@
+import type { PrinterTestFormat } from './counter-browser-print';
 import { encodeQr, qrSvgPath } from '@/lib/qr/qr-code';
 import {
   COUNTER_RECEIPT_STRINGS,
@@ -27,7 +28,7 @@ export function receiptHtmlText(text: string, locale: CounterReceiptLocale) {
 export function designedReceiptHtml(
   receipt: CounterReceipt,
   requested: CounterReceiptLocale,
-  width: 58 | 80,
+  format: PrinterTestFormat,
   reprint: boolean
 ) {
   const layout = safePharmacyLayout(receipt.receiptLayout);
@@ -48,7 +49,7 @@ export function designedReceiptHtml(
         layout,
         receipt.printFacts?.[locale] ?? counterReceiptFacts(receipt, locale),
         mark,
-        width
+        format === 'THERMAL_58' ? 58 : 80
       );
       return `<section lang="${locale}" dir="${locale === 'ur' ? 'rtl' : 'ltr'}">${blocks
         .map((block) => {
@@ -56,7 +57,9 @@ export function designedReceiptHtml(
           if (block.kind === 'text')
             return `<pre class="${block.alignment} ${block.emphasis}" dir="auto">${receiptHtmlText(block.text, locale)}</pre>`;
           if (block.kind === 'logo')
-            return receipt.receiptLogoPng && /^[A-Za-z0-9+/]+=*$/.test(receipt.receiptLogoPng)
+            return format === 'A4' &&
+              receipt.receiptLogoPng &&
+              /^[A-Za-z0-9+/]+=*$/.test(receipt.receiptLogoPng)
               ? `<img alt="Pharmacy logo" width="${Math.round((block.maxWidthMm * 96) / 25.4)}" src="data:image/png;base64,${receipt.receiptLogoPng}">`
               : '';
           const matrix = encodeQr(block.url);

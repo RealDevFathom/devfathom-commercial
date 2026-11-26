@@ -201,3 +201,21 @@ it('prints the recorded facts ahead of oversized legacy branding', () => {
   expect(text.indexOf('Receipt: 101')).toBeGreaterThan(-1);
   expect(text.indexOf('Legacy branding')).toBeGreaterThan(text.indexOf('Receipt: 101'));
 });
+
+it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
+  'prints the saved logo only on A4 when rendering %s',
+  (format) => {
+    const sale = {
+      ...receiptDesignSample,
+      receiptLayout: {
+        ...styled,
+        logo: { assetId: '11111111-1111-4111-8111-111111111111', maxWidthMm: 32 },
+      },
+      receiptLogoPng: 'cG5n',
+    };
+    const html = buildCounterBrowserReceipt(sale, 'en', format);
+    if (format === 'A4') expect(html).toContain('src="data:image/png;base64,cG5n"');
+    else expect(html).not.toContain('<img');
+    expect(html).toContain('Sample Community Pharmacy');
+  }
+);
