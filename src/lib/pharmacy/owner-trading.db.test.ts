@@ -388,6 +388,37 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       );
     });
   });
+  it('counts the same waiting controlled entries as the owner’s supplier return register', async () => {
+    const { countLegacySupplierDispatches, legacySupplierDispatches } =
+      await import('./supplier-returns-operations');
+    await scoped.withTenantDb(org, async (db) => {
+      await db.organizationDepartment.create({
+        data: { organizationId: org, key: 'Pharmacy', name: 'Pharmacy' },
+      });
+      const role = await db.organizationRole.create({
+        data: { organizationId: org, key: 'owner', name: 'Owner', isSystem: true },
+      });
+      const owner = await db.user.create({
+        data: {
+          organizationId: org,
+          organizationRoleId: role.id,
+          email: 'owner@example.test',
+          name: 'Synthetic owner',
+          department: 'Pharmacy',
+          title: 'Owner',
+          role: 'ADMIN',
+          status: 'ACTIVE',
+        },
+      });
+      const scope = { organizationId: org, branchId: id, actorId: owner.id };
+      const page = await legacySupplierDispatches(db, scope);
+      expect(page).not.toBeNull();
+      expect(await countLegacySupplierDispatches(db, scope)).toBe(page!.rows.length);
+      expect(
+        await countLegacySupplierDispatches(db, { ...scope, actorId: 'unassigned' })
+      ).toBeNull();
+    });
+  });
   it('preserves outstanding card attempts across a business-day boundary', async () => {
     const { readOpenWork } = await import('./owner-watch');
     const { countOpenCardTerminalAttempts } = await import('./card-terminal/open-attempts');

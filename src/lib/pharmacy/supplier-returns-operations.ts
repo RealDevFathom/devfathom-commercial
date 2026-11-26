@@ -314,15 +314,8 @@ type LegacySupplierDispatch = {
   sender: string;
 };
 
-/** New controlled dispatches cannot reach DISPATCHED without a register row.
- * This read never signs evidence, consumes a credential or posts stock.
- */
-export async function legacySupplierDispatches(db: ScopedDb, scope: LedgerScope, after?: string) {
-  if (!(await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId))) return null;
-  const rows = await db.$queryRaw<LegacySupplierDispatch[]>`
-    SELECT l.id AS "lineId", d.id AS "purchaseReturnId", b."batchNumber" AS batch,
-           l."quantityUnits" AS quantity, s.name AS supplier, d."dispatchedAt",
-           COALESCE(u.name, d."dispatchedByUserId") AS sender
+function pendingSupplierDispatches(scope: LedgerScope) {
+  return Prisma.sql`
     FROM pharmacy_purchase_returns d
     JOIN pharmacy_purchase_return_lines l ON l."organizationId" = d."organizationId" AND l."purchaseReturnId" = d.id
     JOIN pharmacy_inventory_lots lot ON lot."organizationId" = l."organizationId" AND lot.id = l."inventoryLotId"
@@ -337,9 +330,30 @@ export async function legacySupplierDispatches(db: ScopedDb, scope: LedgerScope,
           JOIN pharmacy_stock_movements receipt ON receipt."organizationId" = purchase."organizationId" AND receipt.id = purchase."stockMovementId"
           WHERE purchase."organizationId" = l."organizationId" AND purchase."inventoryLotId" = l."inventoryLotId"
             AND purchase."entryKind" = 'PURCHASE' AND receipt."occurredAt" <= d."dispatchedAt")
-      ) AND l.id > ${after ?? ''}
+      )
       AND NOT EXISTS (SELECT FROM pharmacy_controlled_register_entries e
-        WHERE e."organizationId" = l."organizationId" AND e."supplierReturnLineId" = l.id)
+        WHERE e."organizationId" = l."organizationId" AND e."supplierReturnLineId" = l.id)`;
+}
+
+/** Count the admitted branch's unsigned legacy entries without reading every page of evidence. */
+export async function countLegacySupplierDispatches(db: ScopedDb, scope: LedgerScope) {
+  if (!(await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId))) return null;
+  const [row] = await db.$queryRaw<
+    { count: number }[]
+  >`SELECT COUNT(*)::int AS count ${pendingSupplierDispatches(scope)}`;
+  return row.count;
+}
+
+/** New controlled dispatches cannot reach DISPATCHED without a register row.
+ * This read never signs evidence, consumes a credential or posts stock.
+ */
+export async function legacySupplierDispatches(db: ScopedDb, scope: LedgerScope, after?: string) {
+  if (!(await isLiveOrganizationOwner(db, scope.organizationId, scope.actorId))) return null;
+  const rows = await db.$queryRaw<LegacySupplierDispatch[]>`
+    SELECT l.id AS "lineId", d.id AS "purchaseReturnId", b."batchNumber" AS batch,
+           l."quantityUnits" AS quantity, s.name AS supplier, d."dispatchedAt",
+           COALESCE(u.name, d."dispatchedByUserId") AS sender
+    ${pendingSupplierDispatches(scope)} AND l.id > ${after ?? ''}
     ORDER BY l.id LIMIT 51`;
   return { rows: rows.slice(0, 50), next: rows.length > 50 ? rows[49]!.lineId : null };
 }

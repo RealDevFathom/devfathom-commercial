@@ -7,7 +7,7 @@ import { listKhataLedger } from './family-khata';
 import { readKhataAgingMinor } from './reports';
 import { roleDashboard } from './stock-signals-operations';
 import { purchaseOrderScopeWhere } from './purchasing-console';
-import { legacySupplierDispatches } from './supplier-returns-operations';
+import { countLegacySupplierDispatches } from './supplier-returns-operations';
 import { countOutstandingCardAttempts } from './card-terminal/open-attempts';
 
 export type WatchRow = {
@@ -182,13 +182,9 @@ export async function readOpenWork(
   if (access.controlled) {
     let count = 0;
     for (const branchId of branchIds) {
-      let cursor: string | undefined;
-      do {
-        const page = await legacySupplierDispatches(db, { ...scope, branchId }, cursor);
-        if (!page) return rows;
-        count += page.rows.length;
-        cursor = page.next ?? undefined;
-      } while (cursor);
+      const pending = await countLegacySupplierDispatches(db, { ...scope, branchId });
+      if (pending === null) return rows;
+      count += pending;
     }
     add(
       'Controlled-register entries waiting',
