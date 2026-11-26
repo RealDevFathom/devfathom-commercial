@@ -332,7 +332,7 @@ export async function readPharmacyCashShiftReport(
   if (shift.cashierId !== scope.actorId && !options.actorIsManager)
     throw new PharmacySettlementError('DRAWER_NOT_YOURS');
   if (shift.status === 'CLOSED') {
-    const late = await lateOfflineCash(db, scope, { shiftId });
+    const late = await lateOfflineCash(db, scope, { shiftIds: [shiftId] });
     return {
       ...(shift.report as unknown as CashShiftReport),
       status: 'CLOSED',
@@ -851,14 +851,20 @@ export async function readPharmacyDayShifts(
     orderBy: [{ drawerSessionId: 'asc' }, { sequence: 'asc' }],
   });
   if (!shifts.length) return { shifts: [], lateArrivals: null };
+  const lateCash = await lateOfflineCash(db, scope, {
+    shiftIds: shifts.filter((s) => s.status === 'CLOSED').map((s) => s.id),
+  });
   const reports = [];
-  for (const shift of shifts)
+  for (const shift of shifts) {
+    const supplement = lateCash.filter((row) => row.shiftId === shift.id);
     reports.push({
       ...(shift.status === 'CLOSED'
         ? (shift.report as unknown as CashShiftReport)
         : await buildReport(db, scope, shift, toleranceMinor)),
       status: shift.status,
+      ...(supplement.length ? { lateOfflineCash: supplement } : {}),
     });
+  }
   const ids = shifts.map((s) => s.id);
   const lateWhere = { organizationId: scope.organizationId, lateArrivalShiftId: { in: ids } };
   const [lateTenders, lateRefunds, lateMovements] = await Promise.all([

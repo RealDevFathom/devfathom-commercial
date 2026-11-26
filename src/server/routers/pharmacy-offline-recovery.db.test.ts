@@ -1000,65 +1000,84 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
       vi.useRealTimers();
     }
   });
-  it('shows rejected cash as a dated late receipt on its closed shift and recording day', async () => {
-    const counter = await setup();
-    const scope = scopeOf(counter.fixture);
-    const { closePharmacyCashShift, readPharmacyCashShiftReport } =
-      await import('@/lib/pharmacy/cash-shifts');
-    const { readPharmacyClose, closePharmacyDay } = await import('@/lib/pharmacy/day-close');
-    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
-    const command = counter.chain.seal(counter.command);
-    const shift = await inOrg(ORG_A, (db) =>
-      db.pharmacyCashShift.findFirstOrThrow({ where: { deviceId: counter.fixture.deviceId } })
-    );
-    const frozen = await inOrg(ORG_A, async (db) => {
-      const result = await closePharmacyCashShift(
-        db,
-        scope,
-        { shiftId: shift.id, countedCashMinor: 0 },
-        { actorIsManager: true }
+  it.each([0, 1])(
+    'shows rejected cash on its closed shift and recording day after %i days',
+    async (daysLater) => {
+      const counter = await setup();
+      const scope = scopeOf(counter.fixture);
+      const { closePharmacyCashShift, readPharmacyCashShiftReport } =
+        await import('@/lib/pharmacy/cash-shifts');
+      const { readPharmacyClose, closePharmacyDay } = await import('@/lib/pharmacy/day-close');
+      const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+      const command = counter.chain.seal(counter.command);
+      const shift = await inOrg(ORG_A, (db) =>
+        db.pharmacyCashShift.findFirstOrThrow({ where: { deviceId: counter.fixture.deviceId } })
       );
-      const preview = await readPharmacyClose(db, scope, shift.businessDate);
-      await closePharmacyDay(db, scope, {
-        businessDate: shift.businessDate,
-        sourceHash: preview.totals.sourceHash,
-        counts: [{ drawerSessionId: shift.drawerSessionId, countedCashMinor: 0 }],
-        varianceNote: '',
-      });
-      return result.report;
-    });
-    const response = await counter.call(
-      'reject',
-      { command, reason: 'Late cash after close' },
-      {
-        'idempotency-key': command.idempotencyKey,
-        'x-command-signature': signPharmacyCommand(
+      const frozen = await inOrg(ORG_A, async (db) => {
+        const result = await closePharmacyCashShift(
+          db,
           scope,
-          counter.fixture.deviceId,
-          command,
-          counter.fixture.deviceSecret
-        ),
-      }
-    );
-    expect(response.status, JSON.stringify(await response.json())).toBe(200);
-    await inOrg(ORG_A, async (db) => {
-      const report = await readPharmacyCashShiftReport(db, scope, shift.id, {
-        actorIsManager: true,
+          { shiftId: shift.id, countedCashMinor: 0 },
+          { actorIsManager: true }
+        );
+        const preview = await readPharmacyClose(db, scope, shift.businessDate);
+        await closePharmacyDay(db, scope, {
+          businessDate: shift.businessDate,
+          sourceHash: preview.totals.sourceHash,
+          counts: [{ drawerSessionId: shift.drawerSessionId, countedCashMinor: 0 }],
+          varianceNote: '',
+        });
+        return result.report;
       });
-      expect(report.cash).toEqual(frozen.cash);
-      expect(report.lateOfflineCash).toMatchObject([
-        {
-          receiptNumber: command.leasedReceipt.receiptNumber,
-          amountMinor: command.amountMinor,
-          shiftId: shift.id,
-          soldAt: command.leasedReceipt.originalSaleAt,
-        },
-      ]);
-      const day = await readPharmacyClose(db, scope, shift.businessDate);
-      expect(day.lateOfflineCash).toEqual(report.lateOfflineCash);
-      expect(day.close?.reopen).toBeNull();
-    });
-  });
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(Date.now() + daysLater * 86_400_000));
+      try {
+        await counter.establish();
+        const response = await counter.call(
+          'reject',
+          { command, reason: 'Late cash after close' },
+          {
+            'idempotency-key': command.idempotencyKey,
+            'x-command-signature': signPharmacyCommand(
+              scope,
+              counter.fixture.deviceId,
+              command,
+              counter.fixture.deviceSecret
+            ),
+          }
+        );
+        expect(response.status, JSON.stringify(await response.json())).toBe(200);
+        await inOrg(ORG_A, async (db) => {
+          const report = await readPharmacyCashShiftReport(db, scope, shift.id, {
+            actorIsManager: true,
+          });
+          expect(report.cash).toEqual(frozen.cash);
+          expect(report.lateOfflineCash).toMatchObject([
+            {
+              receiptNumber: command.leasedReceipt.receiptNumber,
+              amountMinor: command.amountMinor,
+              shiftId: shift.id,
+              soldAt: command.leasedReceipt.originalSaleAt,
+            },
+          ]);
+          const day = await readPharmacyClose(db, scope, shift.businessDate);
+          expect(day.shifts?.find((s) => s.shiftId === shift.id)?.lateOfflineCash).toEqual(
+            report.lateOfflineCash
+          );
+          const recordingDay = await readPharmacyClose(
+            db,
+            scope,
+            new Date(shift.businessDate.getTime() + daysLater * 86_400_000)
+          );
+          expect(recordingDay.lateOfflineCash).toEqual(report.lateOfflineCash);
+          if (daysLater) expect(day.lateOfflineCash).toBeUndefined();
+          expect(day.close?.reopen).toBeNull();
+        });
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  );
   it('audits a synthetic failed seal, quarantines only its position, and books its signed successor', async () => {
     const counter = await setup();
     const sealed = counter.chain.seal(counter.command);

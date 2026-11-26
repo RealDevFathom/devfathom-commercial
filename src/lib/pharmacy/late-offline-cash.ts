@@ -13,12 +13,13 @@ export type LateOfflineCash = {
 export async function lateOfflineCash(
   db: ScopedDb,
   scope: LedgerScope,
-  filter: { shiftId: string } | { recordedDay: Date }
+  filter: { shiftIds: string[] } | { recordedDay: Date }
 ): Promise<LateOfflineCash[]> {
+  if ('shiftIds' in filter && !filter.shiftIds.length) return [];
   await db.$queryRaw`SELECT set_config('app.current_branch_id',${scope.branchId},true)`;
   const selection =
-    'shiftId' in filter
-      ? Prisma.sql`"shiftId"=${filter.shiftId}`
+    'shiftIds' in filter
+      ? Prisma.sql`"shiftId" IN (${Prisma.join(filter.shiftIds)})`
       : Prisma.sql`"recordedDay"=${filter.recordedDay}::date`;
   const rows = await db.$queryRaw<
     (Omit<LateOfflineCash, 'soldAt' | 'recordedAt'> & { soldAt: Date; recordedAt: Date })[]
