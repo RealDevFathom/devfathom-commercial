@@ -6,10 +6,7 @@ import type {
   PharmacyPrintBridge as PharmacyPrintBridgeRow,
   PharmacyPrintJob,
 } from '@/generated/prisma/client';
-import {
-  RawPrintValidationError,
-  type PrintDocument,
-} from '@/lib/restaurant/printing/contract';
+import { RawPrintValidationError, type PrintDocument } from '@/lib/restaurant/printing/contract';
 import { renderPharmacyThermal } from './receipt-thermal-design';
 import { resolveTransport } from '@/lib/restaurant/printing/target';
 import {
