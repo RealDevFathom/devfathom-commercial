@@ -264,6 +264,54 @@ describe('isolated Pharmacy browser receipt', () => {
     expect(html).toContain('پاکستانی روپے');
     expect(html).not.toContain(type + ':');
   });
+  it.each([
+    ['CARD', 'No slip details'],
+    ['BANK_TRANSFER', 'No transfer details'],
+  ])(
+    'prints missing %s evidence on browser receipts, raw receipts and the day close',
+    (type, label) => {
+      const source = {
+        ...receipt,
+        tenders: [{ ...receipt.tenders[0]!, type, paymentDetails: label }],
+      };
+      expect(buildCounterBrowserReceipt(source, 'en', 'A4')).toContain(label);
+      const raw = buildPharmacyReceiptPrintDocument(source, 'en', {
+        layout: DEFAULT_RECEIPT_LAYOUT,
+        taxIdentity: { ntn: null, strn: null },
+        reprint: false,
+      });
+      expect(raw.receiptSnapshot?.facts.payments.join(' ')).toContain(label);
+      const report = buildCounterBrowserZReport(
+        {
+          id: 'close',
+          branchName: 'Test',
+          businessDate: '2026-10-22',
+          currency: 'PKR',
+          sequence: 1,
+          grossSalesMinor: 190,
+          refundTotalMinor: 0,
+          netSalesMinor: 190,
+          cashExpectedMinor: 0,
+          cashCountedMinor: 0,
+          cashVarianceMinor: 0,
+          reason: null,
+          isFinal: true,
+          tenderTotals: [
+            {
+              type,
+              amountMinor: 190,
+              refundMinor: 0,
+              netMinor: 190,
+              details: [{ id: 'private-tender-id', label, amountMinor: 190 }],
+            },
+          ],
+        },
+        'en'
+      );
+      expect(report).toContain(label);
+      expect(report).not.toContain('private-tender-id');
+    }
+  );
   it('prints loyalty points in English browser and raw thermal receipts', () => {
     const source = {
       ...receipt,

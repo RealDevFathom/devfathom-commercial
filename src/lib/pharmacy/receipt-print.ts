@@ -39,6 +39,7 @@ import {
   formatReceiptExpiry,
   formatReceiptIssuedAt,
   receiptCashReceived,
+  receiptTenderLine,
   receiptOfflineReferenceLine,
   receiptPromotionLabel,
   type CounterReceipt,
@@ -154,10 +155,7 @@ function escPosFacts(
     ],
     payments: [
       ...(receipt.tenders.length
-        ? receipt.tenders.map(
-            (tender) =>
-              `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor)}`
-          )
+        ? receipt.tenders.map((tender) => receiptTenderLine(tender, 'en'))
         : ['Payment details unavailable']),
       ...(memo ? [`\n${memo.signature}`] : []),
     ],

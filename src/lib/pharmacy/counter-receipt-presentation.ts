@@ -13,6 +13,8 @@ import {
   localizeReceiptNumber,
   receiptTitle,
   receiptCashReceived,
+  receiptTenderLine,
+  missingReceiptPaymentDetails,
   receiptOfflineReferenceLine,
   receiptPromotionLabel,
   type CounterReceipt,
@@ -208,10 +210,7 @@ export function buildCounterReceiptPreview(
       ],
       payments: [
         ...(receipt.tenders.length
-          ? receipt.tenders.map(
-              (tender) =>
-                `${strings.tenderName[tender.type] ?? tender.type}: ${formatMinor(tender.amountMinor, locale)}`
-            )
+          ? receipt.tenders.map((tender) => receiptTenderLine(tender, locale))
           : [labels[locale].payments]),
         // The qualified person signs the printed memo by hand.
         ...(memo ? [`\n${memo.signature}`] : []),
@@ -287,6 +286,13 @@ export function buildCounterZReportPreview(
       ? []
       : tenderTotalsSchema.parse(report.tenderTotals).flatMap((row) => [
           `${row.type}: ${formatMinor(row.amountMinor, locale)} · ${locale === 'ur' ? 'واپسی' : 'Refunds'}: ${formatMinor(row.refundMinor, locale)} · ${locale === 'ur' ? 'خالص' : 'Net'}: ${formatMinor(row.netMinor, locale)}`,
+          ...[
+            ...new Set(
+              row.details
+                ?.map(({ label }) => missingReceiptPaymentDetails(row.type, label))
+                .filter(Boolean)
+            ),
+          ],
           // DEV-713: who confirmed this type's manual card or wallet payments.
           ...(row.confirmers ?? []).map(
             (confirmer) =>
