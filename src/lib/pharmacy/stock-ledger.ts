@@ -47,6 +47,7 @@ export type LedgerScope = {
 
 type CandidateRow = {
   wholePackOnly?: boolean;
+  countable?: boolean;
   inventoryLotId: string;
   stockLocationId: string;
   organizationId: string;
@@ -174,7 +175,11 @@ async function loadCandidates(
   const packPolicy = readCounterPackPolicy
     ? Prisma.sql`,
     (SELECT "wholePackOnly" FROM pharmacy_medicines WHERE id = ${medicineId}
-      AND "organizationId" = ${scope.organizationId}) AS "wholePackOnly"`
+      AND "organizationId" = ${scope.organizationId}) AS "wholePackOnly",
+    EXISTS (SELECT FROM pharmacy_pack_levels pl JOIN pharmacy_presentations p
+      ON p.id=pl."presentationId" AND p."organizationId"=pl."organizationId"
+      WHERE pl.id=lot."packLevelId" AND pl."organizationId"=lot."organizationId"
+        AND p."medicineId"=batch."medicineId" AND p."dosageForm" ~* 'tablet|capsule') AS countable`
     : Prisma.empty;
   const query = Prisma.sql`
     SELECT ${candidateColumns(counterHolds)}${packPolicy}
@@ -880,7 +885,13 @@ async function postSaleMovements(
     }
     let availableLoose = row.looseUnits;
     let availableSealed = row.sealedPacks;
-    if (sale && sale.unit !== 'PACK' && !row.wholePackOnly && row.unitsPerPack > 1) {
+    if (
+      sale &&
+      sale.unit !== 'PACK' &&
+      row.countable &&
+      !row.wholePackOnly &&
+      row.unitsPerPack > 1
+    ) {
       const plan = planBreakPack({ ...row, requiredLooseUnits: allocation.units });
       for (let pack = 0; pack < plan.packsToBreak; pack++) {
         await postPackOpening(db, scope, {

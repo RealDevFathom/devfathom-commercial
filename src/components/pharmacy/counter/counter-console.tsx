@@ -184,6 +184,7 @@ import { CounterSignOut } from './counter-sign-out';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import {
   counterUnitNoun,
+  preferredSaleUnitOption,
   plural,
   looseSaleUnitOption,
   onHandInSaleUnitLabel,
@@ -339,6 +340,8 @@ function scannedSaleOption(row: CounterSearchRow) {
 }
 
 function counterAddOption(row: CounterSearchRow, kind: SaleUnitKind) {
+  if (counterUnitNoun(row.dosageForm) === 'unit')
+    return preferredSaleUnitOption(row.saleUnits, row.dosageForm);
   const requested =
     kind === 'UNIT'
       ? looseSaleUnitOption(row.saleUnits)

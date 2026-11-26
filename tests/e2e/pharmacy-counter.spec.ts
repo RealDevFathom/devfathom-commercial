@@ -2357,7 +2357,6 @@ test.describe('Counter server features', () => {
     await openDrawer(page);
     const { otc, syrup } = PHARMACY_E2E.medicines;
     for (const med of [otc, syrup]) {
-      if (med === syrup) await page.getByLabel('Scan or search').press('F3');
       await search(page, med.name);
       await addFirstResult(page, med.name);
       await expect(billLine(page, med.name)).toBeVisible();

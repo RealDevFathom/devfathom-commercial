@@ -8900,6 +8900,26 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
     }
   );
 
+  it('review: typed syrup defaults to a whole bottle', async () => {
+    const row = barcodeRow({
+      dosageForm: 'Syrup',
+      unitsPerPack: 60,
+      onHandUnits: 120,
+      saleUnits: [
+        { ...STRIP, kind: 'PACK', canonicalUnitsPerSaleUnit: 60, levelLabel: 'BOTTLE' },
+        LOOSE,
+      ],
+    });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    act(() => mocks.searchProps.mock.lastCall![0].onAdd!(row));
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+        expect.objectContaining({ quantity: 1, saleUnit: 'PACK', canonicalUnitsPerSaleUnit: 60 })
+      )
+    );
+  });
+
   it('DEV-1041: uses the smallest offered size when loose sale is unavailable and explains it on the line', async () => {
     const pack = {
       ...STRIP,
@@ -8908,7 +8928,7 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
       canonicalUnitsPerSaleUnit: 40,
     };
     const row = barcodeRow({
-      dosageForm: 'Powder',
+      dosageForm: 'Tablet',
       unitsPerPack: 40,
       onHandUnits: 80,
       saleUnits: [pack, STRIP],

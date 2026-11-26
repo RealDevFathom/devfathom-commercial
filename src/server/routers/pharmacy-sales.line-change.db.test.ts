@@ -253,6 +253,7 @@ async function stockedItem(
     openedUnits?: number;
     unitsPerPack?: number;
     boxOfThreeStrips?: boolean;
+    dosageForm?: string;
   } = {}
 ): Promise<StockedItem> {
   itemCount += 1;
@@ -269,7 +270,7 @@ async function stockedItem(
         presentations: {
           create: flags.boxOfThreeStrips
             ? { dosageForm: 'Tablet', presentation: '3 x 10 tablets' }
-            : { presentation: 'Tablet, 10 per strip' },
+            : { presentation: '10 per pack', dosageForm: flags.dosageForm ?? 'Tablet' },
         },
       },
       include: { presentations: true },
@@ -638,6 +639,17 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
     ).toHaveLength(1);
     expect(await balance(item)).toMatchObject({ onHandUnits: 0, sealedPacks: 0, looseUnits: 0 });
     await expectStockMatchesBills(item.medicineId, 10);
+  });
+  it('review: a syrup cannot auto-open at the counter', async () => {
+    const item = await stockedItem(
+      'Synthetic syrup',
+      [{ expiresAt: '2032-01-01', units: 20, mrp: 2000 }],
+      { openedUnits: 0, dosageForm: 'Syrup' }
+    );
+    await expect(bill(ids.cashier, [(id) => loose(item, id, 1)])).rejects.toThrow();
+    expect((await history(item)).filter((m) => m.kind === 'BREAK_PACK')).toHaveLength(0);
+    await bill(ids.cashier, [(id) => ({ ...strip(item, id, 1), saleUnit: 'PACK' })]);
+    expect(await balance(item)).toMatchObject({ sealedPacks: 1, looseUnits: 0 });
   });
   it('does not break single-unit packs or whole-pack-only catalogue items', async () => {
     const single = await stock(4, 0, 1);
