@@ -3,6 +3,7 @@ import {
   PHARMACY_FINANCE_MANAGE,
   type PharmacyFinanceAction,
 } from '@/lib/abac/pharmacy-finance-actions';
+import { assignedRegisterBranchIds } from './controlled-register';
 import { TRPCError } from '@trpc/server';
 import type { TRPCContext } from '@/server/trpc';
 import { can, subjectFromSession, type CanOptions } from '@/lib/abac';
@@ -47,4 +48,28 @@ export async function requirePharmacyFinance(
     ))
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Finance permission is required.' });
+}
+
+/** Admission inside the tenant is independent of the finance grant. */
+export async function requireFinanceBranchAssignment(
+  ctx: Pick<TRPCContext, 'session' | 'db' | 'entitlements' | 'organization'>,
+  branchId: string
+) {
+  const user = ctx.session?.user;
+  const org = ctx.entitlements.organizationId;
+  if (
+    !user?.id ||
+    !org ||
+    org !== ctx.organization?.id ||
+    (user.organizationId && user.organizationId !== org)
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Organization is outside your finance scope.',
+    });
+  if (
+    user.role !== 'ADMIN' &&
+    !(await assignedRegisterBranchIds(ctx.db, org, user.id)).includes(branchId)
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your finance scope.' });
 }
