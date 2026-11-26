@@ -1,12 +1,23 @@
 import { createHmac } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { z } from 'zod';
 
 vi.mock('server-only', () => ({}));
 
 const mocks = vi.hoisted(() => ({
   resolveOrganization: vi.fn(),
-  createTenantDb: vi.fn(() => ({})),
+  createTenantDb: vi.fn(() => ({
+    $queryRaw: async () => [
+      {
+        id: 'fixture-config',
+        organizationId: 'org_acme',
+        encryptedSigningSecret: null,
+        previousEncryptedSigningSecret: null,
+        previousSigningSecretExpiresAt: null,
+        webhookKeysDeployedAt: new Date(),
+        legacyRetired: false,
+      },
+    ],
+  })),
   recordInboundWebhook: vi.fn(),
 }));
 
@@ -19,18 +30,10 @@ vi.mock('@/lib/tenancy/host', () => ({
   resolveExplicitOrganizationByHost: mocks.resolveOrganization,
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.createTenantDb }));
-vi.mock('@/lib/restaurant/webhook-inbox', () => {
-  return {
-    recordInboundWebhook: mocks.recordInboundWebhook,
-    webhookEnvelopeSchema: z
-      .object({
-        externalEventId: z.string().min(1).max(200),
-        eventType: z.string().min(1).max(200).optional(),
-        payload: z.record(z.string(), z.unknown()),
-      })
-      .strict(),
-  };
-});
+vi.mock('@/lib/restaurant/webhook-inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/webhook-inbox')>()),
+  recordInboundWebhook: mocks.recordInboundWebhook,
+}));
 
 import { POST } from './route';
 
@@ -132,6 +135,15 @@ describe('terminal webhook replay', () => {
       externalEventId: 'evt_replay_1',
     });
     expect(mocks.recordInboundWebhook).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a fresh fixture with a mismatched signature before calling the inbox writer', async () => {
+    const request = signedRequest(String(Math.floor(Date.now() / 1000)));
+    request.headers.set('x-webhook-signature', '0'.repeat(64));
+    const response = await call(request);
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Invalid webhook signature.' });
+    expect(mocks.recordInboundWebhook).not.toHaveBeenCalled();
   });
 
   it('rejects a timestamp outside five minutes before writing the inbox', async () => {
