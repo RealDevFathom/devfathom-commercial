@@ -93,9 +93,6 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       select: { id: true },
     })
   );
-  const readDecision = () =>
-    withTenantDb(organization.id, (db) => registeredReadDecision(db, session.user, name));
-  let decision: Awaited<ReturnType<typeof readDecision>> | undefined;
   const licenceDenied =
     !!licenceEvidence &&
     !(await withTenantDb(organization.id, (db) =>
@@ -107,9 +104,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       )
     ));
   if (licenceDenied) {
-    // A grandfathered upload may also have an independently readable typed record.
-    decision = await readDecision();
-    if (decision !== 'TYPED') return new Response('Not found', { status: 404 });
+    return new Response('Not found', { status: 404 });
   }
 
   const sopCaptureName = isSopCaptureName(name);
@@ -140,7 +135,6 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     sopEvidenceRow && (sopEvidenceRow.serverCaptured === true || sopCaptureName)
       ? sopEvidenceRow
       : null;
-  if (licenceDenied && sopEvidence) return new Response('Not found', { status: 404 });
   if (sopCaptureName && !sopEvidence) return new Response('Not found', { status: 404 });
   // DEV-751: proof on a pharmacy SOP site is governed by pharmacy branch
   // assignment and SOP capability, not by restaurant branch membership.
@@ -177,22 +171,21 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // bind or re-bind an object. An object the registry does not know (a legacy
   // file nothing references any more) is unresolved and is never served.
   if (!sopEvidence) {
-    decision ??= await readDecision();
+    const decision = await withTenantDb(organization.id, (db) =>
+      registeredReadDecision(db, session.user, name)
+    );
     if (decision === 'DENY') return new Response('Not found', { status: 404 });
   }
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
   // leaks a private-channel/DM file to any signed-in user.
-  const attachment =
-    decision === 'TYPED'
-      ? null
-      : await withTenantDb(organization.id, (db) =>
-          db.messageAttachment.findFirst({
-            where: { url: fileRef },
-            select: { message: { select: { channelId: true } } },
-          })
-        );
+  const attachment = await withTenantDb(organization.id, (db) =>
+    db.messageAttachment.findFirst({
+      where: { url: fileRef },
+      select: { message: { select: { channelId: true } } },
+    })
+  );
   if (attachment) {
     const member = await withTenantDb(organization.id, (db) =>
       db.channelMember.findUnique({

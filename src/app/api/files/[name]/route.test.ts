@@ -600,6 +600,28 @@ describe('private attachment delivery', () => {
     expect((await read('shared.png')).status).toBe(200);
   });
 
+  it('requires both channel membership and licence evidence access on a shared file', async () => {
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'CHAT_ATTACHMENT',
+      ownerId: 'attachment',
+      uploadedById: null,
+    });
+    db.branchRegulatoryProfile.findFirst.mockResolvedValue({ id: 'profile' });
+    db.messageAttachment.findFirst.mockResolvedValue({ message: { channelId: 'private' } });
+    db.channelMember.findUnique.mockResolvedValue({ id: 'member' });
+    expect((await read('shared.pdf')).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+    mocks.actor.mockResolvedValue(actor('ADMIN'));
+    db.uploadedFile.findFirst.mockResolvedValue({
+      ownerType: 'PHARMACY_LICENCE_EVIDENCE',
+      ownerId: 'branch',
+      uploadedById: null,
+    });
+    db.channelMember.findUnique.mockResolvedValue(null);
+    expect((await read('shared.pdf')).status).toBe(404);
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
   it('hides pharmacy licence evidence from non-admin tenant members before storage', async () => {
     db.uploadedFile.findFirst.mockResolvedValue({
       ownerType: 'PHARMACY_LICENCE_EVIDENCE',
