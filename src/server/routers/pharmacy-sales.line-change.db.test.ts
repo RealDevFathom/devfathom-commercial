@@ -7,6 +7,7 @@
  * idempotent retries, the audit trail, and no oversell or lost stock under concurrent writes.
  * Skipped unless TEST_DATABASE_URL is set.
  */
+import { overlappingStockTransactions } from '@/lib/test-support/overlapping-stock-transactions';
 import { randomBytes } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -655,9 +656,22 @@ describeIfDatabase('DEV-1049 counter pack opening', () => {
   });
   it('two cashiers competing for the final units can open and sell them only once', async () => {
     const item = await stock(10);
-    const attempts = await Promise.allSettled(
-      [ids.cashier, ids.cashierB].map((user) => bill(user, [(id) => loose(item, id, 10)]))
+    const first = await bill(ids.cashier, []);
+    const second = await bill(ids.cashierB, []);
+    const { outcomes: attempts, blockedMs } = await overlappingStockTransactions(
+      (hold) =>
+        act(ids.cashier, async (api, db) => {
+          const result = await api.addLine(loose(item, first.saleId, 10));
+          await hold(db);
+          return result;
+        }),
+      (announce) =>
+        act(ids.cashierB, async (api, db) => {
+          await announce(db);
+          return api.addLine(loose(item, second.saleId, 10));
+        })
     );
+    expect(blockedMs).toBeGreaterThanOrEqual(200);
     expect(attempts.filter((a) => a.status === 'fulfilled')).toHaveLength(1);
     expect(attempts.find((a) => a.status === 'rejected')).toMatchObject({
       reason: expect.objectContaining({ message: expect.stringMatching(/0 units available/i) }),
