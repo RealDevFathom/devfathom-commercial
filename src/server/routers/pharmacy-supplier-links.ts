@@ -47,7 +47,7 @@ async function assertBranch(ctx: TRPCContext, branchId: string) {
 
 function mapError(error: unknown): never {
   if (!(error instanceof SupplierLinkError)) throw error;
-  if (error.reason === 'INVALID_LINK') throw genericLinkError();
+  if (error.reason === 'INVALID_LINK' || error.exhausted) throw genericLinkError();
   throw new TRPCError({
     code:
       error.reason === 'LINK_LIMIT_EXCEEDED'
@@ -69,7 +69,10 @@ export const pharmacySupplierLinksRouter = router({
   }),
   submit: publicProcedure.input(supplierLinkSubmitInput).mutation(async ({ ctx, input }) => {
     try {
-      return await submitSupplierEvidence(ctx.db, input);
+      const result = await submitSupplierEvidence(ctx.db, input);
+      return ctx.session?.user
+        ? result
+        : { id: result.id, kind: result.kind, version: result.version };
     } catch (error) {
       mapError(error);
     }

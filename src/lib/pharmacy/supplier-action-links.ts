@@ -18,7 +18,8 @@ export class SupplierLinkError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_UPLOAD'
       | 'INVALID_CORRECTION'
-      | 'LINK_LIMIT_EXCEEDED'
+      | 'LINK_LIMIT_EXCEEDED',
+    public readonly exhausted = false
   ) {
     super(reason);
   }
@@ -85,8 +86,9 @@ async function assertLinkBudget(
       ? sum + size
       : Infinity;
   }, 0);
+  if (rows.length >= SUPPLIER_LINK_LIMITS.submissions)
+    throw new SupplierLinkError('LINK_LIMIT_EXCEEDED', true);
   if (
-    rows.length >= SUPPLIER_LINK_LIMITS.submissions ||
     usedBytes + bytes > SUPPLIER_LINK_LIMITS.totalPayloadBytes ||
     (kind === 'DOCUMENT' &&
       (documents.length >= SUPPLIER_LINK_LIMITS.documents ||
@@ -208,17 +210,22 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
   return link;
 }
 
+async function usableLink(db: ScopedDb, token: string) {
+  const link = await liveLink(db, token);
+  if (link._count.submissions >= SUPPLIER_LINK_LIMITS.submissions)
+    throw new SupplierLinkError('INVALID_LINK');
+  return link;
+}
+
 // Use the same live-link permission check before the HTTP transport reads a file.
 // The write checks it again inside the transaction in case it changed mid-upload.
 export async function assertSupplierDocumentPermission(db: ScopedDb, token: string) {
-  const link = await liveLink(db, token);
+  const link = await usableLink(db, token);
   return link.branchId;
 }
 
 export async function getSupplierActionPage(db: ScopedDb, token: string) {
-  const link = await liveLink(db, token);
-  if (link._count.submissions >= SUPPLIER_LINK_LIMITS.submissions)
-    throw new SupplierLinkError('INVALID_LINK');
+  const link = await usableLink(db, token);
   await recordAudit(
     {
       organizationId: link.organizationId,

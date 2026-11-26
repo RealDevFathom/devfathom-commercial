@@ -29,3 +29,16 @@ it('names each ordered item and shows its quantity to the supplier', () => {
   expect(screen.getByRole('spinbutton')).toHaveValue(4);
   expect(screen.getByRole('button', { name: 'Confirm order' })).toBeEnabled();
 });
+
+it('explains an empty order and keeps delivery and substitution actions disabled until filled', () => {
+  query.mockReturnValue({ data: { reference: 'PO-empty', lines: [] } });
+  render(<SupplierPoActionForm token="synthetic" />);
+  expect(screen.getByText(/there are no items on this order/i)).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Send delivery date' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Send substitution proposal' })).toBeDisabled();
+});
+it('shows progress while checking the link', () => {
+  query.mockReturnValue({ isLoading: true });
+  render(<SupplierPoActionForm token="synthetic" />);
+  expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Loading purchase order');
+});

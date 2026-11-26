@@ -393,3 +393,14 @@ it('refuses a full order even when the current link still has room', async () =>
   ).rejects.toMatchObject({ reason: 'LINK_LIMIT_EXCEEDED' });
   expect(s.rawDb.pharmacySupplierDocument.create).not.toHaveBeenCalled();
 });
+
+it('rejects an exhausted link before a new upload body is admitted', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  for (let i = 0; i < SUPPLIER_LINK_LIMITS.submissions; i++)
+    s.stored.push({ actionLinkId: s.stored[0].id, source: 'SIGNED_LINK' });
+  const { assertSupplierDocumentPermission } = await import('./supplier-action-links');
+  await expect(assertSupplierDocumentPermission(s.db, s.token)).rejects.toMatchObject({
+    reason: 'INVALID_LINK',
+  });
+});

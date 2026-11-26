@@ -57,7 +57,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     const token = request.headers.get(SUPPLIER_DOCUMENT_TOKEN_HEADER)?.trim();
     if (!token || token.length > 200) return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
     let organizationId = actor?.organization.id;
-    let linkId: string | null = null;
+    const linkId = supplierLinkId(token);
     if (outside) {
       const gate = await admitAnonymousRequest({
         kind: 'supplier-upload',
@@ -69,7 +69,6 @@ export const POST = uploadPost(async (request, readUploadForm) => {
         response.headers.set('Retry-After', String(gate.retryAfter));
         return response;
       }
-      linkId = supplierLinkId(token);
       const id = linkId && (await organizationForAnonymousToken(token));
       const org = id && (await resolveOrganizationById(id));
       if (!org || !isTenantLifecycleAccessible(org.status))
@@ -82,7 +81,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
       organizationId,
       async (db) => {
         const branchId = await assertSupplierDocumentPermission(db, token);
-        if (!actor) return { actionLinkId: linkId };
+        if (!actor) return {};
         if (
           !(await can(subjectFromSession(actor.session.user), 'pharmacy:procurement', undefined, {
             db,
@@ -157,6 +156,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
           outcome: 'SUCCESS',
           metadata: {
             ...branchAudit,
+            ...(linkId ? { actionLinkId: linkId } : {}),
             branchId: document.branchId,
             ...(user?.isSupportSession
               ? {
@@ -180,6 +180,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     if (error instanceof TRPCError && error.code === 'FORBIDDEN')
       return message(403, error.message);
     if (error instanceof SupplierLinkError) {
+      if (error.exhausted) return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
       switch (error.reason) {
         case 'INVALID_LINK':
           return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
