@@ -288,3 +288,16 @@ it('streams exact tRPC and portal upload routes without exempting their siblings
     expect(matches(route), route).toBe(true);
   }
 });
+
+it('serves only the single supplier order page privately without a session', async () => {
+  for (const path of ['/supplier/po/unknown', '/supplier/po/synthetic.token.signature']) {
+    const response = await proxy(tenantRequest(path));
+    expect(response.status).toBe(200);
+    expect(response.headers.get('location')).toBeNull();
+    expect(response.headers.get('referrer-policy')).toBe('no-referrer');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('x-robots-tag')).toContain('noindex');
+  }
+  for (const path of ['/supplier', '/supplier/po', '/supplier/po/order/manage'])
+    expect((await proxy(tenantRequest(path))).status).toBe(307);
+});
