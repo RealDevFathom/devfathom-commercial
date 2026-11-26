@@ -138,7 +138,9 @@ describe('a controlled line added while the check was off', () => {
   ];
   function registerDb(stored: Stored, marked: boolean) {
     const findFirst = vi.fn(async () => (marked ? { id: 'entry-1' } : null));
-    const { db } = dbWith(stored, { pharmacyControlledRegisterEntry: { findFirst } });
+    const { db } = dbWith(stored, {
+      pharmacyControlledRegisterEntry: { findFirst, count: vi.fn(async () => 2) },
+    });
     return { db, findFirst };
   }
 
@@ -169,6 +171,15 @@ describe('a controlled line added while the check was off', () => {
     });
   });
 
+  it.each([{ allocations: [] }, { allocations: [{ stockMovementId: null }] }])(
+    'requires stock evidence for every controlled line',
+    async ({ allocations }) => {
+      const { db } = registerDb('OFF', false);
+      await expect(
+        assertRxLinesPrescribed(db, [{ ...lines[0]!, allocations }], CASHIER)
+      ).rejects.toMatchObject({ reason: 'CONTROLLED_LINE_UNCHECKED' });
+    }
+  );
   it('leaves a controlled line a pharmacist authorized untouched', async () => {
     const { db } = registerDb('ON', false);
     await expect(assertRxLinesPrescribed(db, lines, CASHIER)).resolves.toBeUndefined();

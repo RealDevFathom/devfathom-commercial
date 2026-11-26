@@ -6085,7 +6085,10 @@ function ScopedPharmacyCounterConsole({
               <p>
                 {controlledBlock === 'NO_SAFETY_MODULE'
                   ? 'The controlled-medicine authorisation needs Pharmacy Safety, which is not switched on for this business, so it cannot be completed at this counter. Ask the owner.'
-                  : approvalCopy.controlledPharmacistOnly}
+                  : (saleReadiness.data as { requireControlledWitness?: boolean } | undefined)
+                        ?.requireControlledWitness === false
+                    ? 'Only a pharmacist can authorise it at this till. Ask the pharmacist on duty to open this bill and enter their own PIN or authenticator code.'
+                    : approvalCopy.controlledPharmacistOnly}
               </p>
             </CounterStateCard>
           ) : null}

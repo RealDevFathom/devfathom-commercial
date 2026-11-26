@@ -28,6 +28,7 @@ const SOURCE_LABELS: Readonly<Record<string, string>> = {
   pharmacy_branch_regulatory_profiles: 'branch pharmacist records',
   pharmacy_pharmacist_review_items: 'pharmacist reviews',
   pharmacy_pharmacist_review_decisions: 'pharmacist reviews',
+  pharmacy_controlled_register_entries: 'controlled-register entries',
   pharmacy_register_incidents: 'controlled-register incidents',
   pharmacy_khata_events: 'Khata records',
   pharmacy_fiscal_documents: 'fiscal documents',

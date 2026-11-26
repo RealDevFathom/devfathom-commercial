@@ -4652,6 +4652,28 @@ describe('PharmacyCounterConsole barcode safety', () => {
       }
     );
 
+    it('tells a cashier how one pharmacist can approve the same bill with both switches off', async () => {
+      const row = controlledPack();
+      mocks.queries.saleReadiness = query({
+        ready: true,
+        blockers: [],
+        warnings: [],
+        pharmacistCheckOff: true,
+        requireControlledWitness: false,
+      });
+      Object.assign(mocks.queries.controlledPharmacists!, {
+        isSuccess: false,
+        isError: true,
+        error: Object.assign(new Error('Forbidden'), { data: { code: 'FORBIDDEN' } }),
+      });
+      render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      scan(payload);
+      await screen.findByText('A pharmacist must approve this controlled medicine.');
+      const sheet = screen.getByRole('dialog', { name: `Authorise ${row.displayName}` });
+      expect(sheet).toHaveTextContent('open this bill');
+      expect(sheet).not.toHaveTextContent('an independent pharmacist');
+      expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    });
     it('lets the waiting pack go, and says so, when the sheet is closed without adding it', async () => {
       const row = controlledPack();
       render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);

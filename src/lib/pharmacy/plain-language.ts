@@ -299,7 +299,7 @@ export const SHOP_SCREEN_COPY = {
     financeAposSMarginComparisonSplitsDaysTheSameWay:
       ". Finance's margin comparison splits days the same way. It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock signals, recommended orders and expiry exposure to the matching stock lots and products. Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they show — while one is selected. The daily work pack and observed demand use branch/date scope only.",
     theSelectedBranchDoesNotApplyToThis:
-      'The selected branch does not apply to this queue. Date, supplier, ingredient and batch filters do not apply either. Unsigned pharmacist review items plus open controlled-register incidents, from pharmacist review and controlled-register records at read time.',
+      'The selected branch does not apply to this queue. Date, supplier, ingredient and batch filters do not apply either. Unsigned pharmacist review items, open controlled-register incidents and late controlled sales, from pharmacist review and controlled-register records at read time.',
     advisoryOnly: 'Advisory only',
     expiryAndSupplierReturnAdvisor: 'Expiry and supplier-return advisor',
     rankedByProjectedStockValueLeftAtExpiry:

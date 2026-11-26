@@ -97,12 +97,17 @@ async function assertControlledLinesChecked(
   }>,
   scope?: { organizationId: string }
 ): Promise<void> {
-  const movementIds = lines
-    .filter((line) => line.medicine?.controlled)
-    .flatMap((line) => line.allocations ?? [])
-    .map((allocation) => allocation.stockMovementId)
-    .filter((id): id is string => Boolean(id));
-  if (movementIds.length === 0) return;
+  const movementIds: string[] = [];
+  for (const line of lines) {
+    if (!line.medicine?.controlled) continue;
+    if (!line.allocations?.length) throw new PharmacyRxReferenceError('CONTROLLED_LINE_UNCHECKED');
+    for (const allocation of line.allocations) {
+      if (!allocation.stockMovementId)
+        throw new PharmacyRxReferenceError('CONTROLLED_LINE_UNCHECKED');
+      movementIds.push(allocation.stockMovementId);
+    }
+  }
+  if (!movementIds.length) return;
   const unchecked = await db.pharmacyControlledRegisterEntry.findFirst({
     where: {
       ...(scope?.organizationId ? { organizationId: scope.organizationId } : {}),
@@ -113,6 +118,15 @@ async function assertControlledLinesChecked(
     select: { id: true },
   });
   if (unchecked) throw new PharmacyRxReferenceError('CONTROLLED_LINE_UNCHECKED');
+  const recorded = await db.pharmacyControlledRegisterEntry.count({
+    where: {
+      ...(scope?.organizationId ? { organizationId: scope.organizationId } : {}),
+      entryKind: 'SALE',
+      stockMovementId: { in: movementIds },
+    },
+  });
+  if (recorded !== movementIds.length)
+    throw new PharmacyRxReferenceError('CONTROLLED_LINE_UNCHECKED');
 }
 
 export type PrescriptionReference = { prescriptionLineId: string; patientId: string };

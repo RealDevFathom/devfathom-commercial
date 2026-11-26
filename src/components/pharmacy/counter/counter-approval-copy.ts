@@ -76,7 +76,7 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
     controlledSecretNeeded: 'the pharmacist’s approval code',
     controlledReady: 'Ready. The pharmacist’s approval code is checked when the line is added.',
     controlledPharmacistOnly:
-      'Controlled medicines need the patient’s address, a prescription or an emergency supply, and an independent pharmacist’s approval code. Ask the pharmacist on duty to add it at this till.',
+      'Only a pharmacist can authorise it at this till. Ask the pharmacist on duty to open this bill. If a witness is required, they need an independent pharmacist’s approval code. Otherwise they enter their own code for a prescribed sale.',
   },
   PIN: {
     approverLabel: 'Approver PIN',
@@ -104,7 +104,7 @@ export const COUNTER_APPROVAL_COPY: Record<ApprovalSecretKind, CounterApprovalCo
     controlledSecretNeeded: "the pharmacist's PIN",
     controlledReady: "Ready. The pharmacist's PIN is checked when the line is added.",
     controlledPharmacistOnly:
-      "Controlled medicines need the patient's address, a prescription or an emergency supply, and an independent pharmacist's PIN. Ask the pharmacist on duty to add it at this till.",
+      "Only a pharmacist can authorise it at this till. Ask the pharmacist on duty to open this bill. If a witness is required, they need an independent pharmacist's PIN. Otherwise they enter their own PIN for a prescribed sale.",
   },
 };
 

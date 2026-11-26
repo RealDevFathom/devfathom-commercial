@@ -205,8 +205,8 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'safetyQueue',
     'Safety queue',
-    'Unsigned pharmacist review items plus open controlled-register incidents.',
-    'pharmacy_pharmacist_review_items + pharmacy_pharmacist_review_decisions + pharmacy_register_incidents',
+    'Unsigned pharmacist review items, open controlled-register incidents and late controlled sales.',
+    'pharmacy_pharmacist_review_items + pharmacy_pharmacist_review_decisions + pharmacy_register_incidents + pharmacy_controlled_register_entries',
     'selected branches at read time',
     '/pharmacy/pharmacist-queue',
     'reports:operational',
@@ -463,7 +463,9 @@ export async function readPharmacyOwnerCommandCentre(
             },
           }),
       db.$queryRaw<Array<{ value: number }>>(
-        Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
+        Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN')
+          + (SELECT COUNT(DISTINCT r."lateSaleLineId")::int FROM pharmacy_controlled_register_entries r
+             WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."lateSaleLineId" IS NOT NULL) AS value`
       ),
       dimensional
         ? none

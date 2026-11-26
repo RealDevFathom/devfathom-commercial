@@ -2994,3 +2994,167 @@ test('DEV-1043 — a dispensing pharmacist confirms a prescribed controlled sale
     await db.end();
   }
 });
+
+test('DEV-1043 — the standalone queue records a reclassified sale once with its reason and original time', async ({
+  page,
+}) => {
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const { organizationId, branchId, adminId, prescriberId, medicines, adminPin } = PHARMACY_E2E;
+  const medicine = medicines.rx;
+  const patient = randomUUID(),
+    rx = randomUUID(),
+    rxLine = randomUUID();
+  const name = 'Synthetic late review ' + patient.slice(0, 8);
+  const reason = 'The medicine classification changed after the original counter sale.';
+  let reclassified = false;
+  await db.connect();
+  try {
+    await db.query(
+      "SELECT set_config('app.current_organization_id',$1,false),set_config('app.current_branch_id',$2,false)",
+      [organizationId, branchId]
+    );
+    await db.query(
+      'INSERT INTO pharmacy_patients(id,"organizationId","displayName",cnic,address,"updatedAt") VALUES ($1,$2,$3,$4,$5,now())',
+      [patient, organizationId, name, '0000000000000', '12 Synthetic Street']
+    );
+    await db.query(
+      `INSERT INTO pharmacy_patient_consents(id,"organizationId","patientId",purpose,channel,version,granted,"recordedByUserId") VALUES ($1,$2,$3,'DISPENSING','IN_PERSON',1,true,$4)`,
+      [randomUUID(), organizationId, patient, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescriptions(id,"organizationId","patientId","prescriberId","sourceKind","sourceFileRef","validFrom","validUntil","capturedByUserId") VALUES ($1,$2,$3,$4,'PAPER_IMAGE','synthetic://late-classification',now()-interval '1 day',now()+interval '1 day',$5)`,
+      [rx, organizationId, patient, prescriberId, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_prescription_lines(id,"organizationId","prescriptionId","lineNumber","medicineId","presentationId","authorizedCanonicalUnits",directions) VALUES ($1,$2,$3,1,$4,$5,100,'Synthetic directions')`,
+      [rxLine, organizationId, rx, medicine.id, medicine.presentationId]
+    );
+    // The standalone clinical queue requires an explicit branch assignment, including for
+    // the synthetic counter administrator who already holds the dispensing grant.
+    await db.query(
+      `INSERT INTO pharmacy_branch_assignments(id,"organizationId","branchId","userId","updatedAt")
+      VALUES ($1,$2,$3,$4,now()) ON CONFLICT ("organizationId","branchId","userId") DO NOTHING`,
+      [randomUUID(), organizationId, branchId, adminId]
+    );
+    await signIn(page);
+    const deviceId = 'counter-' + randomUUID();
+    await trpcMutation(
+      page,
+      'pharmacySales.openDrawer',
+      {
+        branchId,
+        deviceId,
+        businessDate: workspaceToday('Asia/Karachi') + 'T00:00:00.000Z',
+        openingFloatMinor: 0,
+      },
+      ['businessDate']
+    );
+    const sale = await trpcMutation<{ id: string }>(page, 'pharmacySales.create', {
+      branchId,
+      deviceId,
+    });
+    const { line } = await trpcMutation<{ line: { id: string } }>(page, 'pharmacySales.addLine', {
+      branchId,
+      saleId: sale.id,
+      medicineId: medicine.id,
+      presentationId: medicine.presentationId,
+      packLevelId: medicine.packLevelIds.box,
+      saleUnit: 'PACK',
+      quantity: 1,
+      canonicalUnitsPerSaleUnit: medicine.unitsPerPack,
+      prescription: { prescriptionLineId: rxLine, patientId: patient },
+      idempotencyKey: randomUUID(),
+    });
+    const changed = await db.query(
+      'UPDATE pharmacy_medicines SET controlled=true WHERE id=$1 AND "organizationId"=$2 AND NOT controlled',
+      [medicine.id, organizationId]
+    );
+    expect(changed.rowCount).toBe(1);
+    reclassified = true;
+    await page.goto('/pharmacy/pharmacist-queue');
+    const queue = await trpcQuery<{ items: Array<{ saleLineId: string }> }>(
+      page,
+      'pharmacyDispensing.reviewQueue',
+      {}
+    );
+    const position = queue.items.findIndex((item) => item.saleLineId === line.id);
+    expect(position).toBeGreaterThanOrEqual(0);
+    const item = page.getByRole('list').getByRole('button').nth(position);
+    await pressControl(item);
+    const form = page.getByRole('form', { name: 'Record a late controlled sale entry' });
+    const submit = form.getByRole('button', { name: 'Record late entry' });
+    await form.getByLabel('Your PIN or authenticator code').fill(adminPin);
+    await expect(submit).toBeDisabled();
+    const why = form.getByLabel('Reason for the late entry');
+    await why.fill(reason);
+    for (const reducedMotion of ['no-preference', 'reduce'] as const)
+      await qaShots(page, 'late-controlled-review-' + reducedMotion, {
+        focus: why,
+        widths: QA_STATE_WIDTHS,
+        reducedMotion,
+      });
+    await pressControl(submit);
+    await expect(page.getByRole('list', { name: 'Decision history' })).toContainText(reason);
+    await expect(form).toHaveCount(0);
+    const rows = await db.query(
+      `SELECT r."lateEntryReason",r."recordedByUserId",r."witnessedByUserId",r."originalSaleAt"=l."createdAt" AS original,r."createdAt">l."createdAt" AS late,
+        a."actorId",a.metadata->>'approvalMethod' AS method FROM pharmacy_controlled_register_entries r
+        JOIN pharmacy_sale_lines l ON l.id=r."lateSaleLineId" JOIN pharmacy_pharmacist_review_decisions d ON d.id=r."signatureRef"
+        JOIN audit_logs a ON a.id=d."selfApprovalAuditId" WHERE l.id=$1`,
+      [line.id]
+    );
+    expect(rows.rows).toEqual([
+      {
+        lateEntryReason: reason,
+        recordedByUserId: adminId,
+        witnessedByUserId: null,
+        original: true,
+        late: true,
+        actorId: adminId,
+        method: 'PIN',
+      },
+    ]);
+    // The counter role cannot inspect the register. Use a separate branch-assigned safety reader.
+    const reader = randomUUID(),
+      role = randomUUID(),
+      email = reader + '@pharmacy-counter-e2e.devfathom.invalid';
+    await db.query(
+      `INSERT INTO organization_roles(id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,$1,'Synthetic register reader',now())`,
+      [role, organizationId]
+    );
+    await db.query(
+      `INSERT INTO organization_role_permissions(id,"organizationId","organizationRoleId",capability) VALUES ($1,$2,$3,'pharmacy:safety')`,
+      [randomUUID(), organizationId, role]
+    );
+    await db.query(
+      `INSERT INTO users(id,"organizationId","organizationRoleId",name,email,password,department,title,"updatedAt")
+      SELECT $1,"organizationId",$2,'Synthetic register reader',$3,password,department,'Safety reader',now() FROM users WHERE id=$4`,
+      [reader, role, email, adminId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_branch_assignments(id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
+      [randomUUID(), organizationId, branchId, reader]
+    );
+    await page.context().clearCookies();
+    await signIn(page, email);
+    await page.goto('/pharmacy/controlled-register');
+    await expect(page.getByText(/Needs attention · [1-9].*late controlled sale/)).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Controlled medicine register' })).toContainText(
+      reason
+    );
+    for (const reducedMotion of ['no-preference', 'reduce'] as const)
+      await qaShots(page, 'late-sale-register-' + reducedMotion, {
+        focus: page.getByRole('button', { name: 'Print register' }),
+        widths: QA_STATE_WIDTHS,
+        reducedMotion,
+      });
+  } finally {
+    if (reclassified)
+      await db.query(
+        'UPDATE pharmacy_medicines SET controlled=false WHERE id=$1 AND "organizationId"=$2',
+        [medicine.id, organizationId]
+      );
+    await db.end();
+  }
+});

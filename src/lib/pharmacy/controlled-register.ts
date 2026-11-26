@@ -196,6 +196,7 @@ type SaleRegisterInput = {
   recordedByUserId: string;
   witnessedByUserId: string | null;
   witnessStatement?: string;
+  late?: { lateSaleLineId: string; originalSaleAt: Date; lateEntryReason: string; createdAt: Date };
   signatureRef: string;
 };
 
@@ -217,21 +218,29 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
     });
     const quantityCanonicalUnits = -movement.quantityUnits;
     const balanceDelta = -quantityCanonicalUnits;
-    const runningBalance = await runningFromLot(
-      db,
-      {
-        organizationId: input.organizationId,
-        branchId: input.branchId,
-        medicineId: input.medicineId,
-        inventoryLotId: lot.id,
-      },
-      balanceDelta
-    );
+    // A retrospective entry records a movement already reflected in current stock.
+    const runningBalance = input.late
+      ? await sellableOnHand(db, {
+          organizationId: input.organizationId,
+          branchId: input.branchId,
+          inventoryLotId: lot.id,
+        })
+      : await runningFromLot(
+          db,
+          {
+            organizationId: input.organizationId,
+            branchId: input.branchId,
+            medicineId: input.medicineId,
+            inventoryLotId: lot.id,
+          },
+          balanceDelta
+        );
     await createRegisterRow(db, {
       organizationId: input.organizationId,
       branchId: input.branchId,
       serial: ++serial,
       entryKind: 'SALE',
+      ...input.late,
       prescriptionId: input.prescriptionId,
       prescriptionLineId: input.prescriptionLineId,
       patientId: input.patientId,

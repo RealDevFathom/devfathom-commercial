@@ -29,7 +29,10 @@ export function confirmControlledApproval(
   db: ScopedDb,
   scope: LedgerScope,
   authorization: Confirmation,
-  action: 'pharmacySales.controlledAuthorization' | 'pharmacy.controlledRestorationWitness'
+  action:
+    | 'pharmacySales.controlledAuthorization'
+    | 'pharmacy.controlledRestorationWitness'
+    | 'pharmacyDispensing.lateControlledReview'
 ) {
   // Own credential attempts commit separately so an outer transaction rollback cannot erase a strike.
   return authorization.selfApproval

@@ -15,6 +15,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { LateControlledReviewForm } from './late-controlled-review-form';
 import { QueueActions, type ReviewKind } from './queue-actions';
 import { AccessDeniedState, WorkspaceState, isAccessDenied } from './field';
 
@@ -174,7 +175,27 @@ export function PharmacistQueueConsole() {
               </WorkspaceState>
             ) : null}
             <div ref={actionsRef} tabIndex={-1}>
+              {active.lateControlled && current && (
+                <LateControlledReviewForm
+                  key={'late-' + active.id}
+                  reviewItemId={active.id}
+                  disabled={Boolean(pendingId && pendingId !== active.id)}
+                  onDirtyChange={(dirty) => setDirtyId(dirty ? active.id : null)}
+                  onPendingChange={(pending) => {
+                    pendingRef.current = pending ? active.id : null;
+                    setPendingId(pendingRef.current);
+                  }}
+                  onRecorded={async () => {
+                    try {
+                      await utils.pharmacyDispensing.reviewQueue.invalidate();
+                    } catch {
+                      setRefreshErrorId(active.id);
+                    }
+                  }}
+                />
+              )}
               <QueueActions
+                separateSign={active.lateControlled}
                 key={active.id}
                 canApprove={active.requestedByUserId !== queue.data.currentUserId}
                 pending={pendingId === active.id}

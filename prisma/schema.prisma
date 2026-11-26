@@ -14179,6 +14179,10 @@ model PharmacyControlledRegisterEntry {
   /// Empty when a single pharmacist dispenses or an owner confirms a historical dispatch.
   witnessedByUserId      String?
   witnessStatement        String?
+  /// Original counter line and time for a retrospective controlled sale entry. createdAt is the recording time.
+  lateSaleLineId          String?
+  originalSaleAt          DateTime?
+  lateEntryReason         String?
   signatureRef           String?
   rxSerialWritten        Boolean                           @default(false)
   emergency              Boolean                           @default(false)

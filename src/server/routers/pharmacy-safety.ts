@@ -214,6 +214,9 @@ export const pharmacySafetyRouter = router({
       return {
         provinceName: provinceName(profile?.provinceCode ?? branch.provinceCode),
         pendingLegalReview: ruleSet ? rulesPendingLegalReview(ruleSet) : false,
+        lateSaleAttentionCount: new Set(
+          entries.map((entry) => entry.lateSaleLineId).filter(Boolean)
+        ).size,
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient
