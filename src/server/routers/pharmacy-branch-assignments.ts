@@ -2,6 +2,8 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import { isPharmacistCheckPolicyOwner } from '@/lib/pharmacy/pharmacist-check-policy';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
@@ -134,6 +136,59 @@ export const pharmacyBranchAssignmentsRouter = router({
         metadata: { pharmacyOtherBranchAvailability: saved.pharmacyOtherBranchAvailability },
       });
       return { enabled: saved.pharmacyOtherBranchAvailability };
+    }),
+
+  controlledWitnessSettings: adminProcedure.query(async ({ ctx }) => {
+    const organizationId = pharmacyOrganizationId(ctx);
+    const [branches, canChange] = await Promise.all([
+      ctx.db.pharmacyBranch.findMany({
+        where: { organizationId, active: true },
+        select: { id: true, name: true, requireSecondPharmacist: true },
+        orderBy: { name: 'asc' },
+      }),
+      !ctx.support &&
+        !ctx.session!.user.isSupportSession &&
+        isPharmacistCheckPolicyOwner(ctx.db, organizationId, ctx.session!.user.id),
+    ]);
+    return { branches, canChange };
+  }),
+
+  setControlledWitness: adminProcedure
+    .input(z.strictObject({ branchId: z.string().trim().min(1).max(128), required: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = pharmacyOrganizationId(ctx);
+      await ctx.db.$transaction(async (tx) => {
+        const db = tx as unknown as ScopedDb;
+        if (
+          ctx.support ||
+          ctx.session!.user.isSupportSession ||
+          !(await isPharmacistCheckPolicyOwner(db, organizationId, ctx.session!.user.id, {
+            lock: true,
+          }))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message:
+              'Only the pharmacy owner can change the controlled medicine witness requirement.',
+          });
+        }
+        const result = await db.pharmacyBranch.updateMany({
+          where: { organizationId, id: input.branchId, active: true },
+          data: { requireSecondPharmacist: input.required },
+        });
+        if (!result.count)
+          throw new TRPCError({ code: 'NOT_FOUND', message: 'This branch is unavailable.' });
+      });
+      annotateAudit(ctx, {
+        operation: 'UPDATE',
+        targetType: 'PharmacyBranch',
+        targetId: input.branchId,
+        description: input.required
+          ? 'Required a second pharmacist for controlled medicines'
+          : 'Allowed a pharmacist to dispense controlled medicines alone',
+        metadata: { branchId: input.branchId, requireSecondPharmacist: input.required },
+      });
+      return { required: input.required };
     }),
 
   list: adminProcedure.query(async ({ ctx }) => {
