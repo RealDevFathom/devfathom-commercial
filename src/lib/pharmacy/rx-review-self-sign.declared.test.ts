@@ -14,7 +14,6 @@ vi.mock('@/lib/abac', () => ({
   subjectFromSession: (row: { id: string }) => ({ id: row.id }),
   can: vi.fn(async (subject: { id: string }) => abac.allowed.has(subject.id)),
 }));
-vi.mock('./counter-capability', () => ({ counterBranchAssignmentDenial: vi.fn(async () => null) }));
 
 import { RX_ON_DUTY_DECLARATION } from './rx-solo-shift';
 import {
@@ -61,6 +60,18 @@ function fixture(
     )
   );
   const db = {
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { organizationId: string; branchId: string; userId: string };
+        }) =>
+          where.organizationId === ORG && where.branchId === BRANCH && people.has(where.userId)
+            ? { branchId: BRANCH }
+            : null
+      ),
+    },
     $queryRaw: vi.fn(async (query: { strings?: readonly string[] } | TemplateStringsArray) => {
       const text = (
         'strings' in query && query.strings ? query.strings : (query as TemplateStringsArray)
