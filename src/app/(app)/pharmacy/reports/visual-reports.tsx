@@ -1,5 +1,5 @@
 'use client';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   BusinessChart,
   reportMoney,
@@ -60,7 +60,9 @@ const caption: Record<ChartId, string> = {
   bottomMargin: 'Lowest gross margin percentages on verified sales',
 };
 const rangeLabel = (p: ReportPeriod) => (p.from === p.to ? p.from : p.from + ' to ' + p.to);
-function total(rows: ChartRow[], chart: ChartId) {
+function total(rows: ChartRow[] | undefined, chart: ChartId) {
+  if (!rows) return null;
+  if (!rows.length && !isProfit(chart) && !percent(chart)) return 0;
   if (!rows.some((row) => row.value !== null)) return null;
   return chartValue(
     chart,
@@ -80,7 +82,9 @@ function ChangeStat({
   prior,
   compare,
   format,
+  percentage = false,
 }: {
+  percentage?: boolean;
   label: string;
   value: number | null;
   prior: number | null;
@@ -100,9 +104,34 @@ function ChangeStat({
             ? 'Comparison unavailable'
             : delta === 0
               ? 'No change'
-              : (delta > 0 ? 'Up ' : 'Down ') + format(Math.abs(delta))
+              : (delta > 0 ? 'Up ' : 'Down ') +
+                (percentage
+                  ? Math.abs(delta).toLocaleString('en', { maximumFractionDigits: 2 }) +
+                    ' percentage points'
+                  : format(Math.abs(delta)))
           : undefined
       }
+    />
+  );
+}
+function PaymentStat({
+  filters,
+  compare,
+  currency,
+}: {
+  filters: Filters;
+  compare: boolean;
+  currency: string | null;
+}) {
+  const current = useChart('salesPayment', filters),
+    prior = useChart('salesPayment', filters, true, compare);
+  return (
+    <ChangeStat
+      label="Payments received"
+      value={total(current.data?.rows, 'salesPayment')}
+      prior={total(prior.data?.rows, 'salesPayment')}
+      compare={compare}
+      format={formatter('salesPayment', currency)}
     />
   );
 }
@@ -152,7 +181,8 @@ function ChartPanel({
         key: date,
         label: date,
         value: row?.value ?? (isProfit(chart) ? null : 0),
-        previous: previous?.value ?? null,
+        previous: previous?.value ?? (prior.data && !isProfit(chart) ? 0 : null),
+        previousKey: prior.data ? shiftPharmacyDay(prior.data.period.from, i) : undefined,
         secondary: row?.base ?? 0,
       });
     }
@@ -193,15 +223,21 @@ function ChartPanel({
                       : 'Gross profit'
                 }
                 value={total(rows, chart)}
-                prior={total(before, chart)}
+                prior={total(prior.data?.rows, chart)}
                 compare={compare}
                 format={format}
               />
-              {chart !== 'salesDay' && (
+              {chart === 'salesDay' ? (
+                <PaymentStat filters={filters} compare={compare} currency={currency} />
+              ) : (
                 <ChangeStat
+                  percentage
                   label={chart === 'returnsDay' ? 'Return rate' : 'Gross margin'}
                   value={total(rows, chart === 'returnsDay' ? 'returnRate' : 'marginDay')}
-                  prior={total(before, chart === 'returnsDay' ? 'returnRate' : 'marginDay')}
+                  prior={total(
+                    prior.data?.rows,
+                    chart === 'returnsDay' ? 'returnRate' : 'marginDay'
+                  )}
                   compare={compare}
                   format={formatter('returnRate', currency)}
                 />
@@ -231,6 +267,19 @@ function ChartPanel({
             comparison={compare && main && !!prior.data}
             secondaryLabel={chart === 'returnsDay' ? 'Completed sales' : undefined}
             unitScale={percent(chart) || chart === 'returnMedicine' ? 1 : 100}
+            onSelectPrevious={
+              compare && main
+                ? (p) => {
+                    if (p.previousKey)
+                      select({
+                        chart,
+                        key: p.previousKey,
+                        label: p.previousKey + ' (previous period)',
+                        previous: true,
+                      });
+                  }
+                : undefined
+            }
             onSelect={(p) => select({ chart, key: p.key!, label: p.label })}
           />
           {main && compare && prior.data && (
@@ -256,7 +305,13 @@ function DetailPanel({
 }) {
   const [offset, setOffset] = useState(0);
   const q = trpc.pharmacyReports.visualChart.useQuery(
-    { ...filters, chart: selection.chart, bucket: selection.key, offset },
+    {
+      ...filters,
+      chart: selection.chart,
+      bucket: selection.key,
+      previous: selection.previous,
+      offset,
+    },
     { retry: false }
   );
   const amount = (v: number) =>
@@ -381,7 +436,13 @@ export function VisualReports({
     error = (e as Error).message;
   }
   const charts = REPORT_CHARTS[report];
+  const origin = useRef<HTMLElement | null>(null);
+  function closeDetails() {
+    setSelection(null);
+    requestAnimationFrame(() => origin.current?.focus());
+  }
   function select(row: Drill) {
+    origin.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     setSelection(row);
     requestAnimationFrame(() => document.getElementById('visual-report-details')?.focus());
   }
@@ -487,13 +548,20 @@ export function VisualReports({
             </div>
           </div>
           {selection && (
-            <div id="visual-report-details" tabIndex={-1} className="print:hidden">
+            <div
+              id="visual-report-details"
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') closeDetails();
+              }}
+              tabIndex={-1}
+              className="print:hidden"
+            >
               <DetailPanel
                 key={selection.chart + selection.key}
                 selection={selection}
                 filters={filters}
                 currency={currency}
-                close={() => setSelection(null)}
+                close={closeDetails}
               />
             </div>
           )}

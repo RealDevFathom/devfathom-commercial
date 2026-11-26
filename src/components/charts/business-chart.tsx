@@ -15,6 +15,7 @@ export type BusinessChartPoint = {
   label: string;
   value: number | null;
   previous?: number | null;
+  previousKey?: string;
   secondary?: number | null;
   key?: string;
 };
@@ -34,6 +35,7 @@ export function BusinessChart({
   line = false,
   secondaryLabel,
   onSelect,
+  onSelectPrevious,
   unitScale = 100,
 }: {
   title: string;
@@ -44,6 +46,7 @@ export function BusinessChart({
   line?: boolean;
   secondaryLabel?: string;
   onSelect?: (point: BusinessChartPoint) => void;
+  onSelectPrevious?: (point: BusinessChartPoint) => void;
   unitScale?: number;
 }) {
   if (!points.length) return <p className="py-8 text-sm text-text-muted">{empty}</p>;
@@ -94,6 +97,22 @@ export function BusinessChart({
               <Line
                 dataKey="previous"
                 name="Previous period"
+                activeDot={
+                  onSelectPrevious
+                    ? ({ cx, cy, payload }) => (
+                        <circle
+                          cx={cx}
+                          cy={cy}
+                          r={5}
+                          fill="var(--text-muted)"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onSelectPrevious(payload);
+                          }}
+                        />
+                      )
+                    : undefined
+                }
                 stroke="var(--text-muted)"
                 strokeOpacity={0.65}
                 strokeDasharray="4 4"
@@ -169,7 +188,21 @@ export function BusinessChart({
                     {p.value == null ? 'Unavailable' : format(p.value)}
                   </td>
                   {comparison && (
-                    <td className="text-right">{p.previous == null ? '—' : format(p.previous)}</td>
+                    <td className="text-right">
+                      {onSelectPrevious && p.previousKey ? (
+                        <Button
+                          variant="ghost"
+                          aria-label={'Previous period, ' + p.previousKey}
+                          onClick={() => onSelectPrevious(p)}
+                        >
+                          {p.previous == null ? 'Unavailable' : format(p.previous)}
+                        </Button>
+                      ) : p.previous == null ? (
+                        '—'
+                      ) : (
+                        format(p.previous)
+                      )}
+                    </td>
                   )}
                   {secondaryLabel && (
                     <td className="text-right">
