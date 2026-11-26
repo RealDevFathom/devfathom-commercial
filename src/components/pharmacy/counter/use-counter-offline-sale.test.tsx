@@ -269,6 +269,7 @@ describe('DEV-957 phase 2 (review B1): with the owner switch off the counter che
         'Offline cash selling is off. It becomes available when sending offline sales to the server is ready; until then this counter checks prices only.',
     });
     render(<CounterOfflinePanel offline={view.result.current} />);
+    expect(screen.getByText('To change cashier, reconnect first.')).toBeVisible();
     expect(screen.getByText(/Offline cash selling is off:/)).toBeInTheDocument();
     expect(screen.getByLabelText('Offline price check')).toBeInTheDocument();
     expect(screen.queryByLabelText('Add a medicine to the offline bill')).toBeNull();

@@ -71,8 +71,8 @@ export function CounterOfflineBannerDetail({
       </p>
       {(paymentQueued || tenderPending) && offlineSelling ? (
         <p className="text-text-body">
-          The payment on the open online bill is still waiting for the server. Do not ring the
-          same items up again as an offline sale.
+          The payment on the open online bill is still waiting for the server. Do not ring the same
+          items up again as an offline sale.
         </p>
       ) : null}
     </>
@@ -86,6 +86,14 @@ export function CounterOfflineBannerDetail({
  * prepared, and ready (with the offline price check).
  */
 export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }) {
+  return (
+    <div className="space-y-2">
+      <p className="text-sm text-text-body">To change cashier, reconnect first.</p>
+      <OfflinePanelBody offline={offline} />
+    </div>
+  );
+}
+function OfflinePanelBody({ offline }: { offline: CounterOfflineView }) {
   const { status, readiness, nowMs } = offline;
   // DEV-957 phase 2: the last offline sale's receipt and change stay on screen even when
   // that sale used the last receipt number or unit and no further sale can be taken.
@@ -93,8 +101,8 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
   if (status === 'unenrolled' && offline.revokedNotice)
     return (
       <p className="text-text-body" role="alert" data-counter-offline-mode="revoked">
-        A manager revoked this counter, so it can no longer sell offline. Its price lists,
-        receipt numbers and unfinished bills were removed from this computer.{' '}
+        A manager revoked this counter, so it can no longer sell offline. Its price lists, receipt
+        numbers and unfinished bills were removed from this computer.{' '}
         {offline.revokedNotice.kept > 0
           ? `${offline.revokedNotice.kept} offline sale${offline.revokedNotice.kept === 1 ? ' was' : 's were'} never sent. ${offline.revokedNotice.kept === 1 ? 'It is' : 'They are'} kept on this computer, read-only, under Sales to reconcile, for a manager to export and record. `
           : ''}
@@ -162,8 +170,8 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
           ) : null}
           <p className="text-text-body">
             <span className="font-medium text-text-strong">Never offline: </span>
-            prescription-only, controlled and restricted medicines, card, wallet and khata
-            payments, and refunds.
+            prescription-only, controlled and restricted medicines, card, wallet and khata payments,
+            and refunds.
           </p>
         </>
       ) : (
@@ -194,8 +202,8 @@ export function CounterOfflinePanel({ offline }: { offline: CounterOfflineView }
       </dl>
       {!readiness.prepared ? (
         <p className="text-text-body">
-          This counter is not prepared for offline selling: it holds no receipt numbers or no
-          stock. While the connection is up, a manager can prepare it in{' '}
+          This counter is not prepared for offline selling: it holds no receipt numbers or no stock.
+          While the connection is up, a manager can prepare it in{' '}
           <Link className="font-medium text-text-strong underline" href={SETTINGS_HREF}>
             Settings, Counter computers
           </Link>
@@ -310,8 +318,8 @@ export function CounterOfflineOnly({ offline }: { offline: CounterOfflineView })
             Offline — this counter cannot reach the server.
           </p>
           <p className="text-text-body">
-            Online bills, card and khata payments and the full search come back when the
-            connection returns. This page checks again by itself.
+            Online bills, card and khata payments and the full search come back when the connection
+            returns. This page checks again by itself.
           </p>
           <CounterOfflinePanel offline={offline} />
         </div>
