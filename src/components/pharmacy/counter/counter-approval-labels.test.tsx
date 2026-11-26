@@ -221,14 +221,11 @@ it('continues a line approval only after a matching person is explicitly chosen'
   const collision = Object.assign(new Error('Choose the approver'), {
     data: { matchingStaffProfileIds: ['a', 'c'], choiceProofs: ['fixture-a', 'fixture-c'] },
   });
-  const request = vi
-    .fn()
-    .mockResolvedValueOnce({ pin: '123456' })
-    .mockResolvedValueOnce({
-      matchingStaffProfileId: 'c',
-      choiceProof: 'fixture-c',
-      pin: '654321',
-    });
+  const request = vi.fn().mockResolvedValueOnce({ pin: '123456' }).mockResolvedValueOnce({
+    matchingStaffProfileId: 'c',
+    choiceProof: 'fixture-c',
+    pin: '654321',
+  });
   const send = vi.fn().mockRejectedValueOnce(collision).mockResolvedValueOnce('approved');
   await expect(submitDialogApproval(request, send)).resolves.toBe('approved');
   expect(request.mock.calls).toEqual([
