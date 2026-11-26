@@ -439,6 +439,13 @@ describe('DEV-845 runners and customers are scoped to assigned branches', () => 
     const { caller, db } = fixture({ role: 'EMPLOYEE', rules: [ORDERS], assigned: ['branch-a'] });
     await caller.runners();
     await caller.customers();
+    expect(db.pharmacyCustomer.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ take: 200 })
+    );
+    await caller.customers({ query: '' });
+    expect(db.pharmacyCustomer.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ take: 10 })
+    );
     const atBranch = { some: { organizationId: 'org-a', branchId: { in: ['branch-a'] } } };
     expect(db.user.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
