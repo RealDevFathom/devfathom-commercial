@@ -131,5 +131,31 @@ describe.runIf(process.env.TEST_DATABASE_URL)('prepared party and history operat
     expect(
       await withTenantDb(org, (db) => db.pharmacyPatient.findFirst({ select: { phone: true } }))
     ).toEqual({ phone: '+923001234567' });
+    await withTenantDb(org, (db) =>
+      db.pharmacyAccountingPeriod.create({
+        data: {
+          organizationId: org,
+          branchId: scope.branchId,
+          startsAt: new Date('2026-11-01Z'),
+          endsAt: new Date('2026-12-01Z'),
+          status: 'OPEN',
+        },
+      })
+    );
+    const opening = (confirmation?: string) =>
+      withTenantDb(org, (db) =>
+        runAbuzarStep(
+          db,
+          scope,
+          data,
+          { step: 'balances', sourceBranch: 'B1', addToExisting: false, cutover: '2026-11-26' },
+          confirmation
+        )
+      );
+    const preview = await opening();
+    expect(preview.effects.customerBalanceMinor).toBe('1250');
+    expect((await opening(preview.confirmation)).applied).toBe(1);
+    expect((await opening(preview.confirmation)).applied).toBe(0);
+    expect(await snapshot()).toMatchObject({ journals: 1, audit: 3, sales: 0 });
   });
 });

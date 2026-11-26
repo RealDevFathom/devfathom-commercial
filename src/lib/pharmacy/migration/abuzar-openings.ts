@@ -65,6 +65,8 @@ export async function balanceDecision(
   options: Options,
   data: Prepared
 ) {
+  // Family accounts and their events require the verified active branch in this transaction.
+  await db.$queryRaw`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`;
   const { at, period, prior, entries } = await openingContext(db, scope, options, 'balances');
   const parties = await db.$queryRaw<
     { sourceId: string; customerId: string | null; supplierId: string | null }[]
