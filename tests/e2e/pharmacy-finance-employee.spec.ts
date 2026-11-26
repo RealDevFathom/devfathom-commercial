@@ -6,6 +6,7 @@ import { PHARMACY_ROLE_TEMPLATES } from '../../src/lib/vertical-catalog';
 
 test('a Finance employee reads the branch journal and records a supplier payment', async ({
   page,
+  browser,
   baseURL,
 }, info) => {
   test.setTimeout(240_000);
@@ -59,10 +60,14 @@ test('a Finance employee reads the branch journal and records a supplier payment
         `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,$4,'ALLOW')`,
         [randomUUID(), org, org + '-role', capability]
       );
-    await db.query(
-      `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,password,department,title,role,status,"updatedAt") VALUES ($1,$2,$3,'Test Accountant',$4,$5,'Finance','Accountant','EMPLOYEE','ACTIVE',now())`,
-      [user, org, org + '-role', email, await hash(password, 10)]
-    );
+    for (const [person, address] of [
+      [user, email],
+      [user + '-payer', 'payer-' + email],
+    ])
+      await db.query(
+        `INSERT INTO users (id,"organizationId","organizationRoleId",name,email,password,department,title,role,status,"updatedAt") VALUES ($1,$2,$3,'Test Accountant',$4,$5,'Finance','Accountant','EMPLOYEE','ACTIVE',now())`,
+        [person, org, org + '-role', address, await hash(password, 10)]
+      );
     for (const [id, name] of [
       [branch, 'Admitted branch'],
       [org + '-other', 'Other branch'],
@@ -71,10 +76,11 @@ test('a Finance employee reads the branch journal and records a supplier payment
         `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt") VALUES ($1,$2,$1,$3,'Test Road','Lahore','PB',now())`,
         [id, org, name]
       );
-    await db.query(
-      `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
-      [randomUUID(), org, branch, user]
-    );
+    for (const person of [user, user + '-payer'])
+      await db.query(
+        `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
+        [randomUUID(), org, branch, person]
+      );
     for (const key of ['pharmacy-core', 'pharmacy-finance', 'pharmacy-reports']) {
       await db.query(
         `INSERT INTO platform_modules (id,key,name,category,band,vertical,"updatedAt") VALUES ($1,$1,$1,'Pharmacy','VERTICAL_OPTIONAL','PHARMACY',now()) ON CONFLICT (key) DO NOTHING`,
@@ -116,6 +122,26 @@ test('a Finance employee reads the branch journal and records a supplier payment
   await form.getByLabel('Posting date').fill(new Date().toISOString().slice(0, 10));
   await form.getByLabel('Counterparty name').fill('Synthetic supplier');
   await form.getByRole('button', { name: 'Post transaction' }).click();
+  await expect(page.getByText('Supplier payment draft saved for approval.')).toBeVisible();
+  await page.getByRole('button', { name: 'Post supplier payment', exact: true }).click();
+  await expect(page.getByText('Someone else must pay an invoice you recorded.')).toBeVisible();
+  const payerContext = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  page = await payerContext.newPage();
+  page.on('pageerror', (error) => clientErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') clientErrors.push(message.text());
+  });
+  await page.goto(new URL('/login', app).href);
+  await page.getByLabel(/email/i).fill('payer-' + email);
+  await page.locator('input[name="password"]').fill(password);
+  await page.getByRole('button', { name: /sign in/i }).click();
+  await page.waitForURL((url) => url.pathname != '/login' && !url.pathname.startsWith('/api/auth'));
+  await page.getByRole('link', { name: 'Finance', exact: true }).click();
+  await page
+    .getByRole('row')
+    .filter({ hasText: org })
+    .getByRole('button', { name: 'Post supplier payment' })
+    .click();
   await expect(page.getByText('Transaction posted and journal balanced.')).toBeVisible();
   const posted = page.getByRole('row').filter({ hasText: org });
   await expect(posted).toContainText(/supplier payment/i);
@@ -147,4 +173,5 @@ test('a Finance employee reads the branch journal and records a supplier payment
   expect(await page.locator(':focus-visible').count()).toBeGreaterThan(0);
   await page.keyboard.press('Escape');
   expect(clientErrors).toEqual([]);
+  await payerContext.close();
 });

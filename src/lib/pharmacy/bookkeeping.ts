@@ -280,7 +280,19 @@ export async function postSupplierPaymentDraft(
     isNativeApSettlementTransaction(draft)
   )
     throw new PharmacyBookkeepingError('NOT_FOUND');
-  if (draft.status === 'POSTED' && draft.journalEntryId) return draft;
+  if (draft.status === 'POSTED' && draft.journalEntryId) {
+    const posted = await db.financeJournalEntry.findFirst({
+      where: {
+        id: draft.journalEntryId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        actorId: scope.actorId,
+      },
+      select: { id: true },
+    });
+    if (!posted) throw new PharmacyBookkeepingError('INVALID_STATE');
+    return draft;
+  }
   if (draft.status !== 'PENDING' || draft.journalEntryId)
     throw new PharmacyBookkeepingError('INVALID_STATE');
   await assertPeriodOpen(db, scope, draft.occurredAt);

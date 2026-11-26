@@ -500,6 +500,15 @@ export const pharmacyFinanceRouter = router({
         }),
       ]);
       return {
+        supplierPaymentApprovalLimitMinor:
+          ctx.session.user.role === 'ADMIN'
+            ? (
+                await ctx.db.organization.findUniqueOrThrow({
+                  where: { id: organizationId },
+                  select: { supplierPaymentApprovalLimitMinor: true },
+                })
+              ).supplierPaymentApprovalLimitMinor
+            : null,
         mayManageAccounts: await canManagePharmacyAccounts(ctx),
         branch,
         transactions,
@@ -611,7 +620,10 @@ export const pharmacyFinanceRouter = router({
       const scoped = await scope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
-          postSupplierPaymentDraft(txDb(tx), scoped, input.draftId, { pin: input.pin })
+          postSupplierPaymentDraft(txDb(tx), scoped, input.draftId, {
+            pin: input.pin,
+            approverEmail: input.approverEmail,
+          })
         );
       } catch (error) {
         fail(error);

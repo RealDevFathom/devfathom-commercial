@@ -328,14 +328,7 @@ export default async function PharmacyFinancePage({
     }
   }
 
-  const limit = isAdmin
-    ? (
-        await ctx.db.organization.findUnique({
-          where: { id: ctx.entitlements.organizationId },
-          select: { supplierPaymentApprovalLimitMinor: true },
-        })
-      )?.supplierPaymentApprovalLimitMinor
-    : null;
+  const limit = workspace.supplierPaymentApprovalLimitMinor;
   const now = new Date();
   const timeZone = ctx.organization?.timezone;
   const dated = (value: Date | string) => formatWorkspaceDate(value, timeZone);
