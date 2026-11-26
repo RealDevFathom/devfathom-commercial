@@ -27,6 +27,10 @@ vi.mock('@/components/entitlements-provider', () => ({
     enabledModules: h.modules,
   }),
 }));
+vi.mock('@/lib/platform/timezones', () => ({
+  ianaTimezoneOptions: () =>
+    ['UTC', 'Asia/Karachi', 'Europe/London'].map((zone) => ({ label: zone, value: zone })),
+}));
 vi.mock('@/lib/trpc', () => {
   const procedure = (name: string) => ({
     useQuery: (input: unknown, options?: { enabled?: boolean }) => {
@@ -282,10 +286,12 @@ describe('pharmacy procedures workspace', () => {
     timezone.focus();
     fireEvent.keyDown(timezone, { key: 'ArrowDown' });
     const london = await screen.findByRole('option', { name: 'Europe/London' });
-    london.focus();
-    fireEvent.keyDown(london, { key: 'Enter' });
-    // jsdom does not synthesize the click a browser sends for Enter.
-    fireEvent.click(london, { detail: 0 });
+    act(() => {
+      london.focus();
+      fireEvent.keyDown(london, { key: 'Enter' });
+      // jsdom does not synthesize the click a browser sends for Enter.
+      fireEvent.click(london, { detail: 0 });
+    });
     await waitFor(() => expect(timezone).toHaveTextContent('Europe/London'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn on procedures' }));
