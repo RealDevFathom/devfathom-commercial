@@ -4830,7 +4830,7 @@ describe('PharmacyCounterConsole barcode safety', () => {
       await within(dialog).findByText('Approvers could not be loaded.');
       expect(within(dialog).getByRole('button', { name: 'Approve pack' })).toBeDisabled();
       fireEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
-      await within(dialog).findByText(/No manager or owner is available|No manager or owner has an active staff PIN/);
+      await within(dialog).findByText(/No manager or owner has an active staff PIN/);
       // DEV-931: the notice says where a manager or owner creates their own PIN.
       expect(within(dialog).getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
         'href',

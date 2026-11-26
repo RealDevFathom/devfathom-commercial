@@ -70,8 +70,20 @@ export function UnavailableCounterApprover({ pharmacist = false }: { pharmacist?
   const kind = useContext(ApprovalSecretKindContext);
   const who = pharmacist ? 'pharmacist' : 'manager or owner';
   if (kind === 'CODE')
-    return <>No {who} is available to approve. <PinAwareMessage message={APPROVAL_AUTHENTICATOR_SETUP_MESSAGE} /></>;
-  return <>{pharmacist ? 'No pharmacist is available to approve this batch.' : 'No manager or owner has an active staff PIN. A manager or owner creates their own under Settings, Your PIN.'} <OwnPinLink /></>;
+    return (
+      <>
+        No {who} is available to approve.{' '}
+        <PinAwareMessage message={APPROVAL_AUTHENTICATOR_SETUP_MESSAGE} />
+      </>
+    );
+  return (
+    <>
+      {pharmacist
+        ? 'No pharmacist is available to approve this batch.'
+        : 'No manager or owner has an active staff PIN. A manager or owner creates their own under Settings, Your PIN.'}{' '}
+      <OwnPinLink />
+    </>
+  );
 }
 
 export function ApprovalFallback({

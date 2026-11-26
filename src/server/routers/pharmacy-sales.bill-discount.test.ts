@@ -63,7 +63,10 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 function fixture(options: { support?: boolean } = {}) {
   const transaction = vi.fn(async (callback: (tx: unknown) => unknown) => callback(db));
   const db = {
-    organization: { findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }), findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
+    organization: {
+      findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }),
+      findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
+    },
     $transaction: transaction,
     $queryRaw: vi.fn(async () => []),
     pharmacyBranch: {
@@ -87,7 +90,10 @@ function fixture(options: { support?: boolean } = {}) {
       })),
     },
     restaurantOperatorCredential: { findFirst: vi.fn(async () => ({ id: 'credential-1' })) },
-    pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: 'branch-1' }]) },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn(async () => [{ branchId: 'branch-1' }]),
+      findFirst: vi.fn(async () => ({ branchId: 'branch-1' })),
+    },
   };
   const context = {
     db,

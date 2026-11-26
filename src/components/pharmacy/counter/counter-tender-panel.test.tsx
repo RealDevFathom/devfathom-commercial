@@ -792,10 +792,9 @@ describe('family Khata tender', () => {
     fireEvent.click(override);
     fireEvent.click(override);
     await screen.findByText(/No manager or owner is available/);
-    // DEV-931: the notice says where a manager or owner creates their own PIN.
-    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Set up your authenticator app' })).toHaveAttribute(
       'href',
-      '/pharmacy/settings/pin'
+      '/approval-authenticator-setup'
     );
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
   });
