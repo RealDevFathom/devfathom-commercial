@@ -27,6 +27,7 @@ vi.mock('@/server/trpc', () => ({
     organization: { id: 'org-1' },
     requestMeta: { ip: null },
     db: {
+      pharmacyBranchAssignment: { findMany: async () => [{ branchId: 'branch-1' }] },
       pharmacyBranch: { findMany: mocks.branchRead },
       financeJournalEntry: { create: mocks.journalWriter },
       financeJournalLine: { findMany: mocks.financeDataReader },

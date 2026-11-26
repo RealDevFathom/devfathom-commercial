@@ -1,4 +1,5 @@
 import 'server-only';
+import { assignedRegisterBranchIds } from '@/lib/pharmacy/controlled-register';
 import { can, subjectFromSession } from '@/lib/abac';
 import { canOpenPharmacyFinance } from '@/lib/pharmacy/finance-access';
 import { hasModule } from '@/lib/entitlements';
@@ -36,5 +37,9 @@ export async function canReview(ctx: TRPCContext) {
     )
       return false;
   }
-  return true;
+  const user = ctx.session.user;
+  return (
+    user.role === 'ADMIN' ||
+    (await assignedRegisterBranchIds(ctx.db, ctx.organization.id, user.id)).length > 0
+  );
 }

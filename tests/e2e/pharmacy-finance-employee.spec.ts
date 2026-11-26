@@ -135,8 +135,10 @@ test('a Finance employee reads the branch journal and records a supplier payment
           await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
         ).toBe(true);
       }
+      const path = info.outputPath(`finance-${theme}-${width}.png`);
+      await page.screenshot({ path });
       await info.attach('Finance ' + theme + ' ' + width, {
-        body: await page.screenshot(),
+        path,
         contentType: 'image/png',
       });
     }
