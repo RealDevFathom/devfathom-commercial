@@ -316,7 +316,10 @@ const counterApprovalPin = z
 // Anonymous approval is meaningful only with the independently verified till session.
 const counterLineApproval = z.union([
   counterApprovalPin,
-  z.strictObject({ pin: z.string().regex(/^\d{6}$/) }),
+  z.strictObject({
+    pin: z.string().regex(/^\d{6}$/),
+    matchingStaffProfileId: z.string().trim().min(1).max(128).optional(),
+  }),
 ]);
 type CounterLineApprovalRequest = z.infer<typeof counterLineApproval>;
 
@@ -3093,6 +3096,12 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  fefoOverrideApprovers: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCartWriteAccess(ctx, input.branchId);
+      return listCounterApprovers(ctx.db as unknown as ScopedDb, scope, 'FEFO_OVERRIDE');
     }),
   /** Eligible manager/owner PIN profiles for a scanned pack's first-expiry approval. */
   scannedPackFefoApprovers: protectedProcedure

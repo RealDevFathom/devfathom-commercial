@@ -1806,24 +1806,30 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     vi.setSystemTime(at);
     vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
     try {
-      const submit = (pin: string, staffProfileId?: string) =>
+      const submit = (pin: string, matchingStaffProfileId?: string) =>
         tenant(scope, (db) =>
-          authorizeCounterApproval(db, scope, 'DISCOUNT', { pin, staffProfileId, counter })
+          authorizeCounterApproval(db, scope, 'DISCOUNT', { pin, matchingStaffProfileId, counter })
         );
       // An equally capable person with the same synthetic code but no active
       // branch assignment must never appear as a match or cause a collision.
       const inactive = await addMember(s, scope.organizationId + '_inactive', ['pharmacy:manage'], {
         pin: MANAGER_PIN,
       });
-      await tenant(s.owner, (db) => db.pharmacyBranchAssignment.updateMany({
-        where: { userId: inactive, branchId: scope.branchId }, data: { active: false },
-      }));
-      await enroll(inactive);
-      await expect(tenant(scope, (db) =>
-        authorizeCounterApproval(db, scope, 'DISCOUNT', {
-          pin: codeAt(secret, at), counter: { ...counter, sessionToken: 'invalid-fixture' },
+      await tenant(s.owner, (db) =>
+        db.pharmacyBranchAssignment.updateMany({
+          where: { userId: inactive, branchId: scope.branchId },
+          data: { active: false },
         })
-      )).rejects.toThrow(/Choose the approver by name/);
+      );
+      await enroll(inactive);
+      await expect(
+        tenant(scope, (db) =>
+          authorizeCounterApproval(db, scope, 'DISCOUNT', {
+            pin: codeAt(secret, at),
+            counter: { ...counter, sessionToken: 'invalid-fixture' },
+          })
+        )
+      ).rejects.toThrow(/Choose the approver by name/);
       const previous = codeAt(secret, new Date(at.getTime() - 30_000));
       await expect(submit(previous)).resolves.toMatchObject({
         approvedByUserId: s.manager,

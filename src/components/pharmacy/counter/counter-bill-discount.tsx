@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { amountInputError, amountInputToMinor } from '@/lib/money-input';
 import type { BillDiscountExclusion, BillDiscountRequest } from '@/lib/pharmacy/bill-discount';
-import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
+import { submitDialogApproval, type ApprovalEntry } from './counter-approval-entry';
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   counterErrorMessage,
@@ -44,7 +44,7 @@ export type CounterBillDiscountInput = {
   branchId: string;
   saleId: string;
   lines: readonly CartLine[];
-  requestApproval: (discount: string) => Promise<CounterApprovalPin | null>;
+  requestApproval: (discount: string, matches?: string[]) => Promise<ApprovalEntry | null>;
   onChanged: (message: string) => void;
   /**
    * DEV-977 phase 3: name each item left out, and why, in the message itself. The discount
@@ -83,8 +83,7 @@ export function useCounterBillDiscount({
     discount: BillDiscountRequest,
     label: string
   ): Promise<{ error: string | null; leftOut: string[] }> => {
-    let discountApproval: CounterApprovalPin | undefined;
-    const post = () =>
+    const post = (discountApproval?: ApprovalEntry) =>
       apply.mutateAsync({
         branchId,
         saleId,
@@ -98,15 +97,17 @@ export function useCounterBillDiscount({
       } catch (failure) {
         if (!(failure instanceof Error) || failure.message !== COUNTER_DISCOUNT_APPROVAL_REQUIRED)
           throw failure;
-        const approval = await requestApproval(label);
-        if (!approval) {
+        const approved = await submitDialogApproval(
+          (matches) => requestApproval(label, matches),
+          post
+        );
+        if (!approved) {
           return {
             error: 'The discount was not given: it needs a manager or owner to approve it.',
             leftOut: [],
           };
         }
-        discountApproval = approval;
-        outcome = await post();
+        outcome = approved;
       }
       const reasons = describeBillDiscountExclusions(outcome.excluded, lines);
       if (outcome.status === 'REFUSED') {

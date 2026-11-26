@@ -66,6 +66,8 @@ export const TENDER_ATTEMPT_DISCARDED = 'TENDER_ATTEMPT_DISCARDED';
  * DEV-929: the refusal a manual discount gets when the operator does not hold the discount
  * right and no manager's PIN came with it. The counter asks for the PIN when it sees it.
  */
+export const COUNTER_FEFO_APPROVAL_REQUIRED =
+  'A non-FEFO batch needs a pharmacist to approve it with their PIN.';
 export const COUNTER_DISCOUNT_APPROVAL_REQUIRED =
   'A discount needs a manager to approve it with their PIN.';
 

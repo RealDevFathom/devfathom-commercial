@@ -1,0 +1,125 @@
+'use client';
+
+import { createContext, useContext, useState, type ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
+import { ApprovalSecretKindContext } from './counter-approval-copy';
+
+export const CounterSessionContext = createContext(false);
+
+export type ApprovalEntry = {
+  pin: string;
+  staffProfileId?: string;
+  matchingStaffProfileId?: string;
+};
+
+export function matchingProfiles(error: unknown): string[] | undefined {
+  const ids = (error as { data?: { matchingStaffProfileIds?: unknown } } | null)?.data
+    ?.matchingStaffProfileIds;
+  return Array.isArray(ids) && ids.length > 1 && ids.every((id) => typeof id === 'string')
+    ? ids
+    : undefined;
+}
+
+export function useApprovalEntry(initialMatches?: string[]) {
+  const hasSession = useContext(CounterSessionContext);
+  const kind = useContext(ApprovalSecretKindContext);
+  const [byName, setByName] = useState(false);
+  const [matches, setMatches] = useState(initialMatches);
+  const [profile, setProfile] = useState('');
+  const [pin, setPin] = useState('');
+  const codeOnly = hasSession && kind === 'CODE' && !byName && !matches;
+  let entry: ApprovalEntry | undefined;
+  if (codeOnly) {
+    if (/^\d{6}$/.test(pin)) entry = { pin };
+  } else if (matches) {
+    if (hasSession && kind === 'CODE' && matches.includes(profile) && /^\d{6}$/.test(pin))
+      entry = { matchingStaffProfileId: profile, pin };
+  } else if (profile && /^\d{4,8}$/.test(pin)) {
+    entry = { staffProfileId: profile, pin };
+  }
+
+  function reset(nextMatches?: string[]) {
+    setMatches(nextMatches);
+    setByName(false);
+    setProfile('');
+    setPin('');
+  }
+
+  return {
+    codeOnly,
+    matches,
+    profile,
+    pin,
+    entry,
+    setProfile,
+    setPin,
+    reset,
+    chooseByName() {
+      reset();
+      setByName(true);
+    },
+    visible<T extends { id: string }>(rows: readonly T[]) {
+      return matches ? rows.filter((row) => matches.includes(row.id)) : rows;
+    },
+  };
+}
+
+export function ApprovalFallback({
+  form,
+  disabled,
+}: {
+  form: ReturnType<typeof useApprovalEntry>;
+  disabled?: boolean;
+}) {
+  if (!form.codeOnly) return null;
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      className="min-h-11"
+      disabled={disabled}
+      onClick={form.chooseByName}
+    >
+      Choose the approver by name
+    </Button>
+  );
+}
+export function ApprovalNames({
+  form,
+  children,
+}: {
+  form: ReturnType<typeof useApprovalEntry>;
+  children: ReactNode;
+}) {
+  if (form.codeOnly) return null;
+  return (
+    <>
+      {form.matches && (
+        <p role="status">
+          More than one person matches. Choose who is approving and enter their current code.
+        </p>
+      )}
+      {children}
+    </>
+  );
+}
+
+/** Dialog-based approvals get one explicit follow-up only for a structured collision. */
+export async function submitDialogApproval<T>(
+  request: (matches?: string[]) => Promise<ApprovalEntry | null>,
+  submit: (entry: ApprovalEntry) => Promise<T>
+): Promise<T | null> {
+  const entry = await request();
+  if (!entry) return null;
+  try {
+    return await submit(entry);
+  } catch (error) {
+    const matches = matchingProfiles(error);
+    if (!matches || entry.staffProfileId || entry.matchingStaffProfileId) throw error;
+    const choice = await request(matches);
+    if (!choice) return null;
+    if (!choice.matchingStaffProfileId || !matches.includes(choice.matchingStaffProfileId))
+      throw error;
+    return submit(choice);
+  }
+}

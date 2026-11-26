@@ -28,7 +28,10 @@ import {
   matchingApprovalStep,
   verifyApprovalSecret,
 } from '@/lib/approval-authenticator';
-import { COUNTER_DISCOUNT_APPROVAL_REQUIRED } from './counter-messages';
+import {
+  COUNTER_DISCOUNT_APPROVAL_REQUIRED,
+  COUNTER_FEFO_APPROVAL_REQUIRED,
+} from './counter-messages';
 
 /** A supervisor's staff profile and PIN, entered at the counter for this one line. */
 export type CounterApprovalPin = { staffProfileId: string; pin: string };
@@ -37,6 +40,7 @@ export type CounterApprovalInput =
   | CounterApprovalPin
   | {
       staffProfileId?: string;
+      matchingStaffProfileId?: string;
       pin: string;
       counter: CounterSession;
     };
@@ -129,7 +133,7 @@ export async function mayDiscountWithoutApproval(
 
 const DENIED_MESSAGE: Record<CounterApprovalKind, string> = {
   DISCOUNT: COUNTER_DISCOUNT_APPROVAL_REQUIRED,
-  FEFO_OVERRIDE: 'A non-FEFO batch needs a pharmacist to approve it with their PIN.',
+  FEFO_OVERRIDE: COUNTER_FEFO_APPROVAL_REQUIRED,
   KHATA_OVER_LIMIT:
     'Charging over the Khata credit limit needs a manager or owner to approve it with their PIN.',
   SCANNED_PACK_FEFO:
@@ -149,13 +153,19 @@ export function fefoOverrideApprovalPolicy(approval: CounterApproval, actorId: s
 }
 
 export class CounterApprovalDenied extends Error {
-  constructor(readonly kind: CounterApprovalKind, message = DENIED_MESSAGE[kind]) {
+  constructor(
+    readonly kind: CounterApprovalKind,
+    message = DENIED_MESSAGE[kind]
+  ) {
     super(message);
   }
 }
 
 export function counterProofRequired(kind: CounterApprovalKind) {
-  return new CounterApprovalDenied(kind, 'This till could not verify its enrollment. Choose the approver by name to continue.');
+  return new CounterApprovalDenied(
+    kind,
+    'This till could not verify its enrollment. Choose the approver by name to continue.'
+  );
 }
 
 type ActiveUser = Subject & { organizationId: string | null };
@@ -172,8 +182,7 @@ async function verifiedCounterId(db: ScopedDb, scope: LedgerScope, counter: Coun
     },
     select: { id: true, deviceSecretHash: true, secretExpiresAt: true },
   });
-  if (!device || pharmacyDeviceSecretExpired(device, new Date()))
-    return null;
+  if (!device || pharmacyDeviceSecretExpired(device, new Date())) return null;
   try {
     verifyToken(counter.sessionToken, {
       scope,
@@ -254,15 +263,21 @@ export async function authorizeCounterApproval(
             { staffProfileId: input.staffProfileId, pin: input.pin },
             deviceId ? 'named-at-counter' : 'named'
           )
-        : identifyCounterApprover(credentialDb, scope, kind, input.pin),
+        : identifyCounterApprover(
+            credentialDb,
+            scope,
+            kind,
+            input.pin,
+            'matchingStaffProfileId' in input ? input.matchingStaffProfileId : undefined
+          ),
     { userId: scope.actorId, skipDrain: true }
   );
   // Throw only after the credential transaction has committed any failed attempt.
   if (!approval) throw new CounterApprovalDenied(kind);
-  if (approval instanceof CounterApprovalChoice) throw approval;
   await refundRateLimit(requesterKey, LOCKOUT_DURATION_MS, attempt.windowStartedAt);
   if (counterReservation)
     await refundRateLimit(counterReservation.key, LOCKOUT_DURATION_MS, counterReservation.window);
+  if (approval instanceof CounterApprovalChoice) throw approval;
   return approval;
 }
 
@@ -434,7 +449,8 @@ async function identifyCounterApprover(
   db: ScopedDb,
   scope: LedgerScope,
   kind: CounterApprovalKind,
-  pin: string
+  pin: string,
+  matchingStaffProfileId?: string
 ) {
   if (!/^\d{6}$/.test(pin) || (await approvalSecretKindFor(db, scope.organizationId)) !== 'CODE')
     return null;
@@ -521,15 +537,22 @@ async function identifyCounterApprover(
     matches.push({ userId: auth.userId, staffProfileId: eligible.get(auth.userId)! });
   }
   if (used || matches.length === 0) return null;
-  if (matches.length > 1)
+  if (matches.length > 1 && !matchingStaffProfileId) {
+    // A verified but ambiguous code is not a failed attempt. The explicit choice
+    // makes a fresh, rate-limited comparison against the live candidates.
+    await releaseReservations();
     return new CounterApprovalChoice(matches.map((match) => match.staffProfileId));
-  const [match] = matches;
+  }
+  const match = matchingStaffProfileId
+    ? matches.find((candidate) => candidate.staffProfileId === matchingStaffProfileId)
+    : matches[0];
+  if (!match) return null;
   const result = await verifyApproverPin(
     db,
     scope,
     kind,
-    { staffProfileId: match!.staffProfileId, pin },
-    { matchedUserId: match!.userId }
+    { staffProfileId: match.staffProfileId, pin },
+    { matchedUserId: match.userId }
   );
   if (result) await releaseReservations();
   return result;

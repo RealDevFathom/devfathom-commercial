@@ -268,6 +268,7 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     const real = view.result.current;
     let allow = false;
     const offline: CounterOfflineView = {
+      hasSession: false,
       ...real,
       actions: {
         ...real.actions!,

@@ -94,6 +94,7 @@ export type CounterOfflineActions = {
 };
 
 export type CounterOfflineView = {
+  hasSession: boolean;
   status: CounterOfflineStatus;
   enrolment: CounterEnrolment | null;
   /** A plain sentence when the server or the browser could not be used. */
@@ -541,6 +542,7 @@ export function useCounterOffline(input: {
     };
   }, [ready, refresh, enrolmentName, canResolveConflict]);
   const idle = {
+    hasSession: false,
     message: null,
     readiness: null,
     rows: [],
@@ -559,6 +561,7 @@ export function useCounterOffline(input: {
   if (!enrolledHere) return { status: 'other-branch', enrolment, ...idle };
   return {
     status: current?.status ?? 'opening',
+    hasSession: online && current?.hasSession === true,
     enrolment,
     message: current?.message ?? null,
     readiness,
