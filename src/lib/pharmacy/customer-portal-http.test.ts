@@ -69,3 +69,14 @@ describe('customer portal tenant and browser origin', () => {
     expect(await portalContext(new Request('https://tenant.example', { headers }))).toBeNull();
   });
 });
+
+it('explains missing WhatsApp setup before looking up any customer link', async () => {
+  resolveTenant.mockResolvedValue({ id: 'org', status: 'ACTIVE' });
+  moduleEnabled.mockReturnValue(true);
+  const context = await portalContext(new Request('http://pharmacy.localhost'));
+  const response = await context!.handle('start', { token: 'pcl_' + '0'.repeat(26) });
+  expect(await response.json()).toMatchObject({
+    ok: false,
+    message: 'The pharmacy has not finished setting up WhatsApp. Please ask the pharmacy for help.',
+  });
+});

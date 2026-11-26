@@ -25,6 +25,8 @@ import {
   verifyPortalSignIn,
   type PortalSession,
 } from './customer-portal';
+import { portalWhatsAppReady } from './portal-delivery';
+import { portalSignInMessages } from './portal-sign-in-messages';
 import { persistPrescriptionFile } from './prescription-files';
 import { createWhatsAppProvider, readWhatsAppConfig } from './whatsapp/provider';
 
@@ -154,6 +156,8 @@ export async function portalContext(request: Request) {
         ]);
         if (blocked) return portalResponse.limited(blocked);
         const config = readWhatsAppConfig();
+        if (!portalWhatsAppReady(organizationId, config))
+          return portalResponse.invalid(portalSignInMessages.setup);
         const send = portalCodeSender(config, createWhatsAppProvider(config), organizationId);
         const sent = await inTenant((db) =>
           startPortalSignIn(db, organizationId, parsed.data.token, send)

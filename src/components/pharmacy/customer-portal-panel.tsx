@@ -110,6 +110,11 @@ export function CustomerPortalPanel() {
           Share a sign-in link, then verify prescription photos and refills, and confirm Raast khata
           payments.
         </p>
+        {queue?.canSendCodes === false && (
+          <p role="status" className="text-sm text-warning">
+            Codes cannot be sent yet: set up WhatsApp first
+          </p>
+        )}
         <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-end">
           <div className="space-y-1.5">
             <Label htmlFor="portal-branch">Branch</Label>
@@ -149,7 +154,7 @@ export function CustomerPortalPanel() {
           <Button
             size="touch"
             onClick={shareLink}
-            disabled={!customerId || !branchId || mint.isPending}
+            disabled={!customerId || !branchId || !queue || mint.isPending}
           >
             {mint.isPending ? 'Creating link…' : 'Create app link'}
           </Button>
