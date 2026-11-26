@@ -4,8 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
-vi.mock('@/lib/pharmacy/migration/starter-products.json', () => ({
+vi.mock('@/lib/pharmacy/migration/starter-package', () => ({
   default: Array.from({ length: 251 }, (_, i) => ({
+    categoryName: null,
+    fieldSource: 'Synthetic',
     sourceId: String(i).padStart(4, '0'),
     legacyCode: i === 249 || i === 250 ? 'QA-shared-code' : 'QA-' + i,
     name: i === 1 ? 'QA archived medicine' : 'QA catalogue ' + i,

@@ -6,15 +6,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { packConversions } from '../pack-conversion';
 import { isLegacyControlledClass } from './legacy-class';
 import { catalogueNormalizer } from './staged-creation';
-import shipped from './starter-products.json';
-import { validateStarterCatalogue, type StarterProduct } from './starter-reference';
+import shipped from './starter-package';
+import type { StarterProduct } from './starter-reference';
 
 export const STARTER_BATCH_SIZE = 250;
 
-// The release artifact is read-only. A draft with no approved input leaves the queue waiting.
-function referenceSnapshot(input: unknown) {
-  if (input === null) return null;
-  const rows = validateStarterCatalogue(input);
+// The validated release artifact is read-only; metadata participates in the resume hash.
+function referenceSnapshot(rows: typeof shipped) {
   const hash = createHash('sha256').update(JSON.stringify(rows)).digest('hex');
   const legacyCounts = new Map<string, number>();
   for (const { legacyCode } of rows) {
