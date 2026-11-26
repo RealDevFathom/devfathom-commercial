@@ -26,7 +26,7 @@ vi.mock('@/lib/restaurant/operator-credentials', () => ({
 import { authorizeCounterApproval, CounterApprovalDenied } from './counter-line-approval';
 import { verifyRefundPin } from './refund-authorization';
 import { can } from '@/lib/abac';
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit } from '@/lib/rate-limit';
 import { isLockedOut, verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -131,25 +131,34 @@ beforeEach(async () => {
 });
 
 describe('DEV-879 counter approvals with an authenticator code', () => {
-  it('checks the requester lock across counter actions and branches before credential verification', async () => {
-    const db = fixture({ enrolled: ['manager'] });
-    const key = JSON.stringify([
-      'pharmacy-approval-requester',
-      scope.organizationId,
-      scope.actorId,
-    ]);
-    for (let i = 0; i < 5; i++) await rateLimit(key, 5, 900_000);
-    const approval = { staffProfileId: 'staff-manager', pin: currentCode() };
-    await expect(
-      authorizeCounterApproval(
-        db as never,
-        { ...scope, branchId: 'another-branch' },
-        'KHATA_OVER_LIMIT',
-        approval
-      )
-    ).rejects.toBeInstanceOf(CounterApprovalDenied);
-    expect(db.approvalAuthenticator.findFirst).not.toHaveBeenCalled();
-    expect(db.auditLog.create).not.toHaveBeenCalled();
+  it('allows named approval with a stale till session and limits an unenrolled cashier for 15 minutes', async () => {
+    const db = {
+      ...fixture({ required: false, approver: { ...manager, id: 'limit-manager' } }),
+      pharmacyRegisteredDevice: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+    const named = { staffProfileId: 'staff-manager', pin: '1234' };
+    const submit = (pin: string) =>
+      authorizeCounterApproval(db as never, scope, 'DISCOUNT', { ...named, pin });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const start = Date.now();
+    try {
+      await expect(authorizeCounterApproval(db as never, scope, 'DISCOUNT', {
+        ...named, counter: { deviceId: 'old-device', sessionToken: 'expired-fixture' },
+      })).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
+      for (let i = 0; i < 5; i++) {
+        await expect(submit('0000')).rejects.toBeInstanceOf(CounterApprovalDenied);
+      }
+      const reads = db.restaurantOperatorCredential.findFirst.mock.calls.length;
+      expect(reads).toBe(6);
+      vi.setSystemTime(start + 900_000 - 1);
+      await expect(authorizeCounterApproval(db as never, { ...scope, branchId: 'another-branch' },
+        'KHATA_OVER_LIMIT', named)).rejects.toBeInstanceOf(CounterApprovalDenied);
+      expect(db.restaurantOperatorCredential.findFirst).toHaveBeenCalledTimes(reads);
+      vi.setSystemTime(start + 900_001);
+      await expect(submit(named.pin)).resolves.toMatchObject({ approvedByUserId: 'limit-manager' });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('approves a discount with the manager’s current code and audits the code use', async () => {

@@ -156,6 +156,32 @@ export class CounterApprovalDenied extends Error {
 
 type ActiveUser = Subject & { organizationId: string | null };
 
+async function verifiedCounterId(db: ScopedDb, scope: LedgerScope, counter: CounterSession) {
+  const device = await db.pharmacyRegisteredDevice.findFirst({
+    where: {
+      id: counter.deviceId,
+      kind: 'PHARMACY_COUNTER',
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'ACTIVE',
+      revokedAt: null,
+    },
+    select: { id: true, deviceSecretHash: true, secretExpiresAt: true },
+  });
+  if (!device || pharmacyDeviceSecretExpired(device, new Date()))
+    return null;
+  try {
+    verifyToken(counter.sessionToken, {
+      scope,
+      deviceId: device.id,
+      credentialHash: device.deviceSecretHash,
+    });
+  } catch {
+    return null;
+  }
+  return device.id;
+}
+
 /**
  * Resolve the approval BEFORE the sale transaction opens. PIN checks run in their own tenant
  * transaction so a refusal (or a later sale failure) never rolls back the credential's
@@ -201,31 +227,13 @@ export async function authorizeCounterApproval(
   ]);
   const attempt = await rateLimit(requesterKey, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
   if (!attempt.ok || !attempt.windowStartedAt) throw new CounterApprovalDenied(kind);
+  const deviceId = 'counter' in input ? await verifiedCounterId(db, scope, input.counter) : null;
+  // Named approvals also work when a browser sends a stale terminal session. Only
+  // a verified session may charge a physical till or identify an unnamed approver.
+  if (!input.staffProfileId && !deviceId) throw new CounterApprovalDenied(kind);
   let counterReservation: { key: string; window: Date } | undefined;
-  if ('counter' in input) {
-    const device = await db.pharmacyRegisteredDevice.findFirst({
-      where: {
-        id: input.counter.deviceId,
-        kind: 'PHARMACY_COUNTER',
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        status: 'ACTIVE',
-        revokedAt: null,
-      },
-      select: { id: true, deviceSecretHash: true, secretExpiresAt: true },
-    });
-    if (!device || pharmacyDeviceSecretExpired(device, new Date()))
-      throw new CounterApprovalDenied(kind);
-    try {
-      verifyToken(input.counter.sessionToken, {
-        scope,
-        deviceId: device.id,
-        credentialHash: device.deviceSecretHash,
-      });
-    } catch {
-      throw new CounterApprovalDenied(kind);
-    }
-    const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id]);
+  if (deviceId) {
+    const key = JSON.stringify(['pharmacy-approval-counter', scope.organizationId, deviceId]);
     const reservation = await rateLimit(key, MAX_FAILED_ATTEMPTS, LOCKOUT_DURATION_MS);
     if (!reservation.ok || !reservation.windowStartedAt) throw new CounterApprovalDenied(kind);
     counterReservation = { key, window: reservation.windowStartedAt };
@@ -240,11 +248,9 @@ export async function authorizeCounterApproval(
             scope,
             kind,
             { staffProfileId: input.staffProfileId, pin: input.pin },
-            'counter' in input ? 'named-at-counter' : 'named'
+            deviceId ? 'named-at-counter' : 'named'
           )
-        : 'counter' in input
-          ? identifyCounterApprover(credentialDb, scope, kind, input.pin)
-          : null,
+        : identifyCounterApprover(credentialDb, scope, kind, input.pin),
     { userId: scope.actorId, skipDrain: true }
   );
   // Throw only after the credential transaction has committed any failed attempt.
