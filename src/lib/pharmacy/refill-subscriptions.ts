@@ -560,6 +560,8 @@ export async function verifyRefillCyclePharmacistPin(
       organizationId: scope.organizationId,
       approverUserId: approver.id,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: input.pin,
       action: 'pharmacy.refillCycleApproval',
       approverRight: REFILL_CYCLE_APPROVAL_CAPABILITY,

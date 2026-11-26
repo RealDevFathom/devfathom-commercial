@@ -460,3 +460,39 @@ test('an assigned-branch operator is denied staff and branch administration', as
     await context.close();
   }
 });
+
+test('a manager issues, rotates and revokes a linked operator’s device PIN', async ({ page }) => {
+  const origin = await signInAs(page, 'restaurantAdmin');
+  await page.goto(new URL('/restaurant/staff', origin).href);
+  await staffRow(page, 'E2E Operator').getByRole('button', { name: 'Credentials' }).click();
+  const dialog = page.getByRole('dialog', { name: 'E2E Operator credentials' });
+  await chooseSelectField(
+    dialog.getByRole('combobox', { name: 'Device restriction' }),
+    fixture.pos.deviceId
+  );
+  const issue = dialog
+    .locator('form')
+    .filter({ has: page.getByRole('button', { name: 'Issue credential' }) });
+  await issue.getByLabel('New operator secret').fill('582941');
+  await issue.getByLabel('Confirm PIN').fill('582941');
+  await issue.getByLabel('Your current password').fill(actorFixture.restaurantAdmin.password);
+  await issue.getByRole('button', { name: 'Issue credential' }).click();
+  await expect(page.getByText('Credential issued.', { exact: true })).toBeVisible();
+
+  const rotation = dialog
+    .locator('form')
+    .filter({ has: page.getByLabel('Replacement PIN secret') });
+  await rotation.getByLabel('Replacement PIN secret').fill('624819');
+  await rotation.getByLabel('Confirm PIN').fill('624819');
+  await rotation.getByLabel('Your current password').fill(actorFixture.restaurantAdmin.password);
+  await rotation.getByRole('button', { name: 'Rotate' }).click();
+  await expect(page.getByText('Credential rotated.', { exact: true })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Revoke', exact: true }).click();
+  const confirmation = page.getByRole('dialog', { name: 'Revoke PIN credential?' });
+  await confirmation
+    .getByLabel('Your current password')
+    .fill(actorFixture.restaurantAdmin.password);
+  await confirmation.getByRole('button', { name: 'Revoke credential' }).click();
+  await expect(page.getByText('Credential revoked.', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('REVOKED', { exact: true }).first()).toBeVisible();
+});

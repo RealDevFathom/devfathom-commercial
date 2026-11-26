@@ -32,14 +32,21 @@ function NoticeLine({ notice, id }: { notice: Notice | null; id: string }) {
  * re-entering their account password. The server checks the password, the PIN rules and
  * the organization; this form only explains them. The PIN is never shown back.
  */
-export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) {
+type PinSurface = 'pharmacyPin' | 'accountPin';
+export function OwnPinSettings({
+  onboardingHref,
+  surface = 'pharmacyPin',
+}: {
+  onboardingHref?: string;
+  surface?: PinSurface;
+}) {
   const utils = trpc.useUtils();
-  const status = trpc.pharmacyPin.status.useQuery(undefined, { retry: false });
+  const status = trpc[surface].status.useQuery(undefined, { retry: false });
   const [password, setPassword] = useState('');
   const [pin, setPin] = useState('');
   const [confirmPin, setConfirmPin] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
-  const save = trpc.pharmacyPin.setMine.useMutation({
+  const save = trpc[surface].setMine.useMutation({
     onSuccess: async (result) => {
       setPassword('');
       setPin('');
@@ -51,7 +58,7 @@ export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) 
             ? 'Your PIN is set. Use it whenever an approval asks for your own PIN.'
             : 'Your PIN is changed. Use the new PIN from now on.',
       });
-      await utils.pharmacyPin.status.invalidate();
+      await utils[surface].status.invalidate();
     },
     onError: (error) => {
       setPassword('');
@@ -60,7 +67,7 @@ export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) 
   });
 
   const data = status.data;
-  const hasPin = data?.state === 'SET';
+  const hasPin = data?.state === 'SET' || data?.state === 'MUST_CHANGE';
   const blocked = data?.supportSession === true;
 
   return (
@@ -80,7 +87,9 @@ export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) 
                     : 'Set'
                   : data.state === 'RESET'
                     ? 'Reset'
-                    : 'Not set'
+                    : data.state === 'MUST_CHANGE'
+                      ? 'Change required'
+                      : 'Not set'
               }
             />
           ) : null
@@ -88,9 +97,8 @@ export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) 
       >
         <div className="space-y-4">
           <p className="text-sm text-text-muted">
-            Approvals ask for your own PIN: confirming your medicine import, approving catalogue
-            edits, discounts and refunds, changing the maximum discount and downloading your data.
-            Nobody else can see your PIN, and it is never shown again after you save it.
+            Use your own PIN when an approval asks you to confirm an action. Nobody else can see
+            your PIN, and it is never shown again after you save it.
           </p>
           {status.isLoading ? (
             <p role="status" className="flex items-center gap-2 text-sm text-text-muted">
@@ -106,6 +114,11 @@ export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) 
             </p>
           ) : (
             <>
+              {data.state === 'MUST_CHANGE' && (
+                <p role="status" className="text-sm text-text-body">
+                  Set a new PIN with your password before approving again.
+                </p>
+              )}
               {data.state === 'RESET' ? (
                 <p role="status" className="text-sm text-text-body">
                   Your PIN was reset by the owner or a manager. Create a new one to approve again.
@@ -199,19 +212,19 @@ export function OwnPinSettings({ onboardingHref }: { onboardingHref?: string }) 
           )}
         </div>
       </SectionCard>
-      {data?.canResetOthers ? <StaffPinResets /> : null}
+      {data?.canResetOthers ? <StaffPinResets surface={surface} /> : null}
     </div>
   );
 }
 
 /** The owner's or a staff manager's list: reset a member's PIN so they create a new one. */
-function StaffPinResets() {
+function StaffPinResets({ surface }: { surface: PinSurface }) {
   const utils = trpc.useUtils();
-  const members = trpc.pharmacyPin.members.useQuery(undefined, { retry: false });
+  const members = trpc[surface].members.useQuery(undefined, { retry: false });
   const [selected, setSelected] = useState<{ id: string; name: string } | null>(null);
   const [password, setPassword] = useState('');
   const [notice, setNotice] = useState<Notice | null>(null);
-  const reset = trpc.pharmacyPin.resetForMember.useMutation({
+  const reset = trpc[surface].resetForMember.useMutation({
     onSuccess: async () => {
       setNotice({
         tone: 'status',
@@ -219,7 +232,7 @@ function StaffPinResets() {
       });
       setSelected(null);
       setPassword('');
-      await utils.pharmacyPin.members.invalidate();
+      await utils[surface].members.invalidate();
     },
     onError: (error) => {
       setPassword('');

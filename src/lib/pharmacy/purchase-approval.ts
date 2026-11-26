@@ -115,6 +115,8 @@ async function verifyApprover(
       organizationId,
       approverUserId: approverId,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: pin,
       action: 'pharmacy.purchaseApproval',
       approverRight: 'pharmacy:procurement-approve',

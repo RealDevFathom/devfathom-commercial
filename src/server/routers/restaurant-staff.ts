@@ -30,16 +30,12 @@ import {
 } from '@/lib/restaurant/credential-lifecycle';
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
 import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
-import { verticalForModuleKey, type EntitlementView } from '@/lib/module-catalog';
+import { ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
 import {
   currentPasswordInput,
   requirePasswordReauthentication,
 } from '@/lib/password-reauthentication';
-import {
-  pinResetDenial,
-  requireMemberPinReset,
-  requireOwnPinPassword,
-} from '@/lib/pharmacy/own-pin';
+import { pinResetDenial, requireMemberPinReset } from '@/lib/pharmacy/own-pin';
 import {
   assertMayRemoveLogin,
   guardTerminalOnlyApprovers,
@@ -202,21 +198,6 @@ async function assertMaySetLinkedCredential(
   if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
 }
 
-async function linkedUserOf(db: ScopedDb, staffProfileId: string): Promise<string | null> {
-  const profile = await db.restaurantStaffProfile.findUnique({
-    where: { id: staffProfileId },
-    select: { userId: true },
-  });
-  return profile?.userId ?? null;
-}
-
-function usesPharmacy(entitlements: EntitlementView): boolean {
-  return (
-    entitlements.vertical === 'PHARMACY' ||
-    entitlements.enabledModules.some((key) => verticalForModuleKey(key) === 'PHARMACY')
-  );
-}
-
 // Credential changes and account relinking take the same profile lock. In particular,
 // a terminal-only profile cannot acquire a login between its authorization and its write.
 async function lockCredentialProfile(db: ScopedDb, organizationId: string, staffProfileId: string) {
@@ -229,7 +210,7 @@ async function lockCredentialProfile(db: ScopedDb, organizationId: string, staff
 
 type CredentialChange =
   | { operation: 'set'; type: 'PIN' | 'BADGE'; secret: string; confirmPin?: string }
-  | { operation: 'revoke'; type: 'PIN' | 'BADGE'; credentialId: string };
+  | { operation: 'revoke'; type: 'PIN' | 'BADGE'; credentialId: string; selfOnly?: boolean };
 
 async function changeStaffCredential<T>(
   ctx: TRPCContext,
@@ -240,15 +221,6 @@ async function changeStaffCredential<T>(
   write: (db: ScopedDb) => Promise<T>
 ): Promise<T> {
   const actorId = ctx.session!.user.id;
-  if (!usesPharmacy(ctx.entitlements)) {
-    if (change.operation === 'set')
-      await assertMaySetLinkedCredential(
-        ctx.db,
-        actorId,
-        await linkedUserOf(ctx.db, staffProfileId)
-      );
-    return write(ctx.db);
-  }
   const organizationId = ctx.entitlements.organizationId;
   if (
     ctx.support ||
@@ -262,71 +234,74 @@ async function changeStaffCredential<T>(
   return ctx.db.$transaction(async (tx) => {
     const db = tx as unknown as ScopedDb;
     const profile = await lockCredentialProfile(db, organizationId, staffProfileId);
-    if (!profile.userId) return write(db);
-    annotateAudit(ctx, {
-      targetType: 'User',
-      targetId: profile.userId,
-      metadata: { forUserId: profile.userId, byUserId: actorId },
-    });
-    // All device-independent PINs on a member's profiles are managed together by Your PIN.
+    const targetId = profile.userId;
+    annotateAudit(ctx, { metadata: { staffProfileId, forUserId: targetId, byUserId: actorId } });
+    if (change.operation === 'revoke' && change.selfOnly && targetId !== actorId)
+      denyStaffBranchAccess();
+    if (!targetId) return write(db);
+    const self = actorId === targetId;
     if (change.type === 'PIN' && deviceId == null)
       throw new TRPCError({
         code: 'FORBIDDEN',
         message:
-          'Manage this approval PIN in pharmacy Settings under Your PIN. Only the member can set it.',
-      });
-    if (change.operation === 'set' && (actorId !== profile.userId || profile.status !== 'ACTIVE'))
-      throw new TRPCError({
-        code: 'FORBIDDEN',
-        message: 'Only the active member can set their own credential.',
+          self || change.operation === 'revoke'
+            ? 'Manage this approval PIN in Settings under Your PIN.'
+            : 'Only the member can set their approval PIN. Use Settings, Your PIN to reset it.',
       });
     if (!currentPassword)
       throw new TRPCError({
         code: 'FORBIDDEN',
         message: 'Re-enter your current account password.',
       });
-    if (change.operation === 'revoke') {
-      await requireMemberPinReset(db, {
-        organizationId,
-        actorId,
-        targetId: profile.userId,
-        currentPassword,
-      });
-      const active = await tx.restaurantOperatorCredential.findFirst({
-        where: { id: change.credentialId, revokedAt: null },
-        select: { id: true },
-      });
-      const result = await write(db);
-      if (active)
-        await tx.notification.create({
-          data: {
-            organizationId,
-            userId: profile.userId,
-            type: 'operator_credential_reset',
-            title: 'Your restaurant credential was revoked',
-            message: 'A staff manager revoked your restaurant operator credential.',
-            entityType: 'User',
-            entityId: actorId,
-          },
-        });
-      return result;
-    }
-    if (change.type === 'PIN')
-      await requireOwnPinPassword(db, {
-        organizationId,
-        userId: actorId,
-        pin: change.secret,
-        confirmPin: change.confirmPin ?? '',
-        currentPassword,
-      });
-    else
+    if (self)
       await requirePasswordReauthentication(db, {
         organizationId,
         userId: actorId,
         password: currentPassword,
         purpose: 'pharmacy-pin',
       });
-    return write(db);
+    else await requireMemberPinReset(db, { organizationId, actorId, targetId, currentPassword });
+    if (change.operation === 'set') {
+      if (profile.status !== 'ACTIVE')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This staff profile is not active.' });
+      if (change.type === 'PIN') {
+        const person = await db.user.findFirst({
+          where: { id: targetId, organizationId },
+          select: { phone: true },
+        });
+        const problem = ownPinProblem(change.secret, change.confirmPin ?? '', {
+          phone: person?.phone,
+        });
+        if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
+      }
+    }
+    const notify =
+      !self &&
+      (change.operation === 'set' ||
+        (await db.restaurantOperatorCredential.findFirst({
+          where: { id: change.credentialId, revokedAt: null },
+          select: { id: true },
+        })));
+    const result = await write(db);
+    if (notify) {
+      const revoked = change.operation === 'revoke';
+      await tx.notification.create({
+        data: {
+          organizationId,
+          userId: targetId,
+          type: revoked ? 'operator_credential_reset' : 'operator_credential_changed',
+          title: revoked
+            ? 'Your restaurant credential was revoked'
+            : 'Your restaurant credential changed',
+          message: revoked
+            ? 'A staff manager revoked your restaurant operator credential.'
+            : 'A staff manager issued or rotated your restaurant operator credential.',
+          entityType: 'User',
+          entityId: actorId,
+        },
+      });
+    }
+    return result;
   });
 }
 
@@ -873,7 +848,7 @@ export const restaurantStaffRouter = router({
             staffProfileId: id,
           });
         const staff = await guarded(ctx, 'restaurantStaff.update', async (db) => {
-          if (patch.userId !== undefined && usesPharmacy(ctx.entitlements)) {
+          if (patch.userId !== undefined) {
             const organizationId = workspaceOrganizationId(ctx);
             const profile = await lockCredentialProfile(db, organizationId, id);
             if (profile.userId !== patch.userId) {
@@ -968,6 +943,60 @@ export const restaurantStaffRouter = router({
         },
         orderBy: { createdAt: 'desc' },
       });
+    }),
+
+  myTerminalCredentials: protectedProcedure.query(({ ctx }) =>
+    ctx.db.restaurantOperatorCredential.findMany({
+      where: {
+        organizationId: workspaceOrganizationId(ctx),
+        staffProfile: { userId: ctx.session!.user.id },
+        revokedAt: null,
+        OR: [{ type: 'BADGE' }, { deviceId: { not: null } }],
+      },
+      select: { id: true, type: true, device: { select: { name: true } }, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    })
+  ),
+
+  revokeMyTerminalCredential: protectedProcedure
+    .input(
+      z.strictObject({
+        credentialId: z.string(),
+        currentPassword: currentPasswordInput,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'RestaurantOperatorCredential',
+        targetId: input.credentialId,
+      });
+      const existing = await ctx.db.restaurantOperatorCredential.findFirst({
+        where: {
+          id: input.credentialId,
+          organizationId: workspaceOrganizationId(ctx),
+          staffProfile: { userId: ctx.session!.user.id },
+          OR: [{ type: 'BADGE' }, { deviceId: { not: null } }],
+        },
+        select: { type: true, deviceId: true, staffProfileId: true },
+      });
+      if (!existing) denyStaffBranchAccess();
+      return changeStaffCredential(
+        ctx,
+        existing.staffProfileId,
+        existing.deviceId,
+        input.currentPassword,
+        {
+          operation: 'revoke',
+          type: existing.type,
+          credentialId: input.credentialId,
+          selfOnly: true,
+        },
+        async (db) => {
+          const result = await revokeOperatorCredential(db, input);
+          return { id: result.id, revokedAt: result.revokedAt };
+        }
+      );
     }),
 
   issueCredential: staffProcedure

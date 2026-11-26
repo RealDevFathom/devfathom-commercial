@@ -665,6 +665,7 @@ const purchasingRouter = router({
           const credential = await issueOperatorCredential(txDb(tx), {
             staffProfileId: profile.id,
             type: 'PIN',
+            memberSelectedApprovalPin: true,
             secret: input.pin,
           });
           return { id: credential.id, staffProfileId: profile.id };

@@ -34,6 +34,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 export type OwnPinState = {
   /** SET: an active PIN. NOT_SET: none yet. RESET: a manager reset it; set a new one. */
   state: 'SET' | 'NOT_SET' | 'RESET';
+  mustChange?: true;
   locked: boolean;
   lockedUntil: Date | null;
 };
@@ -57,7 +58,7 @@ export async function readOwnPinState(
     db.restaurantOperatorCredential.findFirst({
       where: activePin(organizationId, userId),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      select: { failedAttempts: true, lockedUntil: true },
+      select: { failedAttempts: true, lockedUntil: true, approvalPinMustChange: true },
     }),
     db.restaurantOperatorCredential.findFirst({
       where: {
@@ -72,7 +73,12 @@ export async function readOwnPinState(
   ]);
   if (!active) return { state: revoked ? 'RESET' : 'NOT_SET', locked: false, lockedUntil: null };
   const locked = isLockedOut(active, now);
-  return { state: 'SET', locked, lockedUntil: locked ? active.lockedUntil : null };
+  return {
+    state: 'SET',
+    ...(active.approvalPinMustChange && { mustChange: true as const }),
+    locked,
+    lockedUntil: locked ? active.lockedUntil : null,
+  };
 }
 
 export class OwnPinError extends Error {
@@ -100,17 +106,22 @@ export async function saveOwnPin(
   const user = await db.$queryRaw<Array<{ name: string | null }>>`
     SELECT name FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;
   if (!user[0]) throw new OwnPinError('Your account was not found.', 'NOT_FOUND');
-  const current = await db.restaurantOperatorCredential.findFirst({
+  const [current, ...otherProfiles] = await db.restaurantOperatorCredential.findMany({
     where: activePin(organizationId, userId),
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: { id: true, staffProfileId: true },
   });
   if (current) {
-    const rotated = await rotateOperatorCredential(db, {
-      credentialId: current.id,
-      secret: input.pin,
-    });
-    return { action: 'changed', credentialId: rotated.id, staffProfileId: current.staffProfileId };
+    // Older accounts can have several linked staff profiles. Each approval surface
+    // must see the member's new PIN, including surfaces that select by profile.
+    for (const credential of [current, ...otherProfiles]) {
+      await rotateOperatorCredential(db, {
+        credentialId: credential.id,
+        secret: input.pin,
+        memberSelectedApprovalPin: true,
+      });
+    }
+    return { action: 'changed', credentialId: current.id, staffProfileId: current.staffProfileId };
   }
   const activeProfile = await db.restaurantStaffProfile.findFirst({
     where: { organizationId, userId, status: 'ACTIVE' },
@@ -143,6 +154,7 @@ export async function saveOwnPin(
   const issued = await issueOperatorCredential(db, {
     staffProfileId,
     type: 'PIN',
+    memberSelectedApprovalPin: true,
     secret: input.pin,
   });
   return { action: 'created', credentialId: issued.id, staffProfileId };

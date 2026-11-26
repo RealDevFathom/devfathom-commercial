@@ -78,6 +78,7 @@ export const pharmacyPinRouter = router({
     ]);
     return {
       ...pin,
+      state: pin.mustChange ? ('MUST_CHANGE' as const) : pin.state,
       supportSession: support,
       canResetOthers: !support && !!party && (await managesStaffPins(ctx.db, party)),
     };
@@ -199,7 +200,7 @@ export const pharmacyPinRouter = router({
             type: 'approval_pin_reset',
             title: 'Your approval PIN was reset',
             message:
-              'A staff manager reset your PIN. Open Your PIN in pharmacy Settings and use your password to set a new one.',
+              'A staff manager reset your PIN. Open Your PIN in Settings and use your password to set a new one.',
             entityType: 'User',
             entityId: userId,
           },

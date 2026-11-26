@@ -115,6 +115,8 @@ function verify(db: ReturnType<typeof fakeDb>, secret: string, now = NOW) {
     organizationId: 'org',
     approverUserId: 'manager',
     credentialHash: `hash:${PIN}`,
+    deviceBound: false,
+    approvalPinMustChange: false,
     secret,
     action: 'pharmacySales.refundTender',
     approverRight: 'pharmacy:manage',
@@ -202,6 +204,8 @@ describe('DEV-961 confirming one’s own action with one’s own PIN', () => {
       organizationId: 'org',
       approverUserId: 'manager',
       credentialHash: `hash:${PIN}`,
+      deviceBound: false,
+      approvalPinMustChange: false,
       secret,
       action: 'pharmacy.voucherRedemption',
       approverRight: 'pharmacy:manage',
@@ -440,6 +444,8 @@ describe('DEV-961 authenticator by default: the shared approval path', () => {
           organizationId: 'org',
           approverUserId: 'manager',
           credentialHash: `hash:${PIN}`,
+          deviceBound: false,
+          approvalPinMustChange: false,
           secret: PIN,
           action: 'pharmacySales.refundTender',
           approverRight: right as never,
@@ -458,6 +464,8 @@ describe('DEV-961 authenticator by default: the shared approval path', () => {
         organizationId: 'org',
         approverUserId: null,
         credentialHash: `hash:${PIN}`,
+        deviceBound: false,
+        approvalPinMustChange: false,
         secret,
         action: 'restaurant.terminal.coAuthorize',
         approverRight: 'coauth:approve',
@@ -470,6 +478,93 @@ describe('DEV-961 authenticator by default: the shared approval path', () => {
     await expect(verify(db, PIN)).resolves.toBeNull();
   });
 
+  it.each([
+    { credentialType: 'BADGE', deviceBound: false },
+    { credentialType: 'PIN', deviceBound: true },
+  ] as const)(
+    'refuses a linked restaurant $credentialType with device binding $deviceBound for pharmacy approval',
+    async (credential) => {
+      const db = fakeDb({ required: false });
+      await expect(
+        verifyApprovalSecret(db as never, {
+          organizationId: 'org',
+          approverUserId: 'member',
+          credentialHash: `hash:${PIN}`,
+          approvalPinMustChange: false,
+          ...credential,
+          secret: PIN,
+          action: 'pharmacy.test',
+          approverRight: 'pharmacy:manage',
+        })
+      ).resolves.toBeNull();
+      expect(verifyOperatorCredential).not.toHaveBeenCalled();
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps a linked manager’s device PIN for a restaurant approval while PIN approvals are enabled', async () => {
+    const db = fakeDb({ required: false });
+    await expect(
+      verifyApprovalSecret(db as never, {
+        organizationId: 'org',
+        approverUserId: 'member',
+        credentialHash: `hash:${PIN}`,
+        approvalPinMustChange: false,
+        deviceBound: true,
+        secret: PIN,
+        action: 'restaurant.terminal.coAuthorize',
+        approverRight: 'coauth:approve',
+      })
+    ).resolves.toBe('PIN');
+    expect(db.auditLog.create).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    'pharmacy:manage',
+    'pharmacy:dispense',
+    'pharmacy:procurement-approve',
+    'OWNER',
+  ] as const)('refuses a terminal-only PIN for %s', async (right) => {
+    const db = fakeDb({ required: false });
+    await expect(
+      verifyApprovalSecret(db as never, {
+        organizationId: 'org',
+        approverUserId: null,
+        credentialHash: `hash:${PIN}`,
+        deviceBound: false,
+        approvalPinMustChange: false,
+        secret: PIN,
+        action: 'pharmacy.test',
+        approverRight: right,
+      })
+    ).resolves.toBeNull();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['pharmacy:manage', 'coauth:approve'] as const)(
+    'directs the member to set a new PIN before using a flagged PIN for %s',
+    async (right) => {
+      const db = fakeDb({ required: false });
+      await expect(
+        verifyApprovalSecret(db as never, {
+          organizationId: 'org',
+          approverUserId: 'manager',
+          credentialHash: `hash:${PIN}`,
+          deviceBound: false,
+          approvalPinMustChange: true,
+          secret: PIN,
+          action: 'test.approval',
+          approverRight: right,
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message:
+          'Set a new PIN with your password in Settings, Your PIN before approving with a PIN.',
+      });
+      expect(db.auditLog.create).not.toHaveBeenCalled();
+    }
+  );
+
   it('still fails closed for a terminal-only profile when the organization cannot be read', async () => {
     const db = fakeDb({ enrolled: false, organization: false });
     await expect(
@@ -477,6 +572,8 @@ describe('DEV-961 authenticator by default: the shared approval path', () => {
         organizationId: 'org',
         approverUserId: null,
         credentialHash: `hash:${PIN}`,
+        deviceBound: false,
+        approvalPinMustChange: false,
         secret: PIN,
         action: 'restaurant.terminal.coAuthorize',
         approverRight: 'coauth:approve',

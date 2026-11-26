@@ -6931,6 +6931,7 @@ model RestaurantOperatorCredential {
   deviceId       String?
   type           RestaurantOperatorCredentialType
   credentialHash String
+  approvalPinMustChange Boolean @default(false)
   failedAttempts Int                              @default(0)
   lockedUntil    DateTime?
   revokedAt      DateTime?

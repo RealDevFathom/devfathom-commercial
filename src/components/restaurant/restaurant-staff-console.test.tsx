@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
         id: 'staff_1',
         displayName: 'Shift Lead',
         email: 'lead@example.com',
-        userId: null,
+        userId: null as string | null,
         primaryBranchId: 'branch_1',
         status: 'ACTIVE',
         createdAt: new Date('2026-08-18T07:00:00Z'),
@@ -393,6 +393,73 @@ describe('Restaurant staff credential UI', () => {
       mocks.issueOptions?.onError?.({ message: 'Credential rejected.' });
       options?.onSettled?.();
     });
+  });
+
+  it('sends the actor password for linked credential changes and confirms device PINs', () => {
+    const staff = mocks.staff.data[0]!;
+    const previous = staff.userId;
+    staff.userId = 'linked-member';
+    mocks.credentials.data = [
+      { id: 'credential', type: 'PIN', deviceId: 'device_1', failedAttempts: 0 },
+    ];
+    try {
+      render(
+        <EntitlementsProvider value={entitlements}>
+          <RestaurantStaffConsole />
+        </EntitlementsProvider>
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
+      const device = screen.getByLabelText('Device restriction', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      });
+      fireEvent.change(selectFieldControl(device), { target: { value: 'device_1' } });
+      const submit = (button: string, label: string, pin: string) => {
+        const action = screen.getByRole('button', { name: button });
+        const form = within(action.closest('form')!);
+        fireEvent.change(form.getByLabelText(label), { target: { value: pin } });
+        fireEvent.change(form.getByLabelText('Confirm PIN'), { target: { value: pin } });
+        fireEvent.change(form.getByLabelText('Your current password'), {
+          target: { value: ' synthetic password ' },
+        });
+        fireEvent.click(action);
+        expect(form.getByLabelText('Your current password')).toHaveValue('');
+      };
+      submit('Issue credential', 'New operator secret', '482916');
+      expect(mocks.issueMutate).toHaveBeenCalledWith(
+        {
+          staffProfileId: staff.id,
+          deviceId: 'device_1',
+          type: 'PIN',
+          secret: '482916',
+          confirmPin: '482916',
+          currentPassword: ' synthetic password ',
+        },
+        expect.anything()
+      );
+      submit('Rotate', 'Replacement PIN secret', '592817');
+      expect(mocks.noopMutate).toHaveBeenCalledWith(
+        {
+          credentialId: 'credential',
+          secret: '592817',
+          confirmPin: '592817',
+          currentPassword: ' synthetic password ',
+        },
+        expect.anything()
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Revoke' }));
+      const revoke = within(screen.getByRole('dialog', { name: /Revoke PIN credential/ }));
+      fireEvent.change(revoke.getByLabelText('Your current password'), {
+        target: { value: ' synthetic password ' },
+      });
+      fireEvent.click(revoke.getByRole('button', { name: 'Revoke credential' }));
+      expect(mocks.noopMutate).toHaveBeenCalledWith({
+        credentialId: 'credential',
+        currentPassword: ' synthetic password ',
+      });
+    } finally {
+      staff.userId = previous;
+      mocks.credentials.data = [];
+    }
   });
 
   it('clears a rejected secret while preserving non-secret credential fields', () => {

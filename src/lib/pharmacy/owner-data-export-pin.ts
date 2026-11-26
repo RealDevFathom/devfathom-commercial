@@ -72,6 +72,8 @@ export async function verifyOwnerExportPin(
           organizationId,
           approverUserId: userId,
           credentialHash: credential.credentialHash,
+          approvalPinMustChange: credential.approvalPinMustChange,
+          deviceBound: credential.deviceId != null,
           secret: pin,
           action,
           approverRight: 'OWNER',

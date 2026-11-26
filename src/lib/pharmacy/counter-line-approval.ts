@@ -278,6 +278,8 @@ async function verifyApproverPin(
       organizationId: scope.organizationId,
       approverUserId: approver.id,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: input.pin,
       action: `pharmacy.counterApproval.${kind}`,
       approverRight: COUNTER_APPROVAL_CAPABILITY[kind],

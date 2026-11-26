@@ -8,6 +8,7 @@ import { signOutEverything } from '@/lib/auth/sign-out';
 import { toast } from 'sonner';
 import { useTheme } from '@/components/theme-provider';
 import Link from 'next/link';
+import { SectionCard } from '@/components/ui/section-card';
 import {
   User,
   Lock,
@@ -132,6 +133,14 @@ export function SettingsContent({
       />
 
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+        <SectionCard title="Your PIN" titleLevel={2}>
+          <Link
+            href="/settings/pin"
+            className="inline-flex min-h-11 items-center underline underline-offset-4"
+          >
+            Manage your approval PIN
+          </Link>
+        </SectionCard>
         {providerRefundSettings}
         {/* Profile */}
         <ProfileSection />

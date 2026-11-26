@@ -22,6 +22,9 @@ export const OWN_PIN_PATH = '/pharmacy/settings/pin';
 export const NO_PIN_SET_MESSAGE =
   'You have not set up your PIN yet. Create it in Settings, Your PIN, then try again.';
 
+export const PIN_CHANGE_REQUIRED =
+  'Set a new PIN with your password in Settings, Your PIN before approving with a PIN.';
+
 export const OWN_PIN_RULES = `Use ${OWN_PIN_MIN_LENGTH} to ${OWN_PIN_MAX_LENGTH} digits. Easy PINs are not accepted: 1111, 1234, 1212, a year such as 1990, or the end of your phone number.`;
 
 /**
