@@ -1,3 +1,4 @@
+import { lateOfflineCash } from './late-offline-cash';
 import { createHash } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -114,6 +115,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
         branch.cashShiftVarianceToleranceMinor ?? 0
       )
     : null;
+  const lateCash = await lateOfflineCash(db, scope, { recordedDay: businessDate });
   const rows = drawers.map((d) => ({
     ...(d.cashShifts && dayShifts
       ? {
@@ -159,6 +161,7 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
       .digest('hex');
   }
   return {
+    ...(lateCash.length ? { lateOfflineCash: lateCash } : {}),
     branchName: branch.name,
     businessDate,
     drawers: rows,

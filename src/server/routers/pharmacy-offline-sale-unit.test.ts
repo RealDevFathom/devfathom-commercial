@@ -29,13 +29,18 @@ vi.mock('@/lib/pharmacy/offline-cash-selling', async (original) => ({
   readOfflineCashSelling: async () => ({ enabled: true, available: true }),
 }));
 
-vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/pharmacy/sales')>()),
-  authenticatePharmacyCommand: vi.fn(async () => undefined),
-  validateLeasedReceiptReplay: vi.fn(() => undefined),
-  createSale: mocks.createSale,
-  addSaleLine: mocks.addSaleLine,
-}));
+vi.mock('@/lib/pharmacy/sales', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/sales')>();
+  return {
+    ...actual,
+    // Exercise the real lease checks at the fixture's replay time.
+    validateLeasedReceiptReplay: (...args: Parameters<typeof actual.validateLeasedReceiptReplay>) =>
+      actual.validateLeasedReceiptReplay(args[0], args[1], args[2], Date.parse(SALE_AT)),
+    authenticatePharmacyCommand: vi.fn(async () => undefined),
+    createSale: mocks.createSale,
+    addSaleLine: mocks.addSaleLine,
+  };
+});
 
 vi.mock('@/lib/pharmacy/offline-command-log', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/pharmacy/offline-command-log')>()),
@@ -97,12 +102,14 @@ function envelope(
  * checks that seal. This counter's first sale names no sale before it.
  */
 function command(multiplier: number) {
-  return router.counterReplaySchema.parse(offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(multiplier), {
-    previousHash: null,
-  }));
+  return router.counterReplaySchema.parse(
+    offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(multiplier), {
+      previousHash: null,
+    })
+  );
 }
 
-function unsealedCommand(multiplier: number) {
+function unsealedCommand(multiplier: number, cashierId?: string) {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' });
   return {
     sequence: 1,
@@ -117,7 +124,14 @@ function unsealedCommand(multiplier: number) {
     },
     snapshots: KINDS.map((kind) => {
       // Offline cash selling forced ON in the signed RULES (it is off in the product).
-      const payload = kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind };
+      const payload =
+        kind === 'RULES'
+          ? {
+              kind,
+              offlineCashSelling: true,
+              ...(cashierId ? { operator: { userId: cashierId } } : {}),
+            }
+          : { kind };
       const signed = envelope(kind, payload);
       return { envelope: signed, signature: signing.signSnapshotEnvelope(signed), payload };
     }),
@@ -138,7 +152,7 @@ function unsealedCommand(multiplier: number) {
   };
 }
 
-function db() {
+function db(priorRefusal?: string) {
   const packLevel = {
     // One sealed pack counted directly in ten canonical tablets.
     findMany: vi.fn(async () => [
@@ -147,7 +161,13 @@ function db() {
     findFirst: vi.fn(async () => ({ id: 'pack_1' })),
   };
   return {
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async (query: unknown) =>
+      priorRefusal &&
+      Array.isArray(query) &&
+      query.join('').includes('SELECT reason FROM pharmacy_offline_receipt_events')
+        ? [{ reason: priorRefusal }]
+        : []
+    ),
     // The sale's business day is read on the organisation's stored clock.
     organization: { findUnique: vi.fn(async () => ({ timezone: 'UTC' })) },
     // DEV-958A: the branch's "day ends at" hour; none stored reads as midnight.
@@ -187,6 +207,51 @@ beforeEach(() => {
 });
 
 describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
+  it('identifies a failed receipt envelope signature for supervisor quarantine', async () => {
+    const body = command(10);
+    body.leasedReceipt.signature = Buffer.alloc(64).toString('base64');
+    await expect(replay(db(), body)).rejects.toMatchObject({
+      code: 'invalid_snapshot',
+      status: 403,
+    });
+    expect(mocks.createSale).not.toHaveBeenCalled();
+  });
+
+  it('books the signed cashier on the sale and line when a different operator reconnects', async () => {
+    const target = db();
+    const cashier = 'cashier_at_sale';
+    const body = router.counterReplaySchema.parse(
+      offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(10, cashier), {
+        previousHash: null,
+      })
+    );
+    await expect(replay(target, body)).rejects.toThrow('REACHED_LINE');
+    expect(mocks.createSale).toHaveBeenCalledWith(target, { ...SCOPE, actorId: cashier });
+    expect(mocks.addSaleLine.mock.calls[0]?.[1]).toEqual({ ...SCOPE, actorId: cashier });
+  });
+
+  it.each(['controlled', 'rx', 'restricted', 'highAlert', 'lasa'])(
+    'refuses a %s medicine during replay before consuming stock',
+    async (flag) => {
+      const target = db();
+      vi.mocked(target.medicine.findFirst).mockResolvedValueOnce({ [flag]: true } as never);
+      await expect(replay(target, command(10))).rejects.toMatchObject({
+        code: 'medicine_not_offline_otc',
+      });
+      expect(mocks.consumeDeviceLotQuota).not.toHaveBeenCalled();
+      expect(mocks.addSaleLine).not.toHaveBeenCalled();
+    }
+  );
+
+  it('requires supervisor review of the same receipt after a drawer refusal', async () => {
+    const target = db('DRAWER_NOT_OPEN');
+    await expect(replay(target, command(10))).rejects.toMatchObject({
+      code: 'DRAWER_NOT_OPEN',
+      status: 409,
+    });
+    expect(mocks.createSale).not.toHaveBeenCalled();
+  });
+
   it('refuses a PACK with a single-unit multiplier before quota or stock moves', async () => {
     await expect(replay(db(), command(1))).rejects.toMatchObject({
       code: 'invalid_pack',

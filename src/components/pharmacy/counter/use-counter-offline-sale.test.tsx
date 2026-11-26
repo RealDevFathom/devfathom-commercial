@@ -75,7 +75,11 @@ import { readReconcileIndex, readReconcileRecord } from '@/lib/pharmacy/counter-
 import { useCounterOffline, type CounterOfflineView } from './use-counter-offline';
 import { CounterOfflinePanel } from './counter-offline-panel';
 
-const ENROLMENT = { ...FIXTURE_SCOPE, name: 'Front counter', enrolledAt: '2026-11-19T08:00:00.000Z' };
+const ENROLMENT = {
+  ...FIXTURE_SCOPE,
+  name: 'Front counter',
+  enrolledAt: '2026-11-19T08:00:00.000Z',
+};
 const KINDS: PharmacyOfflineSnapshotKind[] = ['CATALOG', 'PRICES', 'TAX', 'RULES', 'LOT_BALANCES'];
 const props = (online: boolean) => ({
   organizationId: FIXTURE_SCOPE.organizationId,
@@ -96,7 +100,10 @@ beforeEach(async () => {
     snapshotPublicKey: fixturePublicKey(),
     device: { id: FIXTURE_SCOPE.deviceId },
   });
-  h.snapshots.mockImplementation(async () => ({ publicKey: fixturePublicKey(), snapshots: issue() }));
+  h.snapshots.mockImplementation(async () => ({
+    publicKey: fixturePublicKey(),
+    snapshots: issue(),
+  }));
   // The receipt block a manager reserved when preparing this counter.
   const runtime = new PharmacyCounterRuntime(
     FIXTURE_SCOPE,
@@ -105,7 +112,9 @@ beforeEach(async () => {
     fixturePublicKey()
   );
   await runtime.hydrate();
-  await runtime.adoptLeases([{ leaseId: 'lease_a', blockStart: 501, blockEnd: 510, nextNumber: 501 }]);
+  await runtime.adoptLeases([
+    { leaseId: 'lease_a', blockStart: 501, blockEnd: 510, nextNumber: 501 },
+  ]);
 });
 afterEach(() => {
   window.localStorage.clear();
@@ -121,7 +130,12 @@ async function preparedOnline() {
 function oneTablet(view: CounterOfflineView, lotId = 'lot_panadol_a') {
   const row = view.rows.find((candidate) => candidate.inventoryLotId === lotId)!;
   const unit = row.saleUnits.find((option) => option.kind === 'UNIT')!;
-  return addToOfflineDraft(newOfflineDraft(view.operator?.userId ?? null, new Date()), row, unit, new Date());
+  return addToOfflineDraft(
+    newOfflineDraft(view.operator?.userId ?? null, new Date()),
+    row,
+    unit,
+    new Date()
+  );
 }
 
 describe('DEV-957 phase 2: selling offline through the counter', () => {
@@ -221,9 +235,11 @@ describe('DEV-957 phase 2: selling offline through the counter', () => {
     expect(h.unbind).toHaveBeenCalled();
     expect(h.clear).toHaveBeenCalled();
     // Nothing of the counter is left on this computer: no price list, receipt block or bill.
-    expect(await (h.driver as ReturnType<typeof createMemoryDriver>).read(
-      `${FIXTURE_SCOPE.organizationId}::${FIXTURE_SCOPE.branchId}::${FIXTURE_SCOPE.deviceId}`
-    )).toBeUndefined();
+    expect(
+      await (h.driver as ReturnType<typeof createMemoryDriver>).read(
+        `${FIXTURE_SCOPE.organizationId}::${FIXTURE_SCOPE.branchId}::${FIXTURE_SCOPE.deviceId}`
+      )
+    ).toBeUndefined();
     // Except the sale it took and never sent: kept read-only for a manager (review B2).
     const driver = h.driver as ReturnType<typeof createMemoryDriver>;
     const [entry] = await readReconcileIndex(driver);
@@ -253,6 +269,7 @@ describe('DEV-957 phase 2 (review B1): with the owner switch off the counter che
         'Offline cash selling is off. It becomes available when sending offline sales to the server is ready; until then this counter checks prices only.',
     });
     render(<CounterOfflinePanel offline={view.result.current} />);
+    expect(screen.getByText('To change cashier, reconnect first.')).toBeVisible();
     expect(screen.getByText(/Offline cash selling is off:/)).toBeInTheDocument();
     expect(screen.getByLabelText('Offline price check')).toBeInTheDocument();
     expect(screen.queryByLabelText('Add a medicine to the offline bill')).toBeNull();
@@ -285,7 +302,9 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     await waitFor(() =>
       expect(screen.getByLabelText('Add a medicine to the offline bill')).toBeInTheDocument()
     );
-    expect(screen.getByText(/Ayesha Khan, who was signed in when this counter last connected/)).toBeInTheDocument();
+    expect(
+      screen.getByText(/Ayesha Khan, who was signed in when this counter last connected/)
+    ).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Add a medicine to the offline bill'), {
       target: { value: 'pana' },
     });
@@ -293,7 +312,9 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     expect(await screen.findByText('Rs 3.50 each', { exact: false })).toBeInTheDocument();
     const cash = screen.getByLabelText(/Cash received/);
     fireEvent.change(cash, { target: { value: '3.505' } });
-    expect(screen.getByText('Use at most 2 decimal places, for example 125.50.')).toBeInTheDocument();
+    expect(
+      screen.getByText('Use at most 2 decimal places, for example 125.50.')
+    ).toBeInTheDocument();
     fireEvent.change(cash, { target: { value: '5' } });
     expect(screen.getByText('Rs 1.50')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Take cash Rs 3.50' }));
@@ -305,7 +326,9 @@ describe('DEV-957 phase 2: the offline sale screen', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Take cash Rs 3.50' }));
     expect(await screen.findByText('Paid')).toBeInTheDocument();
     expect(screen.getByText(/Receipt 501/)).toBeInTheDocument();
-    expect(screen.getByLabelText('Receipt 501')).toHaveTextContent('Counter Front counter, sold offline');
+    expect(screen.getByLabelText('Receipt 501')).toHaveTextContent(
+      'Counter Front counter, sold offline'
+    );
   });
 });
 
@@ -320,7 +343,9 @@ describe('DEV-957 phase 2: the paid sale stays on screen when it ends offline se
       fixturePublicKey()
     );
     await runtime.hydrate();
-    await runtime.adoptLeases([{ leaseId: 'lease_one', blockStart: 777, blockEnd: 777, nextNumber: 777 }]);
+    await runtime.adoptLeases([
+      { leaseId: 'lease_one', blockStart: 777, blockEnd: 777, nextNumber: 777 },
+    ]);
     await preparedOnline();
 
     function Counter() {
@@ -371,6 +396,60 @@ describe('DEV-957 replay on reconnect', () => {
     });
     offline.unmount();
   }
+
+  it('quarantines a refused seal with its fingerprint before sending the next receipt', async () => {
+    await waitingSales();
+    const order: string[] = [];
+    let reviewed: Record<string, unknown> | undefined;
+    let acknowledgeNext!: () => void;
+    const nextReceipt = new Promise<void>((resolve) => {
+      acknowledgeNext = resolve;
+    });
+    const send = vi.spyOn(globalThis, 'fetch').mockImplementation(async (path, options) => {
+      const body = JSON.parse(String(options?.body));
+      order.push(String(path));
+      if (String(path).endsWith('/quarantine')) {
+        reviewed = body;
+        return Response.json({ status: 'QUARANTINED', commandId: 'quarantined-1' });
+      }
+      if (body.sequence === 2) {
+        await nextReceipt;
+        return Response.json({ saleId: 'booked-2' });
+      }
+      return Response.json({ error: 'offline_chain_broken' }, { status: 409 });
+    });
+    try {
+      const back = renderHook(() => useCounterOffline(props(true)));
+      await waitFor(() => expect(back.result.current.queued[0]?.status).toBe('QUARANTINED'));
+      const head = back.result.current.queued[0]!;
+      await act(async () =>
+        back.result.current.actions!.resolveConflict!(
+          head.commandId,
+          'Damaged seal verified',
+          'quarantine'
+        )
+      );
+      await waitFor(() => expect(order).toHaveLength(3));
+      expect(back.result.current.queued.map((command) => command.sequence)).toEqual([2]);
+      acknowledgeNext();
+      await waitFor(() => expect(back.result.current.queued).toHaveLength(0));
+      expect(reviewed).toMatchObject({
+        action: 'quarantine',
+        command: { sequence: 1 },
+        originalHash: head.sealHash,
+        reason: 'Damaged seal verified',
+      });
+      expect(order).toEqual([
+        '/api/pharmacy/counter/replay',
+        '/api/pharmacy/counter/quarantine',
+        '/api/pharmacy/counter/replay',
+      ]);
+      back.unmount();
+    } finally {
+      acknowledgeNext();
+      send.mockRestore();
+    }
+  });
 
   it('sends the sealed sales in order and keeps a refused head visible across a reload until a manager settles it', async () => {
     await waitingSales();

@@ -7,7 +7,13 @@
  */
 
 export type CashShiftMovementKind =
-  'OPENING_FLOAT' | 'CASH_SALE' | 'CASH_REFUND' | 'PAID_IN' | 'PAID_OUT' | 'CLOSING_COUNT';
+  | 'REJECTED_OFFLINE_CASH'
+  | 'OPENING_FLOAT'
+  | 'CASH_SALE'
+  | 'CASH_REFUND'
+  | 'PAID_IN'
+  | 'PAID_OUT'
+  | 'CLOSING_COUNT';
 
 export type CashShiftSource = {
   openingFloatMinor: number;
@@ -54,6 +60,7 @@ export type CashShiftFigures = {
     openingFloatMinor: number;
     cashSalesMinor: number;
     cashRefundsMinor: number;
+    rejectedOfflineCashMinor?: number;
     paidInMinor: number;
     paidOutMinor: number;
     expectedMinor: number;
@@ -86,6 +93,7 @@ export function computeCashShiftFigures(source: CashShiftSource): CashShiftFigur
   const kind = (k: string) => source.movements.filter((m) => m.kind === k);
   const cashSalesMinor = sum(kind('CASH_SALE'));
   const cashRefundsMinor = sum(kind('CASH_REFUND'));
+  const rejectedOfflineCashMinor = sum(kind('REJECTED_OFFLINE_CASH'));
   const paidInMinor = sum(kind('PAID_IN'));
   const paidOutMinor = sum(kind('PAID_OUT'));
   const tenderTotalMinor = sum(source.tenders);
@@ -108,16 +116,23 @@ export function computeCashShiftFigures(source: CashShiftSource): CashShiftFigur
       openingFloatMinor: source.openingFloatMinor,
       cashSalesMinor,
       cashRefundsMinor,
+      ...(rejectedOfflineCashMinor ? { rejectedOfflineCashMinor } : {}),
       paidInMinor,
       paidOutMinor,
       expectedMinor:
-        source.openingFloatMinor + cashSalesMinor + paidInMinor - cashRefundsMinor - paidOutMinor,
+        source.openingFloatMinor +
+        cashSalesMinor +
+        rejectedOfflineCashMinor +
+        paidInMinor -
+        cashRefundsMinor -
+        paidOutMinor,
     },
   };
 }
 
 /** The shift report frozen on the shift row at its close, and shown again from there. */
 export type CashShiftReport = CashShiftFigures & {
+  lateOfflineCash?: import('./late-offline-cash').LateOfflineCash[];
   shiftId: string;
   sequence: number;
   drawerSessionId: string;

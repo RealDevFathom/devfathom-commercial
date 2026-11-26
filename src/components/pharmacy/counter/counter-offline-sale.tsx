@@ -23,6 +23,10 @@ import {
   formatReceiptIssuedAt,
   type CounterReceipt,
 } from '@/lib/pharmacy/counter-receipt';
+import {
+  canQuarantineOfflineReceipt,
+  canRetryOfflineReceipt,
+} from '@/lib/pharmacy/counter-replay-transport';
 import { buildCounterReceiptPreview } from '@/lib/pharmacy/counter-receipt-presentation';
 import type { CounterQueuedCommand } from '@/lib/pharmacy/counter-command-queue';
 
@@ -203,7 +207,9 @@ export function CounterOfflineSale({
                           variant="outline"
                           className="min-h-11"
                           disabled={option.canonicalUnitsPerSaleUnit > row.unitsLeft}
-                          onClick={() => void change(addToOfflineDraft(draft, row, option, new Date()))}
+                          onClick={() =>
+                            void change(addToOfflineDraft(draft, row, option, new Date()))
+                          }
                         >
                           Add {saleUnitLabel(option, row.dosageForm).toLowerCase()}
                         </Button>
@@ -326,12 +332,7 @@ export function CounterOfflineSale({
           </p>
         ) : null}
         {draft.lines.length > 0 ? (
-          <Button
-            type="button"
-            variant="ghost"
-            className="min-h-11"
-            onClick={() => void discard()}
-          >
+          <Button type="button" variant="ghost" className="min-h-11" onClick={() => void discard()}>
             Discard this bill
           </Button>
         ) : null}
@@ -467,7 +468,11 @@ export function OfflineQueue({
   resolveConflict,
 }: {
   queued: readonly CounterQueuedCommand[];
-  resolveConflict?: (commandId: string, reason: string) => Promise<void>;
+  resolveConflict?: (
+    commandId: string,
+    reason: string,
+    action?: 'reject' | 'retry' | 'quarantine'
+  ) => Promise<void>;
 }) {
   return (
     <section
@@ -549,7 +554,11 @@ function OfflineReceiptReview({
   resolve,
 }: {
   sale: CounterQueuedCommand;
-  resolve?: (commandId: string, reason: string) => Promise<void>;
+  resolve?: (
+    commandId: string,
+    reason: string,
+    action?: 'reject' | 'retry' | 'quarantine'
+  ) => Promise<void>;
 }) {
   const [note, setNote] = useState('');
   const [pending, setPending] = useState(false);
@@ -575,7 +584,14 @@ function OfflineReceiptReview({
             setPending(true);
             setError('');
             try {
-              await resolve(sale.commandId, note.trim());
+              const submitter = (event.nativeEvent as SubmitEvent).submitter;
+              if (submitter?.getAttribute('value') === 'quarantine') {
+                await resolve(sale.commandId, note.trim(), 'quarantine');
+              } else if (submitter?.getAttribute('value') === 'retry') {
+                await resolve(sale.commandId, note.trim(), 'retry');
+              } else {
+                await resolve(sale.commandId, note.trim());
+              }
             } catch (failure) {
               setError(
                 failure instanceof Error
@@ -603,6 +619,27 @@ function OfflineReceiptReview({
             Record how you handled the cash. Confirming closes this receipt as rejected without
             booking a sale or issuing a refund.
           </p>
+          {canQuarantineOfflineReceipt(sale.refusalCode) && (
+            <Button
+              type="submit"
+              value="quarantine"
+              variant="outline"
+              className="min-h-11"
+              disabled={pending || !note.trim()}
+            >
+              Quarantine receipt
+            </Button>
+          )}
+          {canRetryOfflineReceipt(sale.refusalCode) && (
+            <Button
+              type="submit"
+              value="retry"
+              className="min-h-11"
+              disabled={pending || !note.trim()}
+            >
+              Try again
+            </Button>
+          )}
           <Button
             type="submit"
             variant="destructive"

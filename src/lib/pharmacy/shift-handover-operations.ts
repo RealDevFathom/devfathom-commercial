@@ -40,7 +40,7 @@ export async function readPharmacyShiftHandover(
       SELECT d."countedCashMinor" AS counted,
         COALESCE(SUM(CASE
           WHEN m.kind IN ('CASH_REFUND', 'PAID_OUT') THEN -m."amountMinor"::bigint
-          WHEN m.kind IN ('OPENING_FLOAT', 'CASH_SALE', 'PAID_IN') THEN m."amountMinor"::bigint
+          WHEN m.kind IN ('OPENING_FLOAT', 'CASH_SALE', 'PAID_IN', 'REJECTED_OFFLINE_CASH') THEN m."amountMinor"::bigint
           ELSE 0 END), 0) AS expected
       FROM pharmacy_drawer_sessions d
       LEFT JOIN pharmacy_drawer_movements m

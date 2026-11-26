@@ -4,6 +4,7 @@ type Classification = 'revenue' | 'contra_revenue' | 'cogs' | 'expense' | 'balan
 
 // Exhaustive for today's chart. Future runtime codes remain visibly unmapped until classified.
 export const profitAndLossClassification = {
+  OFFLINE_CASH_SUSPENSE: 'balance_sheet',
   CARD_REFUNDS_PAYABLE: 'balance_sheet',
   CUSTOMER_PREPAID: 'balance_sheet',
   SALES_REVENUE: 'revenue',

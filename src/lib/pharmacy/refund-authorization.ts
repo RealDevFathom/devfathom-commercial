@@ -84,6 +84,7 @@ export async function verifyRefundPin(
     pin: string;
     action?: string;
     requestedById?: string;
+    requireApprovalMode?: true;
   },
   now = new Date()
 ): Promise<{ verified: true } | { blocked: string }> {
@@ -115,7 +116,10 @@ export async function verifyRefundPin(
       secret: pin,
       action: input.action ?? 'pharmacy.refund',
       approverRight: 'pharmacy:manage',
-      purpose: input.requestedById && input.requestedById !== actorId ? 'APPROVAL' : 'OWN_ACTION',
+      purpose:
+        input.requireApprovalMode || (input.requestedById && input.requestedById !== actorId)
+          ? 'APPROVAL'
+          : 'OWN_ACTION',
       requestedById: input.requestedById ?? actorId,
       now,
     }))
@@ -146,6 +150,7 @@ export function authenticateRefundPin(input: {
   pin: string;
   /** The person requesting a different reviewer's approval. */
   requestedById?: string;
+  requireApprovalMode?: true;
   /** The refunding procedure, for the audit row. */
   action: string;
   /** DEV-881: another manager-PIN control reusing this check names its own policy. */

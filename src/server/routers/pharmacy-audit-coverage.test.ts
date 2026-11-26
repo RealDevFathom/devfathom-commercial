@@ -486,6 +486,16 @@ const REST_ROUTES: Readonly<
     delegate: { file: OFFLINE_ROUTER, writes: /'grantOfflineLotQuota'/ },
     how: 'pharmacyCounterRoute writes pharmacyOffline.grantOfflineLotQuota.',
   },
+  'counter/quarantine/route.ts': {
+    audited: /pharmacyCounterRoute\('quarantine'\)/,
+    delegate: { file: OFFLINE_ROUTER, writes: /'pharmacyOffline.quarantineOfflineReceipt'/ },
+    how: 'A successful quarantine records the reviewer, counter, receipt and reason atomically.',
+  },
+  'counter/retry/route.ts': {
+    audited: /pharmacyCounterRoute\('retry'\)/,
+    delegate: { file: OFFLINE_ROUTER, writes: /'reviewAndRetryOfflineSale'/ },
+    how: 'The reviewed retry records who approved the original receipt.',
+  },
   'counter/reject/route.ts': {
     audited: /pharmacyCounterRoute\('reject'\)/,
     delegate: { file: OFFLINE_ROUTER, writes: /'pharmacyOffline.rejectCommand'/ },

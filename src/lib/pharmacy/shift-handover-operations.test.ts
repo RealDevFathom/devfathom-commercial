@@ -124,6 +124,7 @@ describe('drawer handover snapshot', () => {
     ]);
     expect(query.text).toContain('status = \'OPEN\' AND "orderLineId" IS NULL');
     expect(query.text).toContain('counted - expected AS "varianceMinor"');
+    expect(query.text).toContain("'REJECTED_OFFLINE_CASH'");
     expect(query.text).not.toContain('org-a');
   });
   it('refuses unsafe numeric totals instead of rounding money', async () => {

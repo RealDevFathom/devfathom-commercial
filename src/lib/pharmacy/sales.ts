@@ -228,6 +228,7 @@ export class PharmacySaleError extends Error {
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
       | 'INVALID_SALE_UNIT'
+      | 'INVALID_PRICE'
       | 'PRICE_ABOVE_MRP'
       | 'MARGIN_GUARDRAIL'
       | 'DISCOUNT_ABOVE_MAXIMUM'
@@ -568,11 +569,20 @@ export async function assertSaleUnitConversion(
  * `applyCounterPromotions` (#727) is set only by the online counter. Offline replay and
  * reserved customer orders keep the price they quoted, so they never opt in.
  */
+type ReviewedOfflinePrice = {
+  id: string;
+  printedMrpMinor: number;
+  unitsPerPack: number;
+  roundingIncrementMinor: number;
+  lineTotalMinor: number;
+};
+
 export async function addSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
   input: AddSaleLineInput,
   options: {
+    reviewedPrice?: ReviewedOfflinePrice;
     applyCounterPromotions?: boolean;
     /** DEV-830: offline replay checks the sale unit against the setup at the signed sale time. */
     saleUnitAt?: Date;
@@ -584,7 +594,9 @@ export async function addSaleLine(
     input,
     undefined,
     options.applyCounterPromotions,
-    options.saleUnitAt
+    options.saleUnitAt,
+    undefined,
+    options.reviewedPrice
   );
 }
 
@@ -775,7 +787,8 @@ async function addSaleLineWithAllocation(
    * DEV-977B: a changed line keeps its place on the bill (and the receipt), which is ordered by
    * when each line was first rung up. The change itself is dated by its own LINE_ADDED event.
    */
-  placedAt?: Date
+  placedAt?: Date,
+  reviewedPrice?: ReviewedOfflinePrice
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -921,14 +934,21 @@ async function addSaleLineWithAllocation(
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
     if (!lot) throw new PharmacySaleError('NOT_FOUND');
+    if (
+      reviewedPrice &&
+      (reviewedPrice.id !== lot.id || reviewedPrice.unitsPerPack !== lot.unitsPerPack)
+    )
+      throw new PharmacySaleError('INVALID_PRICE');
     const price = priceFromLot({
-      printedMrpMinor: lot.printedMrpMinor,
+      printedMrpMinor: reviewedPrice?.printedMrpMinor ?? lot.printedMrpMinor,
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
-      roundingIncrementMinor: mrpRoundingIncrementForLot(mrpRules, {
-        packLevelId: lot.packLevelId,
-        batchNumber: lot.batch.batchNumber,
-      }),
+      roundingIncrementMinor:
+        reviewedPrice?.roundingIncrementMinor ??
+        mrpRoundingIncrementForLot(mrpRules, {
+          packLevelId: lot.packLevelId,
+          batchNumber: lot.batch.batchNumber,
+        }),
     });
     pricedAllocations.push({ units: part.units, unitPriceMinor: price.unitPriceMinor });
     ceiling = Math.max(ceiling, price.proRataCeilingMinor);
@@ -939,6 +959,8 @@ async function addSaleLineWithAllocation(
     input.quantity,
     input.canonicalUnitsPerSaleUnit
   );
+  if (reviewedPrice && grossMinor !== reviewedPrice.lineTotalMinor)
+    throw new PharmacySaleError('INVALID_PRICE');
   const regulated = medicine.rx || medicine.restricted || medicine.controlled;
   // #727: priced after allocation has finished waiting for its stock locks. A voucher,
   // manual discount or complimentary line is never combined with an automatic promotion.

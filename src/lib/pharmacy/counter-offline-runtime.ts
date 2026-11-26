@@ -143,20 +143,32 @@ export function projectCounterDraft(value: unknown): CounterDraft | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const draft = value as Record<string, unknown>;
   if (typeof draft.draftId !== 'string' || !ID.test(draft.draftId)) return null;
-  if (draft.operatorUserId !== null && (typeof draft.operatorUserId !== 'string' || !ID.test(draft.operatorUserId)))
+  if (
+    draft.operatorUserId !== null &&
+    (typeof draft.operatorUserId !== 'string' || !ID.test(draft.operatorUserId))
+  )
     return null;
-  if (typeof draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(draft.updatedAt))) return null;
+  if (typeof draft.updatedAt !== 'string' || !Number.isFinite(Date.parse(draft.updatedAt)))
+    return null;
   if (!Array.isArray(draft.lines) || draft.lines.length > MAX_OFFLINE_DRAFT_LINES) return null;
   const lines: CounterDraftLine[] = [];
   for (const raw of draft.lines) {
     if (!raw || typeof raw !== 'object') return null;
     const line = raw as Record<string, unknown>;
-    const ids = ['inventoryLotId', 'stockLocationId', 'medicineId', 'presentationId', 'packLevelId'] as const;
-    if (ids.some((key) => typeof line[key] !== 'string' || !ID.test(line[key] as string))) return null;
+    const ids = [
+      'inventoryLotId',
+      'stockLocationId',
+      'medicineId',
+      'presentationId',
+      'packLevelId',
+    ] as const;
+    if (ids.some((key) => typeof line[key] !== 'string' || !ID.test(line[key] as string)))
+      return null;
     if (typeof line.saleUnit !== 'string' || !SALE_UNITS.has(line.saleUnit)) return null;
     for (const key of ['canonicalUnitsPerSaleUnit', 'quantity'] as const) {
       const count = line[key];
-      if (!Number.isSafeInteger(count) || (count as number) <= 0 || (count as number) > 10_000) return null;
+      if (!Number.isSafeInteger(count) || (count as number) <= 0 || (count as number) > 10_000)
+        return null;
     }
     lines.push({
       inventoryLotId: line.inventoryLotId as string,
@@ -694,13 +706,22 @@ export class PharmacyCounterRuntime {
       // caller-provided skip flag as permission to omit the reference.
       const rules = this.payloadFor('RULES') as { manualMerchantPolicies?: unknown } | null;
       try {
-        const manualCapture = validateManualTenderPolicy(rules?.manualMerchantPolicies, input.payload.manualCapture);
+        const manualCapture = validateManualTenderPolicy(
+          rules?.manualMerchantPolicies,
+          input.payload.manualCapture
+        );
         // Sign the normalized name the replay schema will verify, including
         // when an operator entered surrounding whitespace.
         queuedInput = { ...input, payload: { ...input.payload, manualCapture } };
+      } catch {
+        return {
+          ok: false,
+          reason: 'DENIED_OFFLINE',
+          decision: null,
+          message:
+            'Check payer name, transaction reference and signed branch merchant details before queuing payment.',
+        };
       }
-      catch { return { ok: false, reason: 'DENIED_OFFLINE', decision: null,
-        message: 'Check payer name, transaction reference and signed branch merchant details before queuing payment.' }; }
     }
     const leaseState = this.safetyLeaseState();
     const leaseCheck = checkSafetyLease(leaseState, matrix.nowMs);
@@ -746,8 +767,7 @@ export class PharmacyCounterRuntime {
     if (options.sealer) {
       const lineTotalsMinor = options.lineTotalsMinor ?? [];
       const sale = sealableSaleOf(command);
-      if (!sale || !sealLineTotalsValid(sale, lineTotalsMinor))
-        return sealRefusal();
+      if (!sale || !sealLineTotalsValid(sale, lineTotalsMinor)) return sealRefusal();
       const previousHash = this.queue().lastSealHash ?? null;
       let digest;
       try {
@@ -769,13 +789,19 @@ export class PharmacyCounterRuntime {
         sealHash: digest.hash,
         payload: {
           ...command.payload,
-          seal: { previousHash, lineTotalsMinor: [...lineTotalsMinor], signature: digest.signature },
+          seal: {
+            previousHash,
+            lineTotalsMinor: [...lineTotalsMinor],
+            signature: digest.signature,
+          },
         },
       };
       queue = {
         ...queue,
         lastSealHash: digest.hash,
-        commands: queue.commands.map((row) => (row.commandId === command.commandId ? command : row)),
+        commands: queue.commands.map((row) =>
+          row.commandId === command.commandId ? command : row
+        ),
       };
     }
     // The sale keeps only the envelopes of its price lists; one copy of each is archived.
@@ -836,7 +862,8 @@ export class PharmacyCounterRuntime {
   resolveConflict(
     commandId: string,
     send: (request: CounterReplayRequest) => Promise<CounterReplayResponse>,
-    sign: CounterReplaySigner
+    sign: CounterReplaySigner,
+    review?: { action: 'retry' | 'reject' | 'quarantine'; reason: string }
   ): Promise<void> {
     return this.exclusive(async () => {
       const queue = this.queue();
@@ -844,6 +871,24 @@ export class PharmacyCounterRuntime {
       if (head?.commandId !== commandId || head.status !== 'QUARANTINED')
         throw new Error('Refresh the queue before reviewing this receipt.');
       const request = await buildCounterReplayRequest(queue, head, sign);
+      if (review?.action === 'quarantine') {
+        if (!head.sealHash)
+          throw new Error(
+            'The original seal fingerprint is missing. Keep this receipt for review.'
+          );
+        const quarantine = {
+          action: 'quarantine',
+          command: request.body,
+          reason: review.reason,
+          originalHash: head.sealHash,
+        };
+        const signatures = await sign(
+          quarantine,
+          request.body.leasedReceipt as Record<string, unknown>
+        );
+        request.body = quarantine;
+        request.headers['X-Command-Signature'] = signatures.command;
+      }
       let result: CounterReplayResponse;
       try {
         result = await send(request);
@@ -851,6 +896,25 @@ export class PharmacyCounterRuntime {
         throw new Error(
           'The review could not be confirmed. Reconnect and try again. The receipt is kept here.'
         );
+      }
+      if (review?.action === 'retry' && result.serverMessage) {
+        const outcome = classifyCounterReplay(result);
+        const receiptRefused =
+          result.status === 409 ||
+          (result.status === 401 && result.serverMessage === 'INVALID_COMMAND_SIGNATURE') ||
+          (result.status === 403 &&
+            ['invalid_snapshot', 'invalid_pack', 'medicine_not_offline_otc'].includes(
+              result.serverMessage
+            ));
+        if (receiptRefused && (outcome.action === 'REVIEW' || outcome.action === 'QUARANTINE')) {
+          const { snapshot } = applyCounterReplayOutcome(queue, {
+            commandId,
+            outcome,
+            refusalCode: result.serverMessage,
+          });
+          await this.commit({ ...this.state, queue: snapshot });
+          throw new Error(outcome.message);
+        }
       }
       if (result.status === 403 || result.status === 401)
         throw new Error(
@@ -943,6 +1007,7 @@ export class PharmacyCounterRuntime {
           commandId: next.command.commandId,
           outcome,
           serverRef: response.serverRef,
+          refusalCode: response.serverMessage,
         });
         const nextState = { ...this.state, queue: applied.snapshot };
 
@@ -975,7 +1040,10 @@ export class PharmacyCounterRuntime {
       const queue = this.queue();
       const purged = purgeCounterQueue(queue);
       this.state = { ...this.state, queue: purged.snapshot };
-      await this.retireNow(queue, { reason: details.reason ?? 'REVOKED', counterName: details.counterName });
+      await this.retireNow(queue, {
+        reason: details.reason ?? 'REVOKED',
+        counterName: details.counterName,
+      });
       return purged.discarded;
     });
   }

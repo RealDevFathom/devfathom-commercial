@@ -203,6 +203,7 @@ model PharmacyBranch {
   aiUsages                        AIUsage[]
   receiptLayout                   Json?
   receiptLayoutRevision           Int                          @default(0)
+  offlineReconnectHours           Int                          @default(72)
   manualPaymentSettings           Json?
   manualPaymentRevision           Int                          @default(0)
   /// DEV-76 owner-configured khata collection reminder schedule.
@@ -1267,6 +1268,7 @@ enum PharmacyDrawerSessionStatus {
 }
 
 enum PharmacyDrawerMovementKind {
+  REJECTED_OFFLINE_CASH
   OPENING_FLOAT
   CASH_SALE
   CASH_REFUND
@@ -1945,6 +1947,7 @@ enum PharmacyCashShiftStatus {
 /// float, closed with a counted amount; the report is frozen at the close and the row never
 /// changes again (database guard). One open shift per drawer.
 model PharmacyCashShift {
+  lateOfflineCash PharmacyLateOfflineCash[]
   id                     String                   @id @default(cuid())
   organizationId         String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId               String
@@ -3397,6 +3400,7 @@ enum FinanceJournalSide {
 /// query rather than a special case — there is no account here that no adapter
 /// posts to.
 enum FinanceAccountCode {
+  OFFLINE_CASH_SUSPENSE
   CARD_REFUNDS_PAYABLE
   CUSTOMER_PREPAID
   /// Asset. Perpetual stock value, carried per lot and location.
@@ -3436,6 +3440,8 @@ enum FinanceAccountCode {
 /// FIN-01 traceability: the operational table an entry accounts for. `sourceId`
 /// is a row id in that table.
 enum FinanceSourceKind {
+  PHARMACY_REJECTED_OFFLINE_CASH
+  PHARMACY_OFFLINE_CASH_RESOLUTION
   PHARMACY_PREPAID
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE
@@ -15336,6 +15342,7 @@ enum PharmacyOfflineCommandStatus {
 /// device in one indexed lookup before it knows the tenant. Revocation is a
 /// state, never a deletion.
 model PharmacyRegisteredDevice {
+  lateOfflineCash PharmacyLateOfflineCash[]
   id                         String               @id @default(cuid())
   organizationId             String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                   String
@@ -15355,6 +15362,7 @@ model PharmacyRegisteredDevice {
   updatedAt                  DateTime             @updatedAt
 
   branch    PharmacyBranch               @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  receiptEvents PharmacyOfflineReceiptEvent[]
   snapshots PharmacyOfflineSnapshot[]
   commands  PharmacyOfflineCommand[]
   leases    PharmacyReceiptNumberLease[]
@@ -15398,7 +15406,47 @@ model PharmacyOfflineSnapshot {
 /// and reused on every attempt, so a lost response resolves to one server-side
 /// effect. The identity columns are immutable and no row is ever deleted; only
 /// the replay bookkeeping advances, and only away from PENDING.
+model PharmacyLateOfflineCash {
+  commandId String @id
+  organizationId String
+  branchId String
+  deviceId String
+  shiftId String?
+  receiptNumber Int
+  amountMinor Int
+  soldAt DateTime
+  recordedAt DateTime
+  recordedDay DateTime @db.Date
+  command PharmacyOfflineCommand @relation(fields:[organizationId,commandId],references:[organizationId,id],onDelete:NoAction,onUpdate:NoAction)
+  shift PharmacyCashShift? @relation(fields:[organizationId,shiftId],references:[organizationId,id],onDelete:NoAction,onUpdate:NoAction)
+  device PharmacyRegisteredDevice @relation(fields:[organizationId,branchId,deviceId],references:[organizationId,branchId,id],onDelete:NoAction,onUpdate:NoAction)
+  @@unique([organizationId,commandId],map:"late_offline_cash_org_command")
+  @@index([organizationId,branchId,recordedDay],map:"pharmacy_late_cash_day")
+  @@index([organizationId,shiftId],map:"pharmacy_late_cash_shift")
+  @@map("pharmacy_late_offline_cash")
+}
+
+model PharmacyOfflineReceiptEvent {
+  id String @id
+  organizationId String
+  branchId String
+  deviceId String
+  commandKey String
+  sequence Int
+  receiptNumber Int
+  actorId String?
+  kind String
+  reason String
+  commandHash String
+  evidence Json
+  createdAt DateTime @default(now())
+  device PharmacyRegisteredDevice @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: NoAction, onUpdate: NoAction)
+  @@index([organizationId,branchId,deviceId,commandKey,createdAt],map:"offline_receipt_history")
+  @@map("pharmacy_offline_receipt_events")
+}
+
 model PharmacyOfflineCommand {
+  lateCash PharmacyLateOfflineCash?
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId        String

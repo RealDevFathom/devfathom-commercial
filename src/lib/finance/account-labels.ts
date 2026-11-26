@@ -2,6 +2,7 @@ import type { FinanceAccountCode } from '@/generated/prisma/client';
 
 /** Plain-language names for every account in the canonical chart of accounts. */
 export const FINANCE_ACCOUNT_LABELS = {
+  OFFLINE_CASH_SUSPENSE: 'Rejected offline cash in suspense',
   CARD_REFUNDS_PAYABLE: 'Card refunds payable (provider)',
   CUSTOMER_PREPAID: 'Customer prepaid balance',
   INVENTORY: 'Inventory',

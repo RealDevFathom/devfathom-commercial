@@ -148,12 +148,35 @@ describe('#710 offline manual merchant evidence', () => {
   it('persists a Raast tender through restart and signs the same evidence on retry', async () => {
     const driver = createMemoryDriver();
     const counter = await readyCounter(driver);
-    await install(counter, 'RULES', { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
+    await install(
+      counter,
+      'RULES',
+      {
+        offlineCashSelling: true,
+        manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } },
+      },
+      { version: 2 }
+    );
     const manualCapture = { type: 'RAAST', providerRef: '001234', payerName: 'Ayesha' };
-    const result = await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: {
-      ...cashSale().payload, amountMinor: 100, manualCapture: { ...manualCapture, payerName: ' Ayesha ' },
-      snapshots: counter.snapshot().catalog!.snapshots.map(({ envelope, signature, payload }) => ({ envelope, signature, payload })),
-    } }, MATRIX);
+    const result = await counter.enqueue(
+      {
+        ...cashSale(),
+        action: 'MANUAL_OTC_SALE',
+        payload: {
+          ...cashSale().payload,
+          amountMinor: 100,
+          manualCapture: { ...manualCapture, payerName: ' Ayesha ' },
+          snapshots: counter
+            .snapshot()
+            .catalog!.snapshots.map(({ envelope, signature, payload }) => ({
+              envelope,
+              signature,
+              payload,
+            })),
+        },
+      },
+      MATRIX
+    );
     expect(result).toMatchObject({ ok: true, command: { receiptNumber: 900 } });
     const restarted = runtime(driver);
     expect(await restarted.hydrate()).toBe('ready');
@@ -166,26 +189,66 @@ describe('#710 offline manual merchant evidence', () => {
     await restarted.replay(send, replaySigner);
     expect(bodies).toHaveLength(2);
     expect(bodies[0]).toEqual(bodies[1]);
-    expect(bodies[0]).toMatchObject({ action: 'MANUAL_OTC_SALE', manualCapture, leasedReceipt: { receiptNumber: 900 } });
+    expect(bodies[0]).toMatchObject({
+      action: 'MANUAL_OTC_SALE',
+      manualCapture,
+      leasedReceipt: { receiptNumber: 900 },
+    });
     expect(bodies[0]).not.toHaveProperty('cashReceivedMinor');
     expect(restarted.snapshot().queue?.quotas[0]?.consumedUnits).toBe(1);
     expect(restarted.snapshot().queue?.commands[0]?.status).toBe('ACKNOWLEDGED');
   });
   it('refuses a missing reference or unauthorized skip without consuming stock or receipts', async () => {
     const counter = await readyCounter(createMemoryDriver());
-    await install(counter, 'RULES', { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } } }, { version: 2 });
+    await install(
+      counter,
+      'RULES',
+      {
+        offlineCashSelling: true,
+        manualMerchantPolicies: { RAAST: { allowReferenceSkip: false } },
+      },
+      { version: 2 }
+    );
     for (const manualCapture of [
       { type: 'RAAST', payerName: 'Ayesha' },
       { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
       { type: 'JAZZCASH', payerName: 'Ayesha', providerRef: '1234' },
     ]) {
-      expect(await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: { ...cashSale().payload, manualCapture } }, MATRIX)).toMatchObject({ ok: false });
+      expect(
+        await counter.enqueue(
+          {
+            ...cashSale(),
+            action: 'MANUAL_OTC_SALE',
+            payload: { ...cashSale().payload, manualCapture },
+          },
+          MATRIX
+        )
+      ).toMatchObject({ ok: false });
     }
-    expect(counter.snapshot().queue).toMatchObject({ commands: [], leases: [{ nextNumber: 900 }], quotas: [{ consumedUnits: 0 }] });
-    await install(counter, 'RULES', { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: true } } }, { version: 3 });
-    expect(await counter.enqueue({ ...cashSale(), action: 'MANUAL_OTC_SALE', payload: {
-      ...cashSale().payload, manualCapture: { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
-    } }, MATRIX)).toMatchObject({ ok: true });
+    expect(counter.snapshot().queue).toMatchObject({
+      commands: [],
+      leases: [{ nextNumber: 900 }],
+      quotas: [{ consumedUnits: 0 }],
+    });
+    await install(
+      counter,
+      'RULES',
+      { offlineCashSelling: true, manualMerchantPolicies: { RAAST: { allowReferenceSkip: true } } },
+      { version: 3 }
+    );
+    expect(
+      await counter.enqueue(
+        {
+          ...cashSale(),
+          action: 'MANUAL_OTC_SALE',
+          payload: {
+            ...cashSale().payload,
+            manualCapture: { type: 'RAAST', payerName: 'Ayesha', referenceSkipped: true },
+          },
+        },
+        MATRIX
+      )
+    ).toMatchObject({ ok: true });
   });
 });
 
@@ -371,7 +434,12 @@ describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
     expect(counter.counterStatus(NOW)).toMatchObject({ safetyLeaseStatus: 'ACTIVE' });
     expect(counter.snapshot().queue?.safetyLeaseEvents[0]?.type).toBe('ISSUED');
 
-    await install(counter, 'RULES', { kind: 'RULES', offlineCashSelling: true, renewed: true }, { version: 2 });
+    await install(
+      counter,
+      'RULES',
+      { kind: 'RULES', offlineCashSelling: true, renewed: true },
+      { version: 2 }
+    );
     expect(counter.snapshot().queue?.safetyLeaseEvents.at(-1)?.type).toBe('RENEWED');
 
     const denied = await counter.enqueue(cashSale(), { ...MATRIX, nowMs: Date.parse(EXPIRES_AT) });
@@ -740,6 +808,51 @@ describe('PH-OFF OFF-01 — replay: re-auth pauses, revocation purges', () => {
       expect(counter.snapshot().queue?.commands[0]).toMatchObject({ status: 'QUARANTINED' });
     }
   );
+
+  it('keeps the new cause when a reviewed retry discovers a different refusal', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.enqueue(cashSale(1), MATRIX);
+    await counter.replay(
+      async () => ({ status: 409, serverMessage: 'DRAWER_NOT_OPEN' }),
+      replaySigner
+    );
+    const head = counter.snapshot().queue!.commands[0]!;
+    await expect(
+      counter.resolveConflict(
+        head.commandId,
+        async () => ({ status: 403, serverMessage: 'invalid_snapshot' }),
+        replaySigner,
+        { action: 'retry', reason: 'Drawer is open' }
+      )
+    ).rejects.toThrow('sealed sale');
+    expect(counter.snapshot().queue!.commands[0]).toMatchObject({
+      commandId: head.commandId,
+      status: 'QUARANTINED',
+      refusalCode: 'invalid_snapshot',
+    });
+  });
+
+  it('retries the same refused drawer receipt once after manager review', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    await counter.enqueue(cashSale(1), MATRIX);
+    await counter.replay(
+      async () => ({ status: 409, serverMessage: 'DRAWER_NOT_OPEN' }),
+      replaySigner
+    );
+    const head = counter.snapshot().queue!.commands[0]!;
+    expect(head.refusalCode).toBe('DRAWER_NOT_OPEN');
+    const booked = vi.fn(async () => ({ status: 200, serverRef: 'sale-one' }));
+    await counter.resolveConflict(head.commandId, booked, replaySigner);
+    await counter.replay(booked, replaySigner);
+    expect(booked).toHaveBeenCalledTimes(1);
+    expect(booked.mock.calls[0]).toMatchObject([
+      { body: { sequence: head.sequence, idempotencyKey: head.idempotencyKey } },
+    ]);
+    expect(counter.snapshot().queue!.commands[0]).toMatchObject({
+      status: 'ACKNOWLEDGED',
+      serverRef: 'sale-one',
+    });
+  });
 
   it('pauses and keeps the queue on a generic 401', async () => {
     const counter = await readyCounter(createMemoryDriver());

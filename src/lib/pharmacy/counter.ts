@@ -1335,6 +1335,7 @@ export async function readCounterReceipt(
     receiptNumber: sale.receiptNumber,
     counterLabel: counterLabel(sale.receiptDeviceId, device?.name),
     offlineReference: sale.offlineReceiptReference ?? null,
+    ...(snapshot?.offlineSoldDay ? { offlineSoldDay: snapshot.offlineSoldDay } : {}),
     branchName: branch.name,
     businessDate: sale.businessDate ? sale.businessDate.toISOString().slice(0, 10) : null,
     completedAt: sale.completedAt ? sale.completedAt.toISOString() : null,

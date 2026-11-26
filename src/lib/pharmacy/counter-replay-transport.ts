@@ -5,10 +5,38 @@ import {
 import type { CounterReplayRequest } from './counter-command-queue';
 import type { CounterReplayResponse } from './counter-offline-runtime';
 
-function counterConflictMessage(code?: string): string {
+export function canQuarantineOfflineReceipt(code?: string) {
+  return (
+    code === 'offline_chain_broken' ||
+    code === 'INVALID_COMMAND_SIGNATURE' ||
+    code === 'invalid_snapshot'
+  );
+}
+
+export function canRetryOfflineReceipt(code?: string): boolean {
+  switch (code) {
+    case 'DAY_CLOSED':
+    case 'DRAWER_NOT_OPEN':
+    case 'INSUFFICIENT_STOCK':
+    case 'quota_exhausted':
+    case 'QUOTA_EXHAUSTED':
+    case 'offline_total_changed':
+    case 'OVER_TENDER':
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function counterConflictMessage(code?: string): string {
   switch (code) {
     case 'DAY_CLOSED':
       return 'The shop day for this sale is closed. Ask a manager to check the receipt and cash.';
+    case 'DRAWER_NOT_OPEN':
+      return 'The drawer for this sale is closed. Open it before trying again.';
+    case 'OVER_TENDER':
+    case 'offline_total_changed':
+      return 'The price changed. Check the price printed on the receipt before trying again.';
     case 'PERIOD_CLOSED':
       return 'The accounting period is closed. Ask a manager to check the receipt and cash.';
     case 'offline_selling_off':
@@ -60,10 +88,12 @@ export function classifyCounterReplay(response: CounterReplayResponse): Terminal
 export async function sendCounterReplay(
   token: string,
   request: CounterReplayRequest,
-  rejectionReason?: string
+  rejectionReason?: string,
+  reviewAction: 'reject' | 'retry' | 'quarantine' = 'reject'
 ): Promise<CounterReplayResponse> {
-  const rejecting = rejectionReason !== undefined;
-  const response = await fetch(rejecting ? '/api/pharmacy/counter/reject' : request.path, {
+  const reviewing = rejectionReason !== undefined;
+  const rejecting = reviewing && reviewAction === 'reject';
+  const response = await fetch(reviewing ? `/api/pharmacy/counter/${reviewAction}` : request.path, {
     method: request.method,
     credentials: 'same-origin',
     cache: 'no-store',
@@ -75,7 +105,9 @@ export async function sendCounterReplay(
       'x-terminal-session': token,
     },
     body: JSON.stringify(
-      rejecting ? { command: request.body, reason: rejectionReason } : request.body
+      reviewing && reviewAction !== 'quarantine'
+        ? { command: request.body, reason: rejectionReason }
+        : request.body
     ),
   });
   const body = await response.json().catch(() => null);
@@ -85,7 +117,12 @@ export async function sendCounterReplay(
       serverMessage: typeof body?.error === 'string' ? body.error : undefined,
       retryAfter: response.headers.get('retry-after'),
     };
-  const ref = rejecting ? body?.status === 'REJECTED' && body.commandId : body?.saleId;
+  const ref =
+    reviewAction === 'quarantine'
+      ? body?.status === 'QUARANTINED' && body.commandId
+      : rejecting
+        ? body?.status === 'REJECTED' && body.commandId
+        : body?.saleId;
   return typeof ref === 'string' && ref.length > 0
     ? { status: response.status, serverRef: ref }
     : { status: 503 };

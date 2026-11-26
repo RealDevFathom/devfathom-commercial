@@ -66,6 +66,7 @@ export type CounterQueuedCommand = {
   serverRef: string | null;
   /** Set when the server refused this command outright. */
   rejection: string | null;
+  refusalCode?: string;
   /**
    * DEV-957 phase 2 (hardening 4): the hash of the seal this sale was signed with when it
    * was taken (the seal itself travels in `payload.seal`). The next sale names it.
@@ -247,7 +248,13 @@ export type CounterEnqueueResult =
   | { ok: true; snapshot: CounterQueueSnapshot; command: CounterQueuedCommand }
   | {
       ok: false;
-      reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL' | 'SEAL_FAILED' | 'SELLING_OFF';
+      reason:
+        | OfflineDenialReason
+        | 'DEVICE_MISMATCH'
+        | 'DEVICE_REVOKED'
+        | 'QUEUE_FULL'
+        | 'SEAL_FAILED'
+        | 'SELLING_OFF';
       message: string;
       decision: OfflineActionDecision | null;
     };
@@ -495,7 +502,9 @@ export function archiveCommandSnapshots(
     snapshot: {
       ...snapshot,
       snapshotArchive: archive,
-      commands: snapshot.commands.map((row) => (row.commandId === command.commandId ? compact : row)),
+      commands: snapshot.commands.map((row) =>
+        row.commandId === command.commandId ? compact : row
+      ),
     },
   };
 }
@@ -519,9 +528,11 @@ function withArchivedPayloads(snapshot: CounterQueueSnapshot, value: unknown): u
 export function pruneSnapshotArchive(snapshot: CounterQueueSnapshot): CounterQueueSnapshot {
   if (!snapshot.snapshotArchive?.length) return snapshot;
   const needed = new Set(
-    snapshot.commands.filter((command) => command.status !== 'ACKNOWLEDGED').flatMap((command) =>
-      carried(command.payload.snapshots).map((row) => row.envelope?.payloadHash)
-    )
+    snapshot.commands
+      .filter((command) => command.status !== 'ACKNOWLEDGED')
+      .flatMap((command) =>
+        carried(command.payload.snapshots).map((row) => row.envelope?.payloadHash)
+      )
   );
   const kept = snapshot.snapshotArchive.filter((entry) => needed.has(entry.payloadHash));
   return kept.length === snapshot.snapshotArchive.length
@@ -616,7 +627,12 @@ export function beginCounterReplay(
  */
 export function applyCounterReplayOutcome(
   snapshot: CounterQueueSnapshot,
-  input: { commandId: string; outcome: TerminalReplayOutcome; serverRef?: string | null }
+  input: {
+    commandId: string;
+    outcome: TerminalReplayOutcome;
+    refusalCode?: string;
+    serverRef?: string | null;
+  }
 ): ApplyCounterReplayResult {
   const { outcome } = input;
 
@@ -648,6 +664,7 @@ export function applyCounterReplayOutcome(
         ...command,
         status: 'QUARANTINED',
         rejection: outcome.message,
+        refusalCode: input.refusalCode,
       })),
       discarded: null,
     };

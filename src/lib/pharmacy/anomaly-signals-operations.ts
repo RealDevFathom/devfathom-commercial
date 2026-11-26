@@ -279,6 +279,10 @@ export async function readPharmacyAnomalyFacts(
             FROM "pharmacy_tenders" t
             WHERE t."organizationId"=c."organizationId" AND t."branchId"=c."branchId"
               AND t."businessDate"=c."businessDate" AND t."type"='CASH'
+              AND NOT EXISTS (SELECT FROM finance_journal_lines l
+                JOIN finance_journal_entries e ON e."organizationId"=l."organizationId" AND e.id=l."entryId"
+                WHERE l."organizationId"=t."organizationId" AND l."branchId"=t."branchId" AND l."sourceLineId"=t.id
+                  AND l."accountCode"='CASH' AND l.side='CREDIT' AND e."sourceKind"='PHARMACY_OFFLINE_CASH_RESOLUTION')
           ) cash
           -- The close includes opening floats and paid-in/out movements. Remove
           -- those adjustments to compare both sides on a net cash-tender basis.
@@ -288,7 +292,7 @@ export async function readPharmacyAnomalyFacts(
             JOIN "pharmacy_drawer_movements" m ON m."organizationId"=d."organizationId" AND m."drawerSessionId"=d."id"
             WHERE d."organizationId"=c."organizationId" AND d."branchId"=c."branchId"
               AND d."businessDate"=c."businessDate"
-              AND m."kind" IN ('OPENING_FLOAT', 'PAID_IN', 'PAID_OUT')
+              AND m."kind" IN ('OPENING_FLOAT', 'PAID_IN', 'PAID_OUT', 'REJECTED_OFFLINE_CASH')
           ) drawer
           WHERE c."branchId" IN (${branches}) AND c."isFinal"=true
             AND c."businessDate">=${window.from} AND c."businessDate"<${window.to}

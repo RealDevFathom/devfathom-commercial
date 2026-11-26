@@ -1,5 +1,6 @@
 'use client';
 
+import { LateOfflineCashLines } from './cash-shift-report-view';
 import { tenderTotalsSchema } from '@/lib/pharmacy/manual-payments';
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
@@ -54,6 +55,7 @@ export function drawerOpenedLabel(
 }
 
 const DRAWER_MOVEMENT_LABELS: Record<string, string> = {
+  REJECTED_OFFLINE_CASH: 'Cash from a rejected offline sale',
   CASH_SALE: 'Cash sale',
   CASH_REFUND: 'Cash refund',
   PAID_IN: 'Paid in',
@@ -813,6 +815,13 @@ function DayCloseForm({
         )}
       </SectionCard>
       {/* DEV-958B: shift close, then day close. The day's shifts, and what they add up to. */}
+      {data.lateOfflineCash?.length ? (
+        <LateOfflineCashLines
+          rows={data.lateOfflineCash}
+          currency={currency}
+          timeZone={data.timezone}
+        />
+      ) : null}
       {data.shifts?.length && data.shiftTotals ? (
         <SectionCard title="Shifts on this day" titleLevel={2}>
           <div className="space-y-4">

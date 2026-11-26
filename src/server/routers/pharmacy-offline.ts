@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { canRetryOfflineReceipt } from '@/lib/pharmacy/counter-replay-transport';
 import { isAccountingPeriodClosedError } from '@/server/trpc-period-errors';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -55,7 +56,13 @@ import {
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
-import { applyPharmacyTender, lockPharmacyDay } from '@/lib/pharmacy/settlement';
+import {
+  PharmacySettlementError,
+  applyPharmacyTender,
+  lockPharmacyDay,
+  recordRejectedOfflineCash,
+  pharmacyDayClosedForTrading,
+} from '@/lib/pharmacy/settlement';
 import {
   manualTenderCaptureSchema,
   validateManualTenderPolicy,
@@ -63,6 +70,7 @@ import {
 } from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  actorManagesBranchDrawers,
   counterBranchAssignmentDenial,
   counterOperatorDenial,
 } from '@/lib/pharmacy/counter-capability';
@@ -99,6 +107,12 @@ import {
   OFFLINE_PREPARATION_LOT_LIMIT,
   offlinePreparationPlan,
 } from '@/lib/pharmacy/offline-preparation';
+import {
+  resolveOfflineCash,
+  offlineCashResolutionSchema,
+  resolutionAuditId,
+} from '@/lib/pharmacy/offline-cash-resolution';
+import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { adminProcedure, router } from '../trpc';
 
 const id = z.string().min(1).max(160);
@@ -154,6 +168,204 @@ export const pharmacyOfflineRouter = router({
    * DEV-957: the branch's counters for the enrolment screen. Only identifiers,
    * status and runway counts: never a secret hash, a snapshot or a payload.
    */
+  reconnectLimit: adminProcedure.input(branchInput).query(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const db = tx as ScopedDb;
+      const organizationId = ctx.entitlements.organizationId;
+      await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+      const branch = await db.pharmacyBranch.findFirstOrThrow({
+        where: { organizationId, id: input.branchId },
+        select: { offlineReconnectHours: true },
+      });
+      return {
+        hours: branch.offlineReconnectHours,
+        canChange: await isPharmacistCheckPolicyOwner(db, organizationId, ctx.session.user.id),
+      };
+    })
+  ),
+  setReconnectLimit: adminProcedure
+    .input(branchInput.extend({ hours: z.number().int().min(1).max(72) }))
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        if (!(await isPharmacistCheckPolicyOwner(db, organizationId, ctx.session.user.id)))
+          throw new TRPCError({ code: 'FORBIDDEN' });
+        await db.pharmacyBranch.update({
+          where: { organizationId_id: { organizationId, id: input.branchId } },
+          data: { offlineReconnectHours: input.hours },
+        });
+        return { hours: input.hours };
+      })
+    ),
+  resolveCash: adminProcedure
+    .input(
+      offlineCashResolutionSchema.extend({
+        branchId: id,
+        managerPin: z.string().regex(/^\d{4,8}$/),
+      })
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const scope = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session.user.id,
+        };
+        await managedBranch(db, ctx.session.user, scope.organizationId, scope.branchId);
+        if (
+          input.outcome === 'WRITE_OFF' &&
+          !(await isPharmacistCheckPolicyOwner(db, scope.organizationId, scope.actorId, {
+            lock: true,
+          }))
+        )
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Only the owner can write off held cash.',
+          });
+        const approval = await authenticateRefundPin({
+          organizationId: scope.organizationId,
+          actorId: scope.actorId,
+          pin: input.managerPin,
+          action: 'pharmacyOffline.resolveCash',
+          requireApprovalMode: true,
+          policy: 'OFFLINE_CASH_RESOLUTION',
+          errorCode: 'OFFLINE_CASH_APPROVAL_REFUSED',
+        });
+        if ('blocked' in approval)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Approval refused. Check your own PIN or authenticator code.',
+          });
+        await scopeReceiptHistory(db, scope.branchId);
+        const mayUseOtherDrawers =
+          input.outcome !== 'WRITE_OFF' &&
+          (await actorManagesBranchDrawers(
+            db,
+            ctx.session.user,
+            scope.organizationId,
+            scope.branchId,
+            { source: 'TRPC' }
+          ));
+        try {
+          return await resolveOfflineCash(db, scope, input, mayUseOtherDrawers);
+        } catch (error) {
+          if (error instanceof PharmacySettlementError && error.reason === 'DRAWER_NOT_YOURS')
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Use a drawer you operate or ask a branch drawer manager.',
+            });
+          throw error;
+        }
+      })
+    ),
+  refusedReceipts: adminProcedure
+    .input(branchInput.extend({ after: z.object({ at: z.iso.datetime(), id }).optional() }))
+    .query(({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) => {
+        const db = tx as ScopedDb;
+        const organizationId = ctx.entitlements.organizationId;
+        await managedBranch(db, ctx.session.user, organizationId, input.branchId);
+        await scopeReceiptHistory(db, input.branchId);
+        const pageSize = 25;
+        const after = input.after;
+        const found = await db.pharmacyOfflineReceiptEvent.findMany({
+          where: {
+            organizationId,
+            branchId: input.branchId,
+            ...(after
+              ? {
+                  OR: [
+                    { createdAt: { lt: new Date(after.at) } },
+                    { createdAt: new Date(after.at), id: { lt: after.id } },
+                  ],
+                }
+              : {}),
+          },
+          take: pageSize + 1,
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: {
+            id: true,
+            receiptNumber: true,
+            kind: true,
+            reason: true,
+            createdAt: true,
+            deviceId: true,
+            commandKey: true,
+            device: { select: { name: true } },
+          },
+        });
+        const rows = found.slice(0, pageSize);
+        const last = rows.at(-1);
+        const nextCursor =
+          found.length > pageSize && last
+            ? { at: last.createdAt.toISOString(), id: last.id }
+            : null;
+        const closed = rows.filter((row) => row.kind === 'REJECTED' || row.kind === 'QUARANTINED');
+        const resolved = closed.length
+          ? await db.auditLog.findMany({
+              where: {
+                organizationId,
+                id: {
+                  in: closed.map((row) =>
+                    resolutionAuditId(organizationId, row.deviceId, row.commandKey)
+                  ),
+                },
+              },
+              select: { id: true },
+            })
+          : [];
+        const done = new Set(resolved.map((row) => row.id));
+        const heldCommands = closed.length
+          ? await db.pharmacyOfflineCommand.findMany({
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                action: 'CASH_OTC_SALE',
+                OR: closed.map((row) => ({
+                  deviceId: row.deviceId,
+                  idempotencyKey: row.commandKey,
+                })),
+              },
+              select: { deviceId: true, idempotencyKey: true, id: true },
+            })
+          : [];
+        const entries = heldCommands.length
+          ? await db.financeJournalEntry.findMany({
+              where: {
+                organizationId,
+                branchId: input.branchId,
+                sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH',
+                sourceId: { in: heldCommands.map((row) => row.id) },
+              },
+              select: { sourceId: true },
+            })
+          : [];
+        const held = new Set(entries.map((row) => row.sourceId));
+        const cash = new Set(
+          heldCommands
+            .filter((row) => held.has(row.id))
+            .map((row) => resolutionAuditId(organizationId, row.deviceId, row.idempotencyKey))
+        );
+        const page = rows.map(({ deviceId, commandKey, ...row }) => {
+          const auditId = resolutionAuditId(organizationId, deviceId, commandKey);
+          return {
+            ...row,
+            cashState:
+              row.kind === 'REJECTED' || row.kind === 'QUARANTINED'
+                ? done.has(auditId)
+                  ? 'resolved'
+                  : cash.has(auditId)
+                    ? 'held'
+                    : null
+                : null,
+          };
+        });
+        return { rows: page, nextCursor };
+      })
+    ),
   counters: adminProcedure.input(branchInput).query(({ ctx, input }) =>
     ctx.db.$transaction(async (tx) => {
       const db = tx as ScopedDb;
@@ -217,8 +429,7 @@ export const pharmacyOfflineRouter = router({
         offlineUnitsLeft: quotas
           .filter((quota) => quota.deviceId === device.id)
           .reduce((total, quota) => total + Math.max(0, quota.quotaUnits - quota.consumedUnits), 0),
-        failedOfflineSales:
-          pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
+        failedOfflineSales: pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
       }));
     })
   ),
@@ -610,7 +821,10 @@ export async function receiptNumberGaps(
         lastUnused: lease.blockEnd,
         unused: lease.blockEnd - lease.nextNumber + 1,
         cause: revoked ? ('REVOKED' as const) : ('EXPIRED' as const),
-        since: (revoked ? (device.revokedAt ?? device.secretExpiresAt) : device.secretExpiresAt).toISOString(),
+        since: (revoked
+          ? (device.revokedAt ?? device.secretExpiresAt)
+          : device.secretExpiresAt
+        ).toISOString(),
       };
     });
 }
@@ -831,12 +1045,24 @@ export async function verifyOfflineSaleChain(
       sequence: { lt: command.sequence },
     },
     orderBy: { sequence: 'desc' },
-    select: { sequence: true, payload: true },
+    select: { sequence: true, payload: true, status: true, idempotencyKey: true },
   });
   let previousHash: string | null = null;
   if (previous) {
     const parsed = counterReplaySchema.safeParse(previous.payload);
     previousHash = parsed.success ? recordedSaleSealHash(sealScope, parsed.data) : null;
+    if (previous.status === 'DEAD') {
+      await scopeReceiptHistory(db, scope.branchId);
+      const quarantine = await db.pharmacyOfflineReceiptEvent.findFirst({
+        where: { ...sealScope, commandKey: previous.idempotencyKey, kind: 'QUARANTINED' },
+        select: { evidence: true },
+      });
+      if (quarantine)
+        previousHash = z
+          .string()
+          .regex(/^[0-9a-f]{64}$/)
+          .parse(field(quarantine.evidence, 'originalHash'));
+    }
   }
   const refusal = chainRefusal(
     { sequence: command.sequence, previousHash: command.seal.previousHash },
@@ -845,13 +1071,33 @@ export async function verifyOfflineSaleChain(
   if (refusal) throw new CounterChainError(refusal, report);
 }
 
+// Called after all carried snapshots and the device seal have been verified.
+function reviewedOfflinePrice(command: CounterReplay, index: number) {
+  const line = command.lines[index]!;
+  const prices = command.snapshots.find((row) => row.envelope.kind === 'PRICES')?.payload;
+  const price = Array.isArray(prices)
+    ? prices.find((row) => field(row, 'id') === line.inventoryLotId)
+    : null;
+  const lot = z
+    .object({
+      id: z.string(),
+      printedMrpMinor: z.number().int().positive(),
+      unitsPerPack: z.number().int().positive(),
+      roundingIncrementMinor: z.number().int().positive(),
+    })
+    .safeParse(price);
+  if (!lot.success) throw new CounterTransportError('invalid_snapshot', 403);
+  return { ...lot.data, lineTotalMinor: command.seal.lineTotalsMinor[index]! };
+}
+
 /** Called only inside the transport-owned tenant transaction; never catches a
  * business failure here, because a returned response would commit partial work. */
 export async function replayCounterCommand(
   ctx: PharmacyCounterContext,
   command: CounterReplay,
   signature: string,
-  receiptSignature: string
+  receiptSignature: string,
+  reviewed = false
 ) {
   const { db, scope, deviceId, deviceSecret } = ctx;
   // Take the exclusive lock before authentication's shared lock: concurrent
@@ -864,7 +1110,17 @@ export async function replayCounterCommand(
     deviceSecret,
     signature: receiptSignature,
   });
-  validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
+  try {
+    validateLeasedReceiptReplay(scope, deviceId, command.leasedReceipt);
+  } catch (error) {
+    if (
+      error instanceof PharmacySaleError &&
+      error.reason === 'INVALID_SAFETY_LEASE' &&
+      !verifySnapshotSignature(command.leasedReceipt.envelope, command.leasedReceipt.signature)
+    )
+      throw new CounterTransportError('invalid_snapshot', 403);
+    throw error;
+  }
   const originalMs = Date.parse(command.leasedReceipt.originalSaleAt);
   const snapshots = command.snapshots.map((snapshot) => {
     if (
@@ -925,6 +1181,17 @@ export async function replayCounterCommand(
   }
   if (recorded.command.status !== 'PENDING')
     throw new CounterTransportError('command_rejected', 409);
+  // The original receipt's review requirement survives a browser reset or another tab.
+  // Accepted commands returned above, including a retry after its response was lost.
+  await scopeReceiptHistory(db, scope.branchId);
+  const [priorRefusal] = await db.$queryRaw<{ reason: string }[]>`
+    SELECT reason FROM pharmacy_offline_receipt_events WHERE "organizationId"=${scope.organizationId}
+      AND "branchId"=${scope.branchId} AND "deviceId"=${deviceId} AND "commandKey"=${command.idempotencyKey}
+      AND "commandHash"=${recorded.command.payloadHash} AND kind='REFUSED' ORDER BY "createdAt" DESC,id DESC LIMIT 1`;
+  if (reviewed && !canRetryOfflineReceipt(priorRefusal?.reason))
+    throw new CounterTransportError('review_requires_fixable_refusal', 409);
+  if (!reviewed && canRetryOfflineReceipt(priorRefusal?.reason))
+    throw new CounterTransportError(priorRefusal!.reason, 409);
   // DEV-957 phase 2 (hardening 4): the command log has already kept the FIFO order
   // (a skipped sequence is SEQUENCE_OUT_OF_ORDER); the seal proves this is the sale the
   // counter signed when it was taken, following on from the sale recorded before it.
@@ -932,8 +1199,9 @@ export async function replayCounterCommand(
   // Review round 2: the switch is enforced here, not only at the counter. A sale is
   // accepted only when the RULES it carries (verified above) say offline cash selling
   // was on when the counter was handed them.
+  const signedRules = verifiedRulesPayload(command, scope, deviceId);
   if (
-    !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, scope, deviceId)) ||
+    !signedRulesAllowOfflineSelling(signedRules) ||
     !(await readOfflineCashSelling(db, scope.organizationId)).enabled
   )
     throw new CounterTransportError('offline_selling_off', 409);
@@ -991,19 +1259,44 @@ export async function replayCounterCommand(
   // Only a PENDING command reaches here, so a sale already replayed is never moved.
   // DEV-958A: on the branch's clock, whose day ends at its "day ends at" hour, so a sale
   // signed at 00:30 at a branch whose day ends at 05:00 books on the day before.
-  const businessDate = pharmacyBusinessDate(
-    await readPharmacyDayClock(db, scope),
-    new Date(command.leasedReceipt.originalSaleAt)
-  );
+  const clock = await readPharmacyDayClock(db, scope);
+  const soldDay = pharmacyBusinessDate(clock, new Date(command.leasedReceipt.originalSaleAt));
+  await lockPharmacyDay(db, scope, soldDay);
+  const bookOnCurrentDay =
+    reviewed &&
+    (await pharmacyDayClosedForTrading(db, scope, soldDay)) &&
+    (priorRefusal?.reason === 'DAY_CLOSED' ||
+      !!(await db.pharmacyOfflineReceiptEvent.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId,
+          commandKey: command.idempotencyKey,
+          commandHash: recorded.command.payloadHash,
+          kind: 'REFUSED',
+          reason: 'DAY_CLOSED',
+        },
+        select: { id: true },
+      })));
+  const businessDate = bookOnCurrentDay ? pharmacyBusinessDate(clock) : soldDay;
   // DEV-631: take the sale's day lock before any stock lock, the same order the online
   // counter uses (day, then stock), so a replay and a counter line cannot deadlock.
   // The tender below re-enters this lock and still refuses a closed day.
-  await lockPharmacyDay(db, scope, businessDate);
+  if (businessDate.getTime() !== soldDay.getTime()) await lockPharmacyDay(db, scope, businessDate);
   // addSaleLine re-enters these request locks after the command's stock locks.
   // Hold every line key up front so a concurrent online retry cannot invert that order.
   for (let index = 0; index < command.lines.length; index += 1)
     await lockSaleLineKey(db, scope, `${command.idempotencyKey}:${index}`);
-  const sale = await createSale(db, scope);
+  const signedCashier = field(field(signedRules, 'operator'), 'userId');
+  if (reviewed && (typeof signedCashier !== 'string' || !signedCashier))
+    throw new CounterTransportError('offline_cashier_unknown', 409);
+  // Authorization and the review log use the connected actor. The sale records
+  // the operator in the verified sale-time envelope, including on a reviewed retry.
+  const saleScope =
+    typeof signedCashier === 'string' && signedCashier
+      ? { ...scope, actorId: signedCashier }
+      : scope;
+  const sale = await createSale(db, saleScope);
   // DEV-825: one transaction adds every line and then tenders, so take the stock
   // locks for all of them up front in the global order (stock-lock-order.ts):
   // the batches the tender's safety check shares, then every candidate balance.
@@ -1066,10 +1359,15 @@ export async function replayCounterCommand(
     await consumeDeviceLotQuota(db, scope, { ...line, deviceId, units });
     const created = await addSaleLine(
       db,
-      scope,
+      saleScope,
       { ...line, saleId: sale.id, idempotencyKey: `${command.idempotencyKey}:${index}` },
-      { saleUnitAt }
+      {
+        saleUnitAt,
+        ...(reviewed ? { reviewedPrice: reviewedOfflinePrice(command, index) } : {}),
+      }
     );
+    if (created.line.grossMinor !== command.seal.lineTotalsMinor[index])
+      throw new CounterTransportError('offline_total_changed', 409);
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
         organizationId: scope.organizationId,
@@ -1087,7 +1385,7 @@ export async function replayCounterCommand(
   }
   const result = await applyPharmacyTender(
     db,
-    scope,
+    saleScope,
     {
       saleId: sale.id,
       deviceId,
@@ -1108,7 +1406,10 @@ export async function replayCounterCommand(
     { deviceSecret, signature: receiptSignature },
     // DEV-821: an enrolled counter replays a sale it took offline into its own drawer;
     // the device is authenticated by its secret and the signed command above.
-    { drawerOperator: { kind: 'REGISTERED_DEVICE_REPLAY' } }
+    {
+      drawerOperator: { kind: 'REGISTERED_DEVICE_REPLAY' },
+      ...(bookOnCurrentDay ? { offlineSoldDay: soldDay.toISOString().slice(0, 10) } : {}),
+    }
   );
   if (!('settled' in result) || !result.settled)
     throw new CounterTransportError('offline_total_changed', 409);
@@ -1200,6 +1501,8 @@ function verifyToken(
 export type CounterOperation =
   | 'establish'
   | 'snapshot'
+  | 'quarantine'
+  | 'retry'
   | 'replay'
   | 'lease'
   | 'quota'
@@ -1207,7 +1510,11 @@ export type CounterOperation =
   | 'renew';
 
 /** DEV-957 phase 2: what an expired device secret may no longer be used for. */
-const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set(['snapshot', 'lease', 'quota']);
+const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set([
+  'snapshot',
+  'lease',
+  'quota',
+]);
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
@@ -1262,7 +1569,7 @@ function text(value: unknown): string | null {
  * session token, signatures or signed payloads.
  */
 export function counterAuditEntry(
-  operation: Exclude<CounterOperation, 'reject'>,
+  operation: Exclude<CounterOperation, 'reject' | 'quarantine'>,
   body: unknown,
   outcome: unknown
 ): CounterAuditEntry | null {
@@ -1311,6 +1618,16 @@ export function counterAuditEntry(
         targetId: null,
         metadata: {},
       };
+    case 'retry': {
+      const entry = counterAuditEntry('replay', field(body, 'command'), outcome);
+      return (
+        entry && {
+          ...entry,
+          action: 'reviewAndRetryOfflineSale',
+          metadata: { ...entry.metadata, reason: text(field(body, 'reason')) },
+        }
+      );
+    }
     case 'replay':
       if (field(outcome, 'replayed') === true) return null;
       return {
@@ -1351,7 +1668,10 @@ function withCounterAudit<T>(
 ) {
   return async (db: ScopedDb): Promise<T> => {
     const outcome = await work(db);
-    const entry = operation === 'reject' ? null : counterAuditEntry(operation, body, outcome);
+    const entry =
+      operation === 'reject' || operation === 'quarantine'
+        ? null
+        : counterAuditEntry(operation, body, outcome);
     if (entry && target.scope) {
       await db.auditLog.create({
         data: {
@@ -1417,8 +1737,208 @@ async function reportChainBreak(operation: CounterOperation, error: CounterChain
   }
 }
 
+async function retireReviewedReceipt(ctx: PharmacyCounterContext, command: CounterReplay) {
+  const { leaseId, receiptNumber, originalSaleAt } = command.leasedReceipt;
+  const retired = await ctx.db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            UPDATE pharmacy_receipt_number_leases AS lease
+            SET "nextNumber" = ${receiptNumber} + 1
+            WHERE lease.id = ${leaseId}
+              AND lease."organizationId" = ${ctx.scope.organizationId}
+              AND lease."branchId" = ${ctx.scope.branchId}
+              AND lease."deviceId" = ${ctx.deviceId}
+              AND lease."nextNumber" = ${receiptNumber}
+              AND ${receiptNumber} BETWEEN lease."blockStart" AND lease."blockEnd"
+              AND lease."issuedAt" <= ${new Date(originalSaleAt)}
+            RETURNING lease.id`);
+  if (!retired[0]) throw new CounterTransportError('INVALID_RECEIPT_LEASE', 409);
+}
+
+const quarantineSchema = counterRejectSchema.extend({
+  action: z.literal('quarantine'),
+  originalHash: z.string().regex(/^[0-9a-f]{64}$/),
+});
+
+async function quarantineReceipt(
+  ctx: PharmacyCounterContext,
+  review: z.infer<typeof quarantineSchema>,
+  request: Request
+) {
+  const { db, scope, deviceId } = ctx;
+  const { command, reason, originalHash } = review;
+  await db.$queryRaw`SELECT id FROM pharmacy_registered_devices WHERE id=${deviceId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`;
+  // Authenticate a separate review, including the independently retained chain fingerprint.
+  // The failed receipt and its original signatures remain evidence and never authorize a sale.
+  await authenticatePharmacyCommand(db, scope, deviceId, review, {
+    deviceSecret: ctx.deviceSecret,
+    signature: request.headers.get('x-command-signature') ?? '',
+  });
+  await scopeReceiptHistory(db, scope.branchId);
+  const identity = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    deviceId,
+    commandKey: command.idempotencyKey,
+    commandHash: snapshotPayloadHash(command),
+  };
+  const refusal = await db.pharmacyOfflineReceiptEvent.findFirst({
+    where: {
+      ...identity,
+      kind: 'REFUSED',
+      reason: { in: ['offline_chain_broken', 'INVALID_COMMAND_SIGNATURE', 'invalid_snapshot'] },
+    },
+  });
+  if (!refusal) throw new CounterTransportError('quarantine_requires_refused_receipt', 409);
+  const { command: stored } = await recordOfflineCommand(db, scope, {
+    deviceId,
+    sequence: command.sequence,
+    idempotencyKey: command.idempotencyKey,
+    action: command.action,
+    payload: command as Prisma.InputJsonValue,
+    clientOriginAt: new Date(command.leasedReceipt.originalSaleAt),
+    receiptNumber: command.leasedReceipt.receiptNumber,
+  });
+  if (stored.status === 'DEAD') {
+    const prior = await db.pharmacyOfflineReceiptEvent.findFirst({
+      where: { ...identity, kind: 'QUARANTINED' },
+    });
+    if (prior && prior.reason === reason && field(prior.evidence, 'originalHash') === originalHash)
+      return { commandId: stored.id, status: 'QUARANTINED', replayed: true };
+  }
+  if (stored.status !== 'PENDING') throw new CounterTransportError('command_already_settled', 409);
+  await retireReviewedReceipt(ctx, command);
+  await db.pharmacyOfflineCommand.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: stored.id } },
+    data: {
+      status: 'DEAD',
+      settledAt: new Date(),
+      attempts: { increment: 1 },
+      rejectionReason: reason,
+    },
+  });
+  await db.auditLog.create({
+    data: {
+      organizationId: scope.organizationId,
+      actorId: scope.actorId,
+      source: 'REST_API',
+      category: 'PHARMACY',
+      operation: 'UPDATE',
+      action: 'pharmacyOffline.quarantineOfflineReceipt',
+      targetType: 'PharmacyOfflineCommand',
+      targetId: stored.id,
+      metadata: {
+        branchId: scope.branchId,
+        deviceId,
+        sequence: command.sequence,
+        receiptNumber: command.leasedReceipt.receiptNumber,
+        reason,
+      },
+    },
+  });
+  if (command.action === 'CASH_OTC_SALE') {
+    await recordRejectedOfflineCash(db, scope, {
+      soldAt: new Date(command.leasedReceipt.originalSaleAt),
+      deviceId,
+      commandId: stored.id,
+      receiptNumber: command.leasedReceipt.receiptNumber,
+      amountMinor: command.amountMinor,
+    });
+  }
+  await appendReceiptEvent(
+    db,
+    { ...receiptEvidence(ctx, command, request), originalHash },
+    'QUARANTINED',
+    reason
+  );
+  return { commandId: stored.id, status: 'QUARANTINED', replayed: false };
+}
+
+async function scopeReceiptHistory(db: ScopedDb, branchId: string) {
+  await db.$queryRaw`SELECT set_config('app.current_branch_id', ${branchId}, true)`;
+}
+
+type ReceiptEvidence = {
+  scope: LedgerScope;
+  deviceId: string;
+  command: CounterReplay;
+  commandSignature: string;
+  receiptSignature: string;
+  originalHash?: string;
+};
+
+function receiptEvidence(
+  ctx: PharmacyCounterContext,
+  command: CounterReplay,
+  request: Request
+): ReceiptEvidence {
+  return {
+    scope: ctx.scope,
+    deviceId: ctx.deviceId,
+    command,
+    commandSignature: request.headers.get('x-command-signature') ?? '',
+    receiptSignature: request.headers.get('x-receipt-signature') ?? '',
+  };
+}
+
+async function appendReceiptEvent(
+  db: ScopedDb,
+  receipt: ReceiptEvidence,
+  kind: 'REFUSED' | 'REJECTED' | 'RETRIED' | 'QUARANTINED',
+  reason: string
+) {
+  const { scope, deviceId, command, commandSignature, receiptSignature } = receipt;
+  await scopeReceiptHistory(db, scope.branchId);
+  const evidence = {
+    command,
+    commandSignature,
+    receiptSignature,
+    ...(receipt.originalHash ? { originalHash: receipt.originalHash } : {}),
+  };
+  const id = snapshotPayloadHash([
+    scope.organizationId,
+    scope.branchId,
+    deviceId,
+    kind,
+    reason,
+    evidence,
+  ]);
+  await db.pharmacyOfflineReceiptEvent.createMany({
+    data: [
+      {
+        id,
+        ...scope,
+        deviceId,
+        commandKey: command.idempotencyKey,
+        sequence: command.sequence,
+        receiptNumber: command.leasedReceipt.receiptNumber,
+        kind,
+        reason,
+        commandHash: snapshotPayloadHash(command),
+        evidence: evidence as Prisma.InputJsonValue,
+      },
+    ],
+    skipDuplicates: true,
+  });
+}
+
+function receiptRefusal(error: unknown): string | null {
+  if (error instanceof CounterTransportError && error.code === 'review_requires_fixable_refusal')
+    return null;
+  if (error instanceof CounterTransportError)
+    return error.status === 409 || error.status === 403 ? error.code : null;
+  if (isAccountingPeriodClosedError(error)) return 'PERIOD_CLOSED';
+  if (
+    error instanceof Error &&
+    'reason' in error &&
+    typeof error.reason === 'string' &&
+    /^[A-Z_]+$/.test(error.reason)
+  )
+    return error.reason;
+  return null;
+}
+
 export function pharmacyCounterRoute(operation: CounterOperation) {
   return async (request: Request): Promise<Response> => {
+    let attempted: ReceiptEvidence | undefined;
     try {
       if (!(await rateLimit(`pharmacy-counter:${clientIp(request)}`, 120, 60_000)).ok)
         throw new CounterTransportError('rate_limited', 429);
@@ -1461,7 +1981,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         // below (live counter grant and assignment to this terminal's branch),
         // capped at one renewal block. Quota and reject stay manager-only.
         const leasingManager = operation === 'lease' && (await allows('admin:access'));
-        const manager = leasingManager || operation === 'quota' || operation === 'reject';
+        const manager =
+          leasingManager ||
+          operation === 'quota' ||
+          operation === 'reject' ||
+          operation === 'quarantine';
         if (!leasingManager && !(await allows(manager ? 'admin:access' : 'pharmacy:orders')))
           throw new CounterTransportError('forbidden', 403);
         const device = await resolvePharmacyCounterBySecret(db, secret);
@@ -1491,6 +2015,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         // DEV-831: an enrolled terminal does not lend its branch to the actor.
         // Establishment, snapshots and replay take the online counter's live
         // grant and branch-assignment gate before any token, snapshot or sale.
+        if (operation === 'retry' && !(await allows('admin:access')))
+          throw new CounterTransportError('forbidden', 403);
         if (!manager) {
           const denial = await counterOperatorDenial(
             db,
@@ -1691,7 +2217,17 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             take: 20,
           });
           const now = new Date();
-          const expiry = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+          const branch = await db.pharmacyBranch.findFirstOrThrow({
+            where: { id: device.branchId, organizationId: ctx.scope.organizationId },
+            select: { name: true, offlineReconnectHours: true },
+          });
+          const reconnectBy = new Date(
+            Math.min(
+              device.secretExpiresAt.getTime(),
+              now.getTime() + branch.offlineReconnectHours * 3_600_000
+            )
+          );
+          const expiry = reconnectBy;
           const safetyLease = {
             issuedAt: now.toISOString(),
             expiresAt: expiry.toISOString(),
@@ -1704,10 +2240,6 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // DEV-957 phase 2 (review B1): the owner's offline cash selling switch, signed into
           // the rules. Off (and not available) in this phase, so a counter checks prices only.
           const cashSelling = await readOfflineCashSelling(db, ctx.scope.organizationId);
-          const branchName = await db.pharmacyBranch.findFirst({
-            where: { id: device.branchId, organizationId: ctx.scope.organizationId },
-            select: { name: true },
-          });
           const payloads = {
             CATALOG: catalog,
             PRICES: pricedLots,
@@ -1721,7 +2253,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               // under this list are attributed to them on the receipt and in the replay audit.
               operator: { userId: ctx.scope.actorId, name: actor.session.user.name ?? null },
               // The branch name the on-screen offline receipt shows.
-              branchName: branchName?.name ?? null,
+              branchName: branch.name,
+              reconnectBy: reconnectBy.toISOString(),
               // When the server stops issuing this counter new price lists.
               // (Never a key named like a credential: the counter's local store refuses those.)
               deviceAccessUntil: device.secretExpiresAt.toISOString(),
@@ -1744,10 +2277,17 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           return { snapshots, publicKey: snapshotPublicKey(), catalogLimit: 1000 };
         }
         const rejection = operation === 'reject' ? counterRejectSchema.parse(body) : null;
-        const command = rejection?.command ?? counterReplaySchema.parse(body);
+        const quarantine = operation === 'quarantine' ? quarantineSchema.parse(body) : null;
+        const retry = operation === 'retry' ? counterRejectSchema.parse(body) : null;
+        const command =
+          quarantine?.command ??
+          rejection?.command ??
+          retry?.command ??
+          counterReplaySchema.parse(body);
         const key = request.headers.get('idempotency-key');
         if (!key || key !== command.idempotencyKey)
           throw new CounterTransportError('invalid_idempotency_key');
+        if (quarantine) return quarantineReceipt(ctx, quarantine, request);
         if (rejection) {
           // Explicit manager recovery for a command whose failed sale rolled
           // back its log entry. Never skip a position or commit sale effects.
@@ -1781,25 +2321,11 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // The receipt was already printed. Retire exactly the next number
           // under the same lease checks as settlement, so recovery preserves
           // the remaining printed receipts and never makes this one reusable.
-          const { leaseId, receiptNumber, originalSaleAt } = command.leasedReceipt;
-          const retired = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-            UPDATE pharmacy_receipt_number_leases AS lease
-            SET "nextNumber" = ${receiptNumber} + 1
-            WHERE lease.id = ${leaseId}
-              AND lease."organizationId" = ${ctx.scope.organizationId}
-              AND lease."branchId" = ${ctx.scope.branchId}
-              AND lease."deviceId" = ${device.id}
-              AND lease."nextNumber" = ${receiptNumber}
-              AND ${receiptNumber} BETWEEN lease."blockStart" AND lease."blockEnd"
-              AND lease."issuedAt" <= ${new Date(originalSaleAt)}
-            RETURNING lease.id`);
-          if (!retired[0]) throw new CounterTransportError('INVALID_RECEIPT_LEASE', 409);
+          await retireReviewedReceipt(ctx, command);
           // Review round 2: nor can a sale taken while offline selling was off be settled
           // this way: only one its verified signed RULES allowed (the receipt checks above
           // run first, and a refusal here rolls the retirement back).
-          if (
-            !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id))
-          )
+          if (!signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id)))
             throw new CounterTransportError('offline_selling_off', 409);
           await settleOfflineCommand(
             db,
@@ -1807,6 +2333,15 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             { commandId: recorded.command.id, outcome: 'REJECTED', reason: rejection.reason },
             new Date()
           );
+          if (command.action === 'CASH_OTC_SALE') {
+            await recordRejectedOfflineCash(db, ctx.scope, {
+              soldAt: new Date(command.leasedReceipt.originalSaleAt),
+              deviceId: device.id,
+              commandId: recorded.command.id,
+              receiptNumber: command.leasedReceipt.receiptNumber,
+              amountMinor: command.amountMinor,
+            });
+          }
           // Recovery and its audit must commit together. Do not copy the signed
           // payload, snapshots or credentials into the audit record.
           await db.auditLog.create({
@@ -1827,14 +2362,26 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
               },
             },
           });
+          await appendReceiptEvent(
+            db,
+            receiptEvidence(ctx, command, request),
+            'REJECTED',
+            rejection.reason
+          );
           return { commandId: recorded.command.id, status: 'REJECTED', replayed: false };
         }
-        return replayCounterCommand(
+        const receipt = receiptEvidence(ctx, command, request);
+        attempted = receipt;
+        const result = await replayCounterCommand(
           ctx,
           command,
           request.headers.get('x-command-signature') ?? '',
-          request.headers.get('x-receipt-signature') ?? ''
+          request.headers.get('x-receipt-signature') ?? '',
+          retry !== null
         );
+        if (retry && !result.replayed)
+          await appendReceiptEvent(db, receipt, 'RETRIED', retry.reason);
+        return result;
       };
       const result = await withTenantDb(
         actor.organization.id,
@@ -1860,6 +2407,18 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
       });
     } catch (error) {
       if (error instanceof CounterChainError) await reportChainBreak(operation, error);
+      const receipt = attempted;
+      const refusal = receiptRefusal(error);
+      if (receipt && refusal) {
+        try {
+          await withTenantDb(receipt.scope.organizationId, (db) =>
+            appendReceiptEvent(db, receipt, 'REFUSED', refusal)
+          );
+        } catch {
+          // An unrecorded refusal must be retried, never acknowledged locally.
+          return Response.json({ error: 'receipt_history_unavailable' }, { status: 503 });
+        }
+      }
       if (error instanceof CounterTransportError)
         return Response.json({ error: error.code }, { status: error.status });
       // DEV-877: the replay rolled back and its command stays PENDING; the

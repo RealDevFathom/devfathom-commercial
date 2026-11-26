@@ -9,6 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { counterConflictMessage } from '@/lib/pharmacy/counter-replay-transport';
 import { unsettledCommands } from '@/lib/pharmacy/counter-command-queue';
 import {
   forgetCounterEnrolment,
@@ -53,7 +54,7 @@ function errorText(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function when(value: string | null, empty: string): string {
+function when(value: Date | string | null, empty: string): string {
   if (!value) return empty;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? empty : date.toLocaleString();
@@ -762,14 +763,16 @@ function BranchCounters({
         Revoking from another computer: from that moment the server refuses everything the revoked
         counter sends and its earmarked units go back to the branch. The next time it reaches the
         server it deletes its price lists, receipt numbers, unfinished bills and stored page, and it
-        can never take another sale; once its signed price list ends (at most 8 hours) it cannot
-        sell offline even if it never reconnects. Offline sales it never sent are not deleted: that
-        computer keeps them, read-only, under Sales to reconcile on the counter page, for a manager
-        to export and record what was done with each one. Sales it sent before the revoke stay
-        booked.
+        can never take another sale; once its signed price list expires at the configured offline
+        limit it cannot sell offline even if it never reconnects. Offline sales it never sent are
+        not deleted: that computer keeps them, read-only, under Sales to reconcile on the counter
+        page, for a manager to export and record what was done with each one. Sales it sent before
+        the revoke stay booked.
       </p>
       <NoticeLine notice={notice} />
       <OfflineCashSellingSwitch branchId={branchId} />
+      <ReconnectLimit key={branchId} branchId={branchId} />
+      <RefusedReceipts key={branchId} branchId={branchId} />
       <ReceiptNumberGaps branchId={branchId} />
     </div>
   );
@@ -836,6 +839,239 @@ function OfflineCashSellingSwitch({ branchId }: { branchId: string }) {
  * DEV-957 phase 2: receipt numbers a revoked counter, or one whose credential expired,
  * reserved and never printed. They are never reused; this explains each gap.
  */
+function ReconnectLimit({ branchId }: { branchId: string }) {
+  const limit = trpc.pharmacyOffline.reconnectLimit.useQuery({ branchId }, { retry: false });
+  const save = trpc.pharmacyOffline.setReconnectLimit.useMutation({ retry: false });
+  const [edit, setEdit] = useState<string | null>(null);
+  const value = edit ?? String(limit.data?.hours ?? '');
+  return (
+    <section className="space-y-2 border-t border-border-subtle pt-4">
+      <h3 className="text-sm font-semibold text-text-strong">Time before reconnecting</h3>
+      {limit.isLoading ? (
+        <p role="status">Loading reconnect limit…</p>
+      ) : !limit.data ? (
+        <p role="alert">Reconnect limit could not be loaded.</p>
+      ) : (
+        <form
+          className="space-y-2"
+          onSubmit={async (e) => {
+            e.preventDefault();
+            await save
+              .mutateAsync({ branchId, hours: Number(value) })
+              .then(async () => {
+                await limit.refetch();
+                setEdit(null);
+              })
+              .catch(() => undefined);
+          }}
+        >
+          <Label htmlFor="offline-reconnect-hours">Maximum hours offline</Label>
+          <Input
+            id="offline-reconnect-hours"
+            className="min-h-11 max-w-32"
+            type="number"
+            min={1}
+            max={72}
+            step={1}
+            required
+            value={value}
+            disabled={!limit.data.canChange || save.isPending}
+            onChange={(e) => setEdit(e.target.value)}
+          />
+          <p className="text-sm text-text-muted">
+            Applies when the counter next connects. An earlier stock safety or price list expiry
+            still stops sales.
+          </p>
+          {limit.data.canChange && (
+            <Button
+              className="min-h-11"
+              variant="outline"
+              type="submit"
+              disabled={save.isPending || edit === null}
+            >
+              {save.isPending ? 'Saving…' : 'Save limit'}
+            </Button>
+          )}
+          {save.isError && (
+            <p role="alert" className="text-destructive">
+              The limit could not be saved. Your entry is kept here.
+            </p>
+          )}
+          {save.isSuccess && edit === null && <p role="status">Reconnect limit saved.</p>}
+        </form>
+      )}
+    </section>
+  );
+}
+
+function ResolveOfflineCashForm({
+  branchId,
+  eventId,
+  onResolved,
+}: {
+  branchId: string;
+  eventId: string;
+  onResolved: () => void;
+}) {
+  const [outcome, setOutcome] = useState<'REBOOK' | 'REFUND' | 'WRITE_OFF'>('REBOOK');
+  const [problem, setProblem] = useState('');
+  const resolve = trpc.pharmacyOffline.resolveCash.useMutation();
+  const owner = trpc.pharmacyOffline.reconnectLimit.useQuery({ branchId });
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const managerPin = String(data.get('managerPin') ?? '');
+    const pin = form.elements.namedItem('managerPin') as HTMLInputElement;
+    pin.value = '';
+    setProblem('');
+    try {
+      await resolve.mutateAsync({
+        branchId,
+        eventId,
+        outcome,
+        reason: String(data.get('reason') ?? ''),
+        managerPin,
+        ...(outcome === 'REBOOK' ? { saleId: String(data.get('saleId') ?? '') } : {}),
+      });
+      onResolved();
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : 'Resolution could not be recorded.');
+    }
+  }
+  return (
+    <details>
+      <summary className="cursor-pointer py-2">Resolve held cash</summary>
+      <form onSubmit={submit} className="space-y-3">
+        <Label>
+          Outcome
+          <StudioSelect
+            value={outcome}
+            onChange={(e) => setOutcome(e.target.value as typeof outcome)}
+          >
+            <option value="REBOOK">Pay a re-booked sale</option>
+            <option value="REFUND">Refund the customer</option>
+            {owner.data?.canChange && (
+              <option value="WRITE_OFF">Write off as cash over/short</option>
+            )}
+          </StudioSelect>
+        </Label>
+        {outcome === 'REBOOK' && (
+          <Label>
+            Unpaid sale ID
+            <Input name="saleId" required maxLength={128} />
+          </Label>
+        )}
+        <Label>
+          Reason
+          <Input name="reason" required maxLength={500} />
+        </Label>
+        <Label>
+          Your PIN or authenticator code
+          <Input
+            type="password"
+            name="managerPin"
+            inputMode="numeric"
+            autoComplete="off"
+            required
+            pattern="[0-9]{4,8}"
+          />
+        </Label>
+        {problem && (
+          <p role="alert" className="text-destructive">
+            {problem}
+          </p>
+        )}
+        <Button type="submit" className="min-h-11" disabled={resolve.isPending}>
+          {resolve.isPending ? 'Recording…' : 'Confirm resolution'}
+        </Button>
+      </form>
+    </details>
+  );
+}
+
+function RefusedReceipts({ branchId }: { branchId: string }) {
+  const [pages, setPages] = useState<{ at: string; id: string }[]>([]);
+  const history = trpc.pharmacyOffline.refusedReceipts.useQuery(
+    { branchId, after: pages.at(-1) },
+    { retry: false }
+  );
+  const next = history.data?.nextCursor;
+  const statuses: Record<string, { label: string; tone: 'warning' | 'success' | 'danger' }> = {
+    REFUSED: { label: 'Needs review', tone: 'warning' },
+    REJECTED: { label: 'Rejected', tone: 'danger' },
+    RETRIED: { label: 'Booked after review', tone: 'success' },
+    QUARANTINED: { label: 'Quarantined', tone: 'warning' },
+  };
+  return (
+    <section className="space-y-2 border-t border-border-subtle pt-4">
+      <h3 className="text-sm font-semibold text-text-strong">Offline receipt reviews</h3>
+      {history.isLoading ? (
+        <p role="status">Loading receipt history…</p>
+      ) : history.isError ? (
+        <p role="alert" className="text-destructive">
+          Receipt history could not be loaded.{' '}
+          <Button variant="outline" onClick={() => void history.refetch()}>
+            Reload
+          </Button>
+        </p>
+      ) : !history.data?.rows.length ? (
+        <p className="text-sm text-text-muted">
+          No offline receipts have been refused in this branch.
+        </p>
+      ) : (
+        <ul className="divide-y divide-border-subtle text-sm">
+          {history.data.rows.map((row) => (
+            <li key={row.id} className="space-y-1 py-2">
+              <strong>
+                Receipt {row.receiptNumber} · {row.device.name}
+              </strong>
+              <p>
+                <StatusPill
+                  status={row.kind}
+                  {...(statuses[row.kind] ?? { label: 'Reviewed', tone: 'warning' })}
+                />{' '}
+                · {when(row.createdAt, 'Unknown time')}
+              </p>
+              <p>{row.kind === 'REFUSED' ? counterConflictMessage(row.reason) : row.reason}</p>
+              {row.cashState === 'held' && (
+                <ResolveOfflineCashForm
+                  branchId={branchId}
+                  eventId={row.id}
+                  onResolved={() => void history.refetch()}
+                />
+              )}
+              {row.cashState === 'resolved' && <p>Cash resolved</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {(pages.length > 0 || next) && (
+        <nav aria-label="Receipt history pages" className="flex flex-wrap gap-2">
+          <Button
+            className="min-h-11"
+            variant="outline"
+            disabled={!pages.length || history.isFetching}
+            onClick={() => setPages((p) => p.slice(0, -1))}
+          >
+            Previous
+          </Button>
+          <Button
+            className="min-h-11"
+            variant="outline"
+            disabled={!next || history.isFetching}
+            onClick={() => {
+              if (next) setPages((p) => [...p, next]);
+            }}
+          >
+            Next
+          </Button>
+        </nav>
+      )}
+    </section>
+  );
+}
+
 function ReceiptNumberGaps({ branchId }: { branchId: string }) {
   const gaps = trpc.pharmacyOffline.receiptNumberGaps.useQuery({ branchId }, { retry: false });
   return (
