@@ -889,6 +889,67 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
   });
 
+  it('DEV-1040: automatically verifies one stale snapshot and announces the new balance before payment', async () => {
+    const current = mocks.queries.counterCart!;
+    const original = cart();
+    current.data = {
+      ...original,
+      lines: [...original.lines, { ...original.lines[0], saleLineId: 'line-b' }],
+    };
+    const view = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const pay = () => screen.getByRole('button', { name: 'Take payment', hidden: true });
+    expect(pay()).toBeEnabled();
+    let finish!: () => void;
+    mocks.refetch.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      current.isStale = false;
+      current.data = cart({
+        totals: { grossMinor: 26000, netMinor: 26000, discountMinor: 0, tenderedMinor: 0 },
+      });
+      return current;
+    });
+    current.isStale = true;
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalledTimes(1));
+    expect(screen.getAllByText('Checking the bill balance…').length).toBeGreaterThan(0);
+    expect(pay()).toBeDisabled();
+    fireEvent.click(pay());
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    await act(async () => finish());
+    expect(
+      await within(screen.getByRole('dialog', { name: /Take payment/ })).findByText(
+        'This bill changed. New balance: Rs 260.00'
+      )
+    ).toBeVisible();
+    expect(pay()).toBeEnabled();
+    expect(mocks.refetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('DEV-1040: a failed automatic read gives the cashier a manual retry and keeps Khata locked until verified', async () => {
+    mocks.khataAccounts.mockResolvedValue([]);
+    const view = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Khata', exact: true }));
+    const name = await screen.findByLabelText('Customer name');
+    mocks.refetch.mockRejectedValueOnce(new Error('Read failed'));
+    mocks.queries.counterCart!.isStale = true;
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    await waitFor(() => expect(mocks.refetch).toHaveBeenCalledTimes(1));
+    expect(name).toBeDisabled();
+    expect(screen.getAllByText(/Could not check the bill balance/).length).toBeGreaterThan(0);
+    const dialog = within(screen.getByRole('dialog', { name: /Take payment/ }));
+    fireEvent.click(dialog.getByRole('button', { name: 'Refresh bill' }));
+    await waitFor(() => expect(name).toBeEnabled());
+    expect(dialog.getByLabelText(/phone/i)).toBeEnabled();
+    expect(dialog.getByRole('checkbox', { name: /consent|agrees/i })).toBeEnabled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
   it('allows an empty bill to recover without locking bill actions or claiming settlement', async () => {
     mocks.queries.counterCart!.data = cart({
       lines: [],

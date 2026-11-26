@@ -333,6 +333,22 @@ function hasValidBill(
  * DEV-712: a bill the server will never add another line or payment to. A scan
  * against it opens the next bill instead of failing with INVALID_STATE.
  */
+function billContents(cart: CounterCart) {
+  return JSON.stringify([
+    cart.status,
+    cart.totals,
+    cart.lines.map((line) => [
+      line.saleLineId,
+      line.quantity,
+      line.saleUnit,
+      line.canonicalUnits,
+      line.unitPriceMinor,
+      line.discountMinor,
+      line.lineTotalMinor,
+    ]),
+  ]);
+}
+
 function billClosed(cart: CounterCart | null | undefined, saleId: string | null): boolean {
   return Boolean(
     saleId && cart?.saleId === saleId && (cart.status === 'COMPLETED' || cart.status === 'VOID')
@@ -868,6 +884,9 @@ function ScopedPharmacyCounterConsole({
   } | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
   const [tenderReadRequired, setTenderReadRequired] = useState(false);
+  const autoRead = useRef<string | null>(null);
+  const [balanceFailure, setBalanceFailure] = useState<string | null>(null);
+  const [balanceAnnouncement, setBalanceAnnouncement] = useState('');
   const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
   const tenderInFlight = useRef(false);
   const [recoveryBranch, setRecoveryBranch] = useState('');
@@ -1389,6 +1408,9 @@ function ScopedPharmacyCounterConsole({
       setSettledChange(null);
       setReceiptOpen(false);
       setSaleId(nextSaleId);
+      autoRead.current = null;
+      setBalanceFailure(null);
+      setBalanceAnnouncement('');
       if (!keepBillUnit) setAddUnit(null);
       setCustomerId(null);
       setRedeemPoints(0);
@@ -1567,6 +1589,8 @@ function ScopedPharmacyCounterConsole({
   const paidMinor = currentBill ? cart.totals.tenderedMinor : 0;
   const unknownTender = tenderOutcome?.status === 'unknown';
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
+  const billScope = JSON.stringify([branchId, saleId]);
+  const failedBalanceRead = balanceFailure === billScope;
   const billState: CounterTenderBillState =
     !saleId || !branchId
       ? 'idle'
@@ -1574,7 +1598,7 @@ function ScopedPharmacyCounterConsole({
         ? 'error'
         : !recoveryReady || cartQuery.isFetching || cartQuery.isLoading || refreshingTenderBill
           ? 'loading'
-          : cartQuery.isError || unknownTender
+          : cartQuery.isError || unknownTender || failedBalanceRead
             ? 'error'
             : tenderReadRequired || cartQuery.isStale || cartQuery.isPlaceholderData
               ? 'stale'
@@ -1815,29 +1839,31 @@ function ScopedPharmacyCounterConsole({
       ? 'Check the payment outcome before taking more money.'
       : storageError
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
-        : tenderReadRequired
-          ? 'Refresh this bill to verify payment before taking more money.'
-          : packBlocked
-            ? 'Resolve the pack check or remove the blocked line before taking payment.'
-            : blocked
-              ? 'Resolve the safety block in the prescription panel before taking payment.'
-              : billState === 'idle'
-                ? 'Add an item to start a sale before taking payment.'
-                : billState === 'loading'
-                  ? 'Checking the bill. Please wait before taking payment.'
-                  : billState === 'error' || billState === 'stale'
-                    ? 'Refresh the bill to check the balance before taking payment.'
-                    : billState === 'settled'
-                      ? 'This bill is already paid. Start a new sale.'
-                      : billState === 'unavailable'
-                        ? cart?.status === 'HELD'
-                          ? 'Resume this bill before taking payment.'
-                          : currentBill && lineCount === 0
-                            ? 'Add an item to this bill before taking payment.'
-                            : 'Refresh the bill or start a new sale before taking payment.'
-                        : busy
-                          ? 'Wait for the current counter action to finish before taking payment.'
-                          : null;
+        : failedBalanceRead
+          ? 'Could not check the bill balance. Refresh the bill to try again.'
+          : tenderReadRequired
+            ? 'Refresh this bill to verify payment before taking more money.'
+            : packBlocked
+              ? 'Resolve the pack check or remove the blocked line before taking payment.'
+              : blocked
+                ? 'Resolve the safety block in the prescription panel before taking payment.'
+                : billState === 'idle'
+                  ? 'Add an item to start a sale before taking payment.'
+                  : billState === 'loading'
+                    ? 'Checking the bill balance…'
+                    : billState === 'error' || billState === 'stale'
+                      ? 'Refresh the bill to check the balance before taking payment.'
+                      : billState === 'settled'
+                        ? 'This bill is already paid. Start a new sale.'
+                        : billState === 'unavailable'
+                          ? cart?.status === 'HELD'
+                            ? 'Resume this bill before taking payment.'
+                            : currentBill && lineCount === 0
+                              ? 'Add an item to this bill before taking payment.'
+                              : 'Refresh the bill or start a new sale before taking payment.'
+                          : busy
+                            ? 'Wait for the current counter action to finish before taking payment.'
+                            : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -1914,6 +1940,10 @@ function ScopedPharmacyCounterConsole({
         (outcomeInFlight.current && resolution !== 'accepted')
       )
         return false;
+      const original =
+        hasValidBill(cartQuery.data, saleId) && !cartQuery.isPlaceholderData
+          ? billContents(cartQuery.data)
+          : null;
       setRefreshingTenderBill(true);
       let confirmed: CounterReceiptSettlement | null = null;
       try {
@@ -1938,7 +1968,13 @@ function ScopedPharmacyCounterConsole({
         // invalidate() alone can resolve after a failed read. Inspect an explicit
         // refetch before permitting another money movement.
         const read = await cartQuery.refetch({ throwOnError: true });
-        if (!read.isSuccess || !hasValidBill(read.data, saleId)) {
+        if (currentSaleId.current !== saleId) return false;
+        if (
+          !read.isSuccess ||
+          read.isPlaceholderData ||
+          read.isStale ||
+          !hasValidBill(read.data, saleId)
+        ) {
           setTenderReadRequired(true);
           return false;
         }
@@ -1990,6 +2026,13 @@ function ScopedPharmacyCounterConsole({
             return false;
           }
         }
+        if (currentSaleId.current !== saleId) return false;
+        setBalanceFailure(null);
+        if (!resolution && original && original !== billContents(read.data)) {
+          setBalanceAnnouncement(
+            `This bill changed. New balance: Rs ${formatMinor(read.data.totals.netMinor - read.data.totals.tenderedMinor)}`
+          );
+        }
         setTenderReadRequired(false);
         if (confirmed) {
           setReceiptSettlement(confirmed);
@@ -2029,6 +2072,38 @@ function ScopedPharmacyCounterConsole({
       utils,
     ]
   );
+
+  // A cart whose query expires has no observer-triggered fetch until focus/remount. Verify
+  // it here as well as in the open sheet. Payment attempts retain their own recovery path.
+  useEffect(() => {
+    if (billState === 'ready' || billState === 'settled') autoRead.current = null;
+    if (
+      billState !== 'stale' ||
+      !canSettlePayments ||
+      pending ||
+      tenderReadRequired ||
+      attempt ||
+      tenderOutcome ||
+      failedBalanceRead ||
+      autoRead.current === billScope
+    )
+      return;
+    autoRead.current = billScope;
+    void refreshTenderBill().then((ok) => {
+      if (!ok && currentSaleId.current === saleId) setBalanceFailure(billScope);
+    });
+  }, [
+    attempt,
+    billScope,
+    billState,
+    canSettlePayments,
+    failedBalanceRead,
+    pending,
+    refreshTenderBill,
+    saleId,
+    tenderOutcome,
+    tenderReadRequired,
+  ]);
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -5598,6 +5673,16 @@ function ScopedPharmacyCounterConsole({
               {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
             </p>
           )}
+          {balanceAnnouncement && !paymentOpen && (
+            <p role="status" className="text-sm text-text-body">
+              {balanceAnnouncement}
+            </p>
+          )}
+          {failedBalanceRead && !paymentOpen && (
+            <Button variant="outline" onClick={() => void refreshTenderBill()}>
+              Refresh bill
+            </Button>
+          )}
           {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
             <Button variant="outline" className="min-h-11 w-full" onClick={openPayment}>
               Review payment status
@@ -5834,16 +5919,19 @@ function ScopedPharmacyCounterConsole({
           }
           onDiscardAttempt={discardPaymentAttempt}
           loadDiscardApprovers={loadDiscardApprovers}
+          balanceAnnouncement={balanceAnnouncement}
           error={
-            storageError
-              ? TENDER_STORAGE_MESSAGE
-              : cartQuery.isError
-                ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
-                : tenderReadRequired && pending !== 'tender'
-                  ? tenderOutcome?.status === 'accepted'
-                    ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
-                    : 'Refresh this bill to verify its current state.'
-                  : null
+            failedBalanceRead
+              ? 'Could not check the bill balance. Refresh the bill to try again.'
+              : storageError
+                ? TENDER_STORAGE_MESSAGE
+                : cartQuery.isError
+                  ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
+                  : tenderReadRequired && pending !== 'tender'
+                    ? tenderOutcome?.status === 'accepted'
+                      ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
+                      : 'Refresh this bill to verify its current state.'
+                    : null
           }
           onRetry={() => void refreshTenderBill()}
           onTender={takePayment}

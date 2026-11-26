@@ -128,6 +128,7 @@ export type CounterTenderPanelProps = {
   queued?: boolean;
   disabled?: boolean;
   error?: string | null;
+  balanceAnnouncement?: string;
   initialDraft?: TenderDraft & {
     type: CounterTenderType;
     payerName?: string;
@@ -198,6 +199,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       queued = false,
       disabled = false,
       error,
+      balanceAnnouncement,
       onRetry,
       onTender,
       initialDraft,
@@ -540,6 +542,25 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                                     ? 'Choose a family Khata account before taking payment.'
                                                     : 'A manager or owner must approve the credit limit increase first.';
 
+    const lockNote = !editable && (
+      <p className="text-xs text-text-muted">
+        {takingPayment
+          ? 'Locked while payment is being recorded.'
+          : unknown
+            ? 'Locked until the payment outcome is confirmed.'
+            : state === 'loading' || (state === 'stale' && !error)
+              ? 'Locked while the bill balance is being checked.'
+              : state === 'stale' || state === 'error'
+                ? 'Locked until the bill balance is verified.'
+                : state === 'settled'
+                  ? 'This bill has been paid.'
+                  : state === 'idle'
+                    ? 'Add an item to start a bill.'
+                    : state === 'unavailable'
+                      ? 'This bill is unavailable for payment.'
+                      : 'Wait for the current counter action to finish.'}
+      </p>
+    );
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
       submissionRef.current = true;
@@ -763,6 +784,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             >
               Payment method
             </p>
+            {lockNote}
             <div
               role="group"
               aria-labelledby="tender-type-label"
@@ -885,7 +907,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               />
             ) : null}
           </section>
-          {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
+          {!takingPayment && (state === 'error' || (state === 'stale' && Boolean(error))) ? (
             <Button
               type="button"
               variant="outline"
@@ -896,6 +918,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </Button>
           ) : null}
 
+          {balanceAnnouncement && (
+            <p role="status" className="text-sm font-medium text-text-strong">
+              {balanceAnnouncement}
+            </p>
+          )}
           {blocked ? (
             <div
               id="tender-blocked"
@@ -916,6 +943,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}. Pay the rest with another
                 tender.
               </p>
+              {lockNote}
               <Label htmlFor="tender-prepaid-pin">Customer’s prepaid PIN</Label>
               <Input
                 id="tender-prepaid-pin"
@@ -932,6 +960,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </div>
           )}
           <div className="space-y-1.5">
+            {lockNote}
             <Label htmlFor="tender-amount">Amount</Label>
             <Input
               id="tender-amount"
@@ -993,6 +1022,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {bankTransfer ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              {lockNote}
               <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
               <Input
                 id="bank-transfer-reference"
@@ -1021,6 +1051,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 slip; you are recorded as the person who confirmed this payment. Take JazzCash,
                 Easypaisa or Raast under Wallet, not Card.
               </p>
+              {lockNote}
               <Label htmlFor="manual-card-reference">
                 Card last 4 digits or terminal reference
               </Label>
@@ -1058,6 +1089,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {manual ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              {lockNote}
               {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
               {manualSettingsError ? (
                 <p role="alert">Merchant details could not be loaded.</p>
@@ -1157,6 +1189,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {isKhata ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
+              {lockNote}
               <Label htmlFor="khata-account">Family Khata account</Label>
               <select
                 id="khata-account"
@@ -1183,6 +1216,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                     <p className="text-sm text-text-body">
                       No Khata account on this bill. Sign the customer up to open one.
                     </p>
+                    {lockNote}
                     {signupPatient ? (
                       <p className="text-sm text-text-strong">Payer: {signupPatient.displayName}</p>
                     ) : (
@@ -1435,6 +1469,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {type === 'CASH' ? (
             <div className="space-y-1.5">
+              {lockNote}
               <Label htmlFor="tender-cash-received">Cash received</Label>
               <Input
                 id="tender-cash-received"
