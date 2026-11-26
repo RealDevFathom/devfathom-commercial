@@ -316,7 +316,7 @@ suite('PV security persistence and compatibility', () => {
   });
 
   it('requires PIN for solo readiness and commits a matching audit without changing external submission state', async () => {
-    await fixture(async ({ db, owner, branch, api }) => {
+    await fixture(async ({ db, org, owner, branch, api }) => {
       const report = await reviewable(db, branch, owner);
       const input = { id: report.id, branchId: branch, state: 'READY' as const };
       await expect(api(owner).transitionPharmacovigilanceReport(input)).resolves.toHaveProperty(
@@ -346,7 +346,11 @@ suite('PV security persistence and compatibility', () => {
           reauthenticatedAt: expect.any(String),
         },
       });
-      expectNoPersistedPin(audit, '1234');
+      expectNoPersistedPin(audit, '1234', {
+        organizationId: [org],
+        actorId: [owner],
+        branchId: [branch],
+      });
     });
   });
 

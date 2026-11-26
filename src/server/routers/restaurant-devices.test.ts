@@ -705,7 +705,11 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
         metadata: expect.objectContaining({ coAuthorizationId: result.coAuthorizationId }),
       })
     );
-    expectNoPersistedPin(mocks.annotateAudit.mock.calls, APPROVING_PIN);
+    expectNoPersistedPin(mocks.annotateAudit.mock.calls, APPROVING_PIN, {
+      id: [orgId],
+      organizationId: [orgId],
+      branchId: [branchId],
+    });
     expect(JSON.stringify(mocks.annotateAudit.mock.calls)).not.toContain(result.secret);
   });
 

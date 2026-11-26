@@ -726,7 +726,16 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         branchId: branchReview,
       }),
     });
-    expectNoPersistedPin(resolutions, managerPin);
+    expectNoPersistedPin(resolutions, managerPin, {
+      organizationId: [organizationId],
+      actorId: [actorId],
+      initiatedById: [actorId],
+      approverId: [actorId],
+      resolvedById: [actorId],
+      attemptKey: [review.attemptKey],
+      providerRef: [slipRef],
+      resolutionRef: [slipRef],
+    });
 
     // The sale may take another payment: a new terminal attempt starts, and is declined.
     const terminal = gatedTerminal();

@@ -327,6 +327,9 @@ describeIfDatabase('DEV-961 approvals in each mode of the authenticator setting'
     expect(methods).toContain('AUTHENTICATOR');
     const shape = (row: (typeof rows)[number]) => Object.keys(row.metadata as object).sort();
     for (const row of rows) expect(shape(row)).toEqual(shape(rows[0]!));
-    expectNoPersistedPin(rows, MANAGER_PIN);
+    expectNoPersistedPin(rows, MANAGER_PIN, {
+      approverId: [MANAGER],
+      requestedById: [MANAGER],
+    });
   });
 });

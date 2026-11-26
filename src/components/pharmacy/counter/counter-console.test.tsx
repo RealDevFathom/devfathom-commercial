@@ -4756,13 +4756,18 @@ describe('PharmacyCounterConsole barcode safety', () => {
           { id: 'staff-manager', name: self ? 'Owner' : 'Manager', self },
         ]);
         render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
-        scan(payload);
-        const dialog = await screen.findByRole('dialog', { name: 'Approve this scanned pack?' });
+        const search = screen.getByLabelText('Scan or search');
+        fireEvent.change(search, { target: { value: payload } });
+        // Flush the mocked authentication, lookup and refused add as one scan interaction.
+        await act(async () => {
+          fireEvent.keyDown(search, { key: 'Enter' });
+        });
+        const dialog = screen.getByRole('dialog', { name: 'Approve this scanned pack?' });
         expect(mocks.mutations.addLine).toHaveBeenCalledTimes(1);
         expect(mocks.scannedPackApprovers).toHaveBeenCalledWith({ branchId: 'branch-a' });
         const confirm = within(dialog).getByRole('button', { name: 'Approve pack' });
         expect(confirm).toBeDisabled();
-        await within(dialog).findByRole('option', { name: self ? 'Owner (you)' : 'Manager' });
+        within(dialog).getByRole('option', { name: self ? 'Owner (you)' : 'Manager' });
         fireEvent.change(within(dialog).getByLabelText('Approving manager or owner'), {
           target: { value: 'staff-manager' },
         });
@@ -4773,8 +4778,10 @@ describe('PharmacyCounterConsole barcode safety', () => {
         fireEvent.change(within(dialog).getByLabelText('Approver PIN'), {
           target: { value: '975310' },
         });
-        fireEvent.click(confirm);
-        await screen.findByText('1 × Paracetamol added.');
+        await act(async () => {
+          fireEvent.click(confirm);
+        });
+        expect(screen.getByText('1 × Paracetamol added.')).toBeInTheDocument();
         const [first, second] = mocks.mutations.addLine!.mock.calls.map(([input]) => input);
         expect(second).toEqual({
           ...first,
@@ -4782,8 +4789,9 @@ describe('PharmacyCounterConsole barcode safety', () => {
         });
         expect(second).toMatchObject({ saleId: 'sale-a', saleUnit: 'PACK', quantity: 1 });
         expect(mocks.mutations.addLine).toHaveBeenCalledTimes(2);
-        for (const value of Object.values(window.localStorage))
-          expect(value).not.toContain('975310');
+        const stored = Object.values(window.localStorage);
+        expect(stored.length).toBeGreaterThan(0);
+        for (const value of stored) expect(value).not.toContain('975310');
       }
     );
 
