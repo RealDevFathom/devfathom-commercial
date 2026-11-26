@@ -129,6 +129,11 @@ database('cash anomaly SQL reconciliation', () => {
         computedAt: now,
       });
     expect(detect(balanced)).toEqual([]);
+    await client.query('SAVEPOINT held_cash');
+    await client.query(`INSERT INTO pharmacy_drawer_movements VALUES ('org','drawer','REJECTED_OFFLINE_CASH',38000);
+      UPDATE pharmacy_daily_closes SET "cashExpectedMinor"="cashExpectedMinor"+38000`);
+    expect((await read()).facts.tenderMismatch).toEqual(balanced.facts.tenderMismatch);
+    await client.query('ROLLBACK TO SAVEPOINT held_cash');
     await client.query('UPDATE pharmacy_daily_closes SET "cashExpectedMinor"=1170000');
     expect(detect(await read())).toEqual([
       expect.objectContaining({
