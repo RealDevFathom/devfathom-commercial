@@ -40,8 +40,10 @@ function fixture(provisional: boolean | undefined, profileExists = true, branchP
     pharmacistCoverageRule: { provisional },
   };
   const db = {
+    user: { findUnique: vi.fn().mockResolvedValue(null) },
     pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]) },
     pharmacyBranch: {
+      findMany: vi.fn().mockResolvedValue([{ id: 'branch-1', name: 'Main' }]),
       findFirst: vi.fn().mockResolvedValue({ id: 'branch-1' }),
       findFirstOrThrow: vi.fn().mockResolvedValue({
         provinceCode: branchProvince,
@@ -60,7 +62,7 @@ function fixture(provisional: boolean | undefined, profileExists = true, branchP
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { db, caller: pharmacySafetyRouter.createCaller(ctx) };
+  return { db, ctx, caller: pharmacySafetyRouter.createCaller(ctx) };
 }
 
 it.each([true, false, undefined])(
@@ -127,5 +129,34 @@ it('refuses an unassigned branch before reading its regulatory status or registe
     code: 'FORBIDDEN',
   });
   expect(db.pharmacyBranch.findFirstOrThrow).not.toHaveBeenCalled();
+  expect(db.pharmacyControlledRegisterEntry.findMany).not.toHaveBeenCalled();
+});
+
+it('reads controlled registers only in admitted branches, with a tenant-wide view for the System Owner', async () => {
+  const { db, ctx, caller } = fixture(false);
+  ctx.session!.user.role = 'ADMIN';
+  db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+  const refusal = { code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' };
+  await expect(caller.controlledRegister({ branchId: 'branch-1' })).rejects.toMatchObject(refusal);
+  expect(db.pharmacyControlledRegisterEntry.findMany).not.toHaveBeenCalled();
+  await expect(caller.branches()).resolves.toEqual([]);
+  db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch-1' }]);
+  await expect(caller.controlledRegister({ branchId: 'branch-1' })).resolves.toMatchObject({
+    entries: [],
+  });
+  db.pharmacyBranchAssignment.findMany.mockResolvedValue([]);
+  db.user.findUnique.mockResolvedValue({
+    role: 'ADMIN',
+    status: 'ACTIVE',
+    organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+    permissionOverrides: [],
+  });
+  await expect(caller.branches()).resolves.toEqual([{ id: 'branch-1', name: 'Main' }]);
+  await expect(caller.controlledRegister({ branchId: 'branch-1' })).resolves.toMatchObject({
+    entries: [],
+  });
+  db.pharmacyBranch.findFirst.mockResolvedValue(null);
+  db.pharmacyControlledRegisterEntry.findMany.mockClear();
+  await expect(caller.controlledRegister({ branchId: 'foreign' })).rejects.toMatchObject(refusal);
   expect(db.pharmacyControlledRegisterEntry.findMany).not.toHaveBeenCalled();
 });

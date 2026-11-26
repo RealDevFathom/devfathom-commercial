@@ -1,4 +1,5 @@
 import { can, subjectFromSession } from '@/lib/abac';
+import { isClinicalOwner } from '@/lib/pharmacy/clinical-branch-access';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { annotateAudit } from '@/server/audit';
@@ -27,12 +28,20 @@ import {
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { protectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
-async function organizationBranch(ctx: TRPCContext, branchId: string) {
+async function registerReadScope(ctx: TRPCContext, organizationId: string, userId: string) {
+  // Support register views keep the assignment rule they already use.
+  if (!ctx.support && (await isClinicalOwner(ctx.db, organizationId, userId))) return null;
+  return assignedRegisterBranchIds(ctx.db, organizationId, userId);
+}
+
+async function organizationBranch(ctx: TRPCContext, branchId: string, registerView = false) {
   const organizationId = ctx.entitlements?.organizationId;
   const userId = ctx.session?.user?.id;
   if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, userId);
-  if (!assigned.includes(branchId)) {
+  const assigned = registerView
+    ? await registerReadScope(ctx, organizationId, userId)
+    : await assignedRegisterBranchIds(ctx.db, organizationId, userId);
+  if (assigned && !assigned.includes(branchId)) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
   }
   const branch = await ctx.db.pharmacyBranch.findFirst({
@@ -76,10 +85,10 @@ export const pharmacySafetyRouter = router({
     const organizationId = ctx.entitlements?.organizationId;
     const userId = ctx.session?.user?.id;
     if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, userId);
-    if (assigned.length === 0) return [];
+    const assigned = await registerReadScope(ctx, organizationId, userId);
+    if (assigned?.length === 0) return [];
     return ctx.db.pharmacyBranch.findMany({
-      where: { organizationId, active: true, id: { in: assigned } },
+      where: { organizationId, active: true, ...(assigned ? { id: { in: assigned } } : {}) },
       select: { id: true, name: true },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
     });
@@ -87,7 +96,7 @@ export const pharmacySafetyRouter = router({
   controlledRegister: safety
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const organizationId = await organizationBranch(ctx, input.branchId);
+      const organizationId = await organizationBranch(ctx, input.branchId, true);
       const now = new Date();
       const branch = await ctx.db.pharmacyBranch.findFirstOrThrow({
         where: { id: input.branchId, organizationId, active: true },

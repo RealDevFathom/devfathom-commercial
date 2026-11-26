@@ -2057,7 +2057,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySafety.branches': {
-    gate: "capabilityProcedure('pharmacy:safety'); their assigned register branches",
+    gate: "capabilityProcedure('pharmacy:safety'); active register branches admitted to the reader, all active tenant branches for the System Owner; platform support retains its assigned register branches",
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySafety.controlledPharmacists': {
@@ -2068,7 +2068,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySafety.controlledRegister': {
-    gate: "capabilityProcedure('pharmacy:safety') + branch scope (organizationBranch)",
+    gate: "capabilityProcedure('pharmacy:safety') + register view branch scope (organizationBranch); System Owner can view all tenant branches, support requires assignment",
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySafety.createInspectionPack': {
