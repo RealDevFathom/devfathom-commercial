@@ -11,6 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   messageFindUnique: vi.fn(),
+  messageCreate: vi.fn(),
   messageUpdate: vi.fn(),
   memberFindUnique: vi.fn(),
   memberFindMany: vi.fn(),
@@ -53,7 +54,11 @@ import { chatRouter } from './chat';
 import type { TRPCContext } from '../trpc';
 
 const db = {
-  message: { findUnique: mocks.messageFindUnique, update: mocks.messageUpdate },
+  message: {
+    findUnique: mocks.messageFindUnique,
+    update: mocks.messageUpdate,
+    create: mocks.messageCreate,
+  },
   channelMember: { findUnique: mocks.memberFindUnique, findMany: mocks.memberFindMany },
   messageMention: { findMany: mocks.mentionFindMany, deleteMany: mocks.mentionDeleteMany },
   messageEdit: { create: mocks.editCreate },
@@ -194,5 +199,23 @@ describe('DEV-1055: chat edit and delete require current channel membership', ()
     await expect(
       caller(author).editMessage({ messageId: 'msg_1', content: 'x'.repeat(8000) })
     ).resolves.toBeDefined();
+  });
+
+  it('caps text derived from rich content at 8000 characters on send too', async () => {
+    const rich = (length: number) => ({
+      type: 'doc',
+      content: [{ type: 'paragraph', content: [{ type: 'text', text: 'x'.repeat(length) }] }],
+    });
+
+    await expect(
+      caller(author).sendMessage({ channelId: 'chan_1', contentJson: rich(8001) })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'A message can be at most 8000 characters.',
+    });
+    await expect(
+      caller(author).sendMessage({ channelId: 'chan_1', content: 'x'.repeat(8001) })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.messageCreate).not.toHaveBeenCalled();
   });
 });

@@ -51,6 +51,20 @@ async function canManageChannel(
 /** The longest plain-text message body, on send and on edit. */
 const MAX_MESSAGE_LENGTH = 8000;
 
+/**
+ * The schema caps `content`, but with rich content the text is derived on the
+ * server from `contentJson`, which the schema cannot measure. Cap that too, on
+ * send and on edit alike (DEV-1055).
+ */
+function assertMessageLength(content: string): void {
+  if (content.length > MAX_MESSAGE_LENGTH) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `A message can be at most ${MAX_MESSAGE_LENGTH} characters.`,
+    });
+  }
+}
+
 const attachmentInput = z.object({
   name: z.string(),
   url: z.string(),
@@ -276,6 +290,7 @@ export const chatRouter = router({
       }
       // Authoritative server-side derivation — never trust client content/mentions.
       const content = input.contentJson ? tiptapToPlainText(input.contentJson) : input.content;
+      assertMessageLength(content);
       const rawMentions = input.contentJson
         ? extractMentionIds(input.contentJson)
         : (input.mentionIds ?? []);
@@ -394,13 +409,7 @@ export const chatRouter = router({
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Cannot edit a deleted message' });
 
       const content = input.contentJson ? tiptapToPlainText(input.contentJson) : input.content;
-      // The rich-text path derives its text on the server, so cap that too.
-      if (content.length > MAX_MESSAGE_LENGTH) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `A message can be at most ${MAX_MESSAGE_LENGTH} characters.`,
-        });
-      }
+      assertMessageLength(content);
       const rawMentions = input.contentJson
         ? extractMentionIds(input.contentJson)
         : (input.mentionIds ?? []);
