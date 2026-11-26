@@ -1,4 +1,4 @@
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -104,6 +104,31 @@ describe('repeat purchasing page', () => {
     expect(screen.getByLabelText('As-of cutoff (PKT)')).toHaveValue('2026-05-01T09:30');
     expect(screen.getByText(/Frozen cutoff: 1 May 2026, 9:30 AM PKT\./)).toBeInTheDocument();
     expect(screen.getByText(/2 Jan 2026, 12:30 AM PKT/)).toBeInTheDocument();
+  });
+  it.each([
+    ['2026-10-25T00:30:00Z', '2026-10-25T01:30', '2026-10-25T00:30:00Z'],
+    ['2026-10-25T01:30:42.123Z', '2026-10-25T01:30', '2026-10-25T01:30:42.123Z'],
+    ['2026-10-25T02:30:00Z', '2026-10-25T02:30', '2026-10-25T00:30:00Z'],
+  ])('resubmits a London cutoff of %s displayed as %s', async (original, displayed, expected) => {
+    ctx.organization.timezone = 'Europe/London';
+    const from = '2026-08-01';
+    const to = '2026-08-31';
+    render(await Page({ searchParams: Promise.resolve({ from, to, asOf: original }) }));
+    const cutoff = screen.getByLabelText<HTMLInputElement>('As-of cutoff (Europe/London)');
+    expect(cutoff).toHaveValue(displayed);
+    const form = cutoff.form!;
+    const picked = '2026-10-25T01:30';
+    if (displayed !== picked) fireEvent.change(cutoff, { target: { value: picked } });
+    const submitted = new FormData(form);
+    expect(submitted.get('asOf')).toBe(picked);
+    const query: Record<string, string> = {};
+    submitted.forEach((value, key) => {
+      if (typeof value === 'string') query[key] = value;
+    });
+    cleanup();
+    mocks.repeatPurchasing.mockClear();
+    render(await Page({ searchParams: Promise.resolve(query) }));
+    expect(mocks.repeatPurchasing).toHaveBeenCalledExactlyOnceWith({ from, to, asOf: expected });
   });
   it('shows loaded eligible, repeated and immature counts', async () => {
     mocks.repeatPurchasing.mockResolvedValue({

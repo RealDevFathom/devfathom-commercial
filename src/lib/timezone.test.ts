@@ -6,6 +6,8 @@ import {
   ianaTimezone,
   isIanaTimezone,
   workspaceDateRange,
+  workspaceInstantFromInput,
+  workspaceMinuteInput,
   workspaceTimezone,
   workspaceToday,
   workspaceZoneLabel,
@@ -127,6 +129,39 @@ describe('workspace picker instants', () => {
     );
     expect(workspaceInstantFromInput('2026-05-01T09:30:00Z', 'Asia/Karachi')).toBe(
       '2026-05-01T09:30:00Z'
+    );
+  });
+
+  it('chooses the earlier instant for a fresh London fall-back minute', () => {
+    const zone = 'Europe/London';
+    const original = '2026-10-25T00:30:00Z';
+    const displayed = workspaceMinuteInput(original, zone);
+    expect(displayed).toBe('2026-10-25T01:30');
+    expect(workspaceInstantFromInput(displayed, zone)).toBe(original);
+  });
+
+  it.each(['2026-10-25T00:30:00Z', '2026-10-25T01:30:42.123Z'])(
+    'keeps the exact stored London instant %s if its picker value is unchanged',
+    (original) => {
+      const zone = 'Europe/London';
+      const displayed = workspaceMinuteInput(original, zone);
+      expect(displayed).toBe('2026-10-25T01:30');
+      expect(workspaceInstantFromInput(displayed, zone, original)).toBe(original);
+      expect(workspaceInstantFromInput('2026-10-25T01:31', zone, original)).toBe(
+        '2026-10-25T00:31:00Z'
+      );
+    }
+  );
+
+  it('keeps Karachi conversions the same with or without the original instant', () => {
+    const zone = 'Asia/Karachi';
+    const original = '2026-10-24T20:30:00Z';
+    const displayed = workspaceMinuteInput(original, zone);
+    expect(displayed).toBe('2026-10-25T01:30');
+    expect(workspaceInstantFromInput(displayed, zone)).toBe(original);
+    expect(workspaceInstantFromInput(displayed, zone, original)).toBe(original);
+    expect(workspaceInstantFromInput('2026-10-25T01:31', zone, original)).toBe(
+      '2026-10-24T20:31:00Z'
     );
   });
 });
