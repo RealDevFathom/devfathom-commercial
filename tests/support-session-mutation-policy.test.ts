@@ -10,6 +10,9 @@
  *    rule's meta, a "may" mutation does not, and every procedure runs the rule.
  * 3. Calling a "may not" mutation as a support session is refused with the plain message
  *    before anything else runs, and the refusal is audited with the operator's identity.
+ * 4. Queries are open to a support session except the ones listed as refused (a member's
+ *    mailbox). A query under the rule that is not listed, or listed and not under the rule,
+ *    fails here, and each listed query is called and refused like a mutation.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -19,6 +22,7 @@ import {
   SUPPORT_MAY,
   SUPPORT_MAY_NOT,
   SUPPORT_MAY_NOT_BY_ROUTER,
+  SUPPORT_MAY_NOT_QUERIES,
   SUPPORT_MAY_NOTES,
 } from './fixtures/support-session-mutation-policy';
 
@@ -106,6 +110,9 @@ const MESSAGE =
 
 const mayNot = SUPPORT_MAY_NOT.flatMap((group) => group.mutations);
 const mayNotByRouter = SUPPORT_MAY_NOT_BY_ROUTER.flatMap((group) => group.mutations);
+const mayNotQueries = SUPPORT_MAY_NOT_QUERIES.flatMap((group) => group.queries);
+/** Everything the central rule refuses: mutations and queries. */
+const refused = [...mayNot, ...mayNotQueries];
 const may = Object.entries(SUPPORT_MAY).flatMap(([namespace, names]) =>
   names.split(' ').map((name) => `${namespace}.${name}`)
 );
@@ -246,13 +253,30 @@ describe('DEV-1053 every mutation has a support-session decision', () => {
     expect(without).toEqual([]);
   });
 
-  it('enforces exactly the classification', () => {
-    const enforced = [...procedures]
-      .filter(([, entry]) => procedureRefusesSupportSession(entry.procedure))
-      .map(([name]) => name)
-      .sort();
-    // Queries are not under the rule today; one that is must be decided here too.
-    expect(enforced).toEqual([...mayNot].sort());
+  it('enforces exactly the classification, refused queries included', () => {
+    const enforced = [...procedures].filter(([, entry]) =>
+      procedureRefusesSupportSession(entry.procedure)
+    );
+    const ofType = (type: 'query' | 'mutation') =>
+      enforced
+        .filter(([, entry]) => entry.procedure._def.type === type)
+        .map(([name]) => name)
+        .sort();
+    // Every procedure under the rule is a mutation or a query, and each is decided by name.
+    expect(ofType('mutation')).toEqual([...mayNot].sort());
+    expect(ofType('query')).toEqual([...mayNotQueries].sort());
+    expect(enforced.map(([name]) => name).sort()).toEqual([...refused].sort());
+  });
+
+  it('classifies each refused query once, and only real queries', () => {
+    expect(mayNotQueries.length).toBeGreaterThan(0);
+    expect(new Set(mayNotQueries).size).toBe(mayNotQueries.length);
+    for (const name of mayNotQueries) {
+      expect(procedures.get(name)?.procedure._def.type, name).toBe('query');
+    }
+    // The mailbox is refused whole: every email procedure except the provider list.
+    const email = [...procedures.keys()].filter((name) => name.startsWith('email.'));
+    expect(email.filter((name) => !refused.includes(name))).toEqual(['email.providers']);
   });
 
   it('covers every router file: mounted in the app router or listed as standalone', () => {
@@ -276,17 +300,18 @@ describe('DEV-1053 every mutation has a support-session decision', () => {
   });
 });
 
-describe('DEV-1053 a refused mutation, called as a support session', () => {
+describe('DEV-1053 a refused mutation or query, called as a support session', () => {
   it.each(['support', 'session-flag'] as const)(
     'is refused with the plain message and audited with the operator (%s)',
     async (kind) => {
-      for (const name of mayNot) {
+      for (const name of refused) {
         audited.calls.length = 0;
         const result = await call(name, kind);
         expect(result, name).toEqual({ code: 'FORBIDDEN', message: MESSAGE });
         expect(audited.calls, name).toHaveLength(1);
         const entry = audited.calls[0] as {
           path: string;
+          type: string;
           outcome: string;
           input: unknown;
           error: { code: string };
@@ -296,6 +321,7 @@ describe('DEV-1053 a refused mutation, called as a support session', () => {
           };
         };
         expect(entry.path, name).toBe(procedures.get(name)!.local);
+        expect(entry.type, name).toBe(procedures.get(name)!.procedure._def.type);
         expect(entry.outcome, name).toBe('FAILURE');
         expect(entry.error.code, name).toBe('FORBIDDEN');
         expect(entry.input, name).toBeUndefined();
@@ -314,7 +340,7 @@ describe('DEV-1053 a refused mutation, called as a support session', () => {
   );
 
   it('is not refused by the rule for the member themselves', async () => {
-    for (const name of mayNot) {
+    for (const name of refused) {
       const result = await call(name, 'member');
       expect(result.message, name).not.toBe(MESSAGE);
     }

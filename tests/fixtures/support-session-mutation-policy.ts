@@ -9,7 +9,10 @@
  * it would outlive the support session. Those procedures carry `.meta(refuseSupportSession)`
  * and the central rule in `src/server/trpc.ts` refuses them.
  *
- * May: reading, and fixing the data a ticket is about.
+ * May: reading, and fixing the data a ticket is about. The one read a support session may
+ * not do is a member's connected mailbox: those queries are listed in
+ * `SUPPORT_MAY_NOT_QUERIES`, and the test fails when a query is under the rule without being
+ * listed there, or listed without being under the rule.
  */
 
 /** Refused by the central rule. Keys are paths; `standalone:` marks a router outside `appRouter`. */
@@ -55,8 +58,11 @@ export const SUPPORT_MAY_NOT: ReadonlyArray<{ reason: string; mutations: readonl
     ],
   },
   {
-    reason: 'Passwords and signed-in sessions.',
+    reason:
+      'Passwords and signed-in sessions. Starting or completing a password reset is public, and is refused when the request carries a support session: the reset link goes to the member\u2019s mailbox, and a session acting as that member could otherwise use it to set a password it knows.',
     mutations: [
+      'passwordReset.request',
+      'passwordReset.reset',
       'organizationAdmin.resetMemberPassword',
       'team.adminResetPassword',
       'team.changePassword',
@@ -112,6 +118,11 @@ export const SUPPORT_MAY_NOT: ReadonlyArray<{ reason: string; mutations: readonl
     ],
   },
   {
+    reason:
+      'A member\u2019s connected mailbox: syncing it, sending from it, or changing what the member has read. The mailbox receives the member\u2019s sign-in mail, so a support session never touches it.',
+    mutations: ['email.refresh', 'email.sendMessage', 'email.markRead'],
+  },
+  {
     reason: 'Device enrolment and device credentials.',
     mutations: [
       'restaurantDevices.initiateEnrollment',
@@ -146,6 +157,21 @@ export const SUPPORT_MAY_NOT: ReadonlyArray<{ reason: string; mutations: readonl
 ];
 
 /**
+ * Queries refused by the central rule. Reading is otherwise open to a support session; a
+ * query is listed here only when the read itself would hand over lasting access.
+ */
+export const SUPPORT_MAY_NOT_QUERIES: ReadonlyArray<{
+  reason: string;
+  queries: readonly string[];
+}> = [
+  {
+    reason:
+      'A member\u2019s connected mailbox. It receives password reset links and invitations, so reading it is a way to take the account over. A support session cannot list the mailboxes, list the messages or open one.',
+    queries: ['email.listMailboxes', 'email.listMessages', 'email.getMessage'],
+  },
+];
+
+/**
  * Refused for every support session by the router's own rule, which predates the central one
  * and is kept exactly as it was, with its own wording.
  */
@@ -175,9 +201,11 @@ export const SUPPORT_MAY_NOT_BY_ROUTER: ReadonlyArray<{
   },
   {
     reason:
-      'Owner-only control settings (who must approve, how much discount, cash mode): each resolver refuses a support session with its own owner-only message.',
+      'Owner-only control settings (who must approve, how much discount, cash mode, other-branch availability, offline cash selling): each resolver refuses a support session with its own owner-only message.',
     mutations: [
       'pharmacyBranchAssignments.setCashMode',
+      'pharmacyBranchAssignments.setOtherBranchAvailability',
+      'pharmacyOffline.setOfflineCashSelling',
       'pharmacyPharmacistCheck.setPolicy',
       'pharmacyRxSoloShift.setPolicy',
       'pharmacySupplierCompliance.setPolicy',
@@ -199,7 +227,6 @@ export const SUPPORT_MAY: Readonly<Record<string, string>> = {
   clients:
     'addContact addContract create delete deleteContact deleteContract generateInvoiceFromContract setContractStatus sweepExpiredContracts update updateContact updateContract',
   dashboard: 'updateAppearance updatePreferences',
-  email: 'markRead refresh sendMessage',
   finance:
     'addPayment createInvoice createRecurringExpense createTransaction deletePayment deleteRecurringExpense deleteTransaction markOverdueInvoices postDueRecurringExpenses sendInvoiceEmail updateInvoice updateInvoiceStatus updateTransaction',
   'hotelProperty.extras': 'create setActive update',
@@ -219,10 +246,8 @@ export const SUPPORT_MAY: Readonly<Record<string, string>> = {
   notes: 'create delete restoreRevision setShares update',
   organizationAdmin:
     'removeDepartment retryDomain setAskFathomEnabled setDeepStrategyEnabled updateBrand updateProfile upsertDepartment',
-  passwordReset: 'request reset',
   pharmacyApInvoices:
     'approveCreditSetOff pay record rejectCreditSetOff requestCreditSetOff reverseCreditSetOff reverseInvoice reverseSettlement',
-  pharmacyBranchAssignments: 'setOtherBranchAvailability',
   pharmacyCameras: 'capturePending setRetention testConnection',
   pharmacyCardTerminal: 'charge checkStatus recordRefundAction resolveReview',
   pharmacyDispensing: 'decideReview enqueueReview recordSubstitution selfSignReview',
@@ -236,7 +261,7 @@ export const SUPPORT_MAY: Readonly<Record<string, string>> = {
     'approve approveTemplate assist attributeReceipts capture createDraft generateBaskets generateGrowth issueVoucher profileHealth resumeSending reviewBasket reviewGrowth reviewReply revokeVoucher sandbox sandboxDue updateSendPolicy',
   pharmacyMedicine:
     'addAlias addBarcode addMedicineDraft configureReferenceConnector confirmPrices createIngredient createMedicine createPackLevel createStagedMedicines decideCatalogueEdit decideReferenceConnectorProposal dismissDrapPriceAlert ingestPriceNotices proposeCatalogueEdit publishAssertions recordPrintedMrp recordReviewDecision revisePackLevel runReferenceConnectorNow runStagedMedicineCreation setPackBarcode setPackPrice setRetailDetails supersedePublication',
-  pharmacyOffline: 'recordUnsentOfflineSale setOfflineCashSelling',
+  pharmacyOffline: 'recordUnsentOfflineSale',
   pharmacyOnboarding:
     'recordFbrTier1Check recordGate savePharmacistCoverage saveRegulatoryProfile setBranchProvince',
   pharmacyOrdering:
@@ -310,12 +335,12 @@ export const SUPPORT_MAY: Readonly<Record<string, string>> = {
 
 /** Why the close calls are on the "may" side. */
 export const SUPPORT_MAY_NOTES: Readonly<Record<string, string>> = {
-  'passwordReset.request':
-    'Public. Sends the reset link to the member\u2019s own mailbox; the session plays no part.',
-  'passwordReset.reset':
-    'Public. Needs the one-time link from the member\u2019s own mailbox; the session plays no part.',
   'invitations.accept':
-    'Public. Needs the one-time invitation link from the invited person\u2019s mailbox.',
+    'Public. Needs the one-time invitation link from the invited person\u2019s mailbox, which a support session cannot read; inviting is refused too.',
+  'team.markNotificationRead':
+    'An ordinary notice. The "support access started" notice is refused in the resolver for a support session.',
+  'team.markAllNotificationsRead':
+    'Ordinary notices. A support session leaves every "support access started" notice unread.',
   'pharmacySupplierLinks.submit':
     'Public. An outside supplier answering a signed one-time link; issuing the link is refused.',
   'projects.addMember': 'Shares one project among existing members. No new person or permission.',

@@ -71,6 +71,7 @@ vi.mock('@/server/audit', () => ({
   recordAudit: mocks.recordAudit,
 }));
 
+import { SUPPORT_SESSION_REFUSED_MESSAGE } from '@/lib/tenancy/support-session-rule';
 import { POST } from './route';
 
 const rawSecret = `rdk_${'a'.repeat(43)}`;
@@ -176,7 +177,7 @@ describe('POST browser enrollment', () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: 'Support sessions cannot enroll restaurant terminals.',
+      error: SUPPORT_SESSION_REFUSED_MESSAGE,
     });
     expect(mocks.can).not.toHaveBeenCalled();
     expect(mocks.enrollDevice).not.toHaveBeenCalled();

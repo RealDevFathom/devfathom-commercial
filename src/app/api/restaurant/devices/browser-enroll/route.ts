@@ -18,7 +18,10 @@ import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { isSupportSessionActor } from '@/lib/tenancy/support-session-rule';
+import {
+  isSupportSessionActor,
+  SUPPORT_SESSION_REFUSED_MESSAGE,
+} from '@/lib/tenancy/support-session-rule';
 import { ipFromHeaders, recordAudit } from '@/server/audit';
 import { recordSupportSessionRefusal } from '@/server/support-session-refusal';
 
@@ -73,7 +76,7 @@ export async function POST(request: Request) {
       action: 'restaurant.devices.browserEnroll',
       request,
     });
-    return reject('Support sessions cannot enroll restaurant terminals.', 403);
+    return reject(SUPPORT_SESSION_REFUSED_MESSAGE, 403);
   }
   if (actor.organization.isDemo) {
     return reject('Not available in demo.', 403);

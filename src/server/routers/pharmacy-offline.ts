@@ -290,8 +290,12 @@ export const pharmacyOfflineRouter = router({
    */
   setOfflineCashSelling: adminProcedure
     .input(branchInput.extend({ enabled: z.boolean() }))
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
+    .mutation(({ ctx, input }) => {
+      // DEV-1053: owner only means the owner's own session. A support session acting as the
+      // owner is refused before anything is read or written, as `setCashMode` refuses it.
+      if (ctx.support || ctx.session.user.isSupportSession)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Only the owner can change this.' });
+      return ctx.db.$transaction(async (tx) => {
         const db = tx as ScopedDb;
         const organizationId = ctx.entitlements.organizationId;
         await managedBranch(db, ctx.session.user, organizationId, input.branchId);
@@ -314,8 +318,8 @@ export const pharmacyOfflineRouter = router({
             });
           throw error;
         }
-      })
-    ),
+      });
+    }),
   /**
    * DEV-957 phase 2 (review B2): a manager records what was done with one offline sale a
    * revoked (or removed) counter kept and never sent. The sale itself stays on that

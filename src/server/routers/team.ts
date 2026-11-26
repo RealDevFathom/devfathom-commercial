@@ -10,7 +10,12 @@ import {
   capabilityProcedure,
   assertModuleLicensed,
 } from '../trpc';
-import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
+import {
+  isSupportSessionActor,
+  refuseSupportSession,
+  SUPPORT_NOTICE_REFUSED_MESSAGE,
+  SUPPORT_SESSION_STARTED_NOTIFICATION_TYPE,
+} from '@/lib/tenancy/support-session-rule';
 import { can, subjectFromSession } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
 import { annotateAudit, diffChanges } from '../audit';
@@ -850,6 +855,17 @@ export const teamRouter = router({
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await assertNotificationOwner(ctx, input.id);
+      // DEV-1053: the "support access started" notice is the owner's record that an operator
+      // was inside the business. The support session it announces may not clear it.
+      if (isSupportSessionActor(ctx)) {
+        const notice = await ctx.db.notification.findUnique({
+          where: { id: input.id },
+          select: { type: true },
+        });
+        if (notice?.type === SUPPORT_SESSION_STARTED_NOTIFICATION_TYPE) {
+          throw new TRPCError({ code: 'FORBIDDEN', message: SUPPORT_NOTICE_REFUSED_MESSAGE });
+        }
+      }
       return ctx.db.notification.update({
         where: { id: input.id },
         data: { isRead: true },
@@ -858,7 +874,14 @@ export const teamRouter = router({
 
   markAllNotificationsRead: protectedProcedure.mutation(async ({ ctx }) => {
     await ctx.db.notification.updateMany({
-      where: { userId: ctx.session.user.id, isRead: false },
+      where: {
+        userId: ctx.session.user.id,
+        isRead: false,
+        // DEV-1053: a support session leaves every "support access started" notice unread.
+        ...(isSupportSessionActor(ctx)
+          ? { type: { not: SUPPORT_SESSION_STARTED_NOTIFICATION_TYPE } }
+          : {}),
+      },
       data: { isRead: true },
     });
     return { success: true };

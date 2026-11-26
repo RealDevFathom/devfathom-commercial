@@ -10,6 +10,10 @@
  * written; each refusal is a real audit row naming the platform operator. The owner's own
  * session does the same things, and the support session still reads and fixes ordinary data.
  *
+ * It is also refused the owner's connected mailbox (listing, reading, syncing, sending) and
+ * both halves of the public password reset, so it cannot ask for a reset link, read it out
+ * of the mailbox and set a password it knows. The owner and an anonymous visitor still can.
+ *
  * Nothing that decides is mocked: real routers, real ABAC, the real audit writer. Email and
  * notifications are stubbed (side effects), and every module is licensed.
  *
@@ -20,7 +24,14 @@ import { compare, hash } from 'bcryptjs';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+const mail = vi.hoisted(() => ({ send: vi.fn(), sync: vi.fn() }));
+
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+// The mail provider is the outside world: sending and syncing are captured, never performed.
+vi.mock('@/lib/email/adapter', () => ({
+  adapterForMailbox: () => ({ sendMessage: mail.send, getMessage: vi.fn(async () => null) }),
+}));
+vi.mock('@/lib/email/sync', () => ({ syncMailbox: mail.sync }));
 vi.mock('@/lib/email', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/email')>()),
   appUrl: () => 'https://test.invalid',
@@ -32,12 +43,15 @@ vi.mock('@/lib/entitlements', async (importOriginal) => ({
   hasModule: () => true,
 }));
 
+import { hashInviteToken } from '@/lib/invite-token';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { SUPPORT_SESSION_REFUSED_MESSAGE } from '@/lib/tenancy/support-session-rule';
 import { flushAuditWritesForTest } from '@/server/audit';
 import { router, type TRPCContext } from '@/server/trpc';
 import { apiTokensRouter } from '@/server/routers/api-tokens';
+import { emailRouter } from '@/server/routers/email';
 import { organizationAdminRouter } from '@/server/routers/organization-admin';
+import { passwordResetRouter } from '@/server/routers/password-reset';
 import { teamRouter } from '@/server/routers/team';
 
 const databaseUrl = process.env.TEST_DATABASE_URL ?? '';
@@ -54,7 +68,9 @@ const describeIfDatabase = databaseUrl ? describe : describe.skip;
 
 const app = router({
   apiTokens: apiTokensRouter,
+  email: emailRouter,
   organizationAdmin: organizationAdminRouter,
+  passwordReset: passwordResetRouter,
   team: teamRouter,
 });
 
@@ -68,11 +84,31 @@ const OPERATOR = `platform_operator_${suffix}`;
 const ORIGINAL_PASSWORD = 'Member-original-passphrase-1';
 const OPERATOR_PASSWORD = 'Operator-chosen-passphrase-1';
 const REFUSED = { code: 'FORBIDDEN', message: SUPPORT_SESSION_REFUSED_MESSAGE };
+const MAILBOX = `${organizationId}_mailbox`;
+const RESET_MAIL = `${organizationId}_reset_mail`;
+/** Synthetic one-time links. Only their hashes are stored. */
+const SUPPORT_RESET_LINK = `support-${randomBytes(24).toString('hex')}`;
+const VISITOR_RESET_LINK = `visitor-${randomBytes(24).toString('hex')}`;
+const VISITOR_PASSWORD = 'Visitor-chosen-passphrase-1';
 
 let client: pg.Client;
 
-function context(db: ScopedDb, actor: 'support' | 'owner'): TRPCContext {
+type Actor = 'support' | 'owner' | 'visitor';
+
+function context(db: ScopedDb, actor: Actor): TRPCContext {
   const support = actor === 'support';
+  // A visitor has no session at all: the public reset pages before sign-in.
+  if (actor === 'visitor') {
+    return {
+      db,
+      entitlements: { organizationId, enabledModules: [], modules: [], limits: {} },
+      session: null,
+      organization: { id: organizationId, isDemo: false },
+      support: null,
+      requestMeta: { ip: '203.0.113.10', userAgent: 'vitest' },
+      audit: { detail: {} },
+    } as unknown as TRPCContext;
+  }
   return {
     db,
     entitlements: {
@@ -116,10 +152,8 @@ function context(db: ScopedDb, actor: 'support' | 'owner'): TRPCContext {
 }
 
 /** One request: its own tenant transaction, as the tRPC route runs it. */
-const as = <T>(
-  actor: 'support' | 'owner',
-  run: (caller: ReturnType<typeof app.createCaller>) => Promise<T>
-) => withTenantDb(organizationId, (db) => run(app.createCaller(context(db, actor))));
+const as = <T>(actor: Actor, run: (caller: ReturnType<typeof app.createCaller>) => Promise<T>) =>
+  withTenantDb(organizationId, (db) => run(app.createCaller(context(db, actor))));
 
 async function count(table: string): Promise<number> {
   const result = await client.query(
@@ -219,7 +253,13 @@ describeIfDatabase('DEV-1053 a support session cannot create lasting access (Pos
     // Audit rows are retention-locked by the database, so the organization that holds them
     // stays behind in the disposable test database; the credentials are removed.
     try {
-      for (const table of ['organization_scim_tokens', 'api_tokens']) {
+      for (const table of [
+        'organization_scim_tokens',
+        'api_tokens',
+        'password_reset_tokens',
+        'mailboxes',
+        'platform_jobs',
+      ]) {
         await client.query(`DELETE FROM ${table} WHERE "organizationId" = $1`, [organizationId]);
       }
     } finally {
@@ -288,6 +328,160 @@ describeIfDatabase('DEV-1053 a support session cannot create lasting access (Pos
     );
     expect(await count('api_tokens')).toBe(0);
     expect(await count('organization_scim_tokens')).toBe(0);
+  });
+
+  describe('the owner\u2019s mailbox and the password reset', () => {
+    const resetJobs = async () =>
+      (
+        await client.query(
+          `SELECT count(*)::int AS n FROM platform_jobs
+            WHERE type = 'password.reset.request.v1' AND "organizationId" = $1`,
+          [organizationId]
+        )
+      ).rows[0].n as number;
+    const ownerPassword = async () =>
+      (await client.query('SELECT password FROM users WHERE id = $1', [OWNER])).rows[0]
+        .password as string;
+
+    beforeAll(async () => {
+      // The owner connected the mailbox their sign-in mail arrives in, and a reset link is
+      // already sitting in it.
+      await client.query(
+        `INSERT INTO mailboxes (id, "organizationId", "userId", type, "emailAddress",
+           credentials, status, "updatedAt")
+         VALUES ($1, $2, $3, 'GMAIL', 'owner@test.invalid', 'synthetic-ciphertext', 'active', now())`,
+        [MAILBOX, organizationId, OWNER]
+      );
+      await client.query(
+        `INSERT INTO email_messages (id, "organizationId", "mailboxId", "providerMessageId",
+           "fromAddr", "toAddrs", subject, snippet, "bodyText", "sentAt")
+         VALUES ($1, $2, $3, 'provider-1', 'no-reply@test.invalid', '["owner@test.invalid"]',
+           'Reset your password', 'Use this link', $4, now())`,
+        [
+          RESET_MAIL,
+          organizationId,
+          MAILBOX,
+          `https://test.invalid/reset?token=${SUPPORT_RESET_LINK}`,
+        ]
+      );
+      for (const [id, link] of [
+        ['support', SUPPORT_RESET_LINK],
+        ['visitor', VISITOR_RESET_LINK],
+      ]) {
+        await client.query(
+          `INSERT INTO password_reset_tokens (id, "organizationId", "userId", "tokenHash", "expiresAt")
+           VALUES ($1, $2, $3, $4, now() + interval '1 hour')`,
+          [`${organizationId}_reset_${id}`, organizationId, OWNER, hashInviteToken(link)]
+        );
+      }
+    });
+
+    it('refuses the support session every read of the mailbox', async () => {
+      await expectRefusedAndAudited('email.listMailboxes', () =>
+        as('support', (caller) => caller.email.listMailboxes())
+      );
+      await expectRefusedAndAudited('email.listMessages', () =>
+        as('support', (caller) => caller.email.listMessages({ mailboxId: MAILBOX }))
+      );
+      await expectRefusedAndAudited('email.getMessage', () =>
+        as('support', (caller) => caller.email.getMessage({ id: RESET_MAIL }))
+      );
+    });
+
+    it('refuses the support session syncing, sending and marking mail read', async () => {
+      await expectRefusedAndAudited('email.refresh', () =>
+        as('support', (caller) => caller.email.refresh({ mailboxId: MAILBOX }))
+      );
+      await expectRefusedAndAudited('email.sendMessage', () =>
+        as('support', (caller) =>
+          caller.email.sendMessage({
+            mailboxId: MAILBOX,
+            to: ['operator@test.invalid'],
+            subject: 'Forwarded',
+            html: '<p>reset link</p>',
+          })
+        )
+      );
+      await expectRefusedAndAudited('email.markRead', () =>
+        as('support', (caller) => caller.email.markRead({ id: RESET_MAIL }))
+      );
+      expect(mail.sync).not.toHaveBeenCalled();
+      expect(mail.send).not.toHaveBeenCalled();
+      const row = await client.query('SELECT "isRead" FROM email_messages WHERE id = $1', [
+        RESET_MAIL,
+      ]);
+      expect(row.rows[0].isRead).toBe(false);
+    });
+
+    it('refuses the support session a password reset request and queues nothing', async () => {
+      const tokensBefore = await count('password_reset_tokens');
+      await expectRefusedAndAudited('passwordReset.request', () =>
+        as('support', (caller) => caller.passwordReset.request({ email: 'owner@test.invalid' }))
+      );
+      expect(await resetJobs()).toBe(0);
+      expect(await count('password_reset_tokens')).toBe(tokensBefore);
+    });
+
+    it('refuses the support session completing a reset with a real link', async () => {
+      await expectRefusedAndAudited('passwordReset.reset', () =>
+        as('support', (caller) =>
+          caller.passwordReset.reset({ token: SUPPORT_RESET_LINK, newPassword: OPERATOR_PASSWORD })
+        )
+      );
+      expect(await compare(ORIGINAL_PASSWORD, await ownerPassword())).toBe(true);
+      expect(await compare(OPERATOR_PASSWORD, await ownerPassword())).toBe(false);
+      const token = await client.query(
+        'SELECT "usedAt" FROM password_reset_tokens WHERE "tokenHash" = $1',
+        [hashInviteToken(SUPPORT_RESET_LINK)]
+      );
+      expect(token.rows[0].usedAt).toBeNull();
+    });
+
+    it('lets the owner read, sync and send from their own mailbox', async () => {
+      const mailboxes = await as('owner', (caller) => caller.email.listMailboxes());
+      expect(mailboxes.map((mailbox) => mailbox.id)).toEqual([MAILBOX]);
+      const messages = await as('owner', (caller) => caller.email.listMessages());
+      expect(messages.map((message) => message.id)).toEqual([RESET_MAIL]);
+      const message = await as('owner', (caller) => caller.email.getMessage({ id: RESET_MAIL }));
+      expect(message.bodyText).toContain(SUPPORT_RESET_LINK);
+
+      mail.sync.mockResolvedValue(3);
+      await expect(
+        as('owner', (caller) => caller.email.refresh({ mailboxId: MAILBOX }))
+      ).resolves.toEqual({ synced: 3 });
+      await as('owner', (caller) =>
+        caller.email.sendMessage({
+          mailboxId: MAILBOX,
+          to: ['supplier@test.invalid'],
+          subject: 'Order',
+          html: '<p>Order attached</p>',
+        })
+      );
+      expect(mail.send).toHaveBeenCalledTimes(1);
+      await as('owner', (caller) => caller.email.markRead({ id: RESET_MAIL }));
+      const row = await client.query('SELECT "isRead" FROM email_messages WHERE id = $1', [
+        RESET_MAIL,
+      ]);
+      expect(row.rows[0].isRead).toBe(true);
+    });
+
+    it('lets the owner and a visitor request a reset, and a visitor complete one', async () => {
+      await expect(
+        as('owner', (caller) => caller.passwordReset.request({ email: 'owner@test.invalid' }))
+      ).resolves.toEqual({ success: true });
+      expect(await resetJobs()).toBe(1);
+      await expect(
+        as('visitor', (caller) => caller.passwordReset.request({ email: 'owner@test.invalid' }))
+      ).resolves.toEqual({ success: true });
+      expect(await resetJobs()).toBe(2);
+
+      await expect(
+        as('visitor', (caller) =>
+          caller.passwordReset.reset({ token: VISITOR_RESET_LINK, newPassword: VISITOR_PASSWORD })
+        )
+      ).resolves.toEqual({ success: true });
+      expect(await compare(VISITOR_PASSWORD, await ownerPassword())).toBe(true);
+    });
   });
 
   it('still lets the support session read', async () => {

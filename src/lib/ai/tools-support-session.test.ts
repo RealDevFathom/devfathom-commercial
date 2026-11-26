@@ -1,7 +1,7 @@
 /**
  * DEV-1053: the assistant is under the same support-session rule as tRPC and REST.
  *
- * Every assistant tool is decided here: the five that reach a member, role or password change
+ * Every assistant tool is decided here: the six that reach a member, role or password change
  * are refused for a support session; a new tool fails until it is put on one side.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,19 +34,22 @@ import {
 } from '@/lib/tenancy/support-session-rule';
 import { ALL_VERTICALS } from '@/lib/vertical-catalog';
 
-/** Support may not: each mirrors a refused procedure (invite, update, status, lay off, reset). */
+/**
+ * Support may not: each mirrors a refused procedure (invite, update, status, lay off, reset,
+ * and `resignations.review`, which decides whether a member leaves).
+ */
 const SUPPORT_MAY_NOT = [
   'inviteMember',
   'layOffMember',
   'resetMemberPassword',
+  'reviewResignation',
   'setMemberStatus',
   'updateMember',
 ];
 
 /**
- * Support may: reads, and ordinary records. `reviewResignation` records the decision and never
- * deactivates the account (the tRPC procedure that can is refused). Project, channel and note
- * sharing act only among existing members.
+ * Support may: reads, and ordinary records. Project, channel and note sharing act only among
+ * existing members.
  */
 // prettier-ignore
 const SUPPORT_MAY = [
@@ -67,7 +70,7 @@ const SUPPORT_MAY = [
   'listPerformanceNotes', 'listProjects', 'listRecurringExpenses', 'listResignations',
   'listStaffRoles', 'listTeam', 'listTransactions', 'markJoined', 'moveTask',
   'removeLabelFromTask', 'removeProjectMember', 'reorderColumns', 'requestLeave',
-  'reviewResignation', 'searchAuditLog', 'searchMessages', 'searchNotes', 'searchTasks',
+  'searchAuditLog', 'searchMessages', 'searchNotes', 'searchTasks',
   'sendMessage', 'setLeaveStatus', 'setNoteShares', 'setProjectMemberRole', 'setTaskAssignees',
   'submitResignation', 'toggleChecklistItem', 'updateClient', 'updateColumn',
   'updateInvoiceStatus', 'updateMeeting', 'updateMilestone', 'updateMyProfile', 'updateNote',
@@ -152,7 +155,7 @@ describe('DEV-1053 assistant tools under the support-session rule', () => {
     for (const name of SUPPORT_MAY) {
       expect(asSupport.get(name)!.needsApproval, name).toBe(asOwner.get(name)!.needsApproval);
     }
-    // The owner still gets the approval card for the five.
+    // The owner still gets the approval card for the six.
     for (const name of SUPPORT_MAY_NOT) expect(asOwner.get(name)!.needsApproval, name).toBe(true);
   });
 });
