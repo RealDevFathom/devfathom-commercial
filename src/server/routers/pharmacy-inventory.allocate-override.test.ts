@@ -45,6 +45,7 @@ function fixture() {
   const transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   const db = {
     $transaction: transaction,
+    organization: { findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }) },
     user: { findFirst: vi.fn().mockResolvedValue(actor) },
     restaurantOperatorCredential: { findFirst: vi.fn() },
     pharmacyBranch: {
