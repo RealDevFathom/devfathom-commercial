@@ -400,6 +400,7 @@ export const navigation: NavItem[] = [
   {
     label: 'Finance',
     href: '/pharmacy/finance',
+    memberCapabilities: ['finance:read'],
     icon: DollarSign,
     adminOnly: true,
     group: 'Pharmacy',

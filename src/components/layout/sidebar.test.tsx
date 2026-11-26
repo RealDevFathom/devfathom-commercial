@@ -463,6 +463,10 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
   it('offers the Finance role template the Reports destination it can open (DEV-519)', () => {
     const finance = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'finance')!;
     renderNavigation({ role: 'MEMBER', capabilities: [...finance.capabilities] });
+    expect(screen.getByRole('link', { name: (name) => name.endsWith('Finance') })).toHaveAttribute(
+      'href',
+      '/pharmacy/finance'
+    );
     expect(screen.getByRole('link', { name: /Reports & Insights$/ })).toHaveAttribute(
       'href',
       '/pharmacy/reports'
@@ -1051,7 +1055,9 @@ describe('menu drawer user chip with the browser offline', () => {
     const { container } = renderDrawer(collapsed);
     const chip = container.querySelector('[data-sidebar-identity="offline"]');
     expect(chip).not.toBeNull();
-    expect(chip).toHaveTextContent(collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked');
+    expect(chip).toHaveTextContent(
+      collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked'
+    );
     expect(container).not.toHaveTextContent('Ayesha Khan');
     expect(container).not.toHaveTextContent('Branch manager');
     expect(container).not.toHaveTextContent(/\bAK\b/);

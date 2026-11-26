@@ -1,3 +1,4 @@
+import { canOpenPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import type { Metadata } from 'next';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -26,7 +27,7 @@ export default async function PharmacyBalanceSheetPage({
 }) {
   const query = await searchParams;
   const ctx = await tenantContext();
-  if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN') {
+  if (!ctx?.session?.user || !(await canOpenPharmacyFinance(ctx))) {
     return (
       <div className="min-w-0 space-y-6">
         <PageHeader
@@ -36,7 +37,7 @@ export default async function PharmacyBalanceSheetPage({
         />
         <SectionCard title="Permission required">
           <p className="text-sm text-text-muted">
-            Administrator financial-report access is required.
+            Finance and financial-report access are required.
           </p>
         </SectionCard>
       </div>
@@ -44,16 +45,14 @@ export default async function PharmacyBalanceSheetPage({
   }
 
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId: ctx.entitlements.organizationId, active: true },
+    where: financeBranchWhere(ctx.entitlements.organizationId, ctx.session.user),
     orderBy: { name: 'asc' },
     select: { id: true },
   });
   // Only an omitted branch may use the default. An explicit invalid scope must
   // never return another branch's financial balances.
   const branch =
-    query.branch === undefined
-      ? branches[0]
-      : branches.find(({ id }) => id === query.branch);
+    query.branch === undefined ? branches[0] : branches.find(({ id }) => id === query.branch);
   if (!branch) {
     return (
       <div className="min-w-0 space-y-6">

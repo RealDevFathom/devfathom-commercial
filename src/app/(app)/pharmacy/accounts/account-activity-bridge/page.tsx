@@ -1,3 +1,4 @@
+import { canOpenPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import { ReportDetails } from '@/components/pharmacy/report-details';
@@ -50,7 +51,7 @@ export default async function AccountActivityBridgePage({
         support: actor.support,
       })
     : null;
-  if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN')
+  if (!ctx?.session?.user || !(await canOpenPharmacyFinance(ctx)))
     return (
       <State title={screenCopy.accountActivity.permissionRequired}>
         {screenCopy.accountActivity.organizationAdministratorAccessIsRequired}
@@ -71,7 +72,7 @@ export default async function AccountActivityBridgePage({
 
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
+    where: financeBranchWhere(organizationId, ctx.session.user),
     orderBy: { name: 'asc' },
     select: { id: true, name: true },
   });

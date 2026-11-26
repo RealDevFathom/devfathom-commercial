@@ -1,3 +1,4 @@
+import { canOpenPharmacyFinance, financeBranchWhere } from '@/lib/pharmacy/finance-access';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { formatWorkspaceDate, workspaceInstantFromInput } from '@/lib/timezone';
 import { browserUuid } from '@/lib/browser-uuid';
@@ -86,7 +87,7 @@ export default async function PharmacyFinancePage({
 }) {
   const query = await searchParams;
   const ctx = await tenantContext();
-  if (!ctx?.session?.user || ctx.session.user.role !== 'ADMIN') {
+  if (!ctx?.session?.user || !(await canOpenPharmacyFinance(ctx))) {
     return (
       <div className="space-y-6">
         <PageHeader
@@ -95,16 +96,14 @@ export default async function PharmacyFinancePage({
           description="Bookkeeping, reconciliation, close, and tax profile controls."
         />
         <SectionCard title="Permission required">
-          <p className="text-sm text-text-muted">
-            An organization administrator must perform financial postings and approve tax versions.
-          </p>
+          <p className="text-sm text-text-muted">Ask your workspace owner for finance access.</p>
         </SectionCard>
       </div>
     );
   }
   const organizationId = ctx.entitlements.organizationId;
   const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
+    where: financeBranchWhere(organizationId, ctx.session.user),
     orderBy: { name: 'asc' },
     select: { id: true, name: true, businessDayEndsAtHistory: true },
   });
@@ -161,8 +160,8 @@ export default async function PharmacyFinancePage({
     };
     try {
       const actionCtx = await tenantContext();
-      if (!actionCtx?.session?.user || actionCtx.session.user.role !== 'ADMIN')
-        throw new Error('Administrator access is required.');
+      if (!actionCtx?.session?.user || !(await canOpenPharmacyFinance(actionCtx)))
+        throw new Error('Finance permission is required.');
       const localNoon = (key: string) =>
         new Date(
           workspaceInstantFromInput(`${field(data, key)}T12:00`, actionCtx.organization?.timezone)
@@ -447,11 +446,15 @@ export default async function PharmacyFinancePage({
           </Button>
         </form>
       </SectionCard>
-      <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
-      <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
-      <DiscountMaximumPanel key={`discount-maximum-${branch.id}`} branchId={branch.id} />
-      <DayEndHourPanel key={`day-end-hour-${branch.id}`} branchId={branch.id} />
-      <BillDiscountSettingPanel key={`bill-discount-${branch.id}`} branchId={branch.id} />
+      {ctx.session.user.role === 'ADMIN' && (
+        <>
+          <ManualPaymentSettingsPanel key={branch.id} branchId={branch.id} />
+          <KhataReminderSettingsPanel key={`khata-reminders-${branch.id}`} branchId={branch.id} />
+          <DiscountMaximumPanel key={`discount-maximum-${branch.id}`} branchId={branch.id} />
+          <DayEndHourPanel key={`day-end-hour-${branch.id}`} branchId={branch.id} />
+          <BillDiscountSettingPanel key={`bill-discount-${branch.id}`} branchId={branch.id} />
+        </>
+      )}
       <SectionCard
         title="Create POS settlement batch"
         eyebrow="Card · Raast · wallet · bank transfer"
@@ -676,24 +679,26 @@ export default async function PharmacyFinancePage({
                     />
                   </div>
                   {period.status === 'CLOSED' ? (
-                    <form action={perform} className="mt-3 flex flex-wrap gap-2">
-                      <input type="hidden" name="action" value="reopen" />
-                      <input type="hidden" name="branchId" value={branch.id} />
-                      <input type="hidden" name="periodId" value={period.id} />
-                      <Input
-                        className="min-h-11 flex-1"
-                        name="reason"
-                        required
-                        placeholder="Reason for controlled reopen"
-                      />
-                      <Button
-                        disabled={!workspace.mayManageAccounts}
-                        type="submit"
-                        variant="secondary"
-                      >
-                        Reopen
-                      </Button>
-                    </form>
+                    ctx.session.user.role === 'ADMIN' && (
+                      <form action={perform} className="mt-3 flex flex-wrap gap-2">
+                        <input type="hidden" name="action" value="reopen" />
+                        <input type="hidden" name="branchId" value={branch.id} />
+                        <input type="hidden" name="periodId" value={period.id} />
+                        <Input
+                          className="min-h-11 flex-1"
+                          name="reason"
+                          required
+                          placeholder="Reason for controlled reopen"
+                        />
+                        <Button
+                          disabled={!workspace.mayManageAccounts}
+                          type="submit"
+                          variant="secondary"
+                        >
+                          Reopen
+                        </Button>
+                      </form>
+                    )
                   ) : (
                     <p className="mt-2 text-xs text-text-muted">Reopened: {period.reopenReason}</p>
                   )}
