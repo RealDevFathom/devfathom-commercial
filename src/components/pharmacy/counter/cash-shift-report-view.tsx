@@ -1,5 +1,6 @@
 'use client';
 
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CashShiftReport, CashShiftTypeTotal } from '@/lib/pharmacy/cash-shift-report';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
@@ -71,6 +72,25 @@ function TypeTable({
         </tbody>
       </table>
     </div>
+  );
+}
+
+function VarianceApproval({
+  approver,
+  closedById,
+}: {
+  approver: NonNullable<CashShiftReport['varianceApprovedBy']>;
+  closedById?: string;
+}) {
+  const secret = useApprovalSecretKind() === 'CODE' ? 'authenticator code' : 'PIN';
+  return (
+    <p className="text-sm text-text-muted">
+      Over or short approved by {approver.name ?? 'a former team member'}
+      {approver.id === closedById
+        ? ` (their own close, with their ${secret})`
+        : ` with their ${secret}`}
+      .
+    </p>
   );
 }
 
@@ -203,13 +223,7 @@ export function CashShiftReportView({
         <p className="text-sm text-text-body">Note: {report.varianceNote}</p>
       ) : null}
       {report.varianceApprovedBy ? (
-        <p className="text-sm text-text-muted">
-          Over or short approved by {report.varianceApprovedBy.name ?? 'a former team member'}
-          {report.varianceApprovedBy.id === report.closedBy?.id
-            ? ' (their own close, with their PIN)'
-            : ' with their PIN'}
-          .
-        </p>
+        <VarianceApproval approver={report.varianceApprovedBy} closedById={report.closedBy?.id} />
       ) : null}
     </section>
   );
