@@ -1807,6 +1807,46 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
             })
           )
         ).resolves.toMatchObject({ approvedByUserId: s.manager });
+      const { establishToken } = await import('./counter-terminal-session');
+      const { device, secret } = await tenant(s.owner, (db) =>
+        devices.enrollPharmacyCounter(db, s.owner, { name: 'Named proof fixture' })
+      );
+      const otherBranchToken = establishToken({
+        scope: { ...scope, branchId: 'other' },
+        deviceId: device.id,
+        deviceSecret: secret,
+      });
+      for (const token of [
+        otherBranchToken,
+        (() => {
+          vi.useFakeTimers({ toFake: ['Date'] });
+          try {
+            vi.setSystemTime(Date.now() - 9 * 3_600_000);
+            return establishToken({ scope, deviceId: device.id, deviceSecret: secret });
+          } finally {
+            vi.useRealTimers();
+          }
+        })(),
+      ]) {
+        await expect(
+          tenant(scope, (db) =>
+            authorizeCounterApproval(db, scope, 'DISCOUNT', {
+              staffProfileId: profile.id,
+              pin: MANAGER_PIN,
+              counter: { deviceId: device.id, sessionToken: token },
+            })
+          )
+        ).resolves.toMatchObject({ approvedByUserId: s.manager });
+      }
+      const tillKey = rateLimitStorageKey(
+        JSON.stringify(['pharmacy-approval-counter', scope.organizationId, device.id])
+      );
+      expect(
+        await tenant(
+          scope,
+          (db) => db.$queryRaw`SELECT count FROM rate_limit_buckets WHERE key = ${tillKey}`
+        )
+      ).toEqual([]);
       const counts = await tenant(
         scope,
         (db) => db.$queryRaw<{ count: number }[]>`

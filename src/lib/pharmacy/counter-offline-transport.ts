@@ -75,11 +75,44 @@ export type CounterSignedSnapshot = {
 };
 
 // Established in this tab only. The server rechecks the actor, branch and current device key.
-let approvalSession: { deviceId: string; sessionToken: string } | undefined;
+let approvalSession: { deviceId: string; sessionToken: string; expiresAt: number } | undefined;
+
+export function clearCounterApprovalSession() {
+  approvalSession = undefined;
+}
+
+// Bind proof only after the counter hook accepts the opened runtime for its current branch.
+// The decoded expiry only schedules client cleanup. The server verifies the signed token.
+export function activateCounterApprovalSession(
+  enrolled: { deviceId: string; branchId: string; organizationId: string },
+  sessionToken: string | null
+) {
+  clearCounterApprovalSession();
+  if (!sessionToken) return;
+  try {
+    const payload = sessionToken.split('.')[0]!;
+    const claims = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    if (
+      claims.deviceId === enrolled.deviceId &&
+      claims.organizationId === enrolled.organizationId &&
+      claims.branchId === enrolled.branchId &&
+      Number.isSafeInteger(claims.expiresAt) &&
+      claims.expiresAt > Date.now()
+    )
+      approvalSession = { deviceId: enrolled.deviceId, sessionToken, expiresAt: claims.expiresAt };
+  } catch {
+    // An unreadable session cannot enable code-only approval.
+  }
+}
+
+export function counterApprovalSessionActive() {
+  return Boolean(approvalSession && approvalSession.expiresAt > Date.now());
+}
 
 export function counterApprovalHeaders(
   operations: readonly { type: string; path: string }[]
 ): Record<string, string> {
+  if (!counterApprovalSessionActive()) clearCounterApprovalSession();
   if (
     !approvalSession ||
     !operations.some((op) => op.type === 'mutation' && op.path.startsWith('pharmacySales.'))
@@ -93,22 +126,20 @@ export function counterApprovalHeaders(
 
 /** Sets the httpOnly device cookie for the secret enrol/rotate just returned. */
 export async function bindCounterBrowser(secret: string): Promise<CounterBinding> {
-  approvalSession = undefined;
+  clearCounterApprovalSession();
   return (await counterPost('/api/pharmacy/counter/bind', { secret })) as CounterBinding;
 }
 
 /** Clears this browser's device cookie. */
 export async function unbindCounterBrowser(): Promise<void> {
-  approvalSession = undefined;
+  clearCounterApprovalSession();
   await counterPost('/api/pharmacy/counter/bind', null, undefined, 'DELETE');
 }
 
 export async function establishCounterSession(): Promise<CounterEstablished> {
-  approvalSession = undefined;
   const result = (await counterPost('/api/pharmacy/counter/establish', {})) as CounterEstablished;
   if (!result || typeof result.sessionToken !== 'string' || !result.device)
     throw new CounterRequestError(502, 'unexpected_response');
-  approvalSession = { deviceId: result.device.id, sessionToken: result.sessionToken };
   return result;
 }
 
