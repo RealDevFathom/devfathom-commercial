@@ -46,7 +46,7 @@ export const PHARMACY_WIDGET_REGISTRY: readonly PharmacyWidgetDefinition[] = [
       'expiryValueMinor90',
       'expiryValueMinor180',
     ],
-    permission: 'reports:operational',
+    permission: 'reports:financial',
     defaultSpan: 'wide',
   },
   {

@@ -1,6 +1,6 @@
 import { TRPCError } from '@trpc/server';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
-import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
+import { actorIsPharmacyOwner, procurementBranchIds } from '@/lib/pharmacy/procurement-access';
 import { isSoloPharmacyOwner } from '@/lib/pharmacy/solo-owner';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from './audit';
@@ -131,4 +131,32 @@ export async function reachableProcurementBranchIds(
   });
   const assigned = new Set(assignments.map((row) => row.branchId));
   return branchIds.filter((id) => assigned.has(id));
+}
+
+export async function purchasingOrderScope(ctx: TRPCContext) {
+  const { organizationId, actorId: userId } = procurementActor(ctx);
+  const assigned = await procurementBranchIds(ctx.db, organizationId, userId);
+  const central = await ctx.db.pharmacyCentralPurchasingAccess.findMany({
+    where: { organizationId, userId },
+    select: { branchId: true },
+  });
+  const includeUnscoped =
+    central.some((grant) => grant.branchId === null) ||
+    (await actorIsPharmacyOwner(ctx.db, organizationId, userId));
+  const allowed = new Set([
+    ...assigned,
+    ...central.flatMap((grant) => (grant.branchId ? [grant.branchId] : [])),
+  ]);
+  const branches = await ctx.db.pharmacyBranch.findMany({
+    where: { organizationId, active: true },
+    select: { id: true },
+  });
+  const branchIds = branches
+    .filter((branch) => includeUnscoped || allowed.has(branch.id))
+    .map((branch) => branch.id);
+  return {
+    organizationId,
+    branchIds,
+    includeUnscoped,
+  };
 }

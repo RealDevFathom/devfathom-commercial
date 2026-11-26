@@ -24,7 +24,7 @@ import {
 } from '@/lib/restaurant/credential-lifecycle';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
-import { actorIsPharmacyOwner, procurementBranchIds } from '@/lib/pharmacy/procurement-access';
+import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
 import { hasModule } from '@/lib/entitlements';
 import {
   decideReceiptDebitNote,
@@ -147,6 +147,7 @@ import {
   assertProcurementBranch,
   isSoloOwner,
   procurementActor,
+  purchasingOrderScope,
   reachableProcurementBranchIds,
 } from '../pharmacy-procurement-scope';
 
@@ -409,35 +410,6 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
     throw new TRPCError({ code: 'UNAUTHORIZED', message: 'No tenant actor on this request.' });
   }
   return { organizationId };
-}
-
-async function purchasingOrderScope(ctx: TRPCContext) {
-  const { organizationId } = tenantScope(ctx);
-  const userId = ctx.session!.user.id;
-  const assigned = await procurementBranchIds(ctx.db, organizationId, userId);
-  const central = await ctx.db.pharmacyCentralPurchasingAccess.findMany({
-    where: { organizationId, userId },
-    select: { branchId: true },
-  });
-  const includeUnscoped =
-    central.some((grant) => grant.branchId === null) ||
-    (await actorIsPharmacyOwner(ctx.db, organizationId, userId));
-  const allowed = new Set([
-    ...assigned,
-    ...central.flatMap((grant) => (grant.branchId ? [grant.branchId] : [])),
-  ]);
-  const branches = await ctx.db.pharmacyBranch.findMany({
-    where: { organizationId, active: true },
-    select: { id: true },
-  });
-  const branchIds = branches
-    .filter((branch) => includeUnscoped || allowed.has(branch.id))
-    .map((branch) => branch.id);
-  return {
-    organizationId,
-    branchIds,
-    includeUnscoped,
-  };
 }
 
 /**

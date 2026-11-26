@@ -399,7 +399,7 @@ const catalogueCommandProcedure = contextualCapabilityProcedure(catalogueCommand
  * DENY) may decide without it while no other active member holds it, but approves
  * only with a fresh PIN. An editor may see the queue they submit to.
  */
-async function catalogueAccess(ctx: TRPCContext) {
+export async function catalogueAccess(ctx: TRPCContext) {
   return catalogueAccessFor(ctx, ctx.session!.user);
 }
 /** catalogueAccess for any member of the tenant: the one rule the queue and its decisions use. */
@@ -459,7 +459,7 @@ async function requireStagedReviewBranch(ctx: TRPCContext, reorderBranchId?: str
 }
 
 /** The reorder branch an approved bulk creation request carries; null for none or an older one. */
-function approvedReorderBranch(changes: Prisma.JsonValue): string | null {
+export function approvedReorderBranch(changes: Prisma.JsonValue): string | null {
   const json =
     changes && typeof changes === 'object' && !Array.isArray(changes) ? changes.json : null;
   const value =

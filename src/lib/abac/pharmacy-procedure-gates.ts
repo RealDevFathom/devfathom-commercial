@@ -1868,7 +1868,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.branches': {
-    gate: 'auditedProtectedProcedure + pharmacy-reports module; reports:operational/Manager see more branches, others see their assigned branches',
+    gate: 'auditedProtectedProcedure + pharmacy-reports module; normal report scope or dashboard scope (live owner/admin:access across the tenant, otherwise active admitted branches)',
     none: 'any signed-in member of the licensed workspace (branch picker list)',
   },
   'pharmacyReports.catalog': {
@@ -1883,6 +1883,22 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: [
       'financial-reports/workspace-administrator-use-operational',
       'operational-reports/run-seasonal-calendar-demandspike',
+    ],
+  },
+  'pharmacyReports.ownerWatch': {
+    gate: 'branchReports + dashboard branch scope; licensed operational queues require their actions, customer balances require reports:financial, supplier balances also require finance:read, historical register work also requires live ownership',
+    lines: [
+      'operational-reports/open-reports-centre-replenishment',
+      'financial-reports/see-sales-margin-cash',
+      'run-branches/read-reports-centre-replenishment',
+    ],
+  },
+  'pharmacyReports.ownerTrading': {
+    gate: 'branchReports + active assigned branches (all active tenant branches for a live owner or admin:access holder); amounts require reports:financial',
+    lines: [
+      'operational-reports/open-reports-centre-replenishment',
+      'financial-reports/see-sales-margin-cash',
+      'run-branches/read-reports-centre-replenishment',
     ],
   },
   'pharmacyReports.commandCentre': {

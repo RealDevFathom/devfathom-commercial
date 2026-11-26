@@ -54,6 +54,15 @@ vi.mock('@/lib/approval-authenticator', async () => {
       (await verifyOperatorCredential('PIN', input.secret, input.credentialHash)) ? 'PIN' : null,
   };
 });
+vi.mock('@/lib/pharmacy/owner-watch', async (load) => ({
+  ...(await load<typeof import('@/lib/pharmacy/owner-watch')>()),
+  readCustomerPosition: vi.fn().mockResolvedValue({ total: 1500, overdue: 200, count: 1 }),
+  readSupplierPosition: vi.fn().mockResolvedValue({
+    balances: [{ currency: 'AED', total: 1200, overdue: 400 }],
+    due: 1,
+    complete: true,
+  }),
+}));
 vi.mock('@/lib/pharmacy/branch-comparison', () => ({
   readPharmacyBranchComparison: mocks.comparisonRead,
 }));
@@ -1863,5 +1872,111 @@ describe('DEV-74 branch seasonal calendar', () => {
     expect(mocks.windowFindMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { organizationId: 'org_1', branchId: 'branch_1' } })
     );
+  });
+});
+
+describe('owner dashboard effective access', () => {
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    mocks.userFindFirst.mockResolvedValue({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+    });
+    mocks.assignmentFindMany.mockResolvedValue([{ branchId: 'assigned' }]);
+    mocks.branchFindMany.mockResolvedValue(
+      ['assigned', 'other'].map((id) => ({ id, name: id, businessDayEndsAtHistory: [] }))
+    );
+  });
+  it.each([
+    [true, true, 3],
+    [true, false, 0],
+    [false, true, 0],
+  ] as const)(
+    'requires both report finance %s and finance read %s for an employee’s supplier balances',
+    async (financial, read, count) => {
+      mocks.can.mockImplementation(
+        async (_subject, action) =>
+          action === 'reports:operational' ||
+          (financial && action === 'reports:financial') ||
+          (read && action === 'finance:read')
+      );
+      const rows = await caller('EMPLOYEE').ownerWatch({
+        section: 'suppliers',
+        branchId: 'assigned',
+      });
+      expect(rows).toHaveLength(count);
+      if (count)
+        expect(rows[0]).toMatchObject({ label: 'Owed to suppliers', currency: 'AED', value: 1200 });
+    }
+  );
+  it('uses the organization currency on both customer balance figures', async () => {
+    mocks.can.mockImplementation(async (_subject, action) =>
+      ['reports:operational', 'reports:financial'].includes(action)
+    );
+    const ctx = context('EMPLOYEE');
+    const api = pharmacyReportsRouter.createCaller({
+      ...ctx,
+      organization: { ...ctx.organization!, currency: 'AED' },
+    });
+    const rows = await api.ownerWatch({ section: 'customers', branchId: 'assigned' });
+    expect(rows.filter((r) => r.group === 'owed').map((r) => [r.value, r.currency])).toEqual([
+      [1500, 'AED'],
+      [200, 'AED'],
+    ]);
+  });
+  it('admits an effective admin:access holder to all active tenant branches without conferring ownership or finance', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational' || action === 'admin:access'
+    );
+    const api = caller('EMPLOYEE');
+    expect(await api.branches({ dashboard: true })).toMatchObject({
+      organizationId: 'org_1',
+      owner: false,
+      branches: [{ id: 'assigned' }, { id: 'other' }],
+    });
+    await expect(api.ownerTrading({ section: 'profits', branchId: 'other' })).resolves.toEqual([]);
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
+    );
+  });
+  it('restricts a titled administrator to assignments and returns operational sections without monetary values', async () => {
+    const dashboard = caller();
+    const scope = await dashboard.branches({ dashboard: true });
+    expect(scope.branches.map((b) => b.id)).toEqual(['assigned']);
+    await expect(
+      dashboard.ownerTrading({ section: 'profits', branchId: 'assigned' })
+    ).resolves.toEqual([]);
+    await expect(
+      dashboard.ownerWatch({ section: 'customers', branchId: 'assigned' })
+    ).resolves.toEqual([]);
+    await expect(
+      dashboard.ownerTrading({ section: 'summary', branchId: 'other' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+  it('admits the live system owner to every branch and a finance employee only to their assignment', async () => {
+    mocks.userFindFirst.mockResolvedValueOnce({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+      permissionOverrides: [],
+    });
+    expect((await caller().branches({ dashboard: true })).branches.map((b) => b.id)).toEqual([
+      'assigned',
+      'other',
+    ]);
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational' || action === 'reports:financial'
+    );
+    mocks.queryRaw.mockResolvedValue([{ label: 'Medicine', value: 250 }]);
+    const employee = caller('EMPLOYEE');
+    expect((await employee.branches({ dashboard: true })).branches.map((b) => b.id)).toEqual([
+      'assigned',
+    ]);
+    expect(await employee.ownerTrading({ section: 'profits', branchId: 'assigned' })).toEqual([
+      { label: 'Medicine', value: 250 },
+    ]);
   });
 });

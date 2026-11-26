@@ -34,6 +34,9 @@ import { plainReportPermission, plainReportSource } from '@/lib/pharmacy/report-
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 
+import { TradingOverview } from './trading-overview';
+import { reportMoney } from '@/components/dashboard/business-chart';
+
 const definition = new Map(PHARMACY_WIDGET_REGISTRY.map((item) => [item.key, item]));
 type CommandQuery = {
   data?: {
@@ -45,11 +48,11 @@ type CommandQuery = {
   isLoading: boolean;
   refetch: () => unknown;
 };
-const formatMetric = (key: string, value: number | null) =>
+const formatMetric = (key: string, value: number | null, currency?: string | null) =>
   value == null
     ? '—'
     : key.toLowerCase().includes('minor')
-      ? `PKR ${(value / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`
+      ? reportMoney(value, currency)
       : value.toLocaleString();
 
 /**
@@ -58,8 +61,10 @@ const formatMetric = (key: string, value: number | null) =>
  * owner reads as "nothing to reorder".
  */
 const UNCALCULATED_METRICS = new Set(['openStockSignals', 'recommendedOrders']);
-const metricValue = (key: string, value: number | null) =>
-  value == null && UNCALCULATED_METRICS.has(key) ? 'Not calculated yet' : formatMetric(key, value);
+const metricValue = (key: string, value: number | null, currency?: string | null) =>
+  value == null && UNCALCULATED_METRICS.has(key)
+    ? 'Not calculated yet'
+    : formatMetric(key, value, currency);
 const metricSub = (key: string, value: number | null, source: string | null | undefined) =>
   value != null
     ? sourceLine(source)
@@ -79,6 +84,7 @@ function WidgetState({
   contracts,
   branchCount,
   metricsReady,
+  currency,
 }: {
   item: (typeof PHARMACY_WIDGET_REGISTRY)[number];
   query: CommandQuery;
@@ -91,6 +97,7 @@ function WidgetState({
   }>;
   branchCount: number;
   metricsReady: boolean;
+  currency?: string | null;
 }) {
   // A command query that is still fetching — or disabled while its branches
   // load — has no data and no error yet. That is a loading state, not a
@@ -100,9 +107,13 @@ function WidgetState({
   const pending = query.isLoading || (!query.data && !query.error);
   if (pending || (item.key !== 'branches' && !metricsReady))
     return (
-      <div aria-label={`Loading ${item.label}`} role="status" className="space-y-3">
-        <Skeleton className="h-8 w-32" />
-        <Skeleton className="h-4 w-full" />
+      <div aria-label={`Loading ${item.label}`} role="status" className="grid gap-5 sm:grid-cols-2">
+        {(item.metrics.length ? item.metrics : [item.key]).map((key) => (
+          <div key={key} className="min-h-20 space-y-3">
+            <Skeleton className="h-8 w-32" />
+            <Skeleton className="h-4 w-full" />
+          </div>
+        ))}
       </div>
     );
   if (query.error) {
@@ -151,7 +162,7 @@ function WidgetState({
         <Stat
           key={item.metrics[index]}
           label={contract?.label ?? humanizeMetricKey(item.metrics[index]!)}
-          value={metricValue(item.metrics[index]!, value)}
+          value={metricValue(item.metrics[index]!, value, currency)}
           sub={metricSub(item.metrics[index]!, value, contract?.source)}
         />
       ))}
@@ -287,7 +298,7 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
       <PageHeader
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
-        description="Live operational signals with visible source, freshness and permission boundaries."
+        description="Today’s trading, stock and outstanding work across your pharmacy."
       />
       <SectionCard
         eyebrow="Pharmacy Reports"
@@ -320,8 +331,9 @@ function ReportsNotInPackage({ role }: { role: string | null | undefined }) {
 function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
   const { enabledModules, timeZone } = useEntitlements();
   const utils = trpc.useUtils();
-  const branches = trpc.pharmacyReports.branches.useQuery(undefined, { retry: false });
-  const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, { retry: false });
+  const independent = { retry: false, trpc: { context: { independentSection: true } } };
+  const branches = trpc.pharmacyReports.branches.useQuery({ dashboard: true }, independent);
+  const catalog = trpc.pharmacyReports.catalog.useQuery(undefined, independent);
   const preferences = trpc.pharmacyReports.getPreferences.useQuery(undefined, { retry: false });
   const update = trpc.pharmacyReports.updatePreferences.useMutation();
   const [branchId, setBranchId] = useState('');
@@ -336,8 +348,14 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
     selected.map((branch) => branch.businessDayEndsAtHistory)
   );
   const today = pharmacyBusinessDay({ timeZone, dayEnd });
-  const input = { ...(branchId ? { branchId } : {}), from: today, to: today };
+  const input = {
+    dashboard: true as const,
+    ...(branchId ? { branchId } : {}),
+    from: today,
+    to: today,
+  };
   const command = trpc.pharmacyReports.commandCentre.useQuery(input, {
+    trpc: { context: { independentSection: true } },
     enabled: Boolean(branches.data?.branches.length),
     retry: false,
   }) as unknown as CommandQuery;
@@ -388,51 +406,56 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       <PageHeader
         eyebrow="Pharmacy workspace"
         heading="Owner command centre"
-        description="Live operational signals with visible source, freshness and permission boundaries."
+        description="Today’s trading, stock and outstanding work across your pharmacy."
+        className="mb-0 gap-3 pb-4"
         actions={
-          canEdit ? (
-            <Button variant="outline" onClick={begin}>
-              <Pencil aria-hidden />
-              Edit dashboard
-            </Button>
-          ) : null
+          <>
+            <label className="flex min-w-0 items-center gap-2">
+              <span className="eyebrow">Branch</span>
+              <StudioSelect
+                aria-label="Dashboard branch"
+                value={branchId}
+                onChange={(event) => setBranchId(event.target.value)}
+                disabled={branches.isLoading || Boolean(branches.error)}
+                className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                <option value="">All available</option>
+                {branches.data?.branches.map((branch) => (
+                  <option key={branch.id} value={branch.id}>
+                    {branch.name}
+                  </option>
+                ))}
+              </StudioSelect>
+            </label>
+            {canEdit && (
+              <Button variant="outline" onClick={begin}>
+                <Pencil aria-hidden />
+                Edit dashboard
+              </Button>
+            )}
+          </>
         }
       />
-      <SectionCard
-        eyebrow="Scope"
-        title="Today at a glance"
-        titleLevel={2}
-        actions={command.data ? <StatusPill status="Current" tone="success" /> : null}
-      >
-        <label className="block max-w-sm space-y-1.5">
-          <span className="eyebrow">Branch</span>
-          <StudioSelect
-            aria-label="Dashboard branch"
-            value={branchId}
-            onChange={(event) => setBranchId(event.target.value)}
-            disabled={branches.isLoading || Boolean(branches.error)}
-            className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            <option value="">All available</option>
-            {branches.data?.branches.map((branch) => (
-              <option key={branch.id} value={branch.id}>
-                {branch.name}
-              </option>
-            ))}
-          </StudioSelect>
-        </label>
-        <p className="mt-3 font-mono text-xs text-text-muted">
-          {command.data
-            ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
-            : branchesDenied
-              ? 'Branch reports are outside your access.'
-              : branches.error
-                ? 'Branches could not be loaded.'
-                : branches.data?.branches.length === 0
-                  ? 'Waiting for a reportable branch.'
-                  : 'Loading today’s figures…'}
-        </p>
-      </SectionCard>
+      <p className="font-mono text-xs text-text-muted">
+        {command.data
+          ? `As of ${new Date(command.data.freshness.asOf).toLocaleString()} · ${command.data.freshness.source}`
+          : branchesDenied
+            ? 'Branch reports are outside your access.'
+            : branches.error
+              ? 'Branches could not be loaded.'
+              : branches.data?.branches.length === 0
+                ? 'Waiting for a reportable branch.'
+                : 'Loading today’s figures…'}
+      </p>
+
+      {branches.data?.branches.length && catalog.data && !branches.error ? (
+        <TradingOverview
+          branchId={branchId || undefined}
+          branches={selected.length}
+          financial={catalog.data.permissions.financial}
+          currency={catalog.data.currency}
+        />
+      ) : null}
       {catalog.data && !branchesDenied ? (
         <AiAdviceCard
           owner={catalog.data.permissions.owner}
@@ -541,7 +564,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
         </SectionCard>
       ) : !branches.data ? (
         <SectionCard title="Loading command centre">
-          <div role="status" aria-label="Loading command centre" className="space-y-3">
+          <div role="status" aria-label="Loading command centre" className="min-h-56 space-y-3">
             <Skeleton className="h-8 w-40" />
             <Skeleton className="h-4 w-full" />
           </div>
@@ -549,13 +572,32 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       ) : branches.data.branches.length === 0 ? (
         <SectionCard title="No reportable branches">
           <p className="text-sm text-text-body">
-            Activate a pharmacy branch before using the command centre.
+            {'unassigned' in branches.data && branches.data.unassigned
+              ? 'You are not assigned to a branch yet. Ask the owner to add you.'
+              : 'Activate a pharmacy branch before using the command centre.'}
           </p>
         </SectionCard>
       ) : (
         <div data-testid="pharmacy-dashboard-grid" className="grid min-w-0 gap-5 lg:grid-cols-2">
+          {command.data?.permissions.financial === false && (
+            <div
+              role="status"
+              className="flex flex-wrap items-center gap-2 text-sm text-text-muted lg:col-span-2"
+            >
+              <StatusPill status="Restricted" tone="neutral" />
+              <span>Financial reports</span>
+              <span>Financial reports access is required to see monetary figures.</span>
+            </div>
+          )}
           {layout.widgets
-            .filter((item) => item.visible)
+            .filter(
+              (item) =>
+                item.visible &&
+                !(
+                  definition.get(item.key)?.permission === 'reports:financial' &&
+                  command.data?.permissions.financial === false
+                )
+            )
             .map((preference) => {
               const item = definition.get(preference.key)!;
               return (
@@ -591,6 +633,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                       query={command}
                       contracts={catalog.data?.metrics ?? []}
                       branchCount={branches.data?.branches.length ?? 0}
+                      currency={catalog.data?.currency}
                       metricsReady={Boolean(catalog.data) || Boolean(catalog.error)}
                     />
                     {item.key === 'stock' && procurement ? (

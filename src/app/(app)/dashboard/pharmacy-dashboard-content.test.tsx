@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   branches: undefined as unknown,
   catalog: undefined as unknown,
   command: undefined as unknown,
+  expiry: undefined as { label: string; value: number }[] | undefined,
+  approvals: [] as { label: string; value: number; period: string; href: string; group: string }[],
   commandInput: undefined as unknown,
   zone: 'UTC',
   preferences: undefined as unknown,
@@ -40,6 +42,14 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({ pharmacyReports: { getPreferences: { setData: vi.fn() } } }),
     pharmacyReports: {
+      ownerWatch: {
+        useQuery: ({ section }: { section: string }) =>
+          query(section === 'approvals' ? state.approvals : []),
+      },
+      ownerTrading: {
+        useQuery: ({ section }: { section: string }) =>
+          section === 'expiry' ? query(state.expiry) : query(undefined, { isLoading: true }),
+      },
       branches: { useQuery: () => mounted.record('branches', state.branches) },
       catalog: { useQuery: () => mounted.record('catalog', state.catalog) },
       getPreferences: { useQuery: () => mounted.record('getPreferences', state.preferences) },
@@ -97,6 +107,8 @@ const REPORT_HOOKS = [
 ];
 
 beforeEach(() => {
+  state.expiry = undefined;
+  state.approvals = [];
   state.enabledModules = [...WITHOUT_REPORTS, 'pharmacy-reports'];
   mounted.hooks.length = 0;
   state.branches = query({ branches: [{ id: 'b1', name: 'Main' }] });
@@ -119,7 +131,64 @@ describe('PharmacyDashboardContent states', () => {
     expect(screen.getAllByText('Restricted').length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Financial reports access is required/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: 'Stock actions' })).toBeVisible();
-    expect(screen.queryByText('PKR 0')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\b0\.00\b/)).not.toBeInTheDocument();
+  });
+
+  it('exposes the owner overview as a navigable business dashboard region', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(
+      within(screen.getByRole('region', { name: 'Business dashboard' })).getByRole('heading', {
+        name: 'Trading today',
+      })
+    ).toBeVisible();
+  });
+
+  it('explains how a reader with no admitted branch can get access', () => {
+    state.branches = query({ branches: [], unassigned: true });
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(
+      screen.getByText('You are not assigned to a branch yet. Ask the owner to add you.')
+    ).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Business dashboard' })).not.toBeInTheDocument();
+  });
+  it('reserves chart height while trading figures load', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.getByText('Loading trading today…')).toHaveClass('min-h-56');
+  });
+  it('shows an approval headline equal to precisely its linked authorized queues', () => {
+    state.approvals = [
+      {
+        label: 'Purchase orders',
+        value: 3,
+        group: 'approval',
+        period: 'Submitted',
+        href: '/pharmacy/purchasing/orders',
+      },
+      {
+        label: 'Stock counts',
+        value: 4,
+        group: 'approval',
+        period: 'Current',
+        href: '/pharmacy/inventory',
+      },
+    ];
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    const summary = screen.getByText('Approvals waiting').closest('summary')!;
+    expect(summary).toHaveTextContent('Approvals waiting7');
+    summary.click();
+    expect(screen.getByRole('link', { name: /Purchase orders/ })).toHaveAttribute(
+      'href',
+      '/pharmacy/purchasing/orders'
+    );
+    expect(
+      screen.queryByRole('link', { name: /Supplier submission approvals/ })
+    ).not.toBeInTheDocument();
+  });
+  it('omits the money and cost tiles when only operational reports are granted', () => {
+    render(<PharmacyDashboardContent role="ADMIN" />);
+    expect(screen.queryByRole('heading', { name: "Today's trade" })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Expiry exposure' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Trading today' })).toBeVisible();
   });
 
   it('shows loading, not a financial restriction, while the command query is still pending', () => {
@@ -388,5 +457,32 @@ it('requests the Karachi business date at 00:30', () => {
   } finally {
     state.zone = 'UTC';
     vi.useRealTimers();
+  }
+});
+
+it('plots the report’s cumulative expiry values for the next 30, 60 and 90 days', () => {
+  state.catalog = query({
+    metrics: CATALOG_METRICS,
+    currency: 'AED',
+    permissions: { operational: true, financial: true },
+  });
+  state.expiry = [
+    { label: '30 days', value: 1200 },
+    { label: '60 days', value: 3400 },
+    { label: '90 days', value: 5600 },
+  ];
+  state.command = query({
+    freshness: { asOf: '2026-09-04T10:00:00Z', source: 'synthetic ledger' },
+    permissions: { operational: true, financial: true },
+    metrics: { expiryValueMinor30: 1200, expiryValueMinor60: 3400, expiryValueMinor90: 5600 },
+  });
+  render(<PharmacyDashboardContent role="EMPLOYEE" />);
+  const table = screen.getByRole('table', { name: 'Stock expiring from today' });
+  for (const [period, amount] of [
+    ['30 days', 'AED 12.00'],
+    ['60 days', 'AED 34.00'],
+    ['90 days', 'AED 56.00'],
+  ]) {
+    expect(within(table).getByRole('row', { name: `${period} ${amount}` })).toBeInTheDocument();
   }
 });

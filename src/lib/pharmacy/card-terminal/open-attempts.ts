@@ -22,6 +22,15 @@ export function countOpenCardTerminalAttempts(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   businessDate: Date
 ) {
+  return countOutstandingCardAttempts(db, scope, businessDate);
+}
+
+/** Outstanding attempts remain actionable even when their business day has passed. */
+export function countOutstandingCardAttempts(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  businessDate?: Date
+) {
   return db.pharmacyCardTerminalAttempt.count({
     where: {
       organizationId: scope.organizationId,

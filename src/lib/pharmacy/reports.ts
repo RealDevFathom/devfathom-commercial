@@ -1,9 +1,14 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { pharmacyBranchDayWindows, type PharmacyBranchDayEnds } from './business-day';
+import {
+  pharmacyBusinessDay,
+  pharmacyBranchDayWindows,
+  type PharmacyBranchDayEnds,
+} from './business-day';
 import { pharmacyBranchWindowSql, spanOf } from './business-day-sql';
 
+import { reportSaleLineMinor, reportSaleLineJoin, reportTenderTotal } from './trading-report-sql';
 import { grossMarginQuery } from './finance-reports';
 import {
   hasPharmacyReportDimension,
@@ -304,10 +309,34 @@ type MoneyCounts = {
   cashVarianceMinor: number | null;
 };
 
-async function readKhataAgingMinor(
+export const DASHBOARD_KHATA_EVENT_LIMIT = 10000;
+
+/** Caller has already selected this branch under Khata FORCE RLS. */
+export async function khataHistoryWithinLimit(
+  db: Prisma.TransactionClient,
+  branchId: string,
+  limit: number
+) {
+  const [size] = await db.$queryRaw<{ events: number }[]>`SELECT COUNT(*)::int AS events FROM (
+    SELECT 1 FROM pharmacy_khata_events WHERE "organizationId"=current_setting('app.current_organization_id',true)
+    AND "branchId"=${branchId} LIMIT ${limit + 1}) bounded`;
+  return size.events <= limit;
+}
+
+export function readKhataAgingMinor(
   db: Prisma.TransactionClient,
   branchIds: readonly string[]
-): Promise<number> {
+): Promise<number>;
+export function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[],
+  maxEventsPerBranch: number
+): Promise<number | null>;
+export async function readKhataAgingMinor(
+  db: Prisma.TransactionClient,
+  branchIds: readonly string[],
+  maxEventsPerBranch?: number
+): Promise<number | null> {
   const context = await db.$queryRaw<Array<{ branchId: string | null }>>(
     Prisma.sql`SELECT NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
   );
@@ -319,6 +348,11 @@ async function readKhataAgingMinor(
     // authorized report branch under its own branch context rather than bypassing that boundary.
     for (const branchId of branchIds) {
       await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
+      if (
+        maxEventsPerBranch !== undefined &&
+        !(await khataHistoryWithinLimit(db, branchId, maxEventsPerBranch))
+      )
+        return null;
       const rows = await db.$queryRaw<Array<{ value: bigint }>>(
         // A dishonoured cheque re-opens what it bounced, exactly as readKhataBalance counts it:
         // linked to a payment it re-opens that payment's charge, linked to a charge it re-opens
@@ -340,22 +374,58 @@ async function readKhataAgingMinor(
   return value;
 }
 
+export function readExpiryBalances(
+  db: Prisma.TransactionClient,
+  branchIds: string[],
+  dimensions = Prisma.empty
+) {
+  return db.$queryRaw<
+    Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>
+  >(
+    Prisma.sql`SELECT COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '30 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d30", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '60 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d60", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '90 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d90", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '180 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d180", COALESCE(SUM(CASE WHEN bal."disposition"='QUARANTINE' OR b."state"='QUARANTINED' THEN bal."onHandUnits" ELSE 0 END),0)::int AS "quarantine" FROM "pharmacy_stock_balances" bal JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=bal."organizationId" AND lot."branchId"=bal."branchId" AND lot."id"=bal."inventoryLotId" JOIN "pharmacy_manufacturing_batches" b ON b."organizationId"=lot."organizationId" AND b."id"=lot."manufacturingBatchId" WHERE bal."branchId" IN (${Prisma.join(branchIds)}) AND bal."onHandUnits">0 AND (bal."disposition"='AVAILABLE' OR bal."disposition"='QUARANTINE') ${dimensions}`
+  );
+}
+
 export async function readPharmacyOwnerCommandCentre(
   db: Prisma.TransactionClient,
-  filters: PharmacyReportFilters
+  filters: PharmacyReportFilters,
+  dashboardAt?: Date
 ) {
   const parsed = validatePharmacyReportFilters(filters);
-  // Business-date columns compare against `parsed`; event and posting timestamps use the
-  // workspace day, so 00:00–04:59 PKT counts on the Karachi date it happened on (DEV-958A: the
-  // branches' business day, which ends at their "day ends at" hour).
-  const eventWindows = pharmacyBranchDayWindows(
-    filters.from,
-    filters.to,
-    filters.branchIds,
-    filters
+  // An explicit report uses its chosen dates. On the live dashboard, branches
+  // that have not closed yesterday yet must still contribute yesterday's bills.
+  const byDay = new Map<string, string[]>();
+  if (dashboardAt) {
+    for (const branch of filters.branchIds) {
+      const day = pharmacyBusinessDay(
+        { timeZone: filters.timeZone, dayEnd: filters.dayEnds?.[branch] },
+        dashboardAt
+      );
+      const ids = byDay.get(day) ?? [];
+      ids.push(branch);
+      byDay.set(day, ids);
+    }
+  }
+  const ranges = dashboardAt
+    ? [...byDay].map(([day, branchIds]) => ({ from: day, to: day, branchIds }))
+    : [{ from: filters.from, to: filters.to, branchIds: filters.branchIds }];
+  const eventWindows = ranges.flatMap((range) =>
+    pharmacyBranchDayWindows(range.from, range.to, range.branchIds, filters)
   );
+  const dateWindows = dashboardAt
+    ? ranges.map((range) => ({
+        branchIds: range.branchIds,
+        ...validatePharmacyReportFilters(range),
+      }))
+    : [{ branchIds: filters.branchIds, ...parsed }];
+  const dateWindow = (alias: 's' | 't' | 'r' | 'c') =>
+    pharmacyBranchWindowSql(
+      dateWindows,
+      Prisma.raw(`${alias}."branchId"`),
+      Prisma.raw(`${alias}."businessDate"`)
+    );
   const eventWindow = spanOf(eventWindows);
-  const at = new Date();
+  const at = dashboardAt ?? new Date();
   const branches = Prisma.join(filters.branchIds);
   // Supplier, ingredient and batch filters narrow every metric that can be traced to stock;
   // metrics that cannot (cash, refunds, closes, fiscal, Khata, coverage) read unknown instead
@@ -385,17 +455,17 @@ export async function readPharmacyOwnerCommandCentre(
       }`,
     }
   );
-  const saleWindow = Prisma.sql`l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}`;
+  const saleWindow = Prisma.sql`l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND ${dateWindow('s')}`;
   // Batch and supplier live on the lots a line drew from: sum each allocation's charged money.
   // Historical allocations without that snapshot make the filtered total unknown, not guessed.
   // DEV-863: a prepaid tier discount is kept per allocation in the line's own snapshot, since
   // allocation rows are append-only; subtract it so the filtered total matches the charged bill.
   const salesQuery = lotScoped
-    ? Prisma.sql`(SELECT CASE WHEN BOOL_OR(a."grossMinor" IS NULL OR a."discountMinor" IS NULL) THEN NULL ELSE COALESCE(SUM(a."grossMinor" - a."discountMinor" - ${PREPAID_ALLOCATION_TIER_DISCOUNT} - ${BILL_ALLOCATION_DISCOUNT}) - SUM(${LINE_ALLOCATION_DISCOUNT}),0) END FROM "pharmacy_sale_line_allocations" a JOIN "pharmacy_sale_lines" l ON l."organizationId"=a."organizationId" AND l."branchId"=a."branchId" AND l."id"=a."saleLineId" JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=a."organizationId" AND lot."branchId"=a."branchId" AND lot."id"=a."inventoryLotId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)} ${lotDimension(lot, filters, false)})::int`
-    : Prisma.sql`COALESCE((SELECT SUM(l."grossMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)}),0)::int`;
+    ? Prisma.sql`(SELECT CASE WHEN BOOL_OR(a."grossMinor" IS NULL OR a."discountMinor" IS NULL) THEN NULL ELSE COALESCE(SUM(a."grossMinor" - a."discountMinor" - ${PREPAID_ALLOCATION_TIER_DISCOUNT} - ${BILL_ALLOCATION_DISCOUNT}) - SUM(${LINE_ALLOCATION_DISCOUNT}),0) END FROM "pharmacy_sale_line_allocations" a JOIN "pharmacy_sale_lines" l ON l."organizationId"=a."organizationId" AND l."branchId"=a."branchId" AND l."id"=a."saleLineId" JOIN "pharmacy_sales" s ON ${reportSaleLineJoin} JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=a."organizationId" AND lot."branchId"=a."branchId" AND lot."id"=a."inventoryLotId" WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)} ${lotDimension(lot, filters, false)})::int`
+    : Prisma.sql`COALESCE((SELECT SUM(${reportSaleLineMinor}) FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON ${reportSaleLineJoin} WHERE ${saleWindow} ${ingredientOf(Prisma.sql`l."organizationId"`, Prisma.sql`l."medicineId"`)}),0)::int`;
   const tenderMoney = dimensional
     ? Prisma.sql`NULL::int AS "cashMinor", NULL::int AS "refundsMinor", NULL::int AS "cashVarianceMinor"`
-    : Prisma.sql`COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", (SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence"))::int AS "cashVarianceMinor"`;
+    : Prisma.sql`COALESCE((SELECT ${reportTenderTotal} FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND ${dateWindow('t')}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND ${dateWindow('r')}),0)::int AS "refundsMinor", (SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND ${dateWindow('c')} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence"))::int AS "cashVarianceMinor"`;
   const signalScope = Prisma.sql`${ingredientOf(Prisma.sql`s."organizationId"`, Prisma.sql`s."medicineId"`)} ${
     lotScoped
       ? Prisma.sql`AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" lot WHERE lot."organizationId"=s."organizationId" AND lot."branchId"=s."branchId" AND lot."id"=s."inventoryLotId" ${lotDimension(lot, filters, false)})`
@@ -416,10 +486,10 @@ export async function readPharmacyOwnerCommandCentre(
         : db.$queryRaw<Array<{ value: number }>>(
             Prisma.sql`SELECT COUNT(*)::int AS value FROM "pharmacy_unfulfilled_demand_events" WHERE "organizationId"=current_setting('app.current_organization_id',true) AND "branchId" IN (${branches}) AND ${pharmacyBranchWindowSql(eventWindows, Prisma.raw('"branchId"'), Prisma.raw('"createdAt"'))} ${ingredientOf(Prisma.sql`"pharmacy_unfulfilled_demand_events"."organizationId"`, Prisma.sql`"pharmacy_unfulfilled_demand_events"."requestedMedicineId"`)}`
           ),
-      db.$queryRaw<
-        Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>
-      >(
-        Prisma.sql`SELECT COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '30 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d30", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '60 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d60", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '90 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d90", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '180 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d180", COALESCE(SUM(CASE WHEN bal."disposition"='QUARANTINE' OR b."state"='QUARANTINED' THEN bal."onHandUnits" ELSE 0 END),0)::int AS "quarantine" FROM "pharmacy_stock_balances" bal JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=bal."organizationId" AND lot."branchId"=bal."branchId" AND lot."id"=bal."inventoryLotId" JOIN "pharmacy_manufacturing_batches" b ON b."organizationId"=lot."organizationId" AND b."id"=lot."manufacturingBatchId" WHERE bal."branchId" IN (${branches}) AND bal."onHandUnits">0 AND (bal."disposition"='AVAILABLE' OR bal."disposition"='QUARANTINE') ${ingredientOf(Prisma.sql`b."organizationId"`, Prisma.sql`b."medicineId"`)} ${lotDimension(lot, filters, false)}`
+      readExpiryBalances(
+        db,
+        filters.branchIds,
+        Prisma.sql`${ingredientOf(Prisma.sql`b."organizationId"`, Prisma.sql`b."medicineId"`)} ${lotDimension(lot, filters, false)}`
       ),
       !dimensional
         ? db.pharmacyRecallNotice.count({ where: { status: 'OPEN' } })
@@ -468,14 +538,21 @@ export async function readPharmacyOwnerCommandCentre(
       dimensional
         ? none
         : db.$queryRaw<Array<{ aging: number; rejected: number }>>(
-            Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
+            Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches}) AND "status" IN ('QUEUED','SUBMITTING','REJECTED','DEAD')`
           ),
     ]);
-  const khataAgingMinor = dimensional ? null : await readKhataAgingMinor(db, filters.branchIds);
+  const khataAgingMinor = dimensional
+    ? null
+    : dashboardAt
+      ? await readKhataAgingMinor(db, filters.branchIds, DASHBOARD_KHATA_EVENT_LIMIT)
+      : await readKhataAgingMinor(db, filters.branchIds);
   // DEV-729: the evaluator leaves a signal row (in any status) wherever it has run. A
   // branch with none has never been calculated, so a zero there is unknown, not "all fine".
   const signalHistory = await db.$queryRaw<Array<{ evaluatedBranches: number }>>(
-    Prisma.sql`SELECT COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (${branches})`
+    dashboardAt
+      ? Prisma.sql`SELECT COUNT(*)::int AS "evaluatedBranches" FROM (VALUES ${Prisma.join(filters.branchIds.map((id) => Prisma.sql`(${id}::text)`))}) b(id)
+      WHERE EXISTS (SELECT 1 FROM pharmacy_stock_signals h WHERE h."organizationId"=current_setting('app.current_organization_id',true) AND h."branchId"=b.id)`
+      : Prisma.sql`SELECT COUNT(DISTINCT h."branchId")::int AS "evaluatedBranches" FROM "pharmacy_stock_signals" h WHERE h."branchId" IN (${branches})`
   );
   const m = money[0] ?? {
     salesMinor: 0,

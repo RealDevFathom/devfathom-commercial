@@ -15,6 +15,7 @@ import 'server-only';
  * one must stay the diff they explained, not silently become material again when
  * the contract changes.
  */
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { foldExpectedCash, saleTotalMinor } from '../settlement';
@@ -195,31 +196,16 @@ export async function branchStockValueMinor(
   db: ScopedDb,
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>
 ): Promise<bigint> {
-  const balances = await db.pharmacyStockBalance.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      disposition: 'AVAILABLE',
-    },
-    select: { onHandUnits: true, inventoryLotId: true },
-  });
-  if (balances.length === 0) return BigInt(0);
-
-  const lots = await db.pharmacyInventoryLot.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      id: { in: balances.map((balance) => balance.inventoryLotId) },
-    },
-    select: { id: true, unitCostMinor: true },
-  });
-  const costById = new Map(lots.map((lot) => [lot.id, lot.unitCostMinor]));
-
-  return balances.reduce(
-    (total, balance) =>
-      total + BigInt(balance.onHandUnits) * BigInt(costById.get(balance.inventoryLotId) ?? 0),
-    BigInt(0)
+  const [row] = await db.$queryRaw<{ value: bigint }[]>(
+    onHandValueQuery(scope.organizationId, [scope.branchId])
   );
+  return row?.value ?? BigInt(0);
+}
+
+export function onHandValueQuery(organizationId: string, branchIds: string[]) {
+  return Prisma.sql`SELECT COALESCE(SUM(b."onHandUnits"::bigint * lot."unitCostMinor"),0)::bigint AS value
+    FROM pharmacy_stock_balances b JOIN pharmacy_inventory_lots lot ON lot."organizationId"=b."organizationId" AND lot."branchId" = b."branchId" AND lot.id=b."inventoryLotId"
+    WHERE b."organizationId"=${organizationId} AND b."branchId" IN (${Prisma.join(branchIds)}) AND b.disposition='AVAILABLE'`;
 }
 
 export type ComparisonInput = {

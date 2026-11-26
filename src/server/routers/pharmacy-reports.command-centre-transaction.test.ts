@@ -38,6 +38,8 @@ function caller() {
   return pharmacyReportsRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
+      user: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_1' }]) },
       pharmacyBranch: { findMany: mocks.branches },
     },
     entitlements: {
@@ -77,6 +79,23 @@ describe('command-centre transaction-local Khata context', () => {
     expect(result.metrics.khataAgingMinor).toBe(4200);
   });
 
+  it('keeps operational report expiry values and strips them from the dashboard response', async () => {
+    const expiry = {
+      expiryValueMinor30: 100,
+      expiryValueMinor60: 200,
+      expiryValueMinor90: 300,
+      expiryValueMinor180: 400,
+    };
+    mocks.read.mockResolvedValue({ metrics: expiry });
+    mocks.can.mockImplementation(async (_subject, action) => action === 'reports:operational');
+    expect((await caller().commandCentre(input)).metrics).toMatchObject(expiry);
+    expect((await caller().commandCentre({ ...input, dashboard: true })).metrics).toMatchObject({
+      expiryValueMinor30: null,
+      expiryValueMinor60: null,
+      expiryValueMinor90: null,
+      expiryValueMinor180: null,
+    });
+  });
   it('preserves financial masking after the transaction read', async () => {
     mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
     const result = await caller().commandCentre(input);
