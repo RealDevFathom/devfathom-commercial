@@ -702,6 +702,141 @@ describeDatabase('DEV-988 explicit bill line pack check', () => {
   }, 60000);
 });
 
+describeDatabase('DEV-1054 a failed pack check follows the bill and the medicine', () => {
+  const GTIN = '01234567890128';
+  const device = 'readd-till';
+
+  /** A one-line bill whose medicine has a registered barcode, so a pack can match. */
+  async function checkedBill(label: string) {
+    const s = await shop(label);
+    await openDrawer(s, device, 0);
+    const { sale, lines } = await billBy(s, s.cashier, [[1000, 1]]);
+    const line = lines[0]!;
+    const presentationId = await tenant(s.owner, async (db) => {
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: line.packLevelId } });
+      await db.medicineBarcode.create({
+        data: {
+          organizationId: s.owner.organizationId,
+          presentationId: pack.presentationId,
+          packLevelId: pack.id,
+          type: 'GTIN',
+          code: GTIN,
+          normalizedCode: GTIN,
+        },
+      });
+      return pack.presentationId;
+    });
+    const check = (saleLineId: string, payload: string) =>
+      asMember(s, s.cashier, (c) =>
+        c.checkBillLinePack({ branchId: s.owner.branchId, saleId: sale.id, saleLineId, payload })
+      );
+    const add = async (saleId: string, item = { ...line, presentationId }) => {
+      const { line: added } = await tenant(s.as(s.cashier), (db) =>
+        sales.addSaleLine(db, s.as(s.cashier), {
+          saleId,
+          medicineId: item.medicineId,
+          presentationId: item.presentationId,
+          packLevelId: item.packLevelId,
+          saleUnit: 'UNIT',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 1,
+          idempotencyKey: randomUUID(),
+        })
+      );
+      return added;
+    };
+    const pay = (saleId: string, amountMinor = 1000) =>
+      cash(s, s.cashier, device, saleId, amountMinor);
+    const fail = (saleLineId: string) => check(saleLineId, 'synthetic-unmatched-pack');
+    const pass = (saleLineId: string) => check(saleLineId, '(01)' + GTIN);
+    return { s, sale, line, add, pay, fail, pass };
+  }
+
+  it('refuses payment when the medicine is added again before the blocked line is removed', async () => {
+    const { s, sale, line, add, pay, fail } = await checkedBill('readdfirst');
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+    const again = await add(sale.id);
+    expect(again.id).not.toBe(line.id);
+    expect(again.packCheckBlocked).toBe(true);
+    await removeLine(s, s.cashier, sale.id, line, device);
+    await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
+    // Removing and re-adding once more does not launder the failed check either.
+    await removeLine(s, s.cashier, sale.id, { ...line, id: again.id }, device);
+    const third = await add(sale.id);
+    expect(third.packCheckBlocked).toBe(true);
+    await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySale.findUniqueOrThrow({ where: { id: sale.id }, select: { status: true } })
+      )
+    ).toEqual({ status: 'OPEN' });
+  }, 60_000);
+
+  it('still refuses payment when the blocked line is removed before the medicine is added again', async () => {
+    const { s, sale, line, add, pay, fail } = await checkedBill('removefirst');
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+    await removeLine(s, s.cashier, sale.id, line, device);
+    expect((await add(sale.id)).packCheckBlocked).toBe(true);
+    await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
+  }, 60_000);
+
+  it('takes payment once the line added again passes its own check', async () => {
+    const { s, sale, line, add, pay, fail, pass } = await checkedBill('recheck');
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+    const again = await add(sale.id);
+    expect(again.packCheckBlocked).toBe(true);
+    await removeLine(s, s.cashier, sale.id, line, device);
+    expect(await pass(again.id)).toMatchObject({ matched: true });
+    await pay(sale.id);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySale.findUniqueOrThrow({ where: { id: sale.id }, select: { status: true } })
+      )
+    ).toEqual({ status: 'COMPLETED' });
+  }, 60_000);
+
+  it('blocks the medicine again when a later check fails after an earlier pass', async () => {
+    const { s, sale, line, add, pay, fail, pass } = await checkedBill('failafterpass');
+    expect(await pass(line.id)).toMatchObject({ matched: true });
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+    const again = await add(sale.id);
+    expect(again.packCheckBlocked).toBe(true);
+    await removeLine(s, s.cashier, sale.id, line, device);
+    await expect(pay(sale.id)).rejects.toThrow(/pack.check/i);
+  }, 60_000);
+
+  it('leaves a different medicine on the same bill and the same medicine on another bill unblocked', async () => {
+    const { s, sale, line, add, pay, fail } = await checkedBill('unaffected');
+    // A second medicine, received and first billed on a bill of its own.
+    const other = await billBy(s, s.cashier, [[700, 1]]);
+    const otherLine = other.lines[0]!;
+    const otherPresentationId = await tenant(s.owner, async (db) => {
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: otherLine.packLevelId } });
+      return pack.presentationId;
+    });
+    expect(await fail(line.id)).toMatchObject({ matched: false });
+
+    // A different medicine added to the bill that holds the failed check.
+    const different = await add(sale.id, { ...otherLine, presentationId: otherPresentationId });
+    expect(different.packCheckBlocked).toBe(false);
+    await removeLine(s, s.cashier, sale.id, line, device);
+    await pay(sale.id, 700);
+
+    // The failed medicine on another bill.
+    const same = await add(other.sale.id);
+    expect(same.packCheckBlocked).toBe(false);
+    await pay(other.sale.id, 1700);
+    expect(
+      await tenant(s.owner, (db) =>
+        db.pharmacySale.findMany({
+          where: { id: { in: [sale.id, other.sale.id] } },
+          select: { status: true },
+        })
+      )
+    ).toEqual([{ status: 'COMPLETED' }, { status: 'COMPLETED' }]);
+  }, 60_000);
+});
+
 describeDatabase('DEV-977 existing line discount', () => {
   it('requires a verified approval and records the authorized discount against the selected line and its allocations', async () => {
     const s = await shop('discount');
