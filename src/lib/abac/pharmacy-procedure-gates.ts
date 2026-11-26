@@ -1870,7 +1870,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.branches': {
-    gate: 'auditedProtectedProcedure + pharmacy-reports module; reports:operational/Manager see more branches, others see their assigned branches',
+    gate: 'auditedProtectedProcedure + pharmacy-reports module; financial readers and Managers see admitted branches, operational-only holders retain their report scope, other members see active assignments',
     none: 'any signed-in member of the licensed workspace (branch picker list)',
   },
   'pharmacyReports.catalog': {
@@ -1888,7 +1888,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.commandCentre': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue hidden for branch-scoped Managers',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial within admitted active branches; organization-wide safety queue hidden for branch-scoped readers',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'operational-reports/see-stock-alert-lost',
@@ -1992,7 +1992,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.replenishment': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); order-planning scenario figures only for ADMIN + reports:financial',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); order-planning monetary figures require reports:financial within admitted active branches',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'run-branches/read-reports-centre-replenishment',
