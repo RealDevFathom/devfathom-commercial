@@ -190,7 +190,14 @@ export async function portalContext(request: Request) {
             await inTenant((db) => startPortalSignIn(db, organizationId, parsed.data.token, send));
           } catch (error) {
             if (!(error instanceof PharmacyPortalError)) reportPortalFailure('UNEXPECTED');
-            else if (error.reason === 'SEND_FAILED') reportPortalFailure('SEND_FAILED');
+            else if (error.deliveryFailure) {
+              const { errorName, providerStatus } = error.deliveryFailure;
+              console.error('pharmacy.portal.delivery', {
+                organizationId,
+                errorName,
+                providerStatus,
+              });
+            } else if (error.reason === 'SEND_FAILED') reportPortalFailure('SEND_FAILED');
           }
         });
         return json({ ok: true }, 202);

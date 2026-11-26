@@ -80,7 +80,8 @@ export class WhatsAppProviderError extends Error {
   constructor(
     readonly reason: 'NOT_CONFIGURED' | 'TEMPLATE_NOT_CONFIGURED' | 'SEND_FAILED',
     detail?: string,
-    readonly definitive = reason !== 'SEND_FAILED'
+    readonly definitive = reason !== 'SEND_FAILED',
+    readonly httpStatus?: number
   ) {
     super(detail ? `${reason}: ${detail}` : reason);
     this.name = 'WhatsAppProviderError';
@@ -270,7 +271,8 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
       throw new WhatsAppProviderError(
         'SEND_FAILED',
         `HTTP ${response.status}`,
-        !response.ok && response.status >= 400 && response.status < 500 && response.status !== 408
+        !response.ok && response.status >= 400 && response.status < 500 && response.status !== 408,
+        response.status
       );
     }
     return { providerMessageId: id, acceptedByProvider: true };

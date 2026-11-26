@@ -5,6 +5,7 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { currentPharmacyBusinessDate } from './business-day-clock';
 
+import { safePortalDeliveryFailure } from './portal-delivery';
 import { readCustomerSnapshot } from './customer-loyalty';
 import { readKhataBalance } from './family-khata';
 import { recordKhataRepayment } from './khata-repayment';
@@ -54,7 +55,8 @@ export class PharmacyPortalError extends Error {
       | 'RAAST_NOT_CONFIGURED'
       | 'REQUEST_NOT_FOUND'
       | 'INVALID_STATE'
-      | 'KIND_NOT_ALLOWED'
+      | 'KIND_NOT_ALLOWED',
+    readonly deliveryFailure?: ReturnType<typeof safePortalDeliveryFailure>
   ) {
     super(reason);
     this.name = 'PharmacyPortalError';
@@ -205,8 +207,8 @@ export async function startPortalSignIn(
   if (stored.count !== 1) throw new PharmacyPortalError('LINK_LOCKED');
   try {
     await sendCode({ to: phone, otp, body: portalCodeMessage(link.branch.name, otp) });
-  } catch {
-    throw new PharmacyPortalError('SEND_FAILED');
+  } catch (error) {
+    throw new PharmacyPortalError('SEND_FAILED', safePortalDeliveryFailure(error));
   }
   return { sentTo: maskPhone(phone) };
 }

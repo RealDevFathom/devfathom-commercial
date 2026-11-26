@@ -131,6 +131,8 @@ describe('anonymous sign-in responses', () => {
       PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
     };
     Object.entries(config).forEach(([key, value]) => vi.stubEnv(key, value));
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal('fetch', fetch);
     try {
       for (const failure of [null, 'LINK_INVALID', 'SEND_FAILED'] as const) {
         vi.clearAllMocks();
@@ -153,7 +155,57 @@ describe('anonymous sign-in responses', () => {
           ]);
         }
       }
+
+      const service =
+        await vi.importActual<typeof import('./customer-portal')>('./customer-portal');
+      const fixtureDb = {
+        pharmacyCustomerPortalLink: {
+          findUnique: async () => ({
+            id: 'link',
+            organizationId: 'org',
+            branch: { active: true, name: 'Private branch' },
+            customer: { active: true },
+            customerId: 'private customer',
+            expiresAt: new Date(Date.now() + 60_000),
+            otpFailedAttempts: 0,
+          }),
+          updateMany: async () => ({ count: 1 }),
+        },
+        pharmacyCustomer: { findFirst: async () => ({ patient: { phone: '+12025550145' } }) },
+      } as unknown as Parameters<typeof service.startPortalSignIn>[0];
+      for (const providerResponse of [true, false]) {
+        vi.clearAllMocks();
+        const privateDetail = 'fixture token, phone, code, message body and provider payload';
+        if (providerResponse)
+          fetch.mockResolvedValueOnce(Response.json({ error: privateDetail }, { status: 503 }));
+        else
+          fetch.mockRejectedValueOnce(
+            Object.assign(new Error(privateDetail), { name: privateDetail, status: privateDetail })
+          );
+        start.mockImplementationOnce((_db, org, token, send) =>
+          service.startPortalSignIn(fixtureDb, org, token, send)
+        );
+        const context = await portalContext(new Request('http://pharmacy.localhost'));
+        const response = await context!.handle('start', { token: 'pcl_' + '4'.repeat(26) });
+        expect(response.status).toBe(202);
+        expect(await response.json()).toEqual({ ok: true });
+        expect(log).not.toHaveBeenCalled();
+        const work = vi.mocked(after).mock.calls[0]![0];
+        if (typeof work === 'function') await work();
+        expect(fetch).toHaveBeenCalledTimes(1);
+        expect(log.mock.calls).toEqual([
+          [
+            'pharmacy.portal.delivery',
+            {
+              organizationId: 'org',
+              errorName: providerResponse ? 'WhatsAppProviderError' : 'Error',
+              providerStatus: providerResponse ? 503 : null,
+            },
+          ],
+        ]);
+      }
     } finally {
+      vi.unstubAllGlobals();
       vi.unstubAllEnvs();
       log.mockRestore();
     }

@@ -1,12 +1,32 @@
 import 'server-only';
 
 import { randomUUID } from 'node:crypto';
-import { readWhatsAppConfig, type WhatsAppConfig } from './whatsapp/provider';
+import {
+  readWhatsAppConfig,
+  WhatsAppProviderError,
+  type WhatsAppConfig,
+} from './whatsapp/provider';
 
 export function reportPortalFailure(reason: 'SEND_FAILED' | 'UNEXPECTED') {
   const reference = randomUUID();
   console.error('pharmacy.portal', { reason, reference });
   return reference;
+}
+
+// Error names and messages can carry arbitrary remote data. Classify locally
+// and read only the numeric HTTP status recorded by the WhatsApp adapter.
+export function safePortalDeliveryFailure(error: unknown) {
+  if (error instanceof WhatsAppProviderError) {
+    const status = error.httpStatus;
+    return {
+      errorName: 'WhatsAppProviderError',
+      providerStatus:
+        status !== undefined && Number.isInteger(status) && status >= 100 && status <= 599
+          ? status
+          : null,
+    };
+  }
+  return { errorName: error instanceof Error ? 'Error' : 'UnknownError', providerStatus: null };
 }
 
 export function portalWhatsAppReady(
