@@ -6,6 +6,12 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { starterHistory } from '@/lib/pharmacy/migration/starter-history';
 
+const FIELD_LABEL: Readonly<Record<string, string>> = {
+  packSize: 'Pack size',
+  controlled: 'Controlled',
+  active: 'Active',
+};
+
 export function cataloguePageNumber(value: string) {
   const page = Number(value);
   return Number.isInteger(page) && page >= 1 && page <= 10000 ? page : 1;
@@ -153,8 +159,7 @@ export function StarterHistory({
                 </p>
                 {r.existingValue !== null && (
                   <p className="text-sm">
-                    {{ packSize: 'Pack size', controlled: 'Controlled', active: 'Active' }[r.field]}{' '}
-                    · Pharmacy {r.existingValue} · Starter {r.starterValue}
+                    {FIELD_LABEL[r.field]} · Pharmacy {r.existingValue} · Starter {r.starterValue}
                   </p>
                 )}
               </li>

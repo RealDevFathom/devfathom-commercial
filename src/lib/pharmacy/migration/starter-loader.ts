@@ -25,7 +25,12 @@ function referenceSnapshot(input: unknown) {
 const snapshot = referenceSnapshot(shipped);
 export const starterProductCount = snapshot?.rows.length ?? 0;
 
-async function existingProducts(db: ScopedDb, organizationId: string, rows: StarterProduct[]) {
+async function existingProducts(
+  db: ScopedDb,
+  organizationId: string,
+  rows: StarterProduct[],
+  normalized: (value: string) => string
+) {
   // A staged file's row number/code is an Abuzar identity only for the ABUZAR source kind.
   const sources = await db.$queryRaw<{ sourceId: string; medicineId: string }[]>`
     SELECT l."sourceKey" AS "sourceId", l."medicineId" FROM pharmacy_staged_medicine_links l
@@ -37,10 +42,22 @@ async function existingProducts(db: ScopedDb, organizationId: string, rows: Star
   const codes = rows.flatMap((r) =>
     r.legacyCode && !sourceIds.has(r.sourceId) ? [r.legacyCode] : []
   );
-  const aliases = await db.medicineAlias.findMany({
-    where: { organizationId, type: 'LEGACY_CODE', value: { in: codes } },
-    select: { value: true, medicineId: true },
-  });
+  // An old code is only a fallback on an unbound local record. A medicine created in
+  // an earlier batch can share CustomICode with another ICode and is never a candidate.
+  const aliases = codes.length
+    ? await db.$queryRaw<{ value: string; medicineId: string }[]>`
+    SELECT a.value,a."medicineId" FROM pharmacy_medicine_aliases a
+    WHERE a."organizationId"=${organizationId} AND a.type='LEGACY_CODE'
+      AND a."normalizedValue" = ANY(${codes.map(normalized)}::text[]) AND a.value = ANY(${codes}::text[])
+      AND NOT EXISTS (SELECT 1 FROM pharmacy_starter_identities i
+        WHERE i."organizationId"=a."organizationId" AND i."medicineId"=a."medicineId")
+      AND NOT EXISTS (
+        SELECT 1 FROM pharmacy_staged_medicine_links l
+        JOIN pharmacy_migration_batches b ON b."organizationId"=l."organizationId" AND b.id=l."batchId"
+        JOIN pharmacy_migration_sources s ON s."organizationId"=b."organizationId" AND s.id=b."sourceId"
+        WHERE l."organizationId"=a."organizationId" AND l."medicineId"=a."medicineId" AND s.kind='ABUZAR'
+      )`
+    : [];
   const byCode = new Map<string, string[]>();
   for (const alias of aliases) {
     const list = byCode.get(alias.value) ?? [];
@@ -82,11 +99,11 @@ export async function loadStarterBatch(db: ScopedDb, organizationId: string) {
   if (run.catalogueHash && snapshot.hash !== run.catalogueHash)
     throw new Error('Starter catalogue changed during an unfinished import.');
   const rows = snapshot.rows.slice(run.processed, run.processed + STARTER_BATCH_SIZE);
-  const existing = await existingProducts(db, organizationId, rows);
   const normalized = await catalogueNormalizer(
     db,
     rows.flatMap((r) => [r.legacyCode, r.verifiedGeneric].filter((s): s is string => !!s))
   );
+  const existing = await existingProducts(db, organizationId, rows, normalized);
   const medicines: Prisma.MedicineCreateManyInput[] = [];
   const presentations: Prisma.PresentationCreateManyInput[] = [];
   const packs: Prisma.PackLevelCreateManyInput[] = [];

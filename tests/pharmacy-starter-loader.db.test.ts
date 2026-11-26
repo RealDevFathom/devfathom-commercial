@@ -7,7 +7,7 @@ import { assertDisposableRlsDatabase } from './disposable-rls-database';
 vi.mock('@/lib/pharmacy/migration/starter-products.json', () => ({
   default: Array.from({ length: 251 }, (_, i) => ({
     sourceId: String(i).padStart(4, '0'),
-    legacyCode: 'QA-' + i,
+    legacyCode: i === 249 || i === 250 ? 'QA-shared-code' : 'QA-' + i,
     name: 'QA catalogue ' + i,
     active: i !== 1,
     controlled: i === 0,
@@ -88,12 +88,24 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
         return row;
       });
       for (const id of [a, b]) {
+        await expect(
+          withTenantDb(id, async (db) => {
+            await loadStarterBatch(db, id);
+            throw new Error('Synthetic interruption before commit');
+          })
+        ).rejects.toThrow('Synthetic interruption before commit');
+        expect(await withTenantDb(id, (db) => db.pharmacyStarterIdentity.count())).toBe(0);
         await withTenantDb(id, (db) => loadStarterBatch(db, id));
         expect(await withTenantDb(id, (db) => db.pharmacyStarterIdentity.count())).toBe(250);
         await withTenantDb(id, (db) => loadStarterBatch(db, id));
         const before = await withTenantDb(id, snapshot);
         expect(before.counts.slice(0, 3)).toEqual([251, 251, 251]);
         expect(before.counts[4]).toBe(251);
+        expect(
+          await withTenantDb(id, (db) =>
+            db.medicineAlias.count({ where: { value: 'QA-shared-code' } })
+          )
+        ).toBe(2);
         await withPlatformDb((db) => enqueueStarterImport(db, id));
         await withTenantDb(id, (db) => loadStarterBatch(db, id));
         expect(await withTenantDb(id, snapshot)).toEqual(before);
@@ -134,9 +146,18 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
         await db.medicinePackMrp.create({
           data: { packLevelId: pack.id, batchReference: 'QA', printedMrpMinor: 580 },
         });
-        const lot = await db.pharmacyInventoryLot.create({
-          data: {
-            branchId: branch.id,
+        const location = await db.pharmacyStockLocation.create({
+          data: { branchId: branch.id, code: 'QA', name: 'QA stock', kind: 'STORE' },
+        });
+        const { receiveLot } = await import('@/lib/pharmacy/stock-ledger');
+        const { lot } = await receiveLot(
+          db,
+          { organizationId: b, branchId: branch.id, actorId: 'qa-worker' },
+          {
+            stockLocationId: location.id,
+            receivedAt: new Date(),
+            quantityUnits: 60,
+            idempotencyKey: randomUUID(),
             manufacturingBatchId: batch.id,
             packLevelId: pack.id,
             unitsPerPack: 20,
@@ -146,8 +167,13 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
             printedMrpMinor: 580,
             receivedExpiresAt: new Date('2031-01-01'),
             receivedExpiryPrecision: 'DAY',
-          },
-        });
+          }
+        );
+        expect(
+          await db.pharmacyStockBalance.count({
+            where: { inventoryLotId: lot.id, onHandUnits: 60 },
+          })
+        ).toBe(1);
         expect(await db.pharmacyInventoryLot.findUnique({ where: { id: lot.id } })).toBeTruthy();
         expect(await db.medicinePackMrp.count()).toBe(1);
       });
@@ -155,6 +181,7 @@ describe.runIf(process.env.TEST_DATABASE_URL)('starter load in disposable Postgr
         expect(await db.medicine.count({ where: { organizationId: b } })).toBe(0);
         expect(await db.medicinePackMrp.count()).toBe(0);
         expect(await db.pharmacyInventoryLot.count()).toBe(0);
+        expect(await db.pharmacyStockBalance.count()).toBe(0);
         expect(await db.medicine.count({ where: { saleable: true } })).toBe(250);
         expect(await db.pharmacyStarterConflict.count()).toBe(0);
         expect(
