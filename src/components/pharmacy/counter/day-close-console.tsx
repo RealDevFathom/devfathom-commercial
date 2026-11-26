@@ -54,6 +54,7 @@ export function drawerOpenedLabel(
 }
 
 const DRAWER_MOVEMENT_LABELS: Record<string, string> = {
+  REJECTED_OFFLINE_CASH: 'Cash from a rejected offline sale',
   CASH_SALE: 'Cash sale',
   CASH_REFUND: 'Cash refund',
   PAID_IN: 'Paid in',

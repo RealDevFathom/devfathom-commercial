@@ -442,6 +442,46 @@ async function asMember<T>(
 // Each test seeds its own organization and runs many transactions as the restricted role; under
 // the full pharmacy database run they can pass vitest's 5 s default.
 describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_000 }, () => {
+  it('balances rejected offline cash in the reviewed shift and credits suspense once', async () => {
+    const s = await shop('rejected_offline', { shifts: true });
+    const device = randomUUID();
+    const drawer = await openDrawer(s, device, 200);
+    const [shift] = await shiftsOf(s, drawer.id);
+    const commandId = randomUUID();
+    await tenant(s.owner, (db) =>
+      settlement.recordRejectedOfflineCash(db, s.owner, {
+        commandId,
+        deviceId: device,
+        receiptNumber: 12,
+        amountMinor: 130,
+      })
+    );
+    const report = await tenant(s.owner, (db) =>
+      shifts.readPharmacyCashShiftReport(db, s.owner, shift!.id, { actorIsManager: true })
+    );
+    expect(report.cash).toMatchObject({
+      cashSalesMinor: 0,
+      paidInMinor: 0,
+      rejectedOfflineCashMinor: 130,
+      expectedMinor: 330,
+    });
+    expect(report.tenders).toEqual([]);
+    const journal = await tenant(s.owner, (db) =>
+      db.financeJournalEntry.findFirstOrThrow({
+        where: { sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH', sourceId: commandId },
+        include: { lines: true },
+      })
+    );
+    expect(
+      journal.lines.map((line) => [line.accountCode, line.side, Number(line.amountMinor)]).sort()
+    ).toEqual([
+      ['CASH', 'DEBIT', 130],
+      ['OFFLINE_CASH_SUSPENSE', 'CREDIT', 130],
+    ]);
+    await closeShift(s, s.cashier, shift!.id, 330);
+    expect((await shiftsOf(s, drawer.id))[0]).toMatchObject({ varianceMinor: 0, status: 'CLOSED' });
+  });
+
   it('leaves a branch without shifts exactly as before: no shift, no attribution, the same close', async () => {
     const s = await shop('single', { shifts: false });
     const device = `device-${randomUUID()}`;

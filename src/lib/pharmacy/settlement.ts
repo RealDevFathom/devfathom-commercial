@@ -1,3 +1,4 @@
+import { postJournalEntry } from '@/lib/finance/journal';
 import {
   recordTerminalRefundRoot,
   reversedTenderRefundIds,
@@ -1261,7 +1262,13 @@ export function computePharmacyClose(source: CloseSource) {
 }
 
 export type DrawerMovement = {
-  kind: 'OPENING_FLOAT' | 'CASH_SALE' | 'CASH_REFUND' | 'PAID_IN' | 'PAID_OUT';
+  kind:
+    | 'REJECTED_OFFLINE_CASH'
+    | 'OPENING_FLOAT'
+    | 'CASH_SALE'
+    | 'CASH_REFUND'
+    | 'PAID_IN'
+    | 'PAID_OUT';
   amountMinor: number;
 };
 
@@ -1467,6 +1474,53 @@ export async function lockOpenPharmacyDrawer(db: ScopedDb, scope: LedgerScope, d
   });
   if (!stillOpen) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
   return drawer;
+}
+
+/** The manager accounts for the cash physically in this counter's drawer during review.
+ * The shift trigger locks and attributes the movement; journal and rejection commit together.
+ */
+export async function recordRejectedOfflineCash(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    deviceId: string;
+    commandId: string;
+    receiptNumber: number;
+    amountMinor: number;
+  }
+) {
+  assertPositiveMinor(input.amountMinor);
+  const drawer = await lockOpenPharmacyDrawer(db, scope, input.deviceId);
+  await requirePharmacyDayOpen(db, scope, drawer.businessDate);
+  const movement = await withCashShiftRefusal(
+    db.pharmacyDrawerMovement.create({
+      data: {
+        organizationId: scope.organizationId,
+        drawerSessionId: drawer.id,
+        kind: 'REJECTED_OFFLINE_CASH',
+        amountMinor: input.amountMinor,
+        reason: `Offline receipt ${input.receiptNumber}`,
+        actorId: scope.actorId,
+      },
+    })
+  );
+  const leg = {
+    amountMinor: input.amountMinor,
+    branchId: scope.branchId,
+    sourceLineId: movement.id,
+  };
+  await postJournalEntry(db, scope, {
+    sourceKind: 'PHARMACY_REJECTED_OFFLINE_CASH',
+    sourceId: input.commandId,
+    branchId: scope.branchId,
+    occurredAt: movement.createdAt,
+    description: 'Cash from a rejected offline sale',
+    idempotencyKey: `rejected-offline-cash:${input.commandId}`,
+    lines: [
+      { ...leg, accountCode: 'CASH', side: 'DEBIT' },
+      { ...leg, accountCode: 'OFFLINE_CASH_SUSPENSE', side: 'CREDIT' },
+    ],
+  });
 }
 
 export async function recordPharmacyCashMovement(

@@ -96,6 +96,14 @@ export function CashShiftReportView({
   const cashLines: [string, number, boolean?][] = [
     [report.sequence === 1 ? 'Opening float' : 'Opening count', report.cash.openingFloatMinor],
     ['Cash sales', report.cash.cashSalesMinor],
+    ...(report.cash.rejectedOfflineCashMinor
+      ? [
+          ['Cash from a rejected offline sale', report.cash.rejectedOfflineCashMinor] as [
+            string,
+            number,
+          ],
+        ]
+      : []),
     ['Cash refunds', -report.cash.cashRefundsMinor],
     ['Paid in', report.cash.paidInMinor],
     ['Paid out', -report.cash.paidOutMinor],

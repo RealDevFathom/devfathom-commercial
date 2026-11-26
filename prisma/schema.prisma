@@ -1267,6 +1267,7 @@ enum PharmacyDrawerSessionStatus {
 }
 
 enum PharmacyDrawerMovementKind {
+  REJECTED_OFFLINE_CASH
   OPENING_FLOAT
   CASH_SALE
   CASH_REFUND
@@ -3397,6 +3398,7 @@ enum FinanceJournalSide {
 /// query rather than a special case — there is no account here that no adapter
 /// posts to.
 enum FinanceAccountCode {
+  OFFLINE_CASH_SUSPENSE
   CARD_REFUNDS_PAYABLE
   CUSTOMER_PREPAID
   /// Asset. Perpetual stock value, carried per lot and location.
@@ -3436,6 +3438,7 @@ enum FinanceAccountCode {
 /// FIN-01 traceability: the operational table an entry accounts for. `sourceId`
 /// is a row id in that table.
 enum FinanceSourceKind {
+  PHARMACY_REJECTED_OFFLINE_CASH
   PHARMACY_PREPAID
   PHARMACY_GOODS_RECEIPT
   PHARMACY_SALE_LINE

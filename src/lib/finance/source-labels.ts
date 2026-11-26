@@ -1,6 +1,7 @@
 import type { FinanceSourceKind } from '@/generated/prisma/client';
 
 const FINANCE_SOURCE_LABELS = {
+  PHARMACY_REJECTED_OFFLINE_CASH: 'Rejected offline receipt',
   PHARMACY_TERMINAL_REFUND: 'Card provider refund',
   PHARMACY_PREPAID: 'Customer prepaid payment',
   PHARMACY_GOODS_RECEIPT: 'Goods received',

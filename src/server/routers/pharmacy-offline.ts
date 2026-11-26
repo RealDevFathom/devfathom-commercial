@@ -55,7 +55,11 @@ import {
   PharmacySaleError,
 } from '@/lib/pharmacy/sales';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
-import { applyPharmacyTender, lockPharmacyDay } from '@/lib/pharmacy/settlement';
+import {
+  applyPharmacyTender,
+  lockPharmacyDay,
+  recordRejectedOfflineCash,
+} from '@/lib/pharmacy/settlement';
 import {
   manualTenderCaptureSchema,
   validateManualTenderPolicy,
@@ -1938,6 +1942,14 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
             { commandId: recorded.command.id, outcome: 'REJECTED', reason: rejection.reason },
             new Date()
           );
+          if (command.action === 'CASH_OTC_SALE') {
+            await recordRejectedOfflineCash(db, ctx.scope, {
+              deviceId: device.id,
+              commandId: recorded.command.id,
+              receiptNumber: command.leasedReceipt.receiptNumber,
+              amountMinor: command.amountMinor,
+            });
+          }
           // Recovery and its audit must commit together. Do not copy the signed
           // payload, snapshots or credentials into the audit record.
           await db.auditLog.create({
