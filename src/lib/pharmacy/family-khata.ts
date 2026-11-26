@@ -33,7 +33,7 @@ export class FamilyKhataError extends Error {
 }
 
 export type KhataHistoryEntry = {
-  kind: 'CHARGE' | 'PAYMENT' | 'DISHONOURED_CHEQUE';
+  kind: 'CHARGE' | 'PAYMENT' | 'DISHONOURED_CHEQUE' | 'OPENING_DEBIT' | 'OPENING_CREDIT';
   amountMinor: number;
   occurredAt: Date;
   dueAt?: Date | null;
@@ -197,13 +197,16 @@ export async function settleFamilyKhata(
         (paidByCharge.get(event.settlesChargeId) ?? 0) + event.amountMinor
       );
   const openCharges = events
-    .filter((event) => event.kind === 'CHARGE')
+    .filter((event) => event.kind === 'CHARGE' || event.kind === 'OPENING_DEBIT')
     .map((charge) => ({
       charge,
       remaining: charge.amountMinor - (paidByCharge.get(charge.id) ?? 0),
     }))
     .filter(({ remaining }) => remaining > 0);
-  const balanceMinor = openCharges.reduce((sum, item) => sum + item.remaining, 0);
+  const openingCredit = events
+    .filter((event) => event.kind === 'OPENING_CREDIT')
+    .reduce((total, event) => total + event.amountMinor, 0);
+  const balanceMinor = openCharges.reduce((sum, item) => sum + item.remaining, 0) - openingCredit;
   if (input.amountMinor > balanceMinor) throw new FamilyKhataError('PAYMENT_EXCEEDS_BALANCE');
 
   let remaining = input.amountMinor;
@@ -351,7 +354,10 @@ export async function readKhataBalance(
     _sum: { amountMinor: true },
   });
   return totals.reduce(
-    (sum, row) => sum + (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0),
+    (sum, row) =>
+      sum +
+      (row.kind === 'PAYMENT' || row.kind === 'OPENING_CREDIT' ? -1 : 1) *
+        (row._sum.amountMinor ?? 0),
     0
   );
 }
@@ -711,7 +717,8 @@ export async function listKhataLedger(
     balance.set(
       row.familyAccountId,
       (balance.get(row.familyAccountId) ?? 0) +
-        (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0)
+        (row.kind === 'PAYMENT' || row.kind === 'OPENING_CREDIT' ? -1 : 1) *
+          (row._sum.amountMinor ?? 0)
     );
   const lastPayment = new Map(payments.map((row) => [row.familyAccountId, row._max.occurredAt]));
   // A dishonoured cheque re-opens what it bounced: linked to a payment it re-opens that

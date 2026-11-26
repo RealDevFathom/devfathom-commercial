@@ -2851,6 +2851,14 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'dispense-prescriptions/check-procedure-tasks-others',
     ],
   },
+  'pharmacyStagedReview.pharmacyMedicine.catalogueProducts': {
+    gate: 'adminProcedure -> admin:access',
+    none: 'the tenant medicine catalogue administration screen requires workspace admin access',
+  },
+  'pharmacyStagedReview.pharmacyMedicine.starterHistory': {
+    gate: 'contextualCapabilityProcedure -> admin:access for administrators, pharmacy:catalogue-review for catalogue reviewers; tenant scope required',
+    lines: ['review-catalogue/review-medicine-details'],
+  },
   'pharmacyStagedReview.pharmacyMedicine.stageBatch': {
     gate: 'catalogueEditProcedure -> admin:access AND pharmacy:catalogue-edit',
     none: 'preparing import files requires both workspace administrator and catalogue edit access',

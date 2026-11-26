@@ -5,11 +5,11 @@ export default function MedicineReferenceLoading() {
   return (
     <div className="min-w-0 space-y-6">
       <PageHeader
-        eyebrow="Pharmacy / catalog governance"
-        heading="Medicine reference connectors"
-        description="Loading connector health and review controls…"
+        eyebrow="Pharmacy / Stock"
+        heading="Medicine catalogue"
+        description="Loading your pharmacy’s medicines…"
       />
-      <SectionCard title="Loading workbench" titleLevel={2}>
+      <SectionCard title="Loading medicines" titleLevel={2}>
         <div className="h-24 animate-pulse rounded-md bg-surface-sunken" />
       </SectionCard>
     </div>

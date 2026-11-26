@@ -328,7 +328,11 @@ export async function explainVariance(
 export async function postOpeningSession(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { sessionId: string; idempotencyKeyPrefix: string }
+  input: {
+    sessionId: string;
+    idempotencyKeyPrefix: string;
+    quarantinedLineIds?: ReadonlySet<string>;
+  }
 ) {
   const session = await requireSession(db, scope, input.sessionId, ['DRAFT', 'COUNTED']);
 
@@ -409,7 +413,7 @@ export async function postOpeningSession(
           inventoryLotId: lot.id,
           stockLocationId: line.stockLocationId as string,
           kind: 'OPENING',
-          disposition: 'AVAILABLE',
+          disposition: input.quarantinedLineIds?.has(line.id) ? 'QUARANTINE' : 'AVAILABLE',
           quantityUnits: countedUnits,
           sealedPackDelta: sealedPacks,
           looseUnitDelta: looseUnits,

@@ -652,6 +652,40 @@ model Ingredient {
   @@map("pharmacy_ingredients")
 }
 
+model PharmacyStarterImport {
+  catalogueHash String?
+  total Int?
+  organizationId String @id
+  processed Int @default(0)
+  added Int @default(0)
+  matched Int @default(0)
+  editsKept Int @default(0)
+  createdAt DateTime @default(now())
+  progressedAt DateTime @default(now())
+  completedAt DateTime?
+  @@map("pharmacy_starter_imports")
+}
+
+model PharmacyStarterIdentity {
+  organizationId String
+  sourceId String
+  medicineId String
+  narcoticsReview Boolean
+  @@id([organizationId, sourceId])
+  @@unique([organizationId, medicineId])
+  @@map("pharmacy_starter_identities")
+}
+
+model PharmacyStarterConflict {
+  organizationId String
+  sourceId String
+  field String
+  existingValue String
+  starterValue String
+  @@id([organizationId, sourceId, field])
+  @@map("pharmacy_starter_conflicts")
+}
+
 model Medicine {
   id                           String                               @id @default(cuid())
   organizationId               String                               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
@@ -1453,6 +1487,8 @@ model PharmacyCustomer {
 }
 
 enum PharmacyKhataEventKind {
+  OPENING_DEBIT
+  OPENING_CREDIT
   CHARGE
   PAYMENT
   DISHONOURED_CHEQUE
@@ -14139,6 +14175,7 @@ model PharmacySubstitutionRecord {
 }
 
 enum PharmacyControlledRegisterKind {
+  OPENING
   RETURN_TO_SUPPLIER
   SALE
   PURCHASE

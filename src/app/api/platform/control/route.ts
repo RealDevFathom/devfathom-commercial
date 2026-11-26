@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { NextResponse } from 'next/server';
+import { after, NextResponse } from 'next/server';
 import { requirePlatformSession } from '@/lib/platform/auth';
 import { executePlatformCommand } from '@/lib/platform/commands';
 import { formatValidationError } from '@/lib/validation-error';
@@ -20,6 +20,19 @@ export async function POST(request: Request) {
     const actor = await requirePlatformSession(request);
     const command = envelope.parse(await request.json());
     const data = await executePlatformCommand(actor, command.action, command.payload, request);
+    if (['organization.create', 'crm.opportunity.convert'].includes(command.action.trim())) {
+      const pharmacy = z
+        .object({ id: z.string(), vertical: z.literal('PHARMACY') })
+        .safeParse(data);
+      if (pharmacy.success) {
+        // Setup already committed the durable queue entry. Start filling this pharmacy
+        // after responding, without waiting for the next scheduled recovery pass.
+        after(async () => {
+          const { processStarterImports } = await import('@/lib/pharmacy/migration/starter-worker');
+          await processStarterImports(pharmacy.data.id);
+        });
+      }
+    }
     return NextResponse.json({ data });
   } catch (error) {
     if (error instanceof z.ZodError) {

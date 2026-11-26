@@ -1,5 +1,10 @@
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import Link from 'next/link';
+import {
+  TenantMedicineCatalogue,
+  StarterHistory,
+  cataloguePageNumber,
+} from './tenant-medicine-catalogue';
 import { MigrationStagingForm } from './migration-staging-form';
 import { StagedMedicineCreation } from './staged-medicine-creation';
 import {
@@ -46,7 +51,8 @@ const selectClass =
 
 async function loadReview(
   text: (key: string) => string,
-  context?: Awaited<ReturnType<typeof createTRPCContext>>
+  context?: Awaited<ReturnType<typeof createTRPCContext>>,
+  catalogueOnly = false
 ) {
   try {
     const ctx = context ?? (await createTRPCContext());
@@ -87,7 +93,9 @@ async function loadReview(
     };
     const result =
       parallelResult ??
-      (selected.sourceId && selected.batchId ? await caller.stagedRows(rowsInput(selected)) : null);
+      (!catalogueOnly && selected.sourceId && selected.batchId
+        ? await caller.stagedRows(rowsInput(selected))
+        : null);
     const detail =
       parallelDetail ??
       (text('rowId') ? await caller.stagedDetail({ ...selected, rowId: text('rowId') }) : null);
@@ -115,7 +123,13 @@ export async function StagedMedicineCatalogue({
 }) {
   const params = await searchParams;
   const text = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '');
-  const loaded = await loadReview(text, ctx);
+  const mainRoute = route === '/pharmacy/medicines';
+  // Old bookmarks with a selected source still open that import in its history view.
+  const catalogueOnly =
+    mainRoute &&
+    text('view') !== 'imports' &&
+    !['branchId', 'sourceId', 'batchId', 'rowId', 'batchPage'].some((key) => text(key));
+  const loaded = await loadReview(text, ctx, catalogueOnly);
   const href = (change: Record<string, string>) => {
     const next = new URLSearchParams('selected' in loaded ? loaded.selected : {});
     for (const key of ['branchId', 'sourceId', 'batchId', 'query', 'filter', 'page', 'batchPage'])
@@ -129,7 +143,7 @@ export async function StagedMedicineCatalogue({
   const header = (
     <PageHeader
       eyebrow="Pharmacy / source review"
-      heading={heading}
+      heading={mainRoute && !catalogueOnly ? 'Import history' : heading}
       description="Review preserved medicine names, source counts and prices before you create catalogue medicines. Stock is not added here."
     />
   );
@@ -157,6 +171,24 @@ export async function StagedMedicineCatalogue({
     );
   }
   const { branches, branchId, batchPage, batches, selected, result, detail } = loaded;
+  if (catalogueOnly && ctx) {
+    const query = text('q').slice(0, 200);
+    const page = cataloguePageNumber(text('cataloguePage'));
+    const data = await pharmacyStagedReviewRouter
+      .createCaller(ctx)
+      .pharmacyMedicine.catalogueProducts({ query, page });
+    return (
+      <TenantMedicineCatalogue {...data} query={query} page={page} batches={batches?.total ?? 0} />
+    );
+  }
+  const list = text('list') === 'narcotics' ? 'narcotics' : 'conflicts';
+  const page = cataloguePageNumber(text('reviewPage'));
+  const history =
+    mainRoute && ctx
+      ? await pharmacyStagedReviewRouter
+          .createCaller(ctx)
+          .pharmacyMedicine.starterHistory({ list, page })
+      : null;
   // DEV-912: bulk creation controls, shown to a catalogue editor or reviewer only.
   const creationRead =
     result && selected.batchId ? await readStagedMedicineCreation(selected.batchId) : null;
@@ -167,6 +199,14 @@ export async function StagedMedicineCatalogue({
   return (
     <div className="min-w-0 space-y-6">
       {header}
+      {history && (
+        <>
+          <Link href="/pharmacy/medicines" className={linkClass}>
+            Back to medicine catalogue
+          </Link>
+          <StarterHistory data={history} list={list} page={page} />
+        </>
+      )}
       <SectionCard title="Source references, separate from physical stock" titleLevel={2}>
         <p className="text-sm text-text-muted">
           Staged means unverified source evidence. A draft catalogue entry needs validated identity
