@@ -86,7 +86,7 @@ export type OfflinePayResult =
 
 /** DEV-957 phase 2: what the counter can do with its offline bills and queue. */
 export type CounterOfflineActions = {
-  resolveConflict?(commandId: string, reason: string): Promise<void>;
+  resolveConflict?(commandId: string, reason: string, action?: 'reject' | 'retry'): Promise<void>;
   saveDraft(draft: CounterDraft): Promise<boolean>;
   discardDraft(draftId: string): Promise<void>;
   /** Write the sale to this computer; "Paid" only once this resolves ok. */
@@ -241,7 +241,12 @@ export function useCounterOffline(input: {
   }, []);
 
   const open = useCallback(
-    async (enrolled: CounterEnrolment, isOnline: boolean, key: string, cancelled: () => boolean) => {
+    async (
+      enrolled: CounterEnrolment,
+      isOnline: boolean,
+      key: string,
+      cancelled: () => boolean
+    ) => {
       const finish = (next: Omit<Opened, 'key'>) => {
         if (cancelled()) return;
         // The readiness clock must not lag the snapshots just installed, or a
@@ -257,7 +262,9 @@ export function useCounterOffline(input: {
       }
       if (cancelled()) return;
       sealerRef.current =
-        record && record.deviceId === enrolled.deviceId ? counterSaleSealer(record.signingKey) : null;
+        record && record.deviceId === enrolled.deviceId
+          ? counterSaleSealer(record.signingKey)
+          : null;
       if (!record || record.deviceId !== enrolled.deviceId) {
         return finish({
           status: 'unavailable',
@@ -455,7 +462,7 @@ export function useCounterOffline(input: {
     return {
       ...(canResolveConflict
         ? {
-            async resolveConflict(commandId: string, reason: string) {
+            async resolveConflict(commandId: string, reason: string, action?: 'reject' | 'retry') {
               const runtime = runtimeRef.current;
               const token = sessionTokenRef.current;
               const signer = signerRef.current;
@@ -463,7 +470,7 @@ export function useCounterOffline(input: {
                 throw new Error('Reconnect and sign in as a manager to review this receipt.');
               await runtime.resolveConflict(
                 commandId,
-                (request) => sendCounterReplay(token, request, reason),
+                (request) => sendCounterReplay(token, request, reason, action),
                 signer
               );
               refresh();

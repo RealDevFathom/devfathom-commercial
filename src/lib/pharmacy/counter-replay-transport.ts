@@ -5,10 +5,30 @@ import {
 import type { CounterReplayRequest } from './counter-command-queue';
 import type { CounterReplayResponse } from './counter-offline-runtime';
 
+export function canRetryOfflineReceipt(code?: string): boolean {
+  switch (code) {
+    case 'DAY_CLOSED':
+    case 'DRAWER_NOT_OPEN':
+    case 'INSUFFICIENT_STOCK':
+    case 'quota_exhausted':
+    case 'QUOTA_EXHAUSTED':
+    case 'offline_total_changed':
+    case 'OVER_TENDER':
+      return true;
+    default:
+      return false;
+  }
+}
+
 function counterConflictMessage(code?: string): string {
   switch (code) {
     case 'DAY_CLOSED':
       return 'The shop day for this sale is closed. Ask a manager to check the receipt and cash.';
+    case 'DRAWER_NOT_OPEN':
+      return 'The drawer for this sale is closed. Open it before trying again.';
+    case 'OVER_TENDER':
+    case 'offline_total_changed':
+      return 'The price changed. Check the price printed on the receipt before trying again.';
     case 'PERIOD_CLOSED':
       return 'The accounting period is closed. Ask a manager to check the receipt and cash.';
     case 'offline_selling_off':
@@ -60,10 +80,12 @@ export function classifyCounterReplay(response: CounterReplayResponse): Terminal
 export async function sendCounterReplay(
   token: string,
   request: CounterReplayRequest,
-  rejectionReason?: string
+  rejectionReason?: string,
+  reviewAction: 'reject' | 'retry' = 'reject'
 ): Promise<CounterReplayResponse> {
-  const rejecting = rejectionReason !== undefined;
-  const response = await fetch(rejecting ? '/api/pharmacy/counter/reject' : request.path, {
+  const reviewing = rejectionReason !== undefined;
+  const rejecting = reviewing && reviewAction === 'reject';
+  const response = await fetch(reviewing ? `/api/pharmacy/counter/${reviewAction}` : request.path, {
     method: request.method,
     credentials: 'same-origin',
     cache: 'no-store',
@@ -75,7 +97,7 @@ export async function sendCounterReplay(
       'x-terminal-session': token,
     },
     body: JSON.stringify(
-      rejecting ? { command: request.body, reason: rejectionReason } : request.body
+      reviewing ? { command: request.body, reason: rejectionReason } : request.body
     ),
   });
   const body = await response.json().catch(() => null);

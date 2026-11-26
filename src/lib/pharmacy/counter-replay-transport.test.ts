@@ -34,3 +34,19 @@ it('requires an audited rejection before acknowledging a manager review', async 
     status: 503,
   });
 });
+
+it('sends the original command and supervisor note to the retry route and requires a booking', async () => {
+  const fetch = vi
+    .spyOn(globalThis, 'fetch')
+    .mockResolvedValue(Response.json({ saleId: 'sale-1' }));
+  expect(await sendCounterReplay('test-token', request, 'Drawer opened', 'retry')).toMatchObject({
+    serverRef: 'sale-1',
+  });
+  expect(fetch).toHaveBeenCalledWith(
+    '/api/pharmacy/counter/retry',
+    expect.objectContaining({
+      body: JSON.stringify({ command: request.body, reason: 'Drawer opened' }),
+      headers: expect.objectContaining(request.headers),
+    })
+  );
+});

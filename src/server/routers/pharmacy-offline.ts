@@ -217,8 +217,7 @@ export const pharmacyOfflineRouter = router({
         offlineUnitsLeft: quotas
           .filter((quota) => quota.deviceId === device.id)
           .reduce((total, quota) => total + Math.max(0, quota.quotaUnits - quota.consumedUnits), 0),
-        failedOfflineSales:
-          pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
+        failedOfflineSales: pending.find((row) => row.deviceId === device.id)?._count._all ?? 0,
       }));
     })
   ),
@@ -610,7 +609,10 @@ export async function receiptNumberGaps(
         lastUnused: lease.blockEnd,
         unused: lease.blockEnd - lease.nextNumber + 1,
         cause: revoked ? ('REVOKED' as const) : ('EXPIRED' as const),
-        since: (revoked ? (device.revokedAt ?? device.secretExpiresAt) : device.secretExpiresAt).toISOString(),
+        since: (revoked
+          ? (device.revokedAt ?? device.secretExpiresAt)
+          : device.secretExpiresAt
+        ).toISOString(),
       };
     });
 }
@@ -845,13 +847,33 @@ export async function verifyOfflineSaleChain(
   if (refusal) throw new CounterChainError(refusal, report);
 }
 
+// Called after all carried snapshots and the device seal have been verified.
+function reviewedOfflinePrice(command: CounterReplay, index: number) {
+  const line = command.lines[index]!;
+  const prices = command.snapshots.find((row) => row.envelope.kind === 'PRICES')?.payload;
+  const price = Array.isArray(prices)
+    ? prices.find((row) => field(row, 'id') === line.inventoryLotId)
+    : null;
+  const lot = z
+    .object({
+      id: z.string(),
+      printedMrpMinor: z.number().int().positive(),
+      unitsPerPack: z.number().int().positive(),
+      roundingIncrementMinor: z.number().int().positive(),
+    })
+    .safeParse(price);
+  if (!lot.success) throw new CounterTransportError('invalid_snapshot', 403);
+  return { ...lot.data, lineTotalMinor: command.seal.lineTotalsMinor[index]! };
+}
+
 /** Called only inside the transport-owned tenant transaction; never catches a
  * business failure here, because a returned response would commit partial work. */
 export async function replayCounterCommand(
   ctx: PharmacyCounterContext,
   command: CounterReplay,
   signature: string,
-  receiptSignature: string
+  receiptSignature: string,
+  reviewed = false
 ) {
   const { db, scope, deviceId, deviceSecret } = ctx;
   // Take the exclusive lock before authentication's shared lock: concurrent
@@ -1068,7 +1090,10 @@ export async function replayCounterCommand(
       db,
       scope,
       { ...line, saleId: sale.id, idempotencyKey: `${command.idempotencyKey}:${index}` },
-      { saleUnitAt }
+      {
+        saleUnitAt,
+        ...(reviewed ? { reviewedPrice: reviewedOfflinePrice(command, index) } : {}),
+      }
     );
     const allocations = await db.pharmacySaleLineAllocation.findMany({
       where: {
@@ -1198,16 +1223,14 @@ function verifyToken(
     throw new CounterTransportError('invalid_terminal_session', 401);
 }
 export type CounterOperation =
-  | 'establish'
-  | 'snapshot'
-  | 'replay'
-  | 'lease'
-  | 'quota'
-  | 'reject'
-  | 'renew';
+  'establish' | 'snapshot' | 'retry' | 'replay' | 'lease' | 'quota' | 'reject' | 'renew';
 
 /** DEV-957 phase 2: what an expired device secret may no longer be used for. */
-const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set(['snapshot', 'lease', 'quota']);
+const EXTENDS_OFFLINE_SELLING: ReadonlySet<CounterOperation> = new Set([
+  'snapshot',
+  'lease',
+  'quota',
+]);
 
 /** Live web actor plus enrolled device, with an actor/device-bound terminal
  * token after establishment. Errors are mapped only outside the transaction. */
@@ -1311,6 +1334,16 @@ export function counterAuditEntry(
         targetId: null,
         metadata: {},
       };
+    case 'retry': {
+      const entry = counterAuditEntry('replay', field(body, 'command'), outcome);
+      return (
+        entry && {
+          ...entry,
+          action: 'reviewAndRetryOfflineSale',
+          metadata: { ...entry.metadata, reason: text(field(body, 'reason')) },
+        }
+      );
+    }
     case 'replay':
       if (field(outcome, 'replayed') === true) return null;
       return {
@@ -1491,6 +1524,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
         // DEV-831: an enrolled terminal does not lend its branch to the actor.
         // Establishment, snapshots and replay take the online counter's live
         // grant and branch-assignment gate before any token, snapshot or sale.
+        if (operation === 'retry' && !(await allows('admin:access')))
+          throw new CounterTransportError('forbidden', 403);
         if (!manager) {
           const denial = await counterOperatorDenial(
             db,
@@ -1744,7 +1779,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           return { snapshots, publicKey: snapshotPublicKey(), catalogLimit: 1000 };
         }
         const rejection = operation === 'reject' ? counterRejectSchema.parse(body) : null;
-        const command = rejection?.command ?? counterReplaySchema.parse(body);
+        const retry = operation === 'retry' ? counterRejectSchema.parse(body) : null;
+        const command = rejection?.command ?? retry?.command ?? counterReplaySchema.parse(body);
         const key = request.headers.get('idempotency-key');
         if (!key || key !== command.idempotencyKey)
           throw new CounterTransportError('invalid_idempotency_key');
@@ -1797,9 +1833,7 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           // Review round 2: nor can a sale taken while offline selling was off be settled
           // this way: only one its verified signed RULES allowed (the receipt checks above
           // run first, and a refusal here rolls the retirement back).
-          if (
-            !signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id))
-          )
+          if (!signedRulesAllowOfflineSelling(verifiedRulesPayload(command, ctx.scope, device.id)))
             throw new CounterTransportError('offline_selling_off', 409);
           await settleOfflineCommand(
             db,
@@ -1833,7 +1867,8 @@ export function pharmacyCounterRoute(operation: CounterOperation) {
           ctx,
           command,
           request.headers.get('x-command-signature') ?? '',
-          request.headers.get('x-receipt-signature') ?? ''
+          request.headers.get('x-receipt-signature') ?? '',
+          retry !== null
         );
       };
       const result = await withTenantDb(
