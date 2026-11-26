@@ -30,6 +30,8 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyApInvoices.reverseInvoice': ['admin:access', 'finance:manage'],
   'pharmacyApInvoices.reverseSettlement': ['admin:access', 'finance:manage'],
   'pharmacyBranchAssignments.assign': ['admin:access'],
+  'pharmacyBranchAssignments.cashModes': ['admin:access'],
+  'pharmacyBranchAssignments.setCashMode': ['admin:access'],
   'pharmacyBranchAssignments.list': ['admin:access'],
   'pharmacyBranchAssignments.otherBranchAvailability': ['admin:access'],
   'pharmacyBranchAssignments.setOtherBranchAvailability': ['admin:access'],

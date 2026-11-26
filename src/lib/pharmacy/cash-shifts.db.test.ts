@@ -439,6 +439,53 @@ async function asMember<T>(
   );
 }
 
+async function cashModeOwner(s: Shop) {
+  const { organizationId, branchId } = s.owner;
+  const userId = `${organizationId}_owner`;
+  await tenant(s.owner, async (db) => {
+    const role = await db.organizationRole.create({
+      data: { key: 'owner', name: 'Owner', isSystem: true },
+    });
+    await db.user.create({
+      data: {
+        id: userId,
+        name: 'Owner',
+        email: `${userId}@example.test`,
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        title: 'Owner',
+        organizationRoleId: role.id,
+      },
+    });
+  });
+  const { pharmacyBranchAssignmentsRouter } =
+    await import('@/server/routers/pharmacy-branch-assignments');
+  const change = (enabled: boolean) =>
+    tenant(s.as(userId), (db) =>
+      pharmacyBranchAssignmentsRouter
+        .createCaller({
+          db,
+          entitlements: { organizationId, enabledModules: ['pharmacy-core'], modules: [] },
+          session: {
+            expires: 'later',
+            user: {
+              id: userId,
+              role: 'ADMIN',
+              status: 'ACTIVE',
+              organizationId,
+              department: 'LEADERSHIP',
+            },
+          },
+          organization: { id: organizationId, vertical: 'PHARMACY' },
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as never)
+        .setCashMode({ branchId, enabled })
+    );
+  return { userId, change };
+}
+
 // Each test seeds its own organization and runs many transactions as the restricted role; under
 // the full pharmacy database run they can pass vitest's 5 s default.
 describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_000 }, () => {
@@ -481,6 +528,126 @@ describeDatabase('pharmacy cash shifts on migrated PostgreSQL', { timeout: 60_00
     ]);
     await closeShift(s, s.cashier, shift!.id, 330);
     expect((await shiftsOf(s, drawer.id))[0]).toMatchObject({ varianceMinor: 0, status: 'CLOSED' });
+  });
+
+  it('uses the owner’s choice for new drawers only after open shifts and drawers close', async () => {
+    const s = await shop('mode', { shifts: false });
+    const { organizationId, branchId } = s.owner;
+    const { userId, change } = await cashModeOwner(s);
+    const dayDrawer = await openDrawer(s, randomUUID(), 90);
+    await expect(change(true)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await tenant(s.owner, (db) =>
+      settlement.closePharmacyDrawer(db, s.owner, {
+        drawerSessionId: dayDrawer.id,
+        countedCashMinor: 90,
+      })
+    );
+    await change(true);
+    const shiftDrawer = await openDrawer(s, randomUUID(), 120);
+    await expect(change(false)).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(await shiftsOf(s, shiftDrawer.id)).toEqual([
+      expect.objectContaining({ openingFloatMinor: 120, status: 'OPEN' }),
+    ]);
+    const [shift] = await shiftsOf(s, shiftDrawer.id);
+    await closeShift(s, s.cashier, shift!.id, 120);
+    await expect(change(false)).rejects.toMatchObject({ code: 'CONFLICT' });
+    await tenant(s.owner, (db) =>
+      settlement.closePharmacyDrawer(db, s.owner, {
+        drawerSessionId: shiftDrawer.id,
+        countedCashMinor: 120,
+      })
+    );
+    await change(false);
+    const nextDrawer = await openDrawer(s, randomUUID(), 150);
+    for (const [id, cashShifts] of [
+      [dayDrawer.id, false],
+      [shiftDrawer.id, true],
+      [nextDrawer.id, false],
+    ] as const) {
+      const drawer = await tenant(s.owner, (db) =>
+        db.pharmacyDrawerSession.findUniqueOrThrow({ where: { id }, select: { cashShifts: true } })
+      );
+      expect(drawer.cashShifts).toBe(cashShifts);
+    }
+    expect(await shiftsOf(s, dayDrawer.id)).toHaveLength(0);
+    expect(await shiftsOf(s, shiftDrawer.id)).toEqual([
+      expect.objectContaining({ openingFloatMinor: 120, countedCashMinor: 120, status: 'CLOSED' }),
+    ]);
+    expect(await shiftsOf(s, nextDrawer.id)).toHaveLength(0);
+    const changes = await tenant(s.owner, (db) =>
+      db.auditLog.findMany({
+        where: { organizationId, targetId: branchId, action: 'pharmacy.branch.cashMode' },
+        orderBy: { createdAt: 'asc' },
+        select: { actorId: true, changes: true },
+      })
+    );
+    expect(changes).toEqual([
+      { actorId: userId, changes: { cashShiftsEnabled: { before: false, after: true } } },
+      { actorId: userId, changes: { cashShiftsEnabled: { before: true, after: false } } },
+    ]);
+  });
+
+  it('holds the branch mode through terminal preflight and refuses an APPROVED drawerless payment until it settles', async () => {
+    const s = await shop('mode_terminal', { shifts: false });
+    const { organizationId, branchId } = s.owner;
+    const { change } = await cashModeOwner(s);
+    const scope = s.as(s.cashier);
+    const { sale } = await bill(s, 300);
+    const { prismaCardTerminalAttemptStore } = await import('./card-terminal/store');
+    const tryModeLock = () =>
+      tenant(
+        s.owner,
+        (db) =>
+          db.$queryRaw<
+            { id: string }[]
+          >`SELECT id FROM pharmacy_branches WHERE id = ${branchId} AND "organizationId" = ${organizationId} FOR UPDATE SKIP LOCKED`
+      );
+    // Two independent connections. The real store has rolled back its preflight
+    // savepoint, but its transaction must still hold the shared branch lock.
+    const { attempt } = await tenant(scope, async (db) => {
+      const store = prismaCardTerminalAttemptStore((work) => work(db));
+      const created = await store.create(scope, {
+        saleId: sale.id,
+        deviceId: randomUUID(),
+        terminalId: 'QA',
+        provider: 'QA_TERMINAL',
+        attemptKey: randomUUID(),
+        amountMinor: 300,
+        currency: 'PKR',
+        businessDate: s.today,
+      });
+      expect(await tryModeLock()).toEqual([]);
+      return created;
+    });
+    expect(await tryModeLock()).toEqual([{ id: branchId }]);
+    const store = prismaCardTerminalAttemptStore((work) => tenant(scope, work));
+    const sent = await store.transition(scope, attempt, { status: 'SENT', sentAt: new Date() });
+    const approved = await store.transition(scope, sent!, {
+      status: 'APPROVED',
+      providerRef: randomUUID(),
+      approvedAmountMinor: 300,
+    });
+    expect(approved?.status).toBe('APPROVED');
+    expect(
+      await tenant(scope, (db) =>
+        db.pharmacyDrawerSession.count({ where: { organizationId, branchId } })
+      )
+    ).toBe(0);
+    await expect(change(true)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message:
+        'A card payment at this branch is still being finished. Settle or resolve it, then change how the branch closes.',
+    });
+    expect(
+      await tenant(scope, (db) =>
+        db.auditLog.count({
+          where: { organizationId, targetId: branchId, action: 'pharmacy.branch.cashMode' },
+        })
+      )
+    ).toBe(0);
+    // Settlement replays the synthetic approval locally without calling a terminal.
+    await store.settle(scope, attempt.id);
+    await expect(change(true)).resolves.toEqual({ enabled: true });
   });
 
   it('leaves a branch without shifts exactly as before: no shift, no attribution, the same close', async () => {

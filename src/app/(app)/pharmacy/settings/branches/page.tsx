@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 
 import { BranchAssignmentsConsole } from '@/components/pharmacy/branch-assignments';
 import { OtherBranchAvailabilityConsole } from '@/components/pharmacy/other-branch-availability-setting';
+import { BranchCashMode } from '@/components/pharmacy/branch-cash-mode';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { pharmacyBranchAssignmentsRouter } from '@/server/routers/pharmacy-branch-assignments';
@@ -45,6 +46,7 @@ export default async function PharmacyBranchAssignmentsPage() {
         heading="Branch assignments"
         description="Assign an active pharmacy member to a branch, or remove an assignment. Administrators can still open every branch."
       />
+      <BranchCashMode />
       <SectionCard title="Who works at which branch" titleLevel={2}>
         <BranchAssignmentsConsole initial={initial} />
       </SectionCard>
