@@ -107,7 +107,7 @@ function makeContext() {
   };
 }
 
-async function show(notice: { notice?: string; kind?: string } = {}) {
+async function show(notice: { notice?: string; kind?: string; missingCost?: string } = {}) {
   return render(
     await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: branch.id, ...notice }) })
   );
@@ -224,7 +224,7 @@ describe('DEV-862 salt and strength under the product name', () => {
     await show();
     const card = within(
       screen
-        .getByRole('heading', { name: 'Daily cycle count' })
+        .getByRole('heading', { name: 'Daily stock count' })
         .closest('[data-slot="section-card"]')! as HTMLElement
     );
     expect(card.getByText('paracetamol 500 mg')).toBeInTheDocument();
@@ -266,7 +266,7 @@ describe('physical count prerequisites', () => {
   function countCard() {
     return within(
       screen
-        .getByRole('heading', { name: 'Physical count' })
+        .getByRole('heading', { name: 'Stock count' })
         .closest('[data-slot="section-card"]')! as HTMLElement
     );
   }
@@ -292,7 +292,7 @@ describe('physical count prerequisites', () => {
       `/pharmacy/purchasing/receiving?branch=${branch.id}`
     );
     expect(card.queryByText(/create a location/i)).not.toBeInTheDocument();
-    expect(card.queryByRole('button', { name: 'Freeze count scope' })).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: 'Save stock count' })).not.toBeInTheDocument();
     expect(card.queryByText('0', { exact: true })).not.toBeInTheDocument();
   });
 
@@ -310,13 +310,13 @@ describe('physical count prerequisites', () => {
       'href',
       `/pharmacy/purchasing/receiving?branch=${branch.id}`
     );
-    expect(card.queryByRole('button', { name: 'Freeze count scope' })).not.toBeInTheDocument();
+    expect(card.queryByRole('button', { name: 'Save stock count' })).not.toBeInTheDocument();
   });
 
   it('offers the count form when available stock and a location exist', async () => {
     await show();
     const card = countCard();
-    expect(card.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
+    expect(card.getByRole('button', { name: 'Save stock count' })).toBeVisible();
     expect(
       card.getByRole('option', { hidden: true, name: 'Medicine A · batch B-100 · Rack' })
     ).toHaveValue(`${lot.id}:${location.id}`);
@@ -339,7 +339,7 @@ describe('DEV-682 daily cycle count', () => {
   function cycleCard() {
     return within(
       screen
-        .getByRole('heading', { name: 'Daily cycle count' })
+        .getByRole('heading', { name: 'Daily stock count' })
         .closest('[data-slot="section-card"]')! as HTMLElement
     );
   }
@@ -387,7 +387,7 @@ describe('DEV-682 daily cycle count', () => {
   it('is not offered to a role that cannot control inventory', async () => {
     mocks.can.mockResolvedValue(false);
     await show();
-    expect(screen.queryByRole('heading', { name: 'Daily cycle count' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Daily stock count' })).not.toBeInTheDocument();
     expect(mocks.cycleList).not.toHaveBeenCalled();
   });
 
@@ -402,7 +402,7 @@ describe('DEV-682 daily cycle count', () => {
       },
     ]);
     await show();
-    const reason = screen.getByLabelText('Variance reason');
+    const reason = screen.getByLabelText('Reason for the difference');
     expect(reason).toBeRequired();
     fireEvent.change(reason, { target: { value: 'Two strips broken, not logged' } });
     fireEvent.submit(screen.getByRole('button', { name: 'Approve count' }).closest('form')!);
@@ -439,7 +439,7 @@ describe('DEV-682 daily cycle count', () => {
     await show();
     expect(screen.getAllByLabelText('Your PIN, if you work alone')).toHaveLength(1);
     const form = screen.getByLabelText('Your PIN, if you work alone').closest('form')!;
-    fireEvent.change(within(form).getByLabelText('Variance reason'), {
+    fireEvent.change(within(form).getByLabelText('Reason for the difference'), {
       target: { value: 'Breakage' },
     });
     fireEvent.change(within(form).getByLabelText('Your PIN, if you work alone'), {
@@ -469,7 +469,7 @@ describe('DEV-682 daily cycle count', () => {
     ]);
     await show();
     expect(screen.getByText('Reason: Expired strip removed')).toBeVisible();
-    expect(screen.queryByLabelText('Variance reason')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Reason for the difference')).not.toBeInTheDocument();
   });
 });
 
@@ -546,11 +546,11 @@ describe('Quarantine resolution forms', () => {
       ]);
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-      expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Lot' }))).toHaveValue(
+      expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Batch' }))).toHaveValue(
         `${lot.id}:${location.id}:${disposition}`
       );
       fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
-      fireEvent.change(within(form).getByLabelText('Evidence reference'), {
+      fireEvent.change(within(form).getByLabelText('Proof of disposal'), {
         target: { value: 'certificate-1' },
       });
       fireEvent.change(within(form).getByLabelText('Reason'), {
@@ -783,7 +783,7 @@ describe('Inventory pack-action integration', () => {
     ]);
     await show();
     expect(mocks.form).not.toHaveBeenCalled();
-    expect(screen.getByText(/No available lots yet/)).toBeVisible();
+    expect(screen.getByText(/No available batches yet/)).toBeVisible();
   });
 
   it('keeps an unreceived lot disabled', async () => {
@@ -1097,4 +1097,54 @@ it('DEV-1044 shows product quantities at the top with no valuation for a storeke
   expect(screen.queryByText('Value at cost')).not.toBeInTheDocument();
   expect(screen.queryByText('Value at selling price')).not.toBeInTheDocument();
   expect(screen.getByRole('heading', { name: 'Inventory', level: 1 })).toBeVisible();
+});
+
+it('DEV-1044 links to uncatalogued costs and shows accessible category and product tables', async () => {
+  mocks.stockValuation.mockResolvedValue({
+    productCount: 2,
+    businessTotal: false,
+    canSeeBusinessTotal: true,
+    money: {
+      costMinor: 12000n,
+      costCurrency: 'PKR',
+      coveredProductCount: 1,
+      sellingMinor: 16500n,
+      sellingCurrency: 'PKR',
+      expiringMinor: [0n, 12000n, 12000n],
+      expiredMinor: 0n,
+      heldMinor: 0n,
+      missingCost: { count: 1, page: 1, lastPage: 1, rows: [{ id: 'soap', name: 'Hand soap' }] },
+      unpostedProductCount: 0,
+      missingPriceCount: 0,
+      unassignedCostMinor: 0n,
+      categories: [{ id: 'medicines', name: 'Medicines', costMinor: 12000n }],
+      topProducts: [{ id: 'product', name: 'Medicine A', costMinor: 12000n }],
+      asOf: '2026-11-26T08:00:00.000Z',
+      canOpenFinanceReport: true,
+    },
+  });
+  await show({ missingCost: '1' });
+  expect(screen.getByText('1 product has no cost recorded.')).toBeVisible();
+  expect(screen.getByRole('link', { name: 'See products without a cost' })).toHaveAttribute(
+    'href',
+    '/pharmacy/inventory?branch=branch-main&missingCost=1#missing-stock-cost'
+  );
+  expect(screen.getByText('Hand soap')).toBeVisible();
+  expect(screen.getByRole('link', { name: 'Open full valuation in Finance' })).toHaveAttribute(
+    'href',
+    '/pharmacy/finance?branch=branch-main&ledgerInstant=2026-11-26T08%3A00%3A00.000Z#stock-valuation'
+  );
+  for (const name of ['Value by category table', 'Top 20 products by value table']) {
+    const region = screen.getByRole('region', { name, hidden: true });
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(within(region).getByRole('table', { hidden: true })).toHaveTextContent('Rs 120.00');
+  }
+});
+
+it('DEV-1044 keeps the rest of Inventory usable when the stock summary cannot load', async () => {
+  mocks.stockValuation.mockRejectedValue(new Error('Synthetic read failure'));
+  await show();
+  expect(screen.getByText(/stock summary couldn’t load/)).toBeVisible();
+  expect(screen.getByRole('region', { name: 'Pharmacy inventory batches' })).toBeVisible();
+  expect(screen.queryByText('Value at cost')).not.toBeInTheDocument();
 });

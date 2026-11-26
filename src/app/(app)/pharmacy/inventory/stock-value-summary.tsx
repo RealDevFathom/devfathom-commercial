@@ -40,14 +40,17 @@ function CostBreakdown({
   rows: StockValueRow[];
   currency: string;
 }) {
-  const preview = rows.slice(0, 5);
   const max = rows[0]?.costMinor ?? 0n;
   return (
     <SectionCard title={title}>
       {rows.length ? (
         <>
-          <ul className="space-y-3" aria-label={title}>
-            {preview.map(({ id, name, costMinor }) => (
+          <ul
+            className="max-h-80 space-y-3 overflow-y-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            aria-label={title}
+            tabIndex={rows.length > 5 ? 0 : undefined}
+          >
+            {rows.map(({ id, name, costMinor }) => (
               <li key={id} className="space-y-1">
                 <div className="flex flex-wrap justify-between gap-x-4 text-sm">
                   <span className="break-words [overflow-wrap:anywhere]">{name}</span>
@@ -67,9 +70,10 @@ function CostBreakdown({
               </li>
             ))}
           </ul>
-          <details className="mt-3">
+          <details className="group mt-3">
             <summary className={disclosureClass}>
-              Show as a table{rows.length > preview.length ? ` (all ${rows.length})` : ''}
+              <span className="group-open:hidden">Show as a table</span>
+              <span className="hidden group-open:inline">Hide table</span>
             </summary>
             <Table
               containerProps={{

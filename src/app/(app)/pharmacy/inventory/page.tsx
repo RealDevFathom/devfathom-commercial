@@ -201,7 +201,7 @@ export default async function PharmacyInventoryPage({
           <p className="text-sm text-text-muted">
             {moduleEnabled
               ? 'Ask a workspace administrator for pharmacy inventory access.'
-              : 'Enable Pharmacy Inventory in workspace modules to use this console.'}
+              : 'Turn on Pharmacy Inventory in workspace settings to use this page.'}
           </p>
         </SectionCard>
       </div>
@@ -701,8 +701,8 @@ export default async function PharmacyInventoryPage({
       <SectionCard title="Batches by earliest expiry" eyebrow="Stock on hand">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Set up a medicine and its pack, then import your opening count or
-            receive a supplier delivery.
+            No available batches yet. Set up a medicine and its pack, then import your opening count
+            or receive a supplier delivery.
             <span className="mt-3 flex flex-wrap gap-3">
               <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
                 Set up medicines and packs
@@ -838,8 +838,8 @@ export default async function PharmacyInventoryPage({
               role="alert"
             >
               {outOfRangeLogs.length} recent temperature reading
-              {outOfRangeLogs.length === 1 ? ' is' : 's are'} outside the validated range. Review
-              the affected stock before use.
+              {outOfRangeLogs.length === 1 ? ' is' : 's are'} outside the safe range. Review the
+              affected stock before use.
             </div>
           ) : null}
           <div className="space-y-2">
@@ -873,7 +873,7 @@ export default async function PharmacyInventoryPage({
                 <Input className="mt-1" name="name" required />
               </label>
               <label className="text-sm">
-                Code
+                Location code
                 <Input className="mt-1" name="code" required />
               </label>
               <label className="text-sm">
@@ -909,13 +909,13 @@ export default async function PharmacyInventoryPage({
             </p>
           )}
           <div className="mt-6 border-t border-border-subtle pt-5">
-            <h3 className="font-medium text-text-strong">Manual temperature log</h3>
+            <h3 className="font-medium text-text-strong">Record a temperature</h3>
             {coldChainLocations.length > 0 ? (
               <form action={perform} className="mt-3 grid gap-3 sm:grid-cols-2">
                 <input name="action" type="hidden" value="record-temperature" />
                 <input name="branchId" type="hidden" value={branch.id} />
                 <label className="text-sm">
-                  Validated zone
+                  Temperature-controlled location
                   <StudioSelect className={inputClass} name="stockLocationId">
                     {coldChainLocations.map((location) => (
                       <option key={location.id} value={location.id}>
@@ -941,7 +941,7 @@ export default async function PharmacyInventoryPage({
                 </Button>
               </form>
             ) : (
-              <Empty>Create a validated cold-chain zone before recording temperatures.</Empty>
+              <Empty>Add a temperature-controlled location before recording temperatures.</Empty>
             )}
             <div className="mt-4 space-y-2">
               {temperatureLogs.map((log) => (
@@ -974,13 +974,13 @@ export default async function PharmacyInventoryPage({
             </div>
           </div>
         </SectionCard>
-        <SectionCard title="Physical count" eyebrow="Quantities saved when the count started">
+        <SectionCard title="Stock count" eyebrow="Quantities saved when the count started">
           {available.length && locations.length ? (
             <form action={perform} className="grid gap-3 sm:grid-cols-2">
               <input name="action" type="hidden" value="create-count" />
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
-                Lot and location
+                Batch and location
                 <StudioSelect className={inputClass} name="position">
                   {available.map(({ lot, balance }) => (
                     <option
@@ -994,7 +994,7 @@ export default async function PharmacyInventoryPage({
                 </StudioSelect>
               </label>
               <label className="text-sm">
-                Variance threshold
+                Difference allowed (units)
                 <Input
                   className="mt-1"
                   defaultValue="0"
@@ -1013,7 +1013,7 @@ export default async function PharmacyInventoryPage({
                 <Input className="mt-1" min="0" name="loose" required type="number" />
               </label>
               <Button className="sm:col-span-2" type="submit">
-                Freeze count scope
+                Save stock count
               </Button>
             </form>
           ) : (
@@ -1040,7 +1040,9 @@ export default async function PharmacyInventoryPage({
                 <div>
                   <StatusPill status={label(count.status)} tone={tone(count.status)} />
                   <p className="mt-1 text-xs text-text-muted">
-                    {count.lines.length} frozen line · {when(count.createdAt)} · variance{' '}
+                    {count.lines.length}{' '}
+                    {count.lines.length === 1 ? 'batch or location' : 'batches or locations'} ·{' '}
+                    {when(count.createdAt)} · difference{' '}
                     {count.lines.reduce((sum, line) => sum + Math.abs(line.varianceUnits ?? 0), 0)}{' '}
                     units
                   </p>
@@ -1055,7 +1057,7 @@ export default async function PharmacyInventoryPage({
                     <input name="countId" type="hidden" value={count.id} />
                     {count.lines.some((line) => (line.varianceUnits ?? 0) !== 0) ? (
                       <label className="text-sm">
-                        Variance reason
+                        Reason for the difference
                         <Input
                           className="mt-1"
                           maxLength={500}
@@ -1081,7 +1083,7 @@ export default async function PharmacyInventoryPage({
                     ) : null}
                     <Submit>
                       {count.status === 'AWAITING_COAUTH'
-                        ? 'Co-authorize variance'
+                        ? 'Give the second approval'
                         : 'Approve count'}
                     </Submit>
                   </form>
@@ -1093,15 +1095,14 @@ export default async function PharmacyInventoryPage({
       </div>
 
       {canControlInventory ? (
-        <SectionCard title="Daily cycle count" eyebrow="Frequently sold and high-value stock">
+        <SectionCard title="Daily stock count" eyebrow="Frequently sold and high-value stock">
           {cycleCount.length ? (
             <form action={perform} className="space-y-4">
               <input name="action" type="hidden" value="create-cycle-count" />
               <input name="branchId" type="hidden" value={branch.id} />
               <p className="text-sm text-text-muted">
-                Count each shelf position below without looking up the book quantity. Submitting
-                saves a draft count; the variance is posted only after a person approves it with a
-                reason.
+                Count each shelf without checking the saved quantity. Any difference is applied only
+                after someone approves it and gives a reason.
               </p>
               <div className="overflow-x-auto">
                 <Table>
@@ -1172,7 +1173,7 @@ export default async function PharmacyInventoryPage({
               </div>
               <div className="flex flex-wrap items-end gap-3">
                 <label className="text-sm">
-                  Variance threshold
+                  Difference allowed (units)
                   <Input
                     className="mt-1"
                     defaultValue="0"
@@ -1187,8 +1188,8 @@ export default async function PharmacyInventoryPage({
             </form>
           ) : (
             <Empty>
-              Nothing to cycle count today. Every sellable position here was counted in the last 7
-              days, or the branch holds no available stock.
+              No stock to count today. All available stock was counted in the last 7 days, or there
+              is no stock to count.
             </Empty>
           )}
         </SectionCard>
@@ -1201,7 +1202,7 @@ export default async function PharmacyInventoryPage({
             <input name="action" type="hidden" value="write-off" />
             <input name="branchId" type="hidden" value={branch.id} />
             <label className="text-sm md:col-span-2">
-              Lot
+              Batch
               <StudioSelect className={inputClass} name="position">
                 {writeOffPositions.map(({ lot, balance }) => (
                   <option
@@ -1252,7 +1253,7 @@ export default async function PharmacyInventoryPage({
               </span>
             </label>
             <label className="text-sm">
-              Evidence reference
+              Proof of disposal
               <Input
                 className="mt-1"
                 name="evidenceRef"
@@ -1427,7 +1428,7 @@ export default async function PharmacyInventoryPage({
               <input name="action" type="hidden" value="create-recall" />
               <input name="branchId" type="hidden" value={branch.id} />
               <label className="text-sm sm:col-span-2">
-                Manufacturing batch
+                Batch
                 <StudioSelect className={inputClass} name="batchId">
                   {lots.map((lot) => (
                     <option key={lot.batch.id} value={lot.batch.id}>
@@ -1449,7 +1450,7 @@ export default async function PharmacyInventoryPage({
               </Button>
             </form>
           ) : (
-            <Empty>A received manufacturing batch is required before a recall can be issued.</Empty>
+            <Empty>Receive a batch before issuing a recall.</Empty>
           )}
           <div className="mt-5 space-y-2">
             {recalls.map((recall) => {
