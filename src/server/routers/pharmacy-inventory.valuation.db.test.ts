@@ -245,8 +245,9 @@ beforeAll(async () => {
             organizationRoleId: role.id,
           },
         });
-        if (id !== admin)
-          await tx.pharmacyBranchAssignment.create({ data: { branchId: main, userId: id } });
+        await tx.pharmacyBranchAssignment.create({ data: { branchId: main, userId: id } });
+        if (id === admin)
+          await tx.pharmacyBranchAssignment.create({ data: { branchId: east, userId: id } });
       }
       const soap = await product(tx, 'Soap', 'Personal care', 10);
       await takeStock(tx, main, 'soap', soap, {
@@ -408,13 +409,11 @@ suite('DEV-1044 valuation on PostgreSQL', () => {
   });
 
   it('parcels stock by admitted branch, with in-transit cost and units on the receiving side', async () => {
-    const [branch, business, storekeeper, financialReports, readAccounts] = await Promise.all([
-      stock(admin, east),
-      stock(admin, main, true),
-      stock(staff, main, true),
-      stock(reports, main, true),
-      stock(accounts, main, true),
-    ]);
+    const branch = await stock(admin, east);
+    const business = await stock(admin, main, true);
+    const storekeeper = await stock(staff, main, true);
+    const financialReports = await stock(reports, main, true);
+    const readAccounts = await stock(accounts, main, true);
     expect(branch).toMatchObject({
       productCount: 2,
       businessTotal: false,

@@ -215,7 +215,7 @@ export async function currentInventoryValuation(
     const category = position.category?.trim() || familyNames[position.family] || 'Other products';
     for (const [map, id, rowName] of [
       [productValue, medicineId, name],
-      [categoryValue, category, category],
+      [categoryValue, `category:${category}`, category],
     ] as const) {
       map.set(id, { id, name: rowName, costMinor: (map.get(id)?.costMinor ?? BigInt(0)) + cost });
     }
