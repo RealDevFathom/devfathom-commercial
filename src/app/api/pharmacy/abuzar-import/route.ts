@@ -1,13 +1,13 @@
 import { gunzipSync } from 'node:zlib';
 import { eligibleOpeningWitness } from '@/lib/pharmacy/migration/abuzar-witness';
-import { can, subjectFromSession } from '@/lib/abac';
+import type { Action } from '@/lib/abac';
 import { readReconciliation } from '@/lib/pharmacy/migration/abuzar-reconciliation';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { trustedRequestOrigin } from '@/lib/http-origin';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { hasModule } from '@/lib/entitlements';
-import { createTRPCContext } from '@/server/trpc';
+import { assertCapabilities, createTRPCContext } from '@/server/trpc';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyOwnerImportRouter } from '@/server/routers/pharmacy-owner-import';
 import { AbuzarReviewError, phaseInput, runAbuzarStep } from '@/lib/pharmacy/migration/abuzar-run';
@@ -66,14 +66,16 @@ export async function POST(request: Request) {
     const { branchId, confirmed, ...options } = parsed.data;
     if (!branches.some((b) => b.id === branchId))
       return message(403, 'Choose an active branch in this workspace.');
-    if (
-      (options.step === 'catalogue' || options.step === 'prices') &&
-      !(await can(subjectFromSession(session.user), 'pharmacy:catalogue-edit', undefined, {
-        db: ctx.db,
-        source: 'REST',
-      }))
-    )
-      return message(403, 'Catalogue edit permission required.');
+    const actions: Action[] = ['admin:access', 'reports:financial'];
+    if (options.step === 'catalogue' || options.step === 'prices')
+      actions.push('pharmacy:catalogue-edit');
+    if (options.step === 'stock') actions.push('pharmacy:inventory');
+    await assertCapabilities(
+      ctx,
+      confirmed ? 'pharmacyOwnerImport.commit' : 'pharmacyOwnerImport.preview',
+      confirmed ? 'mutation' : 'query',
+      actions
+    );
     let data;
     try {
       data = await parsePreparedExport(async (name, limit) => {

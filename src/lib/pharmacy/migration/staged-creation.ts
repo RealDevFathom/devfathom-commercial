@@ -928,7 +928,7 @@ export async function createStagedMedicinesChunk(
       presentation: { id: presentationId, medicineId, presentation: plan.presentation },
       levels,
       price:
-        outerId && plan.mrpMinor !== null
+        outerId && plan.mrpMinor !== null && !row.preparedAbuzar
           ? {
               organizationId,
               presentationId,

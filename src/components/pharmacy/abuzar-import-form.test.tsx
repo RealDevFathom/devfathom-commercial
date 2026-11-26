@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest';
 import { render, screen } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { AbuzarImportForm } from './abuzar-import-form';

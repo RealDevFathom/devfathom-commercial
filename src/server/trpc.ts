@@ -382,7 +382,7 @@ function capabilityRefusal(action: Action, refusalMessage?: string) {
  * Session, temporary-password and demo checks, then every action in `actions`
  * through the ABAC engine. All must allow; the first refusal wins.
  */
-async function assertCapabilities(
+export async function assertCapabilities(
   ctx: TRPCContext,
   path: string,
   type: 'query' | 'mutation' | 'subscription',

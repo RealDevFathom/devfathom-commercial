@@ -307,6 +307,7 @@ export async function stockDecision(
               batchNumber,
               expiresAt,
               state: d.held ? 'QUARANTINED' : 'ACTIVE',
+              stateChangedAt: d.held ? new Date() : null,
               stateReason: d.held
                 ? 'Unverified batch from Abuzar. Correct at first stock count.'
                 : null,
