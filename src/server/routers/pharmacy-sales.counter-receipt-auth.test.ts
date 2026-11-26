@@ -418,6 +418,36 @@ describe('counter receipt authorization', () => {
     expect(f.db.$transaction).toHaveBeenCalled();
   });
 
+  it('reads the current profile name only for a scoped designer request', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    Object.assign(f.context.organization, { timezone: 'Asia/Karachi' });
+    vi.mocked(readPharmacyReceiptTaxIdentity).mockResolvedValue({
+      registeredName: 'Market Pharmacy',
+      ntn: null,
+      strn: null,
+    });
+    const api = f.caller();
+    await api.counterReceiptFormat({ branchId: 'branch-a' });
+    expect(readPharmacyReceiptTaxIdentity).not.toHaveBeenCalled();
+    await expect(
+      api.counterReceiptFormat({ branchId: 'branch-b', includeRegisteredName: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readPharmacyReceiptTaxIdentity).not.toHaveBeenCalled();
+    await expect(
+      api.counterReceiptFormat({ branchId: 'branch-a', includeRegisteredName: true })
+    ).resolves.toMatchObject({
+      registeredName: 'Market Pharmacy',
+      revision: 1,
+    });
+    expect(readPharmacyReceiptTaxIdentity).toHaveBeenCalledExactlyOnceWith(
+      f.db,
+      expect.objectContaining({ branchId: 'branch-a' }),
+      expect.any(Date),
+      'Asia/Karachi'
+    );
+  });
+
   it('supplies the regulatory identity effective at completion to browser receipt callers', async () => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

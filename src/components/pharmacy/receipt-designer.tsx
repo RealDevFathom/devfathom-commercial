@@ -146,7 +146,7 @@ function Editor({
     try {
       const next = await save.mutateAsync({ branchId, revision: base, layout: parsed.data });
       utils.pharmacySales.counterReceiptFormat.setData(
-        { branchId },
+        { branchId, includeRegisteredName: true },
         { ...next, registeredName: saved.registeredName, receiptLogoPng: png }
       );
       setBase(next.revision);
@@ -479,7 +479,7 @@ export function PharmacyReceiptDesigner({ canSave }: { canSave: boolean }) {
   const list = branches.data?.branches ?? [];
   const branchId = list.some((b) => b.id === selected) ? selected : (list[0]?.id ?? '');
   const format = trpc.pharmacySales.counterReceiptFormat.useQuery(
-    { branchId },
+    { branchId, includeRegisteredName: true },
     { enabled: !!branchId, retry: false }
   );
   return (
