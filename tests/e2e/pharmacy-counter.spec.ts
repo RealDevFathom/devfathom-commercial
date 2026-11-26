@@ -2700,6 +2700,86 @@ test('cashier — the seeded cashier sells from the counter and gets the receipt
   await expect(dialog).toBeHidden();
 });
 
+test('DEV-1049 cashier sells a unit from sealed stock and takes exact cash', async ({ page }) => {
+  const { organizationId, branchId, stockLocationId } = PHARMACY_E2E;
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: resolvePharmacyE2eDatabaseUrl() });
+  const tag = randomUUID();
+  const name = 'Sealed tablets ' + tag.slice(0, 8);
+  await db.connect();
+  try {
+    // A private barcode-free item keeps this case independent of every other bill and rerun.
+    await db.query('BEGIN');
+    await db.query("SELECT set_config('app.current_organization_id', $1, true)", [organizationId]);
+    await db.query(
+      `INSERT INTO pharmacy_medicines
+      (id, "organizationId", "productName", "productFamily", otc, saleable, "updatedAt")
+      VALUES ($1, $2, $3, 'PHARMACEUTICAL', true, true, now())`,
+      [tag, organizationId, name]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_presentations
+      (id, "organizationId", "medicineId", "dosageForm", presentation, "updatedAt")
+      VALUES ($1,$2,$1,'Tablet','Box of 10 tablets',now())`,
+      [tag, organizationId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_pack_levels
+      (id, "organizationId", "presentationId", "versionGroupId", version, level, "unitsPerParent", "effectiveFrom")
+      VALUES ($1,$2,$1,$1,1,'BOX',10,now())`,
+      [tag, organizationId]
+    );
+    await db.query('COMMIT');
+  } finally {
+    await db.end();
+  }
+  await openCounter(page);
+  const printedExpiry = new Date(Date.now() + 365 * 86_400_000).toISOString();
+  const batch = await trpcMutation<{ id: string }>(
+    page,
+    'pharmacyInventory.registerBatch',
+    {
+      medicineId: tag,
+      batchNumber: tag,
+      printedExpiry,
+      expiryPrecision: 'DAY',
+    },
+    ['printedExpiry']
+  );
+  await trpcMutation(
+    page,
+    'pharmacyInventory.receiveLot',
+    {
+      branchId,
+      manufacturingBatchId: batch.id,
+      packLevelId: tag,
+      stockLocationId,
+      unitsPerPack: 10,
+      supplierName: 'Synthetic distributor',
+      supplierInvoiceRef: tag,
+      unitCostMinor: 50,
+      printedMrpMinor: 1000,
+      printedExpiry,
+      expiryPrecision: 'DAY',
+      quantityUnits: 10,
+      idempotencyKey: tag,
+    },
+    ['printedExpiry']
+  );
+  await openDrawer(page);
+  await search(page, name);
+  await addFirstResult(page, name);
+  await expect(billLine(page, name).getByRole('radio', { name: 'Unit' })).toHaveAttribute(
+    'aria-checked',
+    'true'
+  );
+  await expect(page.getByText(/break a pack in Inventory/i)).toHaveCount(0);
+  await tenderCash(page, '1.00');
+  const receipt = page.getByRole('region', { name: /^Receipt \d+ · Counter / });
+  await expect(receipt).toContainText(name);
+  await expect(receipt).toContainText('1.00');
+});
+
 test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
   await openCounter(page);
   await openDrawer(page);

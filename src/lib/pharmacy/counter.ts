@@ -918,6 +918,13 @@ async function hydrateCounterRows(
       }));
     }
 
+    if (medicine.wholePackOnly && priced) {
+      saleUnits = saleUnits.filter(
+        (option) =>
+          option.kind === 'PACK' && option.canonicalUnitsPerSaleUnit === priced.unitsPerPack
+      );
+    }
+
     // The same (pack level, batch) lookup the sale writer uses, so the quoted
     // price is the charged price even when batches carry different increments.
     const roundingIncrementMinor = priced

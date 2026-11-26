@@ -867,6 +867,13 @@ async function addSaleLineWithAllocation(
     medicineId: input.medicineId,
     ...(input.shelfLabelLotId ? { expectedInventoryLotId: input.shelfLabelLotId } : {}),
     requiredUnits: canonicalUnits,
+    counterSale: reservation
+      ? undefined
+      : {
+          id: input.saleId,
+          unit: input.saleUnit,
+          unitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+        },
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
     override,

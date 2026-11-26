@@ -975,7 +975,7 @@ function fail(error: unknown): never {
     // the branch cannot cover is the operator's to correct, never a 500.
     throw new TRPCError({
       code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
-      message: error.reason,
+      message: error.userMessage ?? error.reason,
     });
   }
   if (error instanceof PharmacyLoyaltyError) {

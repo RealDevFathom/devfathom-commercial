@@ -160,7 +160,6 @@ import {
 import {
   COUNTER_DISCOUNT_APPROVAL_REQUIRED,
   COUNTER_DISCOUNT_NOTICES,
-  COUNTER_ERROR_MESSAGES,
   counterBillMovedOn,
   counterErrorMessage,
   counterDrawerErrorMessage,
@@ -229,7 +228,6 @@ type Notice = {
   message: string;
   /** DEV-910: stays on screen until the cashier dismisses it. */
   persistent?: boolean;
-  inventoryBranchId?: string;
   printReceiptSaleId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
@@ -2766,9 +2764,6 @@ function ScopedPharmacyCounterConsole({
         setNotice({
           tone: counterErrorTone(error),
           message,
-          ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
-            ? { inventoryBranchId: branchId }
-            : {}),
           ...setupNotice(error),
         });
         if (counterSetupReason(error)) void refetchSaleReadiness();
@@ -4840,20 +4835,6 @@ function ScopedPharmacyCounterConsole({
                   <div className="min-w-0 space-y-2 text-sm">
                     <p className="text-text-body">{notice.message}</p>
                     {notice.setup ? <CounterSetupNextStep advice={notice.setup} /> : null}
-                    {notice.inventoryBranchId ? (
-                      <Link
-                        href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        prefetch={false}
-                        className={buttonVariants({
-                          variant: 'outline',
-                          className: 'h-auto min-h-11 whitespace-normal',
-                        })}
-                      >
-                        Open Inventory to review pack breaking (new tab)
-                      </Link>
-                    ) : null}
                   </div>
                   {notice.persistent ? (
                     <Button
