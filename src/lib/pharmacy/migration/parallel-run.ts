@@ -204,7 +204,7 @@ export async function branchStockValueMinor(
 
 export function onHandValueQuery(organizationId: string, branchIds: string[]) {
   return Prisma.sql`SELECT COALESCE(SUM(b."onHandUnits"::bigint * lot."unitCostMinor"),0)::bigint AS value
-    FROM pharmacy_stock_balances b JOIN pharmacy_inventory_lots lot ON lot."organizationId"=b."organizationId" AND lot.id=b."inventoryLotId"
+    FROM pharmacy_stock_balances b JOIN pharmacy_inventory_lots lot ON lot."organizationId"=b."organizationId" AND lot."branchId" = b."branchId" AND lot.id=b."inventoryLotId"
     WHERE b."organizationId"=${organizationId} AND b."branchId" IN (${Prisma.join(branchIds)}) AND b.disposition='AVAILABLE'`;
 }
 

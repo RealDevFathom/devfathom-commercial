@@ -208,6 +208,55 @@ describe.skipIf(!url)('owner dashboard and reports on the same completed sale', 
       margin.map((r) => r.grossMarginMinor)
     );
   });
+  it('keeps the report lot and balance in the same branch across a two-branch stock valuation', async () => {
+    const { onHandValueQuery, branchStockValueMinor } = await import('./migration/parallel-run');
+    const second = id + '_second';
+    await scoped.withTenantDb(org, async (db) => {
+      await db.pharmacyBranch.create({
+        data: {
+          id: second,
+          organizationId: org,
+          code: 'SECOND',
+          name: 'Second',
+          addressLine: 'Test',
+          city: 'Test',
+          provinceCode: 'PB',
+        },
+      });
+      const location = await db.pharmacyStockLocation.create({
+        data: { organizationId: org, branchId: second, code: 'Main', name: 'Store', kind: 'STORE' },
+      });
+      const batch = await db.pharmacyManufacturingBatch.findUniqueOrThrow({ where: { id: org } });
+      await receiveLot(
+        db,
+        { organizationId: org, branchId: second, actorId: 'fixture' },
+        {
+          manufacturingBatchId: org,
+          packLevelId: org,
+          stockLocationId: location.id,
+          unitsPerPack: 1,
+          supplierName: 'Synthetic',
+          supplierInvoiceRef: second,
+          unitCostMinor: 50,
+          printedMrpMinor: 500,
+          receivedExpiresAt: batch.expiresAt!,
+          receivedExpiryPrecision: 'DAY',
+          quantityUnits: 2,
+          idempotencyKey: second,
+          receivedAt: at,
+        }
+      );
+      expect(await branchStockValueMinor(db, { organizationId: org, branchId: second })).toBe(
+        BigInt(100)
+      );
+      expect(await branchStockValueMinor(db, { organizationId: org, branchId: id })).toBe(
+        BigInt(1200)
+      );
+      const combined = onHandValueQuery(org, [id, second]);
+      expect(combined.sql).toMatch(/lot\."branchId"\s*=\s*b\."branchId"/);
+      expect(await db.$queryRaw(combined)).toEqual([{ value: BigInt(1300) }]);
+    });
+  });
   it('returns bill counts alone for an operational dashboard', async () => {
     expect(await read('summary', false)).toEqual([
       { label: 'Bills', value: 1, previous: 0, count: true },
