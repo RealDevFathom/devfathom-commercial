@@ -45,6 +45,11 @@ describe.skipIf(!ownerUrl || !runtimeUrl)('recurring expenses on PostgreSQL', ()
         'utf8'
       );
       await owner.query(sql);
+      // A later February due date must never replace the original January anchor.
+      await owner.query(
+        `UPDATE recurring_expenses SET "nextDueDate" = '2026-02-27 19:00' WHERE id = 'local'`
+      );
+      await owner.query(sql);
       expect((await snapshot()).rows).toEqual(before.rows);
       expect(
         (await owner.query('SELECT id, "billingDay" FROM recurring_expenses ORDER BY id')).rows
