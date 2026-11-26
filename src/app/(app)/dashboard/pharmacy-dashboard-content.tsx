@@ -590,8 +590,7 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
                 !(
                   definition.get(item.key)?.permission === 'reports:financial' &&
                   command.data?.permissions.financial === false
-                ) &&
-                (item.key !== 'expiry' || command.data?.permissions.financial === true)
+                )
             )
             .map((preference) => {
               const item = definition.get(preference.key)!;

@@ -1269,10 +1269,14 @@ export const pharmacyReportsRouter = router({
           ? result.metrics
           : {
               ...result.metrics,
-              expiryValueMinor30: null,
-              expiryValueMinor60: null,
-              expiryValueMinor90: null,
-              expiryValueMinor180: null,
+              ...(input.dashboard
+                ? {
+                    expiryValueMinor30: null,
+                    expiryValueMinor60: null,
+                    expiryValueMinor90: null,
+                    expiryValueMinor180: null,
+                  }
+                : {}),
               salesMinor: null,
               marginMinor: null,
               cashMinor: null,
