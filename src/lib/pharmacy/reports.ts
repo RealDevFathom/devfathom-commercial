@@ -57,7 +57,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Completed sale line revenue less line discounts.',
     'pharmacy_sales + pharmacy_sale_lines',
     'selected branches and business dates',
-    '/pharmacy/reports?section=sales',
+    '/pharmacy/reports/operations?section=sales',
     'reports:financial',
   ],
   [
@@ -66,7 +66,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'Posted revenue less discounts and exact allocated lot cost, including return and reversal postings. Missing journal evidence is unknown; source completeness is not asserted.',
     'finance_journal_entries + finance_journal_lines',
     'selected branches and posting times within workspace dates',
-    '/pharmacy/reports?section=sales',
+    '/pharmacy/reports?section=profit',
     'reports:financial',
   ],
   [

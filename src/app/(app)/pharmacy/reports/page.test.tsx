@@ -427,7 +427,7 @@ describe('pharmacy report catalog filters', () => {
     expect(detail.closest('[id="sales"]')).not.toBeNull();
     expect(screen.getByRole('link', { name: 'Back to overview' })).toHaveAttribute(
       'href',
-      '/pharmacy/reports?branch=b1'
+      '/pharmacy/reports/operations?branch=b1'
     );
   });
 

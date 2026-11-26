@@ -1,3 +1,4 @@
+import { operationalReportsHref } from '@/lib/pharmacy/operational-reports-href';
 import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import type { Metadata } from 'next';
@@ -906,7 +907,7 @@ export default async function PharmacyReportsPage({
               </div>
               <Link
                 className="mt-4 inline-flex text-sm font-medium underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                href={scopedDrillThrough('/pharmacy/reports', branch)}
+                href={operationalReportsHref({ ...query, branch })}
               >
                 {screenCopy.reports.backToOverview}
               </Link>
