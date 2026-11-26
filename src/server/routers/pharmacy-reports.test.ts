@@ -1881,6 +1881,21 @@ describe('owner dashboard effective access', () => {
       ['assigned', 'other'].map((id) => ({ id, name: id, businessDayEndsAtHistory: [] }))
     );
   });
+  it('admits an effective admin:access holder to all active tenant branches without conferring ownership or finance', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational' || action === 'admin:access'
+    );
+    const api = caller('EMPLOYEE');
+    expect(await api.branches({ dashboard: true })).toMatchObject({
+      organizationId: 'org_1',
+      owner: false,
+      branches: [{ id: 'assigned' }, { id: 'other' }],
+    });
+    await expect(api.ownerTrading({ section: 'profits', branchId: 'other' })).resolves.toEqual([]);
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
+    );
+  });
   it('restricts a titled administrator to assignments and returns operational sections without monetary values', async () => {
     const dashboard = caller();
     const scope = await dashboard.branches({ dashboard: true });

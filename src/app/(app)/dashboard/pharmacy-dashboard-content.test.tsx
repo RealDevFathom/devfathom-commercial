@@ -138,6 +138,14 @@ describe('PharmacyDashboardContent states', () => {
     ).toBeVisible();
   });
 
+  it('explains how a reader with no admitted branch can get access', () => {
+    state.branches = query({ branches: [], unassigned: true });
+    render(<PharmacyDashboardContent role="EMPLOYEE" />);
+    expect(
+      screen.getByText('You are not assigned to a branch yet. Ask the owner to add you.')
+    ).toBeVisible();
+    expect(screen.queryByRole('region', { name: 'Business dashboard' })).not.toBeInTheDocument();
+  });
   it('omits the money and cost tiles when only operational reports are granted', () => {
     render(<PharmacyDashboardContent role="ADMIN" />);
     expect(screen.queryByRole('heading', { name: "Today's trade" })).not.toBeInTheDocument();

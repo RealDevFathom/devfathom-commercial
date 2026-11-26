@@ -568,7 +568,9 @@ function OwnerCommandCentre({ role }: { role: string | null | undefined }) {
       ) : branches.data.branches.length === 0 ? (
         <SectionCard title="No reportable branches">
           <p className="text-sm text-text-body">
-            Activate a pharmacy branch before using the command centre.
+            {'unassigned' in branches.data && branches.data.unassigned
+              ? 'You are not assigned to a branch yet. Ask the owner to add you.'
+              : 'Activate a pharmacy branch before using the command centre.'}
           </p>
         </SectionCard>
       ) : (

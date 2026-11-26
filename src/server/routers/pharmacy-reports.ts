@@ -134,20 +134,28 @@ async function reportScope(ctx: TRPCContext, reportBranches: 'ALL' | string[]) {
   };
 }
 async function dashboardScope(ctx: TRPCContext, reportBranches: 'ALL' | string[]) {
-  const available = await reportScope(ctx, reportBranches);
+  const available = await scope(ctx);
   const user = ctx.session?.user;
   if (!user?.id || user.organizationId !== available.organizationId)
-    return { ...available, branches: [], owner: false };
-  if (await isLiveOrganizationOwner(ctx.db, available.organizationId, user.id))
-    return { ...available, owner: true };
+    return { ...available, branches: [], owner: false, unassigned: false };
+  const owner = await isLiveOrganizationOwner(ctx.db, available.organizationId, user.id);
+  if (
+    owner ||
+    (await can(subjectFromSession(user), 'admin:access', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  )
+    return { ...available, owner, unassigned: false };
   const assigned = new Set(
     await assignedRegisterBranchIds(ctx.db, available.organizationId, user.id)
   );
-  return {
-    ...available,
-    owner: false,
-    branches: available.branches.filter((branch) => assigned.has(branch.id)),
-  };
+  const branches = available.branches.filter(
+    (branch) =>
+      assigned.has(branch.id) && (reportBranches === 'ALL' || reportBranches.includes(branch.id))
+  );
+  return { ...available, branches, owner: false, unassigned: branches.length === 0 };
 }
 
 const safety = capabilityProcedure('pharmacy:safety');
