@@ -30,7 +30,8 @@ export function resolutionAuditId(org: string, device: string, key: string) {
 export async function resolveOfflineCash(
   db: ScopedDb,
   scope: LedgerScope,
-  input: z.infer<typeof offlineCashResolutionSchema>
+  input: z.infer<typeof offlineCashResolutionSchema>,
+  mayUseOtherDrawers: boolean
 ) {
   const { organizationId, branchId, actorId } = scope;
   if ((input.outcome === 'REBOOK') !== Boolean(input.saleId))
@@ -82,6 +83,7 @@ export async function resolveOfflineCash(
   const at = new Date();
   const businessDate = pharmacyBusinessDate(await readPharmacyDayClock(db, scope), at);
   const key = 'offline-cash-resolution:' + command.id;
+  const operator = { kind: 'COUNTER', actorIsManager: mayUseOtherDrawers } as const;
   let tenderId: string | null = null;
   let movementId: string | null = null;
   if (input.outcome === 'REBOOK' && input.saleId) {
@@ -98,7 +100,7 @@ export async function resolveOfflineCash(
       },
       undefined,
       {
-        drawerOperator: { kind: 'COUNTER', actorIsManager: true },
+        drawerOperator: operator,
         requireCurrentBusinessDate: true,
         fundedFromOfflineSuspense: true,
       }
@@ -115,7 +117,6 @@ export async function resolveOfflineCash(
       });
     tenderId = result.tenderId;
   } else if (input.outcome === 'REFUND') {
-    const operator = { kind: 'COUNTER', actorIsManager: true } as const;
     const drawer = await resolveOperatingPharmacyDrawer(
       db,
       scope,

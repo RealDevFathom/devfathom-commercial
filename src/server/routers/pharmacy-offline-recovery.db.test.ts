@@ -551,6 +551,65 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
       webUser = { id: ACTOR, role: 'ADMIN' };
     }
     expect(await counter.counts()).toMatchObject({ sales: 0, commands: 0, consumed: 0 });
+    await counter.establish();
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const { openPharmacyDrawer } = await import('@/lib/pharmacy/settlement');
+    const { saveOwnPin } = await import('@/lib/pharmacy/own-pin');
+    const rejected = await counter.call(
+      'reject',
+      { command: sealed, reason: 'Receipt cash held' },
+      {
+        'idempotency-key': sealed.idempotencyKey,
+        'x-command-signature': signPharmacyCommand(
+          scope,
+          counter.fixture.deviceId,
+          sealed,
+          counter.fixture.deviceSecret
+        ),
+      }
+    );
+    expect(rejected.status).toBe(200);
+    const { rows } = await supervisor(
+      (api) => api.refusedReceipts({ branchId: scope.branchId }),
+      manager,
+      'EMPLOYEE'
+    );
+    const held = rows.find((row) => row.cashState === 'held')!;
+    await inOrg(ORG_A, async (db) => {
+      await saveOwnPin(db, { organizationId: ORG_A, userId: manager, pin: '5427' });
+      await openPharmacyDrawer(db, scope, {
+        deviceId: counter.fixture.deviceId,
+        businessDate: new Date(),
+        openingFloatMinor: 0,
+      });
+    });
+    const refund = () =>
+      supervisor(
+        (api) =>
+          api.resolveCash({
+            ...resolution,
+            eventId: held.id,
+            outcome: 'REFUND',
+            managerPin: '5427',
+          }),
+        manager,
+        'EMPLOYEE'
+      );
+    await expect(refund()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Use a drawer you operate or ask a branch drawer manager.',
+    });
+    await inOrg(ORG_A, (db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: manager,
+          capability: 'pharmacy:manage',
+          effect: 'ALLOW',
+          reason: 'Assigned branch drawer manager',
+        },
+      })
+    );
+    await expect(refund()).resolves.toEqual({ replayed: false });
   });
 
   it('requires recorded seal evidence for quarantine and a fixable refusal for retry', async () => {

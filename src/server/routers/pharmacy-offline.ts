@@ -57,6 +57,7 @@ import {
 } from '@/lib/pharmacy/sales';
 import { BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import {
+  PharmacySettlementError,
   applyPharmacyTender,
   lockPharmacyDay,
   recordRejectedOfflineCash,
@@ -69,6 +70,7 @@ import {
 } from '@/lib/pharmacy/manual-payments';
 import { readManualPaymentSettings } from '@/lib/pharmacy/manual-payment-settings';
 import {
+  actorManagesBranchDrawers,
   counterBranchAssignmentDenial,
   counterOperatorDenial,
 } from '@/lib/pharmacy/counter-capability';
@@ -238,7 +240,25 @@ export const pharmacyOfflineRouter = router({
             message: 'Approval refused. Check your own PIN or authenticator code.',
           });
         await scopeReceiptHistory(db, scope.branchId);
-        return resolveOfflineCash(db, scope, input);
+        const mayUseOtherDrawers =
+          input.outcome !== 'WRITE_OFF' &&
+          (await actorManagesBranchDrawers(
+            db,
+            ctx.session.user,
+            scope.organizationId,
+            scope.branchId,
+            { source: 'TRPC' }
+          ));
+        try {
+          return await resolveOfflineCash(db, scope, input, mayUseOtherDrawers);
+        } catch (error) {
+          if (error instanceof PharmacySettlementError && error.reason === 'DRAWER_NOT_YOURS')
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Use a drawer you operate or ask a branch drawer manager.',
+            });
+          throw error;
+        }
       })
     ),
   refusedReceipts: adminProcedure
