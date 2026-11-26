@@ -212,6 +212,38 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     );
   }, 120_000);
 
+  it('DEV-1041: only a live owner may change this branch’s starting sale unit', async () => {
+    const other = `counter_other_${suffix}`;
+    await createBranch(ORG, other);
+    const change = () =>
+      asAdmin((c) =>
+        c.saveCounterDefaultSaleUnit({ branchId: ACTIVE, previous: 'UNIT', unit: 'PACK' })
+      );
+    // The fixture administrator can manage drawers but has no owner grant.
+    await expect(change()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    const permission = await withTenantDb(ORG, (db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: ACTOR,
+          capability: '*',
+          effect: 'ALLOW',
+          reason: 'Disposable owner setting fixture',
+        },
+      })
+    );
+    try {
+      await expect(change()).resolves.toEqual({ unit: 'PACK' });
+      await expect(change()).rejects.toMatchObject({ code: 'CONFLICT' });
+      const { branches } = await asAdmin((c) => c.counterBranches());
+      expect(branches.find((b) => b.id === ACTIVE)?.counterDefaultSaleUnit).toBe('PACK');
+      expect(branches.find((b) => b.id === other)?.counterDefaultSaleUnit).toBe('UNIT');
+    } finally {
+      await withTenantDb(ORG, (db) =>
+        db.userPermissionOverride.delete({ where: { id: permission.id } })
+      );
+    }
+  });
+
   const procedures = (branchId: string, drawerSessionId: string) =>
     [
       ['drawerStatus', (c) => c.drawerStatus({ branchId, deviceId: DEVICE }), NOT_IN_WORKSPACE],

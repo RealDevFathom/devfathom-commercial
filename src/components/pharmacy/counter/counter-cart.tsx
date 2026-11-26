@@ -132,6 +132,13 @@ function CounterLineEditor({
     'grid size-11 place-items-center text-text-strong transition-colors hover:bg-surface-sunken focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50';
   return (
     <div className="mt-2 flex flex-wrap items-center gap-1.5">
+      {options.length > 0 && !options.some((option) => option.kind === 'UNIT') && (
+        <span className="basis-full text-xs text-text-muted">
+          {options.length === 1 && options[0]!.canonicalUnitsPerSaleUnit === 1
+            ? 'One pack contains one unit.'
+            : `Not sold loose. The smallest sellable size is one ${options.reduce((a, b) => (a.canonicalUnitsPerSaleUnit <= b.canonicalUnitsPerSaleUnit ? a : b)).kind.toLowerCase()}.`}
+        </span>
+      )}
       {editing === 'full' && options.length > 1 ? (
         <span
           role="radiogroup"

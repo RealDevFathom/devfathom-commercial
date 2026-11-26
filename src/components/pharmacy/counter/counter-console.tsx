@@ -53,6 +53,7 @@ import {
   type CounterLineChange,
   type CounterLotOverrideValue,
 } from './counter-cart';
+import { CounterBranchUnitSetting } from './counter-branch-unit-setting';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterActionBar, CounterFrame, CounterFrameContent } from './counter-frame';
@@ -186,7 +187,6 @@ import {
   plural,
   looseSaleUnitOption,
   onHandInSaleUnitLabel,
-  preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
   type SaleUnitOption,
@@ -902,9 +902,8 @@ function ScopedPharmacyCounterConsole({
   // DEV-977B (Counter v2, A6): the result the arrows are on. Moving through results no longer
   // stages a line; Enter adds the highlighted one in one step.
   const [highlightId, setHighlightId] = useState<string | null>(null);
-  // DEV-977B: "Adds as" (F3 pack, F4 strip, F5 unit), chosen before or while searching. Null
-  // adds each medicine in its usual unit.
-  const [addUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
+  // An explicit cashier choice belongs to the current bill.
+  const [billUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
   // DEV-977B: the sale units of medicines added from search, so their bill line can switch unit.
   const knownSaleUnits = useRef(new Map<string, readonly SaleUnitOption[]>());
   // DEV-977B: retry keys for a line change or removal whose answer was lost.
@@ -1384,12 +1383,13 @@ function ScopedPharmacyCounterConsole({
   }, [utils]);
 
   const setActiveSale = useCallback(
-    (nextSaleId: string | null) => {
+    (nextSaleId: string | null, keepBillUnit = false) => {
       discardReceiptIntent();
       setReceiptSettlement(null);
       setSettledChange(null);
       setReceiptOpen(false);
       setSaleId(nextSaleId);
+      if (!keepBillUnit) setAddUnit(null);
       setCustomerId(null);
       setRedeemPoints(0);
       setTenderOutcome(null);
@@ -1402,6 +1402,28 @@ function ScopedPharmacyCounterConsole({
   // ── Derived state ─────────────────────────────────────────────────────────
 
   const cart = cartQuery.data ?? null;
+  const branchDefault =
+    branches.find((branch) => branch.id === branchId)?.counterDefaultSaleUnit ?? 'UNIT';
+  const addUnit = billClosed(cart, saleId) ? branchDefault : (billUnit ?? branchDefault);
+  const addUnitFor = useCallback(
+    (row: CounterSearchRow) => {
+      const requested =
+        addUnit === 'UNIT'
+          ? looseSaleUnitOption(row.saleUnits)
+          : row.saleUnits.find((option) => option.kind === addUnit);
+      return (
+        requested ??
+        row.saleUnits.reduce<SaleUnitOption | null>(
+          (smallest, option) =>
+            !smallest || option.canonicalUnitsPerSaleUnit < smallest.canonicalUnitsPerSaleUnit
+              ? option
+              : smallest,
+          null
+        )
+      );
+    },
+    [addUnit]
+  );
   const patient = patientPanelQuery.data ?? null;
   const patientAddress = patient ? patientAddressDraft : '';
   const locationName = activeRow?.storage.locationName?.trim() || activeRow?.storage.locationKind;
@@ -2134,29 +2156,32 @@ function ScopedPharmacyCounterConsole({
     [authenticatePack, branchAuthorized, branchId, busy, query]
   );
 
-  const stageRow = useCallback((row: CounterSearchRow, focusQuantity = true) => {
-    const label = counterLabelScanDecision(row);
-    if (label.kind === 'BLOCKED') {
-      setActiveRow(null);
-      setQuantityText('');
-      setSaleUnit(null);
-      setLotOverride(null);
-      setNotice({ tone: 'danger', message: label.message });
-      return;
-    }
-    // DEV-977 phase 3: staging another medicine replaces a pack waiting for authorisation.
-    setPendingPack(null);
-    focusQuantityOnStage.current = focusQuantity;
-    quantityReviewed.current = false;
-    setHighlightId(null);
-    if (focusQuantity) setResultsDismissed(true);
-    setActiveRow(row);
-    setQuantityText('1');
-    setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
-    setLotOverride(
-      label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
-    );
-  }, []);
+  const stageRow = useCallback(
+    (row: CounterSearchRow, focusQuantity = true) => {
+      const label = counterLabelScanDecision(row);
+      if (label.kind === 'BLOCKED') {
+        setActiveRow(null);
+        setQuantityText('');
+        setSaleUnit(null);
+        setLotOverride(null);
+        setNotice({ tone: 'danger', message: label.message });
+        return;
+      }
+      // DEV-977 phase 3: staging another medicine replaces a pack waiting for authorisation.
+      setPendingPack(null);
+      focusQuantityOnStage.current = focusQuantity;
+      quantityReviewed.current = false;
+      setHighlightId(null);
+      if (focusQuantity) setResultsDismissed(true);
+      setActiveRow(row);
+      setQuantityText('1');
+      setSaleUnit(addUnitFor(row)?.kind ?? null);
+      setLotOverride(
+        label.kind === 'OVERRIDE' ? { inventoryLotId: label.inventoryLotId, reason: '' } : null
+      );
+    },
+    [addUnitFor]
+  );
 
   const changeQuantity = useCallback((text: string) => {
     quantityReviewed.current = true;
@@ -2206,7 +2231,7 @@ function ScopedPharmacyCounterConsole({
           void utils.pharmacySales.drawerStatus.invalidate();
         throw error;
       });
-    setActiveSale(created.id);
+    setActiveSale(created.id, true);
     void refetchOpenBills();
     return created.id;
   }, [branchId, createSale, currentCounterDeviceId, refetchOpenBills, setActiveSale, utils]);
@@ -2231,7 +2256,7 @@ function ScopedPharmacyCounterConsole({
         : unitOption && scannedRow
           ? unitOption
           : scannedRow
-            ? (scannedRow.saleUnits[0] ?? null)
+            ? addUnitFor(scannedRow)
             : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
@@ -2618,6 +2643,7 @@ function ScopedPharmacyCounterConsole({
     [
       activeRow,
       addLine,
+      addUnitFor,
       heldVoucher,
       heldDiscount,
       catalogueCache,
@@ -2701,12 +2727,13 @@ function ScopedPharmacyCounterConsole({
         }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
-        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
+        const scanOption = addUnitFor(row);
+        const scanPreview = counterSelectionPreview(row, scanOption, 1);
         // DEV-977B (Counter v2): a scan adds in one step. Only an exception (a non-FEFO shelf
         // sticker, or not enough stock) opens the line form, so the cashier can act on it.
         if (label.kind === 'OVERRIDE' || (!serialized && !scanPreview?.sufficient)) {
           stageRow(row, false);
-          setSaleUnit(row.saleUnits[0]?.kind ?? null);
+          setSaleUnit(scanOption?.kind ?? null);
           // Barcode entry keeps its one-item default; manual selection starts empty.
           setQuantityText('1');
         }
@@ -2733,21 +2760,18 @@ function ScopedPharmacyCounterConsole({
         setScanSettles((count) => count + 1);
       }
     },
-    [addToCart, branchId, busy, catalogueCache, query, runSearch, setupNotice, stageRow, utils]
-  );
-
-  /** DEV-977B: the unit a result is added in: "Adds as" when it sells that way, else its usual. */
-  const addUnitFor = useCallback(
-    (row: CounterSearchRow): SaleUnitOption | null => {
-      const preferred =
-        addUnit === 'UNIT'
-          ? looseSaleUnitOption(row.saleUnits)
-          : addUnit
-            ? (row.saleUnits.find((option) => option.kind === addUnit) ?? null)
-            : null;
-      return preferred ?? preferredSaleUnitOption(row.saleUnits, row.dosageForm) ?? null;
-    },
-    [addUnit]
+    [
+      addToCart,
+      addUnitFor,
+      branchId,
+      busy,
+      catalogueCache,
+      query,
+      runSearch,
+      setupNotice,
+      stageRow,
+      utils,
+    ]
   );
 
   /**
@@ -4413,6 +4437,9 @@ function ScopedPharmacyCounterConsole({
         <div
           className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
         >
+          {actionsOpen && branchAuthorized && (
+            <CounterBranchUnitSetting key={branchId} branchId={branchId} value={branchDefault} />
+          )}
           <CounterPackCheck
             key={`pack:${branchId}:${saleId}`}
             branchId={branchId}
@@ -5035,7 +5062,7 @@ function ScopedPharmacyCounterConsole({
                               aria-checked={checked}
                               aria-keyshortcuts={chordFor(kind)}
                               title={chordFor(kind)}
-                              onClick={() => setAddUnit(checked ? null : kind)}
+                              onClick={() => setAddUnit(kind)}
                               className={`min-h-11 px-3 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 ${
                                 checked
                                   ? 'bg-text-strong text-surface-card'

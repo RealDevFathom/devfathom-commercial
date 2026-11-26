@@ -191,6 +191,7 @@ vi.mock('@/lib/trpc', async () => {
         'counterBranches',
         'counterReceiptFormat',
         'counterKeymap',
+        'saveCounterDefaultSaleUnit',
         'counterSaveKeymap',
         'counterSearch',
         'upsellSuggestions',
@@ -8768,6 +8769,47 @@ describe('DEV-977B Counter v2 phase 2A: one-step add, quantity and unit on the b
       )
     ).toBeInTheDocument();
   });
+
+  it.each(['UNIT', 'PACK'] as const)(
+    'DEV-1041: new bill resets the keyboard override to the branch default (%s)',
+    async (branchDefault) => {
+      mocks.queries.counterBranches = query({
+        branches: [{ id: 'branch-a', name: 'A', code: 'A', counterDefaultSaleUnit: branchDefault }],
+      });
+      const view = render(
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+      );
+      const addsAs = within(screen.getByRole('radiogroup', { name: 'Adds as' }));
+      const startingUnit = addsAs.getByRole('radio', {
+        name: branchDefault === 'UNIT' ? /Unit/ : /Pack/,
+      });
+      expect(startingUnit).toHaveAttribute('aria-checked', 'true');
+      for (const [key, label] of [
+        ['F3', 'Pack'],
+        ['F4', 'Strip'],
+      ] as const) {
+        fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key });
+        expect(addsAs.getByRole('radio', { name: new RegExp(label) })).toHaveAttribute(
+          'aria-checked',
+          'true'
+        );
+        expect(mocks.mutations.changeLine).not.toHaveBeenCalled();
+      }
+      mocks.queries.counterCart = {
+        ...query(
+          cart({
+            status: 'COMPLETED',
+            receiptNumber: 42,
+            totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+          })
+        ),
+        refetch: mocks.refetch,
+      };
+      view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+      fireEvent.click(screen.getByRole('button', { name: 'Start next bill' }));
+      expect(startingUnit).toHaveAttribute('aria-checked', 'true');
+    }
+  );
 
   it('adds a pressed result in one step, in the unit chosen under Adds as', async () => {
     mocks.mutations.addLine!.mockResolvedValue({});

@@ -201,6 +201,7 @@ model PharmacyBranch {
   customerChurnScores             PharmacyCustomerChurnScore[]
   whatsappMessageLogs             PharmacyMessageLog[]
   aiUsages                        AIUsage[]
+  counterDefaultSaleUnit          PharmacySaleUnit             @default(UNIT)
   receiptLayout                   Json?
   receiptLayoutRevision           Int                          @default(0)
   manualPaymentSettings           Json?

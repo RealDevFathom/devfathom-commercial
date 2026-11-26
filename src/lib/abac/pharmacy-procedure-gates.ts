@@ -2595,6 +2595,10 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     gate: "protectedProcedure + owner (readMaxDiscountSettings canChange) + the owner's fresh approval code; support sessions refused; audited",
     none: 'owner only, with a fresh approval code',
   },
+  'pharmacySales.saveCounterDefaultSaleUnit': {
+    gate: 'protectedProcedure + active branch + live organization owner; support sessions refused',
+    none: 'owner only',
+  },
   'pharmacySales.saveDayEndHour': {
     gate: 'auditedProtectedProcedure + requireDrawerManagerAccess -> pharmacy:manage (counter family not DENIED), assigned branch or ADMIN; revision-checked and audited; no PIN',
     lines: ['run-branches/set-when-business-day'],

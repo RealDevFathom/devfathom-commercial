@@ -57,6 +57,7 @@ import {
 } from '@/lib/pharmacy/owner-data-export-pin';
 import {
   MAX_DISCOUNT_CHANGE_REFUSED,
+  isOrganizationOwner,
   readDiscountPolicySettings,
   readDiscountSuggestions,
   readMaxDiscountSettings,
@@ -1521,6 +1522,48 @@ export async function allocateSettledCounterReceiptPrintJob(
 }
 
 export const pharmacySalesRouter = router({
+  saveCounterDefaultSaleUnit: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          previous: z.enum(['PACK', 'STRIP', 'UNIT']),
+          unit: z.enum(['PACK', 'STRIP', 'UNIT']),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      if (
+        ctx.support ||
+        ctx.session.user.isSupportSession ||
+        !(await isOrganizationOwner(ctx.db, scope.organizationId, scope.actorId))
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the owner can change the starting sale unit.',
+        });
+      const saved = await ctx.db.pharmacyBranch.updateMany({
+        where: {
+          id: scope.branchId,
+          organizationId: scope.organizationId,
+          active: true,
+          counterDefaultSaleUnit: input.previous,
+        },
+        data: { counterDefaultSaleUnit: input.unit },
+      });
+      if (!saved.count)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'The branch setting changed. Reload before saving.',
+        });
+      annotateAudit(ctx, {
+        targetType: 'PharmacyBranch',
+        targetId: scope.branchId,
+        metadata: { previous: input.previous, unit: input.unit },
+      });
+      return { unit: input.unit };
+    }),
   manualPaymentSettings: protectedProcedure
     .input(z.object({ branchId }))
     .query(async ({ ctx, input }) => {
@@ -5057,6 +5100,7 @@ export const pharmacySalesRouter = router({
           name: true,
           city: true,
           provinceCode: true,
+          counterDefaultSaleUnit: true,
           businessDayEndsAtHistory: true,
         },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
