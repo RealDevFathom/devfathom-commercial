@@ -219,3 +219,25 @@ it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
     expect(html).toContain('Sample Community Pharmacy');
   }
 );
+
+it.each([DEFAULT_RECEIPT_LAYOUT, layout])(
+  'keeps the original marking and recorded tier discount on thermal layout v$version',
+  (design) => {
+    const sale = {
+      ...receiptDesignSample,
+      lines: receiptDesignSample.lines.map((line) => ({
+        ...line,
+        tierDiscountMinor: 100,
+        tierName: 'Member',
+      })),
+    };
+    const job = buildPharmacyReceiptEscPosJob(sale, 'en', {
+      layout: design,
+      taxIdentity,
+      reprint: false,
+    });
+    const text = Buffer.from(job.escPos.data, 'base64').toString('ascii');
+    expect(text).toContain('\nOriginal\n');
+    expect(text.replace(/\s+/g, ' ')).toContain('Prepaid tier discount - Member: -1.00');
+  }
+);
