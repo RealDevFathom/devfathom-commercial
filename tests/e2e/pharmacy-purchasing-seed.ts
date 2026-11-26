@@ -131,7 +131,7 @@ async function main() {
 
     // Everything below is tenant data, so it runs with the organization GUC set
     // and under the same forced RLS the application runs under.
-    await prisma.$transaction(async (tx) => {
+    const supplierOrder = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT set_config('app.current_organization_id', '${organizationId}', true)`
       );
@@ -366,60 +366,71 @@ async function main() {
       // against a part-received order would see 30 units outstanding where the
       // first saw 100, and the spec would fail for a reason that is the fixture's
       // rather than the product's. The reference is handed to the spec below.
-      {
-        await tx.pharmacyPurchaseOrder.create({
-          data: {
-            organizationId,
-            branchId: branch.id,
-            reference: purchaseOrderReference,
-            // Approved by the approver and sent, which is the only state a
-            // receipt may be filed against.
-            status: 'SENT',
-            supplierId: supplier.id,
-            createdByUserId: receiver!.id,
-            approvedByUserId: approver!.id,
-            approvedAt: day(-2),
-            submittedAt: day(-3),
-            sentAt: day(-1),
-            expectedDeliveryAt: day(1),
-            // Prisma 7 rejects a composite-FK scalar in a nested create: the
-            // parent supplies `organizationId` through the relation, so
-            // repeating it here is an unknown argument rather than a duplicate.
-            lines: {
-              create: {
-                lineNumber: 1,
-                medicineId: medicine.id,
-                packLevelId: packLevel.id,
-                orderedPacks: FIXTURE.purchaseOrder.orderedPacks,
-                canonicalUnitsPerPack: FIXTURE.purchaseOrder.unitsPerPack,
-                orderedCanonicalUnits:
-                  FIXTURE.purchaseOrder.orderedPacks * FIXTURE.purchaseOrder.unitsPerPack,
-                listPricePerPackMinor: 250_00,
-              },
-            },
-            approvals: {
-              create: {
-                actorUserId: approver!.id,
-                policy: 'PUR-02:SEGREGATION_OF_DUTIES',
-                decision: 'APPROVED',
-                fromStatus: 'SUBMITTED',
-                toStatus: 'APPROVED',
-                reason: 'Seeded acceptance fixture.',
-              },
+      const order = await tx.pharmacyPurchaseOrder.create({
+        data: {
+          organizationId,
+          branchId: branch.id,
+          reference: purchaseOrderReference,
+          // Approved by the approver and sent, which is the only state a
+          // receipt may be filed against.
+          status: 'SENT',
+          supplierId: supplier.id,
+          createdByUserId: receiver!.id,
+          approvedByUserId: approver!.id,
+          approvedAt: day(-2),
+          submittedAt: day(-3),
+          sentAt: day(-1),
+          expectedDeliveryAt: day(1),
+          // Prisma 7 rejects a composite-FK scalar in a nested create: the
+          // parent supplies `organizationId` through the relation, so
+          // repeating it here is an unknown argument rather than a duplicate.
+          lines: {
+            create: {
+              lineNumber: 1,
+              medicineId: medicine.id,
+              packLevelId: packLevel.id,
+              orderedPacks: FIXTURE.purchaseOrder.orderedPacks,
+              canonicalUnitsPerPack: FIXTURE.purchaseOrder.unitsPerPack,
+              orderedCanonicalUnits:
+                FIXTURE.purchaseOrder.orderedPacks * FIXTURE.purchaseOrder.unitsPerPack,
+              listPricePerPackMinor: 250_00,
             },
           },
-        });
-      }
+          approvals: {
+            create: {
+              actorUserId: approver!.id,
+              policy: 'PUR-02:SEGREGATION_OF_DUTIES',
+              decision: 'APPROVED',
+              fromStatus: 'SUBMITTED',
+              toStatus: 'APPROVED',
+              reason: 'Seeded acceptance fixture.',
+            },
+          },
+        },
+      });
 
       // Quarantine is referenced by the capture form even when nothing is
       // rejected, so fail loudly here rather than in the browser.
       if (!quarantine) throw new Error('Quarantine location was not provisioned.');
+      const relationship = await tx.pharmacySupplierRelationship.upsert({
+        where: {
+          organizationId_branchId_supplierId: {
+            organizationId,
+            branchId: branch.id,
+            supplierId: supplier.id,
+          },
+        },
+        create: { organizationId, branchId: branch.id, supplierId: supplier.id },
+        update: {},
+        select: { id: true },
+      });
+      return { branchId: branch.id, relationshipId: relationship.id, purchaseOrderId: order.id };
     });
 
     mkdirSync(path.dirname(HANDLE_PATH), { recursive: true });
     writeFileSync(
       HANDLE_PATH,
-      `${JSON.stringify({ organizationId, purchaseOrderReference }, null, 2)}\n`
+      `${JSON.stringify({ organizationId, purchaseOrderReference, supplierOrder }, null, 2)}\n`
     );
     process.stdout.write(
       `PH-PUR fixture ready: organization ${organizationId}, order ${purchaseOrderReference}\n`

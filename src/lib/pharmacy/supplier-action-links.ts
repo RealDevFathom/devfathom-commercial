@@ -175,7 +175,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
     },
     include: {
       _count: { select: { submissions: { where: { source: 'SIGNED_LINK' } } } },
-      relationship: { select: { supplierId: true } },
+      relationship: { select: { supplierId: true, branchId: true } },
       purchaseOrder: {
         select: {
           id: true,
@@ -188,6 +188,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
             select: {
               id: true,
               lineNumber: true,
+              medicineId: true,
               medicine: { select: { productName: true } },
               packLevelId: true,
               orderedPacks: true,
@@ -199,6 +200,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
   });
   if (
     !link ||
+    link.branchId !== link.relationship.branchId ||
     link.relationship.supplierId !== link.purchaseOrder.supplierId ||
     link.branchId !== link.purchaseOrder.branchId
   )

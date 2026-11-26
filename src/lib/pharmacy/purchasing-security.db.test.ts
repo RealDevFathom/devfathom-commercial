@@ -7,7 +7,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '@/server/trpc';
 import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-database';
 
-vi.mock('@/lib/storage', () => ({ putUpload: vi.fn().mockResolvedValue({}) }));
+vi.mock('@/lib/storage', async (original) => ({
+  ...(await original<typeof import('@/lib/storage')>()),
+  putUpload: vi.fn().mockResolvedValue({}),
+  getUpload: vi.fn(async () => Buffer.from('%PDF-1.7')),
+}));
 import { putUpload } from '@/lib/storage';
 
 const runtimeUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -805,6 +809,113 @@ async function newLink() {
           await purchasing.createCaller(context(db)).sendPurchaseOrder({ purchaseOrderId: po.id })
         ).toMatchObject({ status: 'SENT' });
       });
+    });
+
+    it('keeps supplier evidence, document access and audit rows on the issuing order', async () => {
+      const { token } = await newLink();
+      const linkId = supplierLinks.supplierLinkId(token)!;
+      const document = await inOrg(async (db) => {
+        await supplierLinks.getSupplierActionPage(db, token);
+        const evidence = await supplierLinks.submitSupplierEvidence(db, {
+          token,
+          kind: 'ACKNOWLEDGEMENT',
+          idempotencyKey: 'confirmation',
+          payload: {},
+        });
+        const doc = await supplierLinks.uploadSupplierDocument(db, {
+          token,
+          idempotencyKey: 'invoice',
+          fileName: 'invoice.pdf',
+          declaredMimeType: 'application/pdf',
+          content: Buffer.from('%PDF-1.7'),
+        });
+        const rows = await db.auditLog.findMany({
+          where: { organizationId: org, metadata: { path: ['actionLinkId'], equals: linkId } },
+          select: { action: true, targetId: true },
+        });
+        expect(rows).toEqual(
+          expect.arrayContaining([
+            { action: 'pharmacySupplierLinks.get', targetId: expect.any(String) },
+            { action: 'pharmacySupplierLinks.submit', targetId: evidence.id },
+          ])
+        );
+        await db.pharmacySupplierActionLink.update({
+          where: { id: linkId },
+          data: { revokedAt: new Date() },
+        });
+        await expect(supplierLinks.getSupplierActionPage(db, token)).rejects.toMatchObject({
+          reason: 'INVALID_LINK',
+        });
+        return doc;
+      });
+      const other = org + '_other';
+      const otherLink = await newLink();
+      await withTenantDb(other, async (db) => {
+        await expect(
+          supplierLinks.getSupplierActionPage(db, otherLink.token)
+        ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
+        expect(
+          await db.pharmacySupplierDocument.findFirst({ where: { id: document.id } })
+        ).toBeNull();
+      });
+      const { GET } = await import('@/app/api/pharmacy/supplier-documents/[id]/route');
+      const tenantActor = await import('@/lib/tenancy/tenant-actor');
+      const actor = vi.spyOn(tenantActor, 'resolveTenantActor');
+      try {
+        const read = () =>
+          GET(
+            new Request(
+              'https://pharmacy.example.test/api/pharmacy/supplier-documents/' + document.id
+            ),
+            { params: Promise.resolve({ id: document.id }) }
+          );
+        actor.mockResolvedValue(null);
+        expect((await read()).status).toBe(401);
+        const userId = id('document-cashier');
+        await inOrg(async (db) => {
+          await db.user.create({
+            data: {
+              id: userId,
+              organizationId: org,
+              role: 'EMPLOYEE',
+              name: 'Cashier',
+              email: userId + '@test.invalid',
+              department: 'Pharmacy',
+              title: 'Cashier',
+            },
+          });
+          await db.pharmacyBranchAssignment.create({
+            data: { organizationId: org, userId, branchId: id('branch') },
+          });
+        });
+        actor.mockResolvedValue({
+          organization: { id: org },
+          session: { user: { id: userId, organizationId: org } },
+          support: null,
+        } as Awaited<ReturnType<typeof tenantActor.resolveTenantActor>>);
+        expect((await read()).status).toBe(404);
+        await inOrg((db) =>
+          db.userPermissionOverride.create({
+            data: {
+              userId,
+              organizationId: org,
+              capability: 'pharmacy:procurement',
+              effect: 'ALLOW',
+              reason: 'Test procurement appointment',
+            },
+          })
+        );
+        expect((await read()).status).toBe(200);
+        await inOrg((db) =>
+          db.pharmacyBranchAssignment.updateMany({
+            where: { userId, branchId: id('branch') },
+            data: { active: false },
+          })
+        );
+        expect((await read()).status).toBe(404);
+      } finally {
+        actor.mockRestore();
+      }
     });
 
     it('serializes per-link submission quotas across independent transactions and preserves idempotent replay', async () => {
