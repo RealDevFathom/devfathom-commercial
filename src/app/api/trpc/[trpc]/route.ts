@@ -10,7 +10,11 @@ import type { Session } from 'next-auth';
 import { appRouter } from '@/server/routers/_app';
 import { anonymousFallbackRouter } from '@/server/routers/anonymous-fallback';
 import { createTRPCContext } from '@/server/trpc';
-import { preflightTrelloImport } from '@/server/trello-import-transport';
+import {
+  admitTrelloImport,
+  preflightTrelloImport,
+  trelloImportIndex,
+} from '@/server/trello-import-transport';
 import {
   isTenantLifecycleAccessible,
   requestHost,
@@ -478,14 +482,24 @@ async function handleAnonymous(req: Request): Promise<Response> {
 async function handler(req: Request) {
   try {
     if (isPlatformAiSettingsRequest(req)) return servePlatformAiSettings(req);
-    try {
-      await preflightTrelloImport(req, procedurePaths(req));
-    } catch (error) {
-      if (error instanceof TRPCError) return requestFailed(error);
-      throw error;
-    }
+    const importIndex = trelloImportIndex(req, procedurePaths(req));
     const actor = await resolveTenantActor({ request: req });
-    if (!actor) return handleAnonymous(req);
+    if (!actor) return importIndex === null ? handleAnonymous(req) : unauthorized();
+
+    if (importIndex !== null) {
+      const admission = await admitTrelloImport(actor.session.user.id);
+      if (!admission.ok) {
+        const response = requestFailed(
+          new TRPCError({
+            code: 'TOO_MANY_REQUESTS',
+            message: 'Too many Trello imports. Try again later.',
+          })
+        );
+        response.headers.set('retry-after', String(Math.max(1, admission.retryAfter)));
+        return response;
+      }
+      await preflightTrelloImport(req, importIndex);
+    }
 
     const organization = await requireOrganizationForRequest(
       req,
@@ -498,6 +512,7 @@ async function handler(req: Request) {
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);
     if (passwordChange) return passwordChange;
+    if (error instanceof TRPCError) return requestFailed(error);
     if (error instanceof TenantHostError) {
       return Response.json({ error: error.message }, { status: error.status });
     }

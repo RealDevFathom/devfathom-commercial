@@ -203,11 +203,16 @@ vi.mock('@/server/trpc', () => ({
 
 const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
+  rateLimit: vi.fn(),
   requireOrganizationForRequest: vi.fn(),
   resolveOrganizationById: vi.fn(),
   resolveExplicitOrganizationByHost: vi.fn(),
 }));
 
+vi.mock('@/lib/rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/rate-limit')>()),
+  rateLimit: mocks.rateLimit,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/lib/auth/anonymous-tenant', () => ({
   organizationForAnonymousToken: vi.fn(async () => null),
@@ -673,6 +678,10 @@ describe('Trello import HTTP preflight', () => {
   const board = { name: 'Trello board', lists: [], cards: [] };
   const input = { trelloJson: board, newProjectName: 'Imported', memberMapping: {} };
 
+  beforeEach(() => {
+    mocks.rateLimit.mockReset().mockResolvedValue({ ok: true });
+  });
+
   function post(body: string, procedure = path) {
     return POST(
       new Request(url(procedure, '?batch=1'), {
@@ -682,6 +691,47 @@ describe('Trello import HTTP preflight', () => {
       })
     );
   }
+
+  it.each([
+    ['unsigned', 401, () => mocks.resolveTenantActor.mockResolvedValueOnce(null)],
+    [
+      'rate-limited',
+      429,
+      () => mocks.rateLimit.mockResolvedValueOnce({ ok: false, retryAfter: 42 }),
+    ],
+  ] as const)(
+    'refuses an %s Trello import without opening its body',
+    async (_label, status, reject) => {
+      reject();
+      const request = new Request(url(path, '?batch=1'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ '0': { json: input } }),
+      });
+      const reader = vi.spyOn(request.body!, 'getReader');
+      const response = await POST(request);
+      expect(response.status).toBe(status);
+      expect(reader).not.toHaveBeenCalled();
+      expect(request.bodyUsed).toBe(false);
+      expect(harness.outcomes).toEqual([]);
+      if (status === 401) {
+        expect(mocks.rateLimit).not.toHaveBeenCalled();
+      } else {
+        expect(response.headers.get('retry-after')).toBe('42');
+        expect(await response.json()).toMatchObject({
+          error: { json: { data: { code: 'TOO_MANY_REQUESTS' } } },
+        });
+        expect(mocks.rateLimit).toHaveBeenCalledExactlyOnceWith(
+          'trello-import:user:user_1',
+          5,
+          600_000
+        );
+        expect(mocks.resolveTenantActor.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.rateLimit.mock.invocationCallOrder[0]!
+        );
+      }
+    }
+  );
 
   it('hands an exact-byte-limit request to the real tRPC adapter and transaction', async () => {
     const json = JSON.stringify({ '0': { json: input } });
@@ -709,19 +759,20 @@ describe('Trello import HTTP preflight', () => {
     expect(harness.outcomes).toEqual(['COMMIT']);
   });
 
-  it('rejects actual bytes beyond the limit even without Content-Length before auth or a database transaction', async () => {
+  it('rejects actual bytes beyond the limit even without Content-Length before opening a tenant transaction', async () => {
     const json = JSON.stringify({ '0': { json: input } });
     const response = await post(json.padEnd(MAX_TRELLO_REQUEST_BYTES + 1));
     expect(response.status).toBe(413);
     expect(await response.json()).toMatchObject({
       error: { json: { message: TRELLO_LIMIT_MESSAGE } },
     });
-    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(mocks.resolveTenantActor).toHaveBeenCalledOnce();
+    expect(mocks.rateLimit).toHaveBeenCalledOnce();
     expect(harness.outcomes).toEqual([]);
   });
 
   it.each(['', '/', '//'])(
-    'rejects a nested limit across a batch with suffix %j before any database work',
+    'rejects a nested limit across a batch with suffix %j before opening a tenant transaction',
     async (suffix) => {
       const over = {
         ...input,
@@ -732,13 +783,14 @@ describe('Trello import HTTP preflight', () => {
         `write,${path}${suffix}`
       );
       expect(response.status).toBe(413);
-      expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+      expect(mocks.resolveTenantActor).toHaveBeenCalledOnce();
+      expect(mocks.rateLimit).toHaveBeenCalledOnce();
       expect(harness.outcomes).toEqual([]);
       expect(harness.writes).toEqual([]);
     }
   );
 
-  it('names the imported list limit before tenant authentication or database access', async () => {
+  it('names the imported list limit before opening a tenant transaction', async () => {
     const trelloJson = {
       ...board,
       lists: Array.from({ length: 501 }, (_, id) => ({ id: String(id) })),
@@ -748,7 +800,8 @@ describe('Trello import HTTP preflight', () => {
     expect(await response.json()).toMatchObject({
       error: { json: { message: expect.stringContaining('500 lists') } },
     });
-    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(mocks.resolveTenantActor).toHaveBeenCalledOnce();
+    expect(mocks.rateLimit).toHaveBeenCalledOnce();
     expect(harness.outcomes).toEqual([]);
   });
 
