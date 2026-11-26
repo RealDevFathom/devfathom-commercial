@@ -55,11 +55,11 @@ const caption: Record<ChartId, string> = {
   returnMedicine: 'Medicines with the most units returned',
   physicalReason: 'Units returned by the recorded reason',
   returnReason: 'Refund amounts by recorded reason',
-  profitDay: 'Gross profit from verified ledger costs',
-  marginDay: 'Verified gross profit as a share of net revenue',
+  profitDay: 'Gross profit from posted sales and returns',
+  marginDay: 'Posted gross profit as a share of net revenue',
   profitCategory: 'Gross profit by product category',
-  topMargin: 'Highest gross margin percentages on verified sales',
-  bottomMargin: 'Lowest gross margin percentages on verified sales',
+  topMargin: 'Highest gross margin percentages on posted transactions',
+  bottomMargin: 'Lowest gross margin percentages on posted transactions',
 };
 const rangeLabel = (p: ReportPeriod) => (p.from === p.to ? p.from : p.from + ' to ' + p.to);
 function total(rows: ChartRow[] | undefined, chart: ChartId) {
@@ -265,8 +265,8 @@ function ChartPanel({
           )}
           {isProfit(chart) && (
             <p role="note" className="mb-3 text-sm text-text-muted">
-              {excluded} {excluded === 1 ? 'line' : 'lines'} excluded for missing or unverified
-              cost.
+              {excluded} {excluded === 1 ? 'line' : 'lines'} excluded because the sale or return has
+              no ledger posting.
             </p>
           )}
           {compare && main && differentCurrency && (

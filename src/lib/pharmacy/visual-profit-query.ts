@@ -46,7 +46,7 @@ export function profitFacts(
           .sort()
           .at(-1)!
       ),
-      by: 'postingLot',
+      by: 'postingLine',
       where: sql`AND EXISTS (SELECT 1 FROM bounds b WHERE b.id=line."branchId" AND entry."occurredAt">=b.start_at AND entry."occurredAt"<b.stop_at)`,
     }
   );
@@ -60,15 +60,12 @@ export function profitFacts(
     days AS (SELECT * FROM jsonb_to_recordset(${JSON.stringify(days)}::jsonb) AS d(id text,day text,start_at timestamp,stop_at timestamp)),
     lines AS (
       SELECT key->>0 AS entry, key->>1 AS branch, key->>2 AS product,key->>3 AS source,
-        BOOL_AND("hasPostedCost" AND key->>4 IS NOT NULL) AS verified,
-        SUM("grossMarginMinor") AS profit,SUM("revenueMinor"-"discountMinor") AS net
-      FROM postings GROUP BY 1,2,3,4
+        "grossMarginMinor" AS profit, "revenueMinor"-"discountMinor" AS net
+      FROM postings
     ), evidence AS (
       SELECT ${daily ? sql`d.day` : sql`NULL::text`} AS day, p.product,
         concat(p.entry,'/',p.source) AS ref, e.description AS description,e.currency::text AS currency,
-        CASE WHEN p.verified THEN p.profit ELSE 0 END AS profit,
-        CASE WHEN p.verified THEN p.net ELSE 0 END AS net,
-        CASE WHEN p.verified THEN 0 ELSE 1 END AS excluded
+        p.profit, p.net, 0 AS excluded
       FROM lines p JOIN finance_journal_entries e ON e."organizationId"=${org} AND e.id=p.entry
       ${daily ? sql`JOIN days d ON d.id=p.branch AND e."occurredAt">=d.start_at AND e."occurredAt"<d.stop_at` : Prisma.empty}
       UNION ALL
@@ -86,7 +83,7 @@ export function profitFacts(
         AND e."sourceKind"=r.source AND e."sourceId"=r.id)
     )
     SELECT ${group} AS key,${label} AS label,ref,
-      concat(COALESCE(m."productName",'Unknown medicine'),' · ',description,CASE WHEN excluded>0 THEN ' · Cost unverified — excluded' END) AS detail,
+      concat(COALESCE(m."productName",'Unknown medicine'),' · ',description,CASE WHEN excluded>0 THEN ' · Excluded' END) AS detail,
       profit AS amount,net AS base,excluded,currency
     FROM evidence LEFT JOIN pharmacy_medicines m ON m."organizationId"=${org} AND m.id=product`;
 }

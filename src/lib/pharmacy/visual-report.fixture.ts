@@ -1,7 +1,13 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // Synthetic transaction evidence, shared by every chart parity check.
-export async function seedVisualReport(db: ScopedDb, branch: string, prefix: string, day: string) {
+export async function seedVisualReport(
+  db: ScopedDb,
+  branch: string,
+  prefix: string,
+  day: string,
+  cost = 50
+) {
   const id = (suffix: string) => prefix + '_' + suffix;
   const at = new Date(day + 'T12:00:00Z');
   const businessDate = new Date(day + 'T00:00:00Z');
@@ -39,7 +45,7 @@ export async function seedVisualReport(db: ScopedDb, branch: string, prefix: str
       unitsPerPack: 1,
       supplierName: 'Sample supplier',
       supplierInvoiceRef: prefix,
-      unitCostMinor: 50,
+      unitCostMinor: cost,
       printedMrpMinor: 100,
     },
   });
@@ -72,7 +78,7 @@ export async function seedVisualReport(db: ScopedDb, branch: string, prefix: str
       approvalPolicy: 'Synthetic approval',
       approvedByUserId: 'sample-cashier',
       proRataCeilingMinor: 100,
-      unitCostMinor: 50,
+      unitCostMinor: cost,
       idempotencyKey: id('line'),
     },
   });
@@ -137,9 +143,9 @@ export async function seedVisualReport(db: ScopedDb, branch: string, prefix: str
     const legs = [
       ['SALES_REVENUE', 'CREDIT', 100],
       ['SALES_DISCOUNT', 'DEBIT', 10],
-      ['COST_OF_GOODS_SOLD', 'DEBIT', 50],
+      ['COST_OF_GOODS_SOLD', 'DEBIT', cost],
       ['CASH', 'DEBIT', 90],
-      ['INVENTORY', 'CREDIT', 50],
+      ['INVENTORY', 'CREDIT', cost],
     ] as const;
     await db.financeJournalEntry.create({
       data: {
@@ -151,15 +157,17 @@ export async function seedVisualReport(db: ScopedDb, branch: string, prefix: str
         occurredAt: at,
         idempotencyKey: id('journal-' + reversal),
         lines: {
-          create: legs.map(([accountCode, side, money]) => ({
-            accountCode,
-            side: reversal ? (side === 'DEBIT' ? 'CREDIT' : 'DEBIT') : side,
-            amountMinor: money * factor,
-            branchId: branch,
-            productId: medicine.id,
-            lotId: lot.id,
-            sourceLineId: line.id,
-          })),
+          create: legs
+            .filter(([, , money]) => money > 0)
+            .map(([accountCode, side, money]) => ({
+              accountCode,
+              side: reversal ? (side === 'DEBIT' ? 'CREDIT' : 'DEBIT') : side,
+              amountMinor: money * factor,
+              branchId: branch,
+              productId: medicine.id,
+              lotId: lot.id,
+              sourceLineId: line.id,
+            })),
         },
       },
     });
