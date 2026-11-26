@@ -1,4 +1,9 @@
-import { recurringExpenseSchedule, rollForwardDueDate } from '@/lib/finance/recurring-expense';
+import { postDueRecurringExpenses } from '@/lib/finance/recurring-expense-posting';
+import {
+  recurringBillingDay,
+  recurringInterval,
+  rollForwardDueDate,
+} from '@/lib/finance/recurring-expense';
 import {
   workspaceDateRange,
   workspaceMonthRange,
@@ -825,7 +830,7 @@ export const financeRouter = router({
     return expenses
       .map((exp) => ({
         ...exp,
-        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone),
+        nextDueDate: rollForwardDueDate(exp.nextDueDate, exp.interval, today, zone, exp.billingDay),
       }))
       .sort((a, b) => a.nextDueDate.getTime() - b.nextDueDate.getTime());
   }),
@@ -848,13 +853,18 @@ export const financeRouter = router({
           'UTILITIES',
           'MISCELLANEOUS',
         ]),
-        interval: z.string().min(1),
+        interval: z.string().toLowerCase().pipe(recurringInterval),
         nextDueDate: z.date(),
         vendorName: z.string().optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
-      return ctx.db.recurringExpense.create({ data: input });
+      return ctx.db.recurringExpense.create({
+        data: {
+          ...input,
+          billingDay: recurringBillingDay(input.nextDueDate, ctx.organization?.timezone),
+        },
+      });
     }),
 
   deleteRecurringExpense: adminProcedure
@@ -866,51 +876,11 @@ export const financeRouter = router({
       });
     }),
 
-  // IMP-FIN-03: post every recurring expense that has come due as a real EXPENSE
-  // transaction (one per elapsed billing cycle), then persist the advanced
-  // nextDueDate so a re-run never double-posts the same cycle. This is the
-  // mechanism a production cron would invoke; here it's an operator-triggered
-  // mutation. Per-expense cycle count is capped so a long-stale row can't post
-  // hundreds of rows in one go.
-  postDueRecurringExpenses: adminProcedure.mutation(async ({ ctx }) => {
-    const now = new Date();
-    const expenses = await ctx.db.recurringExpense.findMany({ where: { active: true } });
-    let posted = 0;
-    const details: Array<{ id: string; name: string; cycles: number }> = [];
-
-    for (const exp of expenses) {
-      const advance = recurringExpenseSchedule(
-        exp.nextDueDate,
-        exp.interval,
-        ctx.organization?.timezone
-      );
-      let due = exp.nextDueDate;
-      const toPost: Date[] = [];
-      for (let i = 0; due <= now && i < 36; i++) {
-        toPost.push(new Date(due));
-        due = advance(due);
-      }
-      if (toPost.length === 0) continue;
-
-      await ctx.db.$transaction([
-        ctx.db.transaction.createMany({
-          data: toPost.map((d) => ({
-            type: 'EXPENSE' as const,
-            amount: exp.amount,
-            currency: exp.currency,
-            category: exp.category,
-            description: `${exp.name}${exp.vendorName ? ` — ${exp.vendorName}` : ''} (recurring)`,
-            date: d,
-          })),
-        }),
-        ctx.db.recurringExpense.update({ where: { id: exp.id }, data: { nextDueDate: due } }),
-      ]);
-      posted += toPost.length;
-      details.push({ id: exp.id, name: exp.name, cycles: toPost.length });
-    }
-
-    return { posted, details };
-  }),
+  postDueRecurringExpenses: adminProcedure.mutation(({ ctx }) =>
+    ctx.db.$transaction((tx) =>
+      postDueRecurringExpenses(tx, workspaceId(ctx), ctx.organization?.timezone, new Date())
+    )
+  ),
 
   // IMP-FIN-03: spend-against-budget rollup. For each project carrying a budget,
   // total its posted EXPENSE transactions (kept per-currency, since budgets are a

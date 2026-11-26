@@ -70,7 +70,7 @@ describe('finance.getFinancialSummary', () => {
         vi.setSystemTime(at);
         // This stored occurrence was at 23:59 on 31 October in Karachi.
         mocks.recurringFindMany.mockResolvedValue([
-          { nextDueDate: new Date('2026-10-31T18:59Z'), interval: 'monthly' },
+          { nextDueDate: new Date('2026-10-31T18:59Z'), interval: 'monthly', billingDay: 31 },
         ]);
         const server = caller('Asia/Karachi');
         const assistant = buildFinanceTools({
@@ -173,7 +173,7 @@ describe('finance.getFinancialSummary', () => {
         vi.setSystemTime(now);
         const due = new Date('2026-05-01T00:00:00+05:00');
         mocks.recurringFindMany.mockResolvedValue([
-          { id: 'r', name: 'Subscription', interval: 'monthly', nextDueDate: due },
+          { id: 'r', name: 'Subscription', interval: 'monthly', billingDay: 1, nextDueDate: due },
         ]);
         const ctx = context('Asia/Karachi');
         const createMany = vi.fn();
@@ -182,7 +182,11 @@ describe('finance.getFinancialSummary', () => {
           organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
           transaction: { ...ctx.db.transaction, createMany },
           recurringExpense: { ...ctx.db.recurringExpense, update: vi.fn() },
-          $transaction: vi.fn(),
+          $queryRaw: mocks.recurringFindMany,
+          recurringExpensePosting: {
+            createManyAndReturn: ({ data }: { data: { dueDate: Date }[] }) => data,
+          },
+          $transaction: (run: (tx: unknown) => Promise<unknown>) => run(db),
         };
         const router = financeRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
         const june = new Date('2026-05-31T19:00Z');
@@ -265,7 +269,7 @@ it('bounds date-only transaction searches and new charges on the Karachi clock',
     nextDueDate: '2026-11-02',
   });
   expect(create).toHaveBeenCalledWith({
-    data: expect.objectContaining({ nextDueDate: new Date('2026-11-01T19:00:00Z') }),
+    data: expect.objectContaining({ nextDueDate: new Date('2026-11-01T19:00:00Z'), billingDay: 2 }),
   });
 });
 
@@ -275,14 +279,14 @@ const monthlySchedules = [
   {
     name: '31 January, common year',
     year: 2026,
-    days: [31, ...Array<number>(11).fill(28)],
-    nextDay: 28,
+    days: [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31],
+    nextDay: 31,
   },
   ...[30, 31].map((start) => ({
     name: start + ' January, leap year',
     year: 2028,
-    days: [start, ...Array<number>(12).fill(29), 28],
-    nextDay: 28,
+    days: [start, 29, start, 30, start, 30, start, start, 30, start, 30, start, start, 28],
+    nextDay: start,
   })),
 ];
 
@@ -298,10 +302,10 @@ describe.each(['America/New_York', 'Asia/Karachi', 'UTC'] as const)(
       ])(
         'posts each month once ($clock, successive=$successive)',
         async ({ clock, successive }) => {
-          function expectedOccurrence(day: number, index: number) {
+          function expectedOccurrence(day: number, index: number, posting = false) {
             const carrier = new Date(Date.UTC(year, index, day));
             const label = carrier.toISOString().slice(0, 10);
-            if (clock === 'legacy UTC date') return carrier;
+            if (!posting && clock === 'legacy UTC date') return carrier;
             // At 00:30 on these fixture dates New York observes daylight time on
             // April–November firsts in 2026, and March–October month ends.
             const month = carrier.getUTCMonth() + 1;
@@ -311,13 +315,15 @@ describe.each(['America/New_York', 'Asia/Karachi', 'UTC'] as const)(
               'Asia/Karachi': '+05:00',
               UTC: 'Z',
             };
-            return new Date(label + 'T00:30:00' + offsets[zone]);
+            return new Date(label + (posting ? 'T00:00:00' : 'T00:30:00') + offsets[zone]);
           }
-          const expected = days.map(expectedOccurrence);
+          const expected = days.map((day, index) => expectedOccurrence(day, index));
+          const ledgerDates = days.map((day, index) => expectedOccurrence(day, index, true));
           const expense = {
             id: 'r',
             name: 'Subscription',
             interval: 'monthly',
+            billingDay: days[0],
             nextDueDate: expected[0]!,
           };
           mocks.recurringFindMany.mockImplementation(async () => [{ ...expense }]);
@@ -335,7 +341,11 @@ describe.each(['America/New_York', 'Asia/Karachi', 'UTC'] as const)(
               ...ctx.db.recurringExpense,
               update: ({ data }: { data: { nextDueDate: Date } }) => Object.assign(expense, data),
             },
-            $transaction: vi.fn(),
+            $queryRaw: mocks.recurringFindMany,
+            recurringExpensePosting: {
+              createManyAndReturn: ({ data }: { data: { dueDate: Date }[] }) => data,
+            },
+            $transaction: (run: (tx: unknown) => Promise<unknown>) => run(db),
           };
           const router = financeRouter.createCaller({ ...ctx, db } as unknown as TRPCContext);
           const assistant = buildFinanceTools({
@@ -364,15 +374,60 @@ describe.each(['America/New_York', 'Asia/Karachi', 'UTC'] as const)(
             expect((await router.postDueRecurringExpenses()).posted).toBe(
               successive ? 0 : expected.length
             );
-            expect(posted).toEqual(expected);
+            expect(posted).toEqual(ledgerDates);
             expect((await router.postDueRecurringExpenses()).posted).toBe(0);
-            expect(posted).toEqual(expected);
+            expect(posted).toEqual(ledgerDates);
             expect(expense.nextDueDate).toEqual(expectedOccurrence(nextDay, days.length));
           } finally {
             vi.useRealTimers();
           }
         }
       );
+    });
+  }
+);
+
+it.each(['weekly', 'daily', 'constructor'])(
+  'refuses to save interval %s in plain words',
+  async (interval) => {
+    const ctx = context('UTC');
+    const create = vi.fn();
+    const router = financeRouter.createCaller({
+      ...ctx,
+      db: { ...ctx.db, recurringExpense: { create } },
+    } as unknown as TRPCContext);
+    await expect(
+      router.createRecurringExpense({
+        name: 'Subscription',
+        amount: 12,
+        category: 'SOFTWARE',
+        interval,
+        nextDueDate: new Date('2027-01-01'),
+      })
+    ).rejects.toThrow('Choose monthly, quarterly or yearly');
+    expect(create).not.toHaveBeenCalled();
+  }
+);
+
+it.each(['monthly', 'quarterly', 'yearly'])(
+  'stores the Karachi billing day for a %s charge',
+  async (interval) => {
+    const ctx = context('Asia/Karachi');
+    const create = vi.fn();
+    const router = financeRouter.createCaller({
+      ...ctx,
+      db: { ...ctx.db, recurringExpense: { create } },
+    } as unknown as TRPCContext);
+    const nextDueDate = new Date('2027-01-30T19:00:00Z');
+    await router.createRecurringExpense({
+      name: 'Service',
+      amount: 12,
+      category: 'SOFTWARE',
+      interval,
+      nextDueDate,
+    });
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ interval, nextDueDate, billingDay: 31 }),
     });
   }
 );
