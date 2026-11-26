@@ -902,8 +902,16 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     allows: [
       {
         id: 'view-accounts',
-        text: 'With the required administrator, branch and report access, view supplier invoices, payments and reversals, the general journal, bank statements and financial statements.',
-        sites: {},
+        text: 'Open licensed Pharmacy Finance and read supplier invoices, payments, reversals, journals and bank statements at your admitted branches. Financial statements and journal evidence also require report access.',
+        sites: {
+          'src/server/routers/pharmacy-access.ts': 2,
+          'src/app/(app)/pharmacy/accounts/journal-evidence-export/page.tsx': 1,
+        },
+      },
+      {
+        id: 'finance-reader-branch-scope',
+        text: 'With report access, employees see their assigned branches in the Reports centre, branch list, replenishment and daily work pack.',
+        sites: { 'src/server/routers/pharmacy-reports.ts': 2 },
       },
     ],
   },
@@ -915,7 +923,7 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     allows: [
       {
         id: 'manage-transactions',
-        text: 'With See accounts and the required administrator access, record invoices and payments, manage journals and bank reconciliation, close periods and publish tax profiles. Reversing a supplier invoice, payment or approved credit set-off also requires management access and the approver’s authenticator code (or PIN, if the owner turned the authenticator off).',
+        text: 'With See accounts, record invoices and payment drafts, post journals, reconcile bank entries and close periods at admitted branches. A different person posts a supplier payment, unless an administrator verifies their own approval. A payment above the business limit needs administrator approval. Only administrators may change that limit, publish tax profiles or reopen a period. Supplier reversals keep their separate management and approval checks.',
         sites: {},
       },
     ],
@@ -928,12 +936,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     allows: [
       {
         id: 'workspace-administrator-use-operational',
-        text: 'As a workspace administrator with Use operational reports: view growth, marketing, branch comparison, anomaly and expiry-advice reports, and also change data there: save and delete seasonal windows, propose expiry returns, refresh, acknowledge and snooze anomalies, acknowledge pack-authentication flags and set the daily digest',
+        text: 'With Use operational reports, view growth, marketing, branch comparison, anomalies and expiry advice for admitted branches. Administrators can also manage seasonal windows, propose expiry returns, refresh and acknowledge anomalies, acknowledge pack-authentication flags and set the daily digest',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
         id: 'workspace-administrator-run-orderplanning',
-        text: 'As a workspace administrator: run order-planning scenarios and see anomaly and expiry items in the daily work pack, also through the assistant; read supplier-credit follow-up through the assistant',
+        text: 'With report access, see financial sections of the daily work pack at admitted branches. Administrators can also run order-planning scenarios and read supplier-credit follow-up through the assistant',
         sites: {
           'src/server/routers/pharmacy-reports.ts': 2,
           'src/lib/ai/tools/pharmacy-reports.ts': 1,
@@ -941,26 +949,26 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'see-sales-margin-cash',
-        text: 'See sales, margin, cash, refund, payables, receivables and khata figures in the Reports centre and the assistant',
+        text: 'See sales, margins, cash, refunds, payables, receivables and khata figures in the Reports centre and the assistant. Employees with financial report access are limited to assigned branches.',
         sites: {
-          'src/server/routers/pharmacy-reports.ts': 1,
+          'src/server/routers/pharmacy-reports.ts': 2,
           'src/lib/pharmacy/reports.ts': 8,
           'src/lib/ai/tools/pharmacy-reports.ts': 2,
         },
       },
       {
         id: 'workspace-administrator-use-operational-2',
-        text: 'As a workspace administrator with Use operational reports: view the accounts reports (cash-flow forecast, stock valuation, margins, leakage). Reading financial statements also requires finance access through a grant or as the workspace owner',
+        text: 'With Use operational reports, read cash-flow forecasts, valuations, margins and leakage for admitted branches. Financial statements also require See accounts or existing owner access',
         sites: { 'src/server/routers/pharmacy-finance.ts': 2 },
       },
       {
         id: 'workspace-administrator-use-operational-3',
-        text: 'As a workspace administrator with Use operational reports: look up accounting journal entries when you also have finance access through a grant or as the workspace owner',
+        text: 'With Use operational reports, look up journal entries at admitted branches with See accounts or existing owner access',
         sites: { 'src/lib/pharmacy/accounts/journal-entry-lookup.ts': 1 },
       },
       {
         id: 'workspace-administrator-use-operational-4',
-        text: 'As a workspace administrator with Use operational reports: view the fiscal exceptions register',
+        text: 'With Use operational reports, view the fiscal exceptions register at admitted branches',
         sites: { 'src/lib/pharmacy/accounts/fiscal-exceptions.reader.ts': 1 },
       },
       {
@@ -1015,12 +1023,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'delivery-distance-profitability',
-        text: 'As a workspace administrator with Use operational reports: see delivered-order profitability by delivery distance',
+        text: 'With Use operational reports, see delivered-order profitability by distance at admitted branches',
         sites: {},
       },
       {
         id: 'admin-view-repeat-lostsales-packflags',
-        text: 'As a workspace administrator with Use operational reports: view the repeat-purchasing, lost-sales recovery and pack-authentication flag reports for every branch',
+        text: 'With Use operational reports, view repeat purchasing and lost-sales recovery at admitted branches. Only administrators can view pack-authentication flags',
         sites: {},
       },
     ],
@@ -1033,12 +1041,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     allows: [
       {
         id: 'run-seasonal-calendar-demandspike',
-        text: 'Run the seasonal calendar, demand-spike and staffing reports for every branch; as a workspace administrator with Use financial reports, also view growth, marketing, branch comparison, anomaly and expiry-advice reports and change data there: save and delete seasonal windows, propose expiry returns, refresh, acknowledge and snooze anomalies, acknowledge pack-authentication flags and set the daily digest',
+        text: 'Run the seasonal calendar, demand-spike and staffing reports. With Use financial reports, read growth, marketing, branch comparison, anomalies and expiry advice for admitted branches. Administrators with both permissions can also manage seasonal windows, propose expiry returns, refresh and acknowledge anomalies, acknowledge pack-authentication flags and set the daily digest.',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
         id: 'open-reports-centre-replenishment',
-        text: 'Open the Reports centre, replenishment report, daily work pack and supplier list for every branch, and save their dashboard layout',
+        text: 'Open the Reports centre, replenishment report, daily work pack and supplier list, and save your dashboard layout. Employees with financial report or account access see their assigned branches in these branch reports',
         sites: { 'src/server/routers/pharmacy-reports.ts': 1 },
       },
       {
@@ -1053,17 +1061,17 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'workspace-administrator-use-financial',
-        text: 'As a workspace administrator with Use financial reports: view the accounts reports (cash-flow forecast, stock valuation, margins, leakage). Reading financial statements also requires finance access through a grant or as the workspace owner',
+        text: 'With Use financial reports, read cash-flow forecasts, valuations, margins and leakage for admitted branches. Financial statements also require See accounts or existing owner access',
         sites: { 'src/server/routers/pharmacy-finance.ts': 2 },
       },
       {
         id: 'workspace-administrator-use-financial-2',
-        text: 'As a workspace administrator with Use financial reports: look up accounting journal entries when you also have finance access through a grant or as the workspace owner',
+        text: 'With Use financial reports, look up journal entries at admitted branches with See accounts or existing owner access',
         sites: { 'src/lib/pharmacy/accounts/journal-entry-lookup.ts': 1 },
       },
       {
         id: 'workspace-administrator-use-financial-3',
-        text: 'As a workspace administrator with Use financial reports: view the fiscal exceptions register',
+        text: 'With Use financial reports, view the fiscal exceptions register at admitted branches',
         sites: { 'src/lib/pharmacy/accounts/fiscal-exceptions.reader.ts': 1 },
       },
       {
@@ -1083,12 +1091,12 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'delivery-distance-profitability',
-        text: 'As a workspace administrator with Use financial reports: see delivered-order profitability by delivery distance',
+        text: 'With Use financial reports, see delivered-order profitability by distance at admitted branches',
         sites: {},
       },
       {
         id: 'admin-view-repeat-lostsales-packflags',
-        text: 'As a workspace administrator with Use financial reports: view the repeat-purchasing, lost-sales recovery and pack-authentication flag reports for every branch',
+        text: 'With Use financial reports, view repeat purchasing and lost-sales recovery at admitted branches. Only administrators can view pack-authentication flags',
         sites: {},
       },
     ],

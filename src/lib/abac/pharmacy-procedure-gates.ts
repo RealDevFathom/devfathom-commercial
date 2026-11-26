@@ -56,7 +56,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts'],
   },
   'pharmacyApInvoices.pay': {
-    gate: `${accountsGate} + finance:manage`,
+    gate: `${accountsGate} + finance:manage + independent payer or fresh administrator self-approval + administrator approval above the business limit for non-administrators`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyApInvoices.payablesDrafts': {
@@ -334,7 +334,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.postSupplierPaymentDraft': {
-    gate: `${bookkeepingGate} + finance:manage + independent payer or administrator self-approval`,
+    gate: `${bookkeepingGate} + finance:manage + independent payer or fresh administrator self-approval + administrator approval above the business limit for non-administrators`,
     lines: ['read-finance-accounts/view-accounts', 'manage-finance-accounts/manage-transactions'],
   },
   'pharmacyFinance.publishTaxProfile': {
