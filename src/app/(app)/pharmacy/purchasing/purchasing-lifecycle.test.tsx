@@ -63,10 +63,8 @@ async function chooseOption(trigger: HTMLElement, label: string) {
   trigger.focus();
   fireEvent.keyDown(trigger, { key: 'ArrowDown' });
   const option = await screen.findByRole('option', { name: label, exact: true });
-  option.focus();
-  fireEvent.keyDown(option, { key: 'Enter' });
-  // jsdom does not synthesize the click a browser sends for Enter.
-  fireEvent.click(option, { detail: 0 });
+  fireEvent.pointerDown(option, { pointerType: 'mouse' });
+  fireEvent.click(option, { detail: 1 });
 }
 
 const actor = {

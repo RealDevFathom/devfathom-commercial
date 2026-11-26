@@ -286,12 +286,8 @@ describe('pharmacy procedures workspace', () => {
     timezone.focus();
     fireEvent.keyDown(timezone, { key: 'ArrowDown' });
     const london = await screen.findByRole('option', { name: 'Europe/London' });
-    act(() => {
-      london.focus();
-      fireEvent.keyDown(london, { key: 'Enter' });
-      // jsdom does not synthesize the click a browser sends for Enter.
-      fireEvent.click(london, { detail: 0 });
-    });
+    fireEvent.pointerDown(london, { pointerType: 'mouse' });
+    fireEvent.click(london, { detail: 1 });
     await waitFor(() => expect(timezone).toHaveTextContent('Europe/London'));
 
     fireEvent.click(screen.getByRole('button', { name: 'Turn on procedures' }));

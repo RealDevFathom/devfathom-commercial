@@ -31,10 +31,8 @@ it('submits the visible Studio supplier choice once, while keeping ineligible su
     await screen.findByRole('option', { name: 'Lapsed supplier — not authorized' })
   ).toHaveAttribute('aria-disabled', 'true');
   const approved = screen.getByRole('option', { name: 'Approved supplier' });
-  approved.focus();
-  fireEvent.keyDown(approved, { key: 'Enter' });
-  // jsdom does not synthesize the click a browser sends for Enter.
-  fireEvent.click(approved, { detail: 0 });
+  fireEvent.pointerDown(approved, { pointerType: 'mouse' });
+  fireEvent.click(approved, { detail: 1 });
   await waitFor(() => expect(supplier).toHaveTextContent('Approved supplier'));
   expect(form.checkValidity()).toBe(true);
   expect(new FormData(form).getAll('supplierId')).toEqual(['approved']);
