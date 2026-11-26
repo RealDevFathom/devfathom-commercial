@@ -12,13 +12,13 @@ import {
 } from './report-dimensions';
 import { regulatoryProfileInForceWhere, regulatoryStartInstant } from './regulatory-start';
 
+import { completedLineRevenue } from './visual-report-sales-basis';
+
 /** DEV-863: an allocation's share of the line's prepaid tier discount (0 when none). */
 const PREPAID_ALLOCATION_TIER_DISCOUNT = Prisma.sql`COALESCE((l."tierAllocationDiscounts" ->> a."id")::int, 0)`;
 /** DEV-956: an allocation's share of the line's whole-bill discount (0 when none). */
 const LINE_ALLOCATION_DISCOUNT = Prisma.sql`COALESCE((l."lineAllocationDiscounts" ->> a."id")::int, 0)`;
 const BILL_ALLOCATION_DISCOUNT = Prisma.sql`COALESCE((l."billAllocationDiscounts" ->> a."id")::int, 0)`;
-
-import { completedLineRevenue } from './visual-report-sales-basis';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
