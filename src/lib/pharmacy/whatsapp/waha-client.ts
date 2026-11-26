@@ -9,7 +9,8 @@ export class WahaFailure extends Error {
   constructor(
     readonly reason: 'UNAVAILABLE' | 'NOT_ON_WHATSAPP' | 'RESTRICTED' | 'UNKNOWN',
     readonly definitive: boolean,
-    readonly restriction?: 463 | 475
+    readonly restriction?: 463 | 475,
+    readonly httpStatus?: number
   ) {
     super(reason);
   }
@@ -63,7 +64,7 @@ export class WahaClient {
         const code =
           restriction(json) ?? (res.status === 463 || res.status === 475 ? res.status : undefined);
         if (code) throw new WahaFailure('RESTRICTED', true, code);
-        throw new WahaFailure(send ? 'UNKNOWN' : 'UNAVAILABLE', !send);
+        throw new WahaFailure(send ? 'UNKNOWN' : 'UNAVAILABLE', !send, undefined, res.status);
       }
       return json;
     } catch (e) {
@@ -135,8 +136,38 @@ export class WahaClient {
       },
     });
   }
+  async activate() {
+    await this.request(this.path + '/start', 'POST');
+  }
   async disconnect() {
-    await this.request(this.path, 'DELETE');
+    await this.request(this.path + '/logout', 'POST', {});
+    await this.request(this.path + '/stop', 'POST');
+  }
+  async issueSessionKey() {
+    const dto = z
+      .object({
+        session: z.literal(this.session),
+        isAdmin: z.literal(false),
+        isActive: z.literal(true),
+        key: z.string().min(1).max(512),
+      })
+      .safeParse(
+        await this.request('/api/keys', 'POST', {
+          isAdmin: false,
+          isActive: true,
+          session: this.session,
+          actions: {
+            read: true,
+            send: true,
+            control: true,
+            setting: false,
+            app: false,
+            delete: false,
+          },
+        })
+      );
+    if (!dto.success) throw new WahaFailure('UNAVAILABLE', true);
+    return dto.data.key;
   }
   async status() {
     const dto = z
