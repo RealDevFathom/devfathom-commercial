@@ -8,6 +8,8 @@ import { processDuePharmacyLoyaltyExpiries } from '@/lib/pharmacy/loyalty-expiry
 import { processDueRefillSubscriptionCycles } from '@/lib/pharmacy/refill-cycle-job';
 import { processDueCardTerminalRecovery } from '@/lib/pharmacy/card-terminal/sweep';
 
+import { processStarterImports } from '@/lib/pharmacy/migration/starter-worker';
+
 export const maxDuration = 300;
 
 function safeEqual(left: string, right: string): boolean {
@@ -33,6 +35,7 @@ export async function POST(request: Request) {
     loyaltyExpiry,
     refillCycles,
     cardTerminalRecovery,
+    starterImports,
   ] = await Promise.all([
     processPlatformJobs(maxJobs),
     processDueOwnerDigests(new Date(), maxJobs),
@@ -45,6 +48,7 @@ export async function POST(request: Request) {
     processDueRefillSubscriptionCycles(new Date(), maxJobs),
     // DEV-743: card-terminal attempts a counter left open are recovered by status query.
     processDueCardTerminalRecovery(new Date(), maxJobs),
+    processStarterImports(),
   ]);
   return NextResponse.json({
     ...jobs,
@@ -54,6 +58,7 @@ export async function POST(request: Request) {
     loyaltyExpiry,
     refillCycles,
     cardTerminalRecovery,
+    starterImports,
   });
 }
 

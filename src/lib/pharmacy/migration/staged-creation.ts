@@ -441,7 +441,7 @@ const barcodeType = (code: string) =>
  * some characters differently from `normalizeMedicineText` ("B₁₂", "½", "①"), and an empty
  * result cannot be stored at all (DEV-1002). Empty: leave the value off.
  */
-async function catalogueNormalizer(tx: ScopedDb, values: readonly string[]) {
+export async function catalogueNormalizer(tx: ScopedDb, values: readonly string[]) {
   const unique = [...new Set(values)];
   const found = unique.length
     ? await tx.$queryRaw<{ value: string; normalized: string | null }[]>`

@@ -572,6 +572,8 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacySop.submit': ['sop:complete'],
   'pharmacySop.templates': ['sop:manage'],
   'pharmacySop.verify': ['sop:verify'],
+  'pharmacyStagedReview.pharmacyMedicine.catalogueProducts': ['admin:access'],
+  'pharmacyStagedReview.pharmacyMedicine.starterHistory': ['contextual'],
   'pharmacyStagedReview.pharmacyMedicine.stageBatch': ['contextual'],
   'pharmacyStagedReview.pharmacyMedicine.stagedBatches': ['admin:access'],
   'pharmacyStagedReview.pharmacyMedicine.stagedBranches': ['admin:access'],
