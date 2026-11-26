@@ -1851,13 +1851,21 @@ export const pharmacySalesRouter = router({
       return readDailyCloseEvidence(ctx.db, await scopeFor(ctx, input.branchId), input.closeId);
     }),
   khataAccounts: protectedProcedure
-    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          query: z.string().trim().max(120).optional(),
+        })
+        .strict()
+    )
     .query(async ({ ctx, input }) => {
       const scope = await khataScope(ctx, input.branchId, 'read');
       return ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);
-        return readSaleKhataAccounts(db, scope, input.saleId);
+        return readSaleKhataAccounts(db, scope, input.saleId, { query: input.query });
       });
     }),
   khataStatement: protectedProcedure

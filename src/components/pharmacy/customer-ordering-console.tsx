@@ -214,6 +214,7 @@ export function PharmacyCustomerOrderingConsole() {
   const [addressLine, setAddressLine] = useState('');
   const [city, setCity] = useState('');
   const [deliveryInstructions, setDeliveryInstructions] = useState('');
+  const [customerSearch, setCustomerSearch] = useState('');
   const [actingCustomerId, setActingCustomerId] = useState('');
   const [runnerByOrder, setRunnerByOrder] = useState<Record<string, string>>({});
   const [pending, setPending] = useState<string | null>(null);
@@ -231,7 +232,10 @@ export function PharmacyCustomerOrderingConsole() {
     { branchId },
     { enabled: Boolean(branchId), retry: false }
   );
-  const customersQuery = trpc.pharmacyOrdering.customers.useQuery(undefined, { retry: false });
+  const customersQuery = trpc.pharmacyOrdering.customers.useQuery(
+    { query: customerSearch.trim() },
+    { retry: false }
+  );
   const runnersQuery = trpc.pharmacyOrdering.runners.useQuery(undefined, { retry: false });
   const staff = staffQueueQuery.isSuccess;
   const currency = branchesQuery.data?.currency ?? 'PKR';
@@ -375,6 +379,15 @@ export function PharmacyCustomerOrderingConsole() {
                 <Label htmlFor="acting-customer">Ordering for customer</Label>
                 <StudioSelect
                   id="acting-customer"
+                  search={{
+                    value: customerSearch,
+                    placeholder: 'Search by name or phone',
+                    loading: customersQuery.isFetching,
+                    onChange: (text) => {
+                      setCustomerSearch(text);
+                      setActingCustomerId('');
+                    },
+                  }}
                   className="h-11 w-full rounded-sm border border-border-default bg-surface-raised px-3 text-sm"
                   value={actingCustomerId}
                   onChange={(event) => setActingCustomerId(event.target.value)}

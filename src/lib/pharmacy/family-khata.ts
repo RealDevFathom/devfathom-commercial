@@ -357,26 +357,48 @@ export async function readKhataBalance(
 }
 
 /** Account membership is checked against the sale's server-read customer. */
-export async function readSaleKhataAccounts(db: ScopedDb, scope: FamilyKhataScope, saleId: string) {
+export async function readSaleKhataAccounts(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  saleId: string,
+  filter: { query?: string; accountId?: string } = {}
+) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     select: { customerId: true },
   });
   if (!sale?.customerId) return [];
+  const term = filter.query?.trim();
+  const digits = term?.replace(/[\s()-]/g, '');
   const accounts = await db.pharmacyFamilyAccount.findMany({
     where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       active: true,
       members: { some: { customerId: sale.customerId } },
+      ...(filter.accountId ? { id: filter.accountId } : {}),
+      ...(term
+        ? {
+            OR: [
+              { displayName: { contains: term, mode: 'insensitive' as const } },
+              { payer: { displayName: { contains: term, mode: 'insensitive' as const } } },
+              ...(digits && /^\+?\d+$/.test(digits)
+                ? [{ payer: { phoneLast4: { contains: digits.slice(-4) } } }]
+                : []),
+            ],
+          }
+        : {}),
     },
     select: {
       id: true,
       displayName: true,
       creditLimitMinor: true,
+      payerCustomerId: true,
+      payer: { select: { phoneLast4: true } },
       members: { where: { customerId: sale.customerId }, select: { id: true } },
     },
-    orderBy: { id: 'asc' },
+    orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+    take: 10,
   });
   return Promise.all(
     accounts.map(async (account) => ({
@@ -384,6 +406,10 @@ export async function readSaleKhataAccounts(db: ScopedDb, scope: FamilyKhataScop
       displayName: account.displayName,
       creditLimitMinor: account.creditLimitMinor,
       memberId: account.members[0]!.id,
+      ...(account.payer?.phoneLast4
+        ? { maskedPhone: `•••• ${account.payer.phoneLast4.slice(-4)}` }
+        : {}),
+      ...(account.payerCustomerId === sale.customerId ? { linkedPayer: true } : {}),
       balanceMinor: await readKhataBalance(db, scope, account.id),
     }))
   );
@@ -398,9 +424,9 @@ export async function readSaleKhataStatement(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR SHARE`
   );
-  const account = (await readSaleKhataAccounts(db, scope, saleId)).find(
-    (row) => row.id === familyAccountId
-  );
+  const account = (
+    await readSaleKhataAccounts(db, scope, saleId, { accountId: familyAccountId })
+  ).find((row) => row.id === familyAccountId);
   if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const rows = await db.pharmacyKhataEvent.findMany({
     where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
@@ -432,9 +458,9 @@ export async function authorizeKhataCharge(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
   );
-  const account = (await readSaleKhataAccounts(db, scope, input.saleId)).find(
-    (row) => row.id === input.familyAccountId
-  );
+  const account = (
+    await readSaleKhataAccounts(db, scope, input.saleId, { accountId: input.familyAccountId })
+  ).find((row) => row.id === input.familyAccountId);
   if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const projected = account.balanceMinor + input.amountMinor;
   if (

@@ -3287,10 +3287,17 @@ function ScopedPharmacyCounterConsole({
     [branchId, busy, heldSaleId, refetchOpenBills, refreshCart, saleId, setActiveSale, transition]
   );
 
-  const loadKhataAccounts = useCallback(async () => {
-    if (!saleId) return [];
-    return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
-  }, [branchId, saleId, utils]);
+  const loadKhataAccounts = useCallback(
+    async (query?: string) => {
+      if (!saleId) return [];
+      return utils.client.pharmacySales.khataAccounts.query({
+        branchId,
+        saleId,
+        ...(query ? { query } : {}),
+      });
+    },
+    [branchId, saleId, utils]
+  );
   const loadKhataApprovers = useCallback(
     () => utils.client.pharmacySales.khataOverLimitApprovers.query({ branchId }),
     [branchId, utils]

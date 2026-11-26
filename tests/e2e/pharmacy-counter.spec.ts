@@ -1181,7 +1181,12 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         .getByRole('group', { name: 'Payment method', exact: true })
         .getByRole('button', { name: 'Khata', exact: true })
     );
-    await page.getByLabel('Family Khata account').selectOption(familyId);
+    const accountSearch = page.getByRole('combobox', { name: 'Family Khata account' });
+    await expect(accountSearch).toBeFocused();
+    await accountSearch.fill('Counter test family');
+    await expect(page.getByRole('option', { name: /Counter test family/ }).first()).toBeVisible();
+    await accountSearch.press('ArrowDown');
+    await accountSearch.press('Enter');
     await page.getByLabel('Amount', { exact: true }).fill('1.00');
     await pressControl(page.getByRole('button', { name: 'Take payment' }));
     await expect(page.getByText('Payment recorded.', { exact: true })).toBeVisible();
@@ -1219,7 +1224,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
         for (const reducedMotion of ['no-preference', 'reduce'] as const) {
           await page.emulateMedia({ reducedMotion });
           await page
-            .getByLabel('Family Khata account')
+            .getByRole('combobox', { name: 'Family Khata account' })
             .locator('..')
             .screenshot({
               path: testInfo.outputPath(`khata-${width}-${theme}-${reducedMotion}.png`),
@@ -1231,7 +1236,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     await override.focus();
     await override.press('Space');
     await page
-      .getByLabel('Family Khata account')
+      .getByRole('combobox', { name: 'Family Khata account' })
       .locator('..')
       .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
     // The signed-in admin approves as themselves with a fresh password re-entry.

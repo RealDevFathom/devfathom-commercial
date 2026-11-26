@@ -506,3 +506,49 @@ suite('khata reminder PostgreSQL balance and idempotency', () => {
     expect(await claim('c', '2026-10-22')).toBeTruthy();
   });
 });
+
+suite('DEV-1046 search', () => {
+  it('returns one masked page from 1,000 eligible accounts and resolves a later account by ID', async () => {
+    await inScope(a, async (db) => {
+      const sale = await db.pharmacySale.findFirstOrThrow({ where: { id: a.saleId } });
+      const payerCustomerId = sale.customerId!;
+      await db.pharmacyCustomer.update({
+        where: { id: payerCustomerId },
+        data: { phoneLast4: '9876' },
+      });
+      const accounts = Array.from({ length: 1000 }, (_, i) => ({
+        id: `search_${suffix}_${i}`,
+        displayName: `Synthetic ${String(i).padStart(4, '0')}`,
+        organizationId: a.organizationId,
+        branchId: a.branchId,
+        payerCustomerId,
+        creditLimitMinor: 2000,
+      }));
+      await db.pharmacyFamilyAccount.createMany({ data: accounts });
+      await db.pharmacyFamilyMember.createMany({
+        data: accounts.map((account) => ({
+          organizationId: a.organizationId,
+          branchId: a.branchId,
+          familyAccountId: account.id,
+          customerId: payerCustomerId,
+        })),
+      });
+      const start = performance.now();
+      const results = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: 'Synthetic' });
+      expect(results).toHaveLength(10);
+      expect(results[0]).toMatchObject({ displayName: 'Synthetic 0000', maskedPhone: '•••• 9876' });
+      expect(await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '987' })).toHaveLength(10);
+      const last = await khata.readSaleKhataAccounts(db, a, a.saleId, { query: '0999' });
+      expect(last.map((row) => row.id)).toEqual([accounts[999]!.id]);
+      expect(await khata.readSaleKhataStatement(db, a, a.saleId, accounts[999]!.id)).toMatchObject({
+        account: { id: accounts[999]!.id },
+      });
+      expect(results[0]).not.toHaveProperty('phone');
+      expect(results[0]).not.toHaveProperty('payer');
+      console.info(
+        'DEV-1046: three capped searches plus exact statement, milliseconds',
+        Math.round(performance.now() - start)
+      );
+    });
+  });
+});
