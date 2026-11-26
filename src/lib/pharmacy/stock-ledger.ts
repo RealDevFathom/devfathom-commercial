@@ -46,7 +46,7 @@ export type LedgerScope = {
 };
 
 type CandidateRow = {
-  wholePackOnly: boolean;
+  wholePackOnly?: boolean;
   inventoryLotId: string;
   stockLocationId: string;
   organizationId: string;
@@ -138,7 +138,6 @@ function candidateColumns(counterHolds: boolean) {
       AND reservation."stockLocationId" = balance."stockLocationId"
       AND reservation."status" = 'RESERVED'
   ), 0) - ${counterHolds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}) AS "availableUnits",
-  (SELECT m."wholePackOnly" FROM pharmacy_medicines m WHERE m.id = batch."medicineId" AND m."organizationId" = batch."organizationId") AS "wholePackOnly",
   lot."unitsPerPack"          AS "unitsPerPack",
   balance."sealedPacks"       AS "sealedPacks",
   balance."looseUnits"        AS "looseUnits"`;
@@ -167,10 +166,18 @@ async function loadCandidates(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   medicineId: string,
   lock: boolean,
-  counterHolds: boolean
+  counterHolds: boolean,
+  readCounterPackPolicy = false
 ): Promise<CandidateRow[]> {
+  // One catalogue lookup for the medicine in the post-lock snapshot. Inventory
+  // previews and operations that cannot open counter packs need no catalogue read.
+  const packPolicy = readCounterPackPolicy
+    ? Prisma.sql`,
+    (SELECT "wholePackOnly" FROM pharmacy_medicines WHERE id = ${medicineId}
+      AND "organizationId" = ${scope.organizationId}) AS "wholePackOnly"`
+    : Prisma.empty;
   const query = Prisma.sql`
-    SELECT ${candidateColumns(counterHolds)}
+    SELECT ${candidateColumns(counterHolds)}${packPolicy}
     ${CANDIDATE_JOINS}
     WHERE balance."organizationId" = ${scope.organizationId}
       AND balance."branchId" = ${scope.branchId}
@@ -584,7 +591,14 @@ export async function allocateForSale(
   input: AllocateForSaleInput
 ): Promise<AllocateForSaleResult> {
   const holds = await counterSetAsidesInForce(db, scope.organizationId);
-  const rows = await loadCandidates(db, scope, input.medicineId, true, holds);
+  const rows = await loadCandidates(
+    db,
+    scope,
+    input.medicineId,
+    true,
+    holds,
+    Boolean(input.counterSale)
+  );
   const byBucket = new Map(
     // Plans debit AVAILABLE only; blocked dispositions remain candidates for refusal evidence.
     rows
