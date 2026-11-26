@@ -165,3 +165,34 @@ describe('revokeOperatorCredential', () => {
     expect(mocks.credUpdate).not.toHaveBeenCalled();
   });
 });
+
+describe('approval PIN provenance on issue and rotation', () => {
+  it.each([
+    { type: 'PIN', deviceId: null, memberSelectedApprovalPin: undefined, expected: true },
+    { type: 'PIN', deviceId: null, memberSelectedApprovalPin: true, expected: false },
+    { type: 'PIN', deviceId: 'register', memberSelectedApprovalPin: undefined, expected: false },
+    { type: 'BADGE', deviceId: null, memberSelectedApprovalPin: undefined, expected: false },
+  ] as const)(
+    'persists the required change flag for $type / $deviceId / member-selected $memberSelectedApprovalPin',
+    async ({ type, deviceId, memberSelectedApprovalPin, expected }) => {
+      const secret = type === 'BADGE' ? 'fixture-badge-42' : '48619';
+      const staffProfileId = 'staff_1';
+      await issueOperatorCredential(db, {
+        staffProfileId,
+        type,
+        deviceId,
+        memberSelectedApprovalPin,
+        secret,
+      });
+      expect(mocks.credCreate.mock.calls[0][0].data.approvalPinMustChange).toBe(expected);
+
+      mocks.credFindUnique.mockResolvedValue({ id: 'cred_1', type, deviceId, revokedAt: null });
+      await rotateOperatorCredential(db, {
+        credentialId: 'cred_1',
+        memberSelectedApprovalPin,
+        secret,
+      });
+      expect(mocks.credUpdate.mock.calls[0][0].data.approvalPinMustChange).toBe(expected);
+    }
+  );
+});

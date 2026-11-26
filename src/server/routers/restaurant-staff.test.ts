@@ -579,6 +579,32 @@ describe('DEV-974: a manager never sets the PIN of an administrator or the owner
 });
 
 describe('shared pharmacy approval PINs', () => {
+  it.each([null, 'another-member'])(
+    'self-only revocation rechecks the locked profile link (%s)',
+    async (userId) => {
+      mocks.credFindFirst.mockResolvedValueOnce({
+        staffProfileId: 'staff_1',
+        type: 'BADGE',
+        deviceId: null,
+      });
+      mocks.raw.mockResolvedValueOnce([{ userId, status: 'ACTIVE' }]);
+      await expect(
+        caller().revokeMyTerminalCredential({ credentialId: 'cred_1', currentPassword: password })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You are not authorized to administer staff for this branch.',
+      });
+      expect(mocks.credFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ staffProfile: { userId: 'user_gm' } }),
+        })
+      );
+      expect(mocks.raw).toHaveBeenCalledOnce();
+      expect(mocks.credUpdate).not.toHaveBeenCalled();
+      expect(db.notification.create).not.toHaveBeenCalled();
+    }
+  );
+
   it.each(['restaurant-core', 'pharmacy-core', 'pharmacy-counter'])(
     'directs issue, rotation and revocation to the password-protected PIN procedures with %s',
     async (pharmacyModule) => {
