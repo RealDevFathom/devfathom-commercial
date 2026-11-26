@@ -227,7 +227,7 @@ export async function authorizeCounterApproval(
     where: { id: scope.actorId, organizationId: scope.organizationId, status: 'ACTIVE' },
   })) as ActiveUser | null;
   if (!actor) throw await approvalDenied(db, scope, kind);
-  if (kind === 'FEFO_OVERRIDE' && (await mayApproveCounterLine(db, actor, kind))) {
+  if (kind === 'FEFO_OVERRIDE' && !input && (await mayApproveCounterLine(db, actor, kind))) {
     return {
       approvedByUserId: actor.id,
       approvalPolicy: 'PHARMACIST_ON_DUTY',

@@ -355,6 +355,15 @@ describe('counter FEFO-override approval (#520)', () => {
     expect(db.restaurantOperatorCredential.findFirst).not.toHaveBeenCalled();
   });
 
+  it('verifies the explicitly named pharmacist even when the operator may approve on duty', async () => {
+    const db = fixture(manager, ['cashier', 'manager']);
+    await expect(authorizeCounterApproval(db as never, scope, 'FEFO_OVERRIDE', pin)).resolves.toMatchObject({
+      approvedByUserId: 'manager',
+      credentialId: 'cred',
+      approvalBranchId: scope.branchId,
+    });
+  });
+
   it('refuses a non-pharmacist override without a pharmacist PIN', async () => {
     const db = fixture(manager, []);
     await expect(

@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { OwnPinLink, PinAwareMessage } from '@/components/pharmacy/pin-aware-message';
 import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { Button } from '@/components/ui/button';
@@ -32,10 +32,19 @@ export function useApprovalEntry(initialMatches?: ApprovalMatches) {
   const hasSession = useContext(CounterSessionContext);
   const kind = useContext(ApprovalSecretKindContext);
   const [byName, setByName] = useState(false);
-  const [matches, setMatches] = useState(initialMatches);
+  const [pendingMatches, setMatches] = useState(initialMatches);
+  const canIdentify = hasSession && kind === 'CODE';
+  const matches = canIdentify ? pendingMatches : undefined;
   const [profile, setProfile] = useState('');
   const [pin, setPin] = useState('');
-  const codeOnly = hasSession && kind === 'CODE' && !byName && !matches;
+  useEffect(() => {
+    if (pendingMatches && !canIdentify) {
+      setMatches(undefined);
+      setProfile('');
+      setPin('');
+    }
+  }, [pendingMatches, canIdentify]);
+  const codeOnly = canIdentify && !byName && !matches;
   let entry: ApprovalEntry | undefined;
   if (codeOnly) {
     if (/^\d{6}$/.test(pin)) entry = { pin };
@@ -43,7 +52,7 @@ export function useApprovalEntry(initialMatches?: ApprovalMatches) {
     const selected = matches.find((match) => match.id === profile);
     if (hasSession && kind === 'CODE' && selected && /^\d{6}$/.test(pin))
       entry = { matchingStaffProfileId: profile, choiceProof: selected.proof, pin };
-  } else if (profile && /^\d{4,8}$/.test(pin)) {
+  } else if (!pendingMatches && profile && /^\d{4,8}$/.test(pin)) {
     entry = { staffProfileId: profile, pin };
   }
 

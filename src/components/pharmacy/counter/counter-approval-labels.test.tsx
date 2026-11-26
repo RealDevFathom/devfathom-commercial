@@ -184,6 +184,26 @@ it('offers only the returned names after a collision and requires an explicit ch
   });
 });
 
+it('discards the collision choice when the till loses its approval session', async () => {
+  const dialog = (
+    <CounterPackApprovalDialog
+      medicineName="Local item"
+      loadApprovers={loadStaff}
+      matches={[{ id: 'a', proof: 'fixture-a' }, { id: 'c', proof: 'fixture-c' }]}
+      onCancel={vi.fn()}
+      onConfirm={vi.fn()}
+    />
+  );
+  const view = render(<CounterSessionContext.Provider value={true}>{dialog}</CounterSessionContext.Provider>);
+  await screen.findByRole('option', { name: 'Casey' });
+  expect(screen.queryByRole('option', { name: 'Blair' })).toBeNull();
+  view.rerender(<CounterSessionContext.Provider value={false}>{dialog}</CounterSessionContext.Provider>);
+  await screen.findByRole('option', { name: 'Blair' });
+  expect(screen.queryByText(/more than one person matches/i)).toBeNull();
+  expect(screen.getByLabelText('Approving manager or owner')).toHaveValue('');
+  expect(screen.getByLabelText('Authenticator code')).toBeDisabled();
+});
+
 it('continues a line approval only after a matching person is explicitly chosen', async () => {
   const collision = Object.assign(new Error('Choose the approver'), {
     data: { matchingStaffProfileIds: ['a', 'c'], choiceProofs: ['fixture-a', 'fixture-c'] },
