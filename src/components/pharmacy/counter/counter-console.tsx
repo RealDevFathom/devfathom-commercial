@@ -1454,9 +1454,7 @@ function ScopedPharmacyCounterConsole({
   const configuredBranch = branches.find((branch) => branch.id === branchId);
   const branchDefault = configuredBranch?.counterDefaultSaleUnit ?? 'UNIT';
   // Once the branch is known, pin its starting choice for the lifetime of this bill.
-  useEffect(() => {
-    if (saleId && configuredBranch) setAddUnit((current) => current ?? branchDefault);
-  }, [branchDefault, configuredBranch, saleId]);
+  if (saleId && configuredBranch && billUnit === null) setAddUnit(branchDefault);
   const addUnit = billClosed(cart, saleId) ? branchDefault : (billUnit ?? branchDefault);
   const addUnitFor = useCallback(
     (row: CounterSearchRow) => counterAddOption(row, addUnit),
