@@ -811,6 +811,63 @@ describeIfDatabase('Offline receipt recovery through the counter routes', () => 
       });
     }
   );
+  it('requires the signed-in supervisor’s authenticator when the branch owner uses code approvals', async () => {
+    const counter = await setup();
+    const scope = scopeOf(counter.fixture);
+    const command = counter.chain.seal(counter.command);
+    const { signPharmacyCommand } = await import('@/lib/pharmacy/sales');
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const { fixtureTotp } = await import('../../../tests/fixtures/restaurant-totp');
+    const secret = generateTotpSecret();
+    const response = await counter.call(
+      'reject',
+      { command, reason: 'Cash held for review' },
+      {
+        'idempotency-key': command.idempotencyKey,
+        'x-command-signature': signPharmacyCommand(
+          scope,
+          counter.fixture.deviceId,
+          command,
+          counter.fixture.deviceSecret
+        ),
+      }
+    );
+    expect(response.status).toBe(200);
+    const {
+      rows: [receipt],
+    } = await supervisor((api) => api.refusedReceipts({ branchId: scope.branchId }));
+    await inOrg(ORG_A, async (db) => {
+      await db.approvalAuthenticator.create({
+        data: { userId: ACTOR, encryptedSecret: encryptSecret(secret), enabledAt: new Date() },
+      });
+      await db.organization.update({
+        where: { id: ORG_A },
+        data: { requireApprovalAuthenticator: true },
+      });
+    });
+    try {
+      const resolve = (managerPin: string) =>
+        supervisor((api) =>
+          api.resolveCash({
+            branchId: scope.branchId,
+            eventId: receipt!.id,
+            outcome: 'REFUND',
+            reason: 'Returned held cash',
+            managerPin,
+          })
+        );
+      await expect(resolve('2651')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(resolve(fixtureTotp(secret))).resolves.toMatchObject({ replayed: false });
+    } finally {
+      await inOrg(ORG_A, (db) =>
+        db.organization.update({
+          where: { id: ORG_A },
+          data: { requireApprovalAuthenticator: false },
+        })
+      );
+    }
+  });
   it('rebooks a closed-day receipt on the current open day and preserves its printed sale date', async () => {
     const counter = await setup();
     const scope = scopeOf(counter.fixture),
