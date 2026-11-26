@@ -1616,16 +1616,35 @@ function ScopedPharmacyCounterConsole({
   const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
   const billScope = JSON.stringify([branchId, saleId]);
   const failedBalanceRead = balanceFailure === billScope;
+  const lastPayable = useRef<{ scope: string; contents: string } | null>(null);
+  const previousBill =
+    lastPayable.current?.scope === billScope ? lastPayable.current.contents : null;
+  const sameVerifiedBill = Boolean(
+    currentBill && previousBill && previousBill === billContents(cart)
+  );
+  const changedInSheet =
+    paymentOpen &&
+    !tenderOutcome &&
+    !pending &&
+    currentBill &&
+    previousBill !== null &&
+    !sameVerifiedBill;
   const billState: CounterTenderBillState =
     !saleId || !branchId
       ? 'idle'
       : storageError
         ? 'error'
-        : !recoveryReady || cartQuery.isFetching || cartQuery.isLoading || refreshingTenderBill
+        : !recoveryReady ||
+            (cartQuery.isFetching && !sameVerifiedBill) ||
+            cartQuery.isLoading ||
+            refreshingTenderBill
           ? 'loading'
           : cartQuery.isError || unknownTender || failedBalanceRead
             ? 'error'
-            : tenderReadRequired || cartQuery.isStale || cartQuery.isPlaceholderData
+            : tenderReadRequired ||
+                (cartQuery.isStale && !sameVerifiedBill) ||
+                cartQuery.isPlaceholderData ||
+                changedInSheet
               ? 'stale'
               : !cartQuery.isSuccess || !currentBill || cart.lines.length === 0
                 ? 'unavailable'
@@ -1637,7 +1656,7 @@ function ScopedPharmacyCounterConsole({
                   : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
                     ? 'ready'
                     : 'unavailable';
-  const lastPayable = useRef<{ scope: string; contents: string } | null>(null);
+
   useEffect(() => {
     if (billState !== 'ready' || !currentBill) return;
     const contents = billContents(cart);
@@ -2068,8 +2087,15 @@ function ScopedPharmacyCounterConsole({
           }
         }
         if (currentSaleId.current !== saleId) return false;
+        const previous = lastPayable.current;
+        const contents = billContents(read.data);
+        if (read.data.status === 'OPEN') lastPayable.current = { scope: billScope, contents };
         setBalanceFailure(null);
-        if (!resolution && original && original !== billContents(read.data)) {
+        if (
+          !resolution &&
+          ((original && original !== contents) ||
+            (previous?.scope === billScope && previous.contents !== contents))
+        ) {
           setBalanceAnnouncement(
             `This bill changed. New balance: Rs ${formatMinor(read.data.totals.netMinor - read.data.totals.tenderedMinor)}`
           );
@@ -2099,6 +2125,7 @@ function ScopedPharmacyCounterConsole({
       }
     },
     [
+      billScope,
       branchAuthorized,
       branchId,
       cartQuery,
@@ -3442,7 +3469,6 @@ function ScopedPharmacyCounterConsole({
       tenderInFlight.current = true;
       setPending('tender');
       setTenderOutcome(null);
-      setTenderReadRequired(true);
       discardReceiptIntent();
       setReceiptSettlement(null);
       let dispatched = false;
@@ -3454,6 +3480,40 @@ function ScopedPharmacyCounterConsole({
           setStorageError(true);
           throw new Error(TENDER_STORAGE_MESSAGE);
         }
+        // Reserve the print window during the gesture, but do not persist or dispatch a
+        // payment until an uncached read confirms the exact bill the cashier reviewed.
+        const printReservation = autoPrint ? reserveCounterBrowserPrint() : undefined;
+        let verified;
+        try {
+          verified = await utils.client.pharmacySales.counterCart.query({ branchId, saleId });
+          if (currentSaleId.current !== saleId || !hasValidBill(verified, saleId))
+            throw new Error('Bill unavailable');
+        } catch {
+          printReservation?.cancel();
+          setBalanceFailure(billScope);
+          setTenderReadRequired(true);
+          tenderInFlight.current = false;
+          setPending(null);
+          return {
+            status: 'rejected',
+            message: 'Could not check the bill balance. Refresh the bill to try again.',
+          };
+        }
+        if (!cart || billContents(verified) !== billContents(cart)) {
+          printReservation?.cancel();
+          lastPayable.current = { scope: billScope, contents: billContents(verified) };
+          utils.pharmacySales.counterCart.setData({ branchId, saleId }, verified);
+          const message = `This bill changed. New balance: Rs ${formatMinor(verified.totals.netMinor - verified.totals.tenderedMinor)}`;
+          setBalanceAnnouncement(message);
+          tenderInFlight.current = false;
+          setPending(null);
+          return { status: 'rejected', message };
+        }
+        if (readTenderAttempt(recoveryScope).status !== 'empty') {
+          printReservation?.cancel();
+          throw new Error(TENDER_STORAGE_MESSAGE);
+        }
+        setTenderReadRequired(true);
         const payload: TenderAttempt['input'] = {
           branchId,
           saleId,
@@ -3512,8 +3572,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           receiptNumber: null,
           autoPrint,
-          // Still inside the native payment gesture: no await precedes this.
-          printReservation: autoPrint ? reserveCounterBrowserPrint() : undefined,
+          printReservation,
         };
         receiptIntent.current = intent;
         dispatched = true;
@@ -3579,6 +3638,8 @@ function ScopedPharmacyCounterConsole({
     },
     [
       autoPrint,
+      cart,
+      billScope,
       billState,
       blocked,
       branchId,

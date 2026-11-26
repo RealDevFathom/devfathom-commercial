@@ -171,7 +171,17 @@ vi.mock('@/lib/trpc', async () => {
         invalidate: vi.fn(),
         fetch: (...args: unknown[]) => mocks.searchFetch(...args),
       },
-      counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
+      counterCart: {
+        cancel: mocks.cancel,
+        invalidate: vi.fn(),
+        setData: (_input: unknown, data: unknown) =>
+          Object.assign(mocks.queries.counterCart!, {
+            data,
+            isStale: false,
+            isFetching: false,
+            isPlaceholderData: false,
+          }),
+      },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       tradingDayStatus: { invalidate: vi.fn() },
@@ -648,6 +658,7 @@ beforeEach(() => {
       isSuccess: true,
       isError: false,
       isFetching: false,
+      isPlaceholderData: false,
       isStale: false,
     });
     return mocks.queries.counterCart;
@@ -659,7 +670,9 @@ beforeEach(() => {
   mocks.scannedPackApprovers.mockReset().mockResolvedValue([]);
   mocks.discountApprovers.mockReset().mockResolvedValue([]);
   mocks.signIn.mockResolvedValue({ ok: true });
-  mocks.cartRead.mockReset().mockResolvedValue(cart());
+  mocks.cartRead
+    .mockReset()
+    .mockImplementation(async () => mocks.queries.counterCart?.data ?? cart());
   window.localStorage.clear();
 });
 
@@ -890,6 +903,34 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     expect(screen.getByRole('button', { name: 'Take payment', hidden: true })).toBeDisabled();
   });
 
+  it('review: a background refresh leaves cash input focused and a changed server balance stops tender', async () => {
+    const view = renderPayment(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    const cash = screen.getByLabelText('Cash received');
+    cash.focus();
+    const size = cash.getBoundingClientRect().height;
+    Object.assign(mocks.queries.counterCart!, { isStale: true, isFetching: true });
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(cash).toBeEnabled();
+    expect(cash).toHaveFocus();
+    expect(cash.getBoundingClientRect().height).toBe(size);
+    expect(screen.queryByText('Unavailable', { exact: true })).not.toBeInTheDocument();
+    expect(mocks.refetch).not.toHaveBeenCalled();
+    const changed = cart({
+      totals: { grossMinor: 26000, netMinor: 26000, discountMinor: 0, tenderedMinor: 0 },
+    });
+    mocks.cartRead.mockResolvedValueOnce(changed);
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment', hidden: true }));
+    await waitFor(() =>
+      expect(mocks.cartRead).toHaveBeenCalledWith({ branchId: 'branch-a', saleId: 'sale-a' })
+    );
+    expect(
+      await screen.findAllByText('This bill changed. New balance: Rs 260.00')
+    ).not.toHaveLength(0);
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
   it('DEV-1040: automatically verifies one stale snapshot and announces the new balance before payment', async () => {
     const current = mocks.queries.counterCart!;
     const original = cart();
@@ -908,11 +949,13 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
         finish = resolve;
       });
       current.isStale = false;
+      current.isPlaceholderData = false;
       current.data = cart({
         totals: { grossMinor: 26000, netMinor: 26000, discountMinor: 0, tenderedMinor: 0 },
       });
       return current;
     });
+    current.isPlaceholderData = true;
     current.isStale = true;
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     await waitFor(() => expect(mocks.refetch).toHaveBeenCalledTimes(1));
@@ -938,6 +981,7 @@ describe('PharmacyCounterConsole authoritative bill state', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Khata' }));
     const name = await screen.findByLabelText('Customer name');
     mocks.refetch.mockRejectedValueOnce(new Error('Read failed'));
+    mocks.queries.counterCart!.isPlaceholderData = true;
     mocks.queries.counterCart!.isStale = true;
     view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     await waitFor(() => expect(mocks.refetch).toHaveBeenCalledTimes(1));

@@ -568,23 +568,25 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                                     ? 'Choose a family Khata account before taking payment.'
                                                     : 'A manager or owner must approve the credit limit increase first.';
 
-    const lockNote = !editable && (
-      <p className="text-xs text-text-muted">
-        {takingPayment
-          ? 'Locked while payment is being recorded.'
-          : unknown
-            ? 'Locked until the payment outcome is confirmed.'
-            : state === 'loading' || (state === 'stale' && !error)
-              ? 'Locked while the bill balance is being checked.'
-              : state === 'stale' || state === 'error'
-                ? 'Locked until the bill balance is verified.'
-                : state === 'settled'
-                  ? 'This bill has been paid.'
-                  : state === 'idle'
-                    ? 'Add an item to start a bill.'
-                    : state === 'unavailable'
-                      ? 'This bill is unavailable for payment.'
-                      : 'Locked while the counter finishes its current action.'}
+    const lockNote = (
+      <p className="min-h-8 text-xs text-text-muted" aria-live="polite">
+        {editable
+          ? null
+          : takingPayment
+            ? 'Locked while payment is being recorded.'
+            : unknown
+              ? 'Locked until the payment outcome is confirmed.'
+              : state === 'loading' || (state === 'stale' && !error)
+                ? 'Locked while the bill balance is being checked.'
+                : state === 'stale' || state === 'error'
+                  ? 'Locked until the bill balance is verified.'
+                  : state === 'settled'
+                    ? 'This bill has been paid.'
+                    : state === 'idle'
+                      ? 'Add an item to start a bill.'
+                      : state === 'unavailable'
+                        ? 'This bill is unavailable for payment.'
+                        : 'Locked while the counter finishes its current action.'}
       </p>
     );
     async function submitTender() {
@@ -815,7 +817,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             >
               Payment method
             </p>
-            {lockNote}
+
             <div
               role="group"
               aria-labelledby="tender-type-label"
@@ -974,7 +976,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 Prepaid balance: PKR {formatMinor(prepaidBalanceMinor)}. Pay the rest with another
                 tender.
               </p>
-              {lockNote}
+
               <Label htmlFor="tender-prepaid-pin">Customer’s prepaid PIN</Label>
               <Input
                 id="tender-prepaid-pin"
@@ -991,7 +993,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </div>
           )}
           <div className="space-y-1.5">
-            {lockNote}
             <Label htmlFor="tender-amount">Amount</Label>
             <Input
               id="tender-amount"
@@ -1033,7 +1034,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {cashMemo ? (
             <div className="space-y-1.5">
-              {lockNote}
               <Label htmlFor="tender-buyer-name">Buyer name (cash memo, optional)</Label>
               <Input
                 id="tender-buyer-name"
@@ -1054,7 +1054,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {bankTransfer ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-              {lockNote}
               <div className="flex flex-wrap items-baseline gap-1">
                 <Label htmlFor="bank-transfer-reference">Transfer reference</Label>
                 {!requirePaymentDetails && (
@@ -1094,7 +1093,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 slip; you are recorded as the person who confirmed this payment. Take JazzCash,
                 Easypaisa or Raast under Wallet, not Card.
               </p>
-              {lockNote}
+
               <div className="flex flex-wrap items-baseline gap-1">
                 <Label htmlFor="manual-card-reference">
                   Card last 4 digits or terminal reference
@@ -1156,7 +1155,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {manual ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-              {lockNote}
               {manualSettingsLoading ? <p role="status">Loading merchant details…</p> : null}
               {manualSettingsError ? (
                 <p role="alert">Merchant details could not be loaded.</p>
@@ -1270,7 +1268,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {isKhata ? (
             <div className="space-y-3 rounded-md border border-border-default bg-surface-sunken p-4">
-              {lockNote}
               <Label htmlFor="khata-account">Family Khata account</Label>
               <SelectField
                 autoFocus
@@ -1332,7 +1329,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                         </Button>
                       )}
                     </p>
-                    {lockNote}
+
                     {signupPatient ? (
                       <p className="text-sm text-text-strong">Payer: {signupPatient.displayName}</p>
                     ) : (
@@ -1586,7 +1583,6 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
 
           {type === 'CASH' ? (
             <div className="space-y-1.5">
-              {lockNote}
               <Label htmlFor="tender-cash-received">Cash received</Label>
               <Input
                 id="tender-cash-received"
