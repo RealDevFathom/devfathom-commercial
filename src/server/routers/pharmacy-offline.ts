@@ -227,6 +227,7 @@ export const pharmacyOfflineRouter = router({
           actorId: scope.actorId,
           pin: input.managerPin,
           action: 'pharmacyOffline.resolveCash',
+          requireApprovalMode: true,
           policy: 'OFFLINE_CASH_RESOLUTION',
           errorCode: 'OFFLINE_CASH_APPROVAL_REFUSED',
         });

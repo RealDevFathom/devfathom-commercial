@@ -211,8 +211,8 @@ beforeAll(async () => {
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   await scopedDb.withPlatformDb((db) =>
     db.$executeRawUnsafe(
-      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
-       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "requireApprovalAuthenticator", "createdAt", "updatedAt")
+       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', false, now(), now() FROM unnest($1::text[]) AS id
        ON CONFLICT (id) DO NOTHING`,
       [ORG_A]
     )
