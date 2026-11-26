@@ -1,4 +1,5 @@
 import 'server-only';
+import { lockCustomerConsent } from '../consent-writer';
 import { randomUUID } from 'node:crypto';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -45,9 +46,26 @@ export async function guardedWahaSend(
   purpose: string,
   content: WahaContent
 ) {
+  if (['test', 'portalSignInCode', 'media', 'consentReply'].includes(purpose)) {
+    // The normal utility flows already hold this lock in sendClaimedMessage.
+    return withTenantDb(organizationId, async (db) => {
+      const customer = await findCustomerByWhatsApp(db, organizationId, to);
+      if (!customer) throw new WhatsAppProviderError('WAHA_POLICY');
+      await lockCustomerConsent(db, organizationId, customer.id);
+      return reserveAndSend(organizationId, to, purpose, content);
+    });
+  }
+  return reserveAndSend(organizationId, to, purpose, content);
+}
+async function reserveAndSend(
+  organizationId: string,
+  to: string,
+  purpose: string,
+  content: WahaContent
+) {
   const id = randomUUID();
   const reservation = await withTenantDb(organizationId, async (db) => {
-    await db.$queryRaw`SELECT "organizationId" FROM pharmacy_waha_sessions WHERE "organizationId"=${organizationId} FOR UPDATE`;
+    await db.$queryRaw`SELECT "organizationId" FROM pharmacy_waha_sessions WHERE "organizationId"=${organizationId} FOR NO KEY UPDATE`;
     const session = await readWahaSession(db, organizationId);
     if (!session || session.status !== 'WORKING')
       throw new WhatsAppProviderError('WAHA_DISCONNECTED');

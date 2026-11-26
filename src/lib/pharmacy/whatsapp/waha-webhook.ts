@@ -6,7 +6,7 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { handleInboundWhatsAppMessage } from './inbound';
 import { bindWhatsAppTenant, createWhatsAppProvider, type WhatsAppConfig } from './provider';
-import { wahaMessageId } from './waha-client';
+import { WahaClient, wahaMessageId } from './waha-client';
 import { readWahaSession, selectorOrganization } from './waha-session';
 
 const dummy = randomBytes(48);
@@ -49,7 +49,7 @@ const ackSchema = z.object({
 const messageSchema = z.object({
   id: identifier,
   fromMe: z.literal(false),
-  from: z.string().regex(/^[1-9]\d{7,14}@c\.us$/),
+  from: z.string().regex(/^(?:[1-9]\d{7,14}@c\.us|\d{6,20}@lid)$/),
   body: z.string().min(1).max(1000),
   timestamp: z.number().int().positive().max(8640000000000),
 });
@@ -66,7 +66,7 @@ const statusSchema = z.object({
   ]),
   data: z
     .object({
-      reachoutTimelock: z.unknown().optional(),
+      reachoutTimelock: z.object({ isActive: z.boolean() }).nullish(),
       messageCapping: z.object({ cappingStatus: z.string() }).nullish(),
     })
     .nullish(),
@@ -103,6 +103,7 @@ export function parseWahaEvent(raw: Buffer, session: string) {
       return {
         ...base,
         kind: 'message' as const,
+        lid: data.from.endsWith('@lid') ? data.from : null,
         semanticKey: digest('in:' + messageId),
         message: {
           providerMessageId: messageId,
@@ -129,7 +130,7 @@ export function parseWahaEvent(raw: Buffer, session: string) {
         restriction:
           state.data.data?.messageCapping?.cappingStatus === 'CAPPED'
             ? 475
-            : state.data.data?.reachoutTimelock
+            : state.data.data?.reachoutTimelock?.isActive
               ? 463
               : null,
       };
@@ -173,15 +174,23 @@ export async function receiveWahaEvent(
       return 403;
     const messageId = event.kind === 'ack' ? event.messageId : null;
     const ack = event.kind === 'ack' ? event.ack : null;
-    const requestKey = digest(headers.get('x-webhook-request-id')!);
+    const requestKey = digest(event.eventKey + ':' + headers.get('x-webhook-request-id')!);
     if (messageId)
       await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${organizationId + messageId},0))`;
     const inserted =
       await db.$executeRaw`INSERT INTO pharmacy_waha_events ("organizationId","eventKey","requestKey","semanticKey","providerMessageId",ack)
     VALUES (${organizationId},${event.eventKey},${requestKey},${event.semanticKey},${messageId},${ack}) ON CONFLICT DO NOTHING`;
     if (!inserted) return 200;
-    if (event.kind === 'message')
-      await handleInboundWhatsAppMessage(organizationId, provider, event.message);
+    if (event.kind === 'message') {
+      const from = event.lid
+        ? await new WahaClient(
+            session.sessionName,
+            decryptSecret(session.encryptedApiKey)
+          ).phoneForLid(event.lid)
+        : event.message.from;
+      if (from)
+        await handleInboundWhatsAppMessage(organizationId, provider, { ...event.message, from });
+    }
     if (event.kind === 'ack')
       await db.$executeRaw`UPDATE pharmacy_message_logs SET "wahaAck"=greatest("wahaAck",${event.ack}::smallint)
       WHERE "organizationId"=${organizationId} AND direction='OUTBOUND' AND "providerMessageId"=${messageId}`;

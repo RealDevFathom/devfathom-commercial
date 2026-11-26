@@ -1,3 +1,4 @@
+import { WHATSAPP_REPLIES } from './messages';
 import {
   WhatsAppProviderError,
   type WhatsAppConfig,
@@ -66,7 +67,13 @@ export class WahaWhatsAppProvider implements WhatsAppProvider {
     return this.deliver(to, template, { text });
   }
   sendText({ to, body }: Parameters<WhatsAppProvider['sendText']>[0]) {
-    return this.deliver(to, 'reply', { text: body });
+    return this.deliver(
+      to,
+      body === WHATSAPP_REPLIES.optedIn || body === WHATSAPP_REPLIES.optedOut
+        ? 'consentReply'
+        : 'reply',
+      { text: body }
+    );
   }
   sendMedia({
     to,

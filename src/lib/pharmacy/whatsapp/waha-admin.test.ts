@@ -10,7 +10,7 @@ it('refuses a non-owner before reading credentials or contacting WAHA and audits
   const ctx = {
     organization: { id: 'business-a', vertical: 'PHARMACY', status: 'ACTIVE' },
     session: { user: { id: 'user-a', organizationId: 'business-a' } },
-    entitlements: { organizationId: 'business-a', modules: [] },
+    entitlements: { organizationId: 'business-a', enabledModules: ['pharmacy-core'] },
     db: {},
     requestMeta: {},
   } as unknown as TRPCContext;

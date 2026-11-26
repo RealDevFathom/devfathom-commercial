@@ -130,6 +130,7 @@ export class WahaClient {
           {
             url: callback,
             events: ['message', 'message.ack', 'session.status'],
+            retries: { attempts: 3, delaySeconds: 2, policy: 'constant' },
             hmac: { key: webhookSecret },
           },
         ],
@@ -169,17 +170,38 @@ export class WahaClient {
     if (!dto.success) throw new WahaFailure('UNAVAILABLE', true);
     return dto.data.key;
   }
+  async phoneForLid(lid: string) {
+    const parsed = z
+      .object({ lid: z.literal(lid), pn: z.string().nullable() })
+      .safeParse(
+        await this.request(
+          '/api/' + encodeURIComponent(this.session) + '/lids/' + encodeURIComponent(lid)
+        )
+      );
+    return parsed.success ? (parsed.data.pn?.match(/^(\d{8,15})@c\.us$/)?.[1] ?? null) : null;
+  }
   async status() {
     const dto = z
       .object({
         name: z.literal(this.session),
         status: z.string(),
-        me: z.object({ id: z.string() }).nullish(),
+        me: z
+          .object({
+            id: z.string(),
+            reachoutTimelock: z.object({ isActive: z.boolean() }).nullish(),
+            messageCapping: z.object({ cappingStatus: z.string() }).nullish(),
+          })
+          .nullish(),
       })
       .safeParse(await this.request(this.path));
     if (!dto.success) throw new WahaFailure('UNAVAILABLE', true);
     return {
       status: dto.data.status,
+      restriction: dto.data.me?.reachoutTimelock?.isActive
+        ? 463
+        : dto.data.me?.messageCapping?.cappingStatus === 'CAPPED'
+          ? 475
+          : null,
       number: dto.data.me?.id.match(/^(\d{8,15})(?::\d+)?@c\.us$/)?.[1] ?? null,
     };
   }

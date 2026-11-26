@@ -117,7 +117,7 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
       notice = 'WhatsApp accepted the test message.';
     }
     const view = await withTenantDb(org.id, async (db) => {
-      await db.$queryRaw`SELECT "organizationId" FROM pharmacy_waha_sessions WHERE "organizationId"=${org.id} FOR UPDATE`;
+      await db.$queryRaw`SELECT "organizationId" FROM pharmacy_waha_sessions WHERE "organizationId"=${org.id} FOR NO KEY UPDATE`;
       const row = await readWahaSession(db, org.id);
       if (!row) return { ...empty, access: true };
       let client = new WahaClient(row.sessionName, decryptSecret(row.encryptedApiKey));
@@ -143,7 +143,7 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
           if (!(e instanceof WahaFailure) || e.httpStatus !== 404) throw e;
         }
         if (!state) await provisioner.start(callback, decryptSecret(row.encryptedWebhookSecret));
-        if (state?.status === 'STOPPED') await provisioner.activate();
+        if (state?.status === 'STOPPED' && !state.restriction) await provisioner.activate();
         try {
           await client.status();
         } catch (e) {
@@ -155,7 +155,7 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
         }
       }
       if (cmd.action === 'disconnect' && !row.restrictionCode) await client.disconnect();
-      let current: { status: string; number: string | null } = {
+      let current: { status: string; number: string | null; restriction?: number | null } = {
         status: 'DISCONNECTED',
         number: null,
       };
@@ -166,14 +166,14 @@ export async function manageWaha(ctx: TRPCContext, input: WahaCommand): Promise<
       } catch {
         notice = 'WhatsApp is disconnected. Check the WAHA server and refresh.';
       }
-      await db.$executeRaw`UPDATE pharmacy_waha_sessions SET status=${current.status},"connectedNumber"=${current.number},"statusAt"=now() WHERE "organizationId"=${org.id}`;
+      await db.$executeRaw`UPDATE pharmacy_waha_sessions SET status=${current.status},"connectedNumber"=${current.number},"statusAt"=now(), "restrictionCode"=COALESCE("restrictionCode",${current.restriction ?? null}::int) WHERE "organizationId"=${org.id}`;
       return {
         access: true,
         configured: true,
         status: current.status,
         number: current.number,
         qr,
-        paused: !!row.restrictionCode,
+        paused: !!(row.restrictionCode || current.restriction),
         minute: row.perMinute,
         day: row.perDay,
         portal: row.portalCodes,
