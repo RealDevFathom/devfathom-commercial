@@ -30,7 +30,8 @@ export type CounterPrescriptionLine = {
   directions: string;
   authorizedCanonicalUnits: number;
   filledCanonicalUnits: number;
-  fills: { date: string; quantity: number; label: string }[];
+  /** Older cached panel responses have totals without individual fills. */
+  fills?: { date: string; quantity: number; label: string }[];
   /** Never negative: a cumulative over-fill is a defect to surface, not to hide. */
   remainingAuthorizedUnits: number;
   /** True only when a pharmacist has signed the RX-03 review item (RX-03). */
