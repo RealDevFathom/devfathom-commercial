@@ -30,7 +30,14 @@ import {
   PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE,
   pharmacyActionErrorMessage,
 } from '@/lib/pharmacy/action-error-message';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
+import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { formatLotExpiry } from '@/lib/pharmacy/product-class';
+import {
+  listQuarantineHolds,
+  QUARANTINE_SAFETY_RELEASE_REFUSED,
+  type QuarantineHoldView,
+} from '@/lib/pharmacy/quarantine-holds';
 import { lotStockBreakdown } from '@/lib/pharmacy/stock-breakdown';
 import { writeOffWitnessOptions } from '@/lib/pharmacy/write-off-witness';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -40,6 +47,7 @@ import {
 } from '@/server/routers/pharmacy-inventory';
 import { renderStockComposition } from '@/lib/pharmacy/counter';
 import { createTRPCContext } from '@/server/trpc';
+import { TRPCError } from '@trpc/server';
 
 import { BATCH_NOT_RECORDED, batchNumberLabel, batchPhrase } from '@/lib/pharmacy/unrecorded-batch';
 
@@ -132,6 +140,52 @@ function Submit({
 }
 
 type InventoryContext = NonNullable<Awaited<ReturnType<typeof tenantContext>>>;
+
+/** DEV-1052: mirrors the safety-permission gate on releasing a safety quarantine hold. */
+async function safetyReleaseAllowed(ctx: InventoryContext): Promise<boolean> {
+  const user = ctx.session?.user;
+  if (!user) return false;
+  try {
+    return await can(subjectFromSession(user), 'pharmacy:safety', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** DEV-1052: the server's own plain sentence when it refuses a quarantine release. */
+function quarantineReleaseRefusal(error: unknown): string | null {
+  if (!(error instanceof TRPCError) || !(error.cause instanceof PharmacyInventoryError))
+    return null;
+  if (error.cause.reason !== 'QUARANTINE_RELEASE_REFUSED') return null;
+  return error.cause.userMessage ?? QUARANTINE_SAFETY_RELEASE_REFUSED;
+}
+
+const HOLD_ORIGIN_LABELS: Record<string, string> = {
+  MANUAL: 'placed by hand',
+  EXPIRY: 'expiry check',
+  CUSTOMER_RETURN: 'customer return',
+  DELIVERY_RETURN: 'failed delivery',
+  GOODS_IN: 'refused at receiving',
+  LEGACY: 'placed before owners were recorded',
+  UNATTRIBUTED: 'no recorded owner',
+};
+
+/** DEV-1052: who placed the open hold of one authority, in plain words. */
+function holdPlacedBy(
+  hold: QuarantineHoldView,
+  authority: 'SAFETY' | 'INVENTORY',
+  timeZone: string | null | undefined
+) {
+  const placed = hold.placed.find((entry) => entry.authority === authority);
+  if (!placed) return 'no recorded owner';
+  const origin = HOLD_ORIGIN_LABELS[placed.origin] ?? 'no recorded owner';
+  const on = pharmacyCalendarDay(timeZone, placed.at);
+  return placed.actorName ? `${placed.actorName}, ${on} (${origin})` : `${on} (${origin})`;
+}
 
 async function inventoryControlAllowed(ctx: InventoryContext): Promise<boolean> {
   const user = ctx.session?.user;
@@ -381,7 +435,26 @@ export default async function PharmacyInventoryPage({
       .filter((balance) => balance.disposition === 'DAMAGED' && balance.onHandUnits > 0)
       .map((balance) => ({ lot, balance }))
   );
-  const releasableQuarantined = quarantined.filter(({ lot }) => lot.batch.state === 'ACTIVE');
+  // DEV-1052: who placed each hold, and which of them this person may release. A hold the
+  // read cannot account for is shown, and treated, as a safety hold.
+  const canReleaseSafety = await safetyReleaseAllowed(ctx);
+  const quarantineHolds = quarantined.length
+    ? await listQuarantineHolds(ctx.db, { organizationId, branchId: branch.id })
+    : new Map<string, QuarantineHoldView>();
+  const heldPositions = quarantined
+    .filter(({ lot }) => lot.batch.state === 'ACTIVE')
+    .map(({ lot, balance }) => {
+      const hold = quarantineHolds.get(`${lot.id}:${balance.stockLocationId}`) ?? {
+        safetyUnits: balance.onHandUnits,
+        inventoryUnits: 0,
+        recallUnits: 0,
+        placed: [],
+      };
+      const releasableUnits =
+        (canControlInventory ? hold.inventoryUnits : 0) + (canReleaseSafety ? hold.safetyUnits : 0);
+      return { lot, balance, hold, releasableUnits };
+    });
+  const releasableQuarantined = heldPositions.filter((row) => row.releasableUnits > 0);
   const writeOffPositions = [...available, ...quarantined, ...damaged];
   const totalUnits = available.reduce((sum, row) => sum + row.balance.onHandUnits, 0);
   const draftLotByMedicine = new Map(
@@ -474,16 +547,20 @@ export default async function PharmacyInventoryPage({
           disposition: field(data, 'position').split(':')[2] as
             'AVAILABLE' | 'QUARANTINE' | 'DAMAGED',
         });
-      else if (action === 'release-quarantine')
-        await actionCaller.releaseQuarantinedPart({
+      else if (action === 'release-quarantine') {
+        // DEV-1052: one release, through the procedure this person's permission opens. The
+        // server checks each unit against its own hold either way.
+        const release = {
           branchId,
           inventoryLotId: field(data, 'position').split(':')[0]!,
           stockLocationId: field(data, 'position').split(':')[1]!,
           units: number(data, 'units'),
           reason: field(data, 'reason'),
           idempotencyKeyPrefix: `ui-quarantine-release:${browserUuid()}`,
-        });
-      else if (action === 'allocate-transfer')
+        };
+        if (await hasInventoryAccess(actionCtx)) await actionCaller.releaseQuarantinedPart(release);
+        else await actionCaller.releaseSafetyQuarantine(release);
+      } else if (action === 'allocate-transfer')
         await actionCaller.allocateTransfer({
           branchId,
           toBranchId: field(data, 'destination').split(':')[0]!,
@@ -568,9 +645,10 @@ export default async function PharmacyInventoryPage({
         !(await hasInventoryAccess(actionCtx));
       destination = url(
         branchId,
-        accessDenied
-          ? PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE
-          : pharmacyActionErrorMessage('inventory'),
+        (action === 'release-quarantine' ? quarantineReleaseRefusal(error) : null) ??
+          (accessDenied
+            ? PHARMACY_INVENTORY_ACCESS_DENIED_MESSAGE
+            : pharmacyActionErrorMessage('inventory')),
         'error'
       );
     }
@@ -1222,6 +1300,50 @@ export default async function PharmacyInventoryPage({
             this branch who has a PIN set up.
           </Empty>
         )}
+        {heldPositions.length ? (
+          <div className="mt-6">
+            <h3 className="text-sm font-medium text-text-strong">Held stock</h3>
+            <ul className="mt-2 divide-y divide-border-subtle rounded-[var(--radius-sm)] border border-border-subtle">
+              {heldPositions.map(({ lot, balance, hold, releasableUnits }) => (
+                <li className="p-3 text-sm" key={`${lot.id}:${balance.stockLocationId}`}>
+                  <p className="font-medium text-text-strong">
+                    {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
+                    {balance.location.name}
+                  </p>
+                  {hold.safetyUnits > 0 ? (
+                    <p className="text-text-muted">
+                      Safety hold · {hold.safetyUnits} units ·{' '}
+                      {holdPlacedBy(hold, 'SAFETY', ctx.organization?.timezone)}
+                    </p>
+                  ) : null}
+                  {hold.inventoryUnits > 0 ? (
+                    <p className="text-text-muted">
+                      Inventory hold · {hold.inventoryUnits} units ·{' '}
+                      {holdPlacedBy(hold, 'INVENTORY', ctx.organization?.timezone)}
+                    </p>
+                  ) : null}
+                  {hold.recallUnits > 0 ? (
+                    <p className="text-text-muted">
+                      Recall hold · {hold.recallUnits} units · released only by reversing the recall
+                    </p>
+                  ) : null}
+                  {hold.safetyUnits > 0 && !canReleaseSafety ? (
+                    <p className="mt-1 text-text-strong">
+                      {releasableUnits > 0
+                        ? `You can release ${releasableUnits} units. The safety hold can be released only by someone with the safety permission.`
+                        : QUARANTINE_SAFETY_RELEASE_REFUSED}
+                    </p>
+                  ) : null}
+                  {hold.inventoryUnits > 0 && !canControlInventory ? (
+                    <p className="mt-1 text-text-strong">
+                      The inventory hold is released by someone with the inventory permission.
+                    </p>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {releasableQuarantined.length ? (
           <form action={perform} className="mt-6 grid gap-3 md:grid-cols-3">
             <input name="action" type="hidden" value="release-quarantine" />
@@ -1229,13 +1351,13 @@ export default async function PharmacyInventoryPage({
             <label className="text-sm md:col-span-2">
               Manually held stock
               <StudioSelect className={inputClass} name="position">
-                {releasableQuarantined.map(({ lot, balance }) => (
+                {releasableQuarantined.map(({ lot, balance, releasableUnits }) => (
                   <option
                     key={`${lot.id}:${balance.stockLocationId}`}
                     value={`${lot.id}:${balance.stockLocationId}`}
                   >
                     {lotProductLabel(lot)} · {batchNumberLabel(lot.batch.batchNumber)} ·{' '}
-                    {balance.location.name}
+                    {balance.location.name} · up to {releasableUnits} units
                   </option>
                 ))}
               </StudioSelect>

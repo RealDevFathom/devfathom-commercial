@@ -125,6 +125,12 @@ function makeDb() {
     pharmacyStockBalance: model(),
     pharmacyRecallQuarantineAction: {
       findMany: vi.fn().mockResolvedValue([]),
+      aggregate: vi.fn().mockResolvedValue({ _sum: { quantityUnits: null } }),
+    },
+    // DEV-1052: no hold entries by default, so every held unit is an unowned (safety) hold.
+    pharmacyQuarantineHoldEntry: {
+      groupBy: vi.fn().mockResolvedValue([]),
+      create: vi.fn().mockResolvedValue({}),
     },
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
@@ -2542,6 +2548,13 @@ describe('DEV-211 / DEV-660 — branch assignment, or a verified tenant ADMIN', 
  * the decision.
  */
 const TENANT_ONLY_BRANCH_PROCEDURES = ['quarantinePart', 'acknowledgeRecall'];
+/**
+ * DEV-1052: `pharmacy:safety` procedures that do go through the branch assignment check
+ * (`admittedScopeFor`). The tenant-ADMIN exception inside it still needs
+ * `pharmacy:inventory`, so they are not in ASSIGNMENT_GATED, whose cases grant one capability;
+ * "manual quarantine resolution authorization" below covers them.
+ */
+const SAFETY_ASSIGNMENT_GATED = ['releaseSafetyQuarantine'];
 
 function takesBranchId(schema: unknown): boolean {
   const zod = schema as {
@@ -2566,6 +2579,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
     const classified = [
       ...ASSIGNMENT_GATED.map((gated) => gated.name),
       ...TENANT_ONLY_BRANCH_PROCEDURES,
+      ...SAFETY_ASSIGNMENT_GATED,
     ].sort();
 
     expect(new Set(classified).size).toBe(classified.length);
@@ -2693,7 +2707,105 @@ describe('manual quarantine resolution authorization', () => {
     });
   });
 
-  it('lets an inventory-only actor release a manual hold with session attribution', async () => {
+  /** DEV-1052: who owns the 20 held units, as the hold entries record it. */
+  function heldBy(owners: { SAFETY?: number; INVENTORY?: number }) {
+    db.pharmacyQuarantineHoldEntry.groupBy.mockResolvedValue(
+      Object.entries(owners).map(([authority, quantityUnits]) => ({
+        authority,
+        _sum: { quantityUnits },
+      }))
+    );
+  }
+  const SAFETY_HOLD_REFUSAL = {
+    code: 'FORBIDDEN',
+    message:
+      'This stock is held by pharmacy safety. Only someone with the safety permission can release it.',
+  };
+
+  it.each([
+    ['a safety hold', { SAFETY: 20 }],
+    ['a hold nobody recorded an owner for', {}],
+  ])('DEV-1052: refuses an inventory-only actor releasing %s', async (_label, owners) => {
+    heldBy(owners);
+    await expect(caller().releaseQuarantinedPart(input)).rejects.toMatchObject(SAFETY_HOLD_REFUSAL);
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-1052: never lets an inventory-only actor exceed the inventory-owned units', async () => {
+    heldBy({ SAFETY: 15, INVENTORY: 5 });
+    await expect(caller().releaseQuarantinedPart(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'Only 5 of these units can be released with the inventory permission. The rest is held by pharmacy safety, and only someone with the safety permission can release it.',
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-1052: refuses the safety release procedure to an inventory-only actor', async () => {
+    heldBy({ INVENTORY: 20 });
+    await expect(caller().releaseSafetyQuarantine(input)).rejects.toMatchObject(CAPABILITY_REFUSAL);
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('DEV-1052: lets a safety-only actor admitted to the branch release a safety hold', async () => {
+    sessionRole = 'EMPLOYEE';
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_1' });
+    heldBy({ SAFETY: 20 });
+    await caller().releaseSafetyQuarantine(input);
+    expect(db.pharmacyStockMovement.create).toHaveBeenCalledTimes(2);
+    expect(db.pharmacyQuarantineHoldEntry.create).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        organizationId: 'org_a',
+        branchId: 'branch_a',
+        authority: 'SAFETY',
+        origin: 'RELEASE',
+        quantityUnits: -10,
+        actorId: 'user_a',
+        reason: 'Inspection passed',
+      }),
+    });
+  });
+
+  it('DEV-1052: refuses a safety-only actor who is not admitted to the branch', async () => {
+    sessionRole = 'EMPLOYEE';
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    heldBy({ SAFETY: 20 });
+    await expect(caller().releaseSafetyQuarantine(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-1052: gives a safety-only ADMIN no branch without an assignment', async () => {
+    // The tenant-ADMIN exception is an inventory privilege; safety alone does not carry it.
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    confirmAdmin();
+    heldBy({ SAFETY: 20 });
+    await expect(caller().releaseSafetyQuarantine(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('DEV-1052: a safety-only actor does not release an inventory hold', async () => {
+    sessionRole = 'EMPLOYEE';
+    grant([allow('pharmacy:safety')]);
+    db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_1' });
+    heldBy({ INVENTORY: 20 });
+    await expect(caller().releaseSafetyQuarantine(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('lets an inventory-only actor release an inventory hold with session attribution', async () => {
+    heldBy({ INVENTORY: 20 });
     await caller().releaseQuarantinedPart(input);
     expect(db.pharmacyStockMovement.create).toHaveBeenCalledTimes(2);
     expect(db.pharmacyStockMovement.create).toHaveBeenNthCalledWith(2, {

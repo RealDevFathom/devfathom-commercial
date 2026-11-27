@@ -5285,10 +5285,18 @@ export const pharmacySalesRouter = router({
                   code.expiry)
           )
         );
-        await db.pharmacySaleLine.update({
-          where: { id: line.id },
-          data: { packCheckBlocked: !matched },
-        });
+        // DEV-1054: a failed check blocks every line of the medicine on this bill, as the
+        // trigger on the PACK_CHECK event does; a successful check clears only its own line.
+        if (matched)
+          await db.pharmacySaleLine.update({
+            where: { id: line.id },
+            data: { packCheckBlocked: false },
+          });
+        else
+          await db.pharmacySaleLine.updateMany({
+            where: { ...where, medicineId: line.medicineId },
+            data: { packCheckBlocked: true },
+          });
         await db.pharmacySaleEvent.create({
           data: {
             ...where,

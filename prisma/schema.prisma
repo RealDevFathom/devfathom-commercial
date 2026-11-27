@@ -3170,6 +3170,33 @@ model PharmacyRecallQuarantineAction {
   @@map("pharmacy_recall_quarantine_actions")
 }
 
+/// DEV-1052: append-only ownership of manual quarantine holds. One signed quantity per
+/// authority at a lot and location: positive when a hold is placed, negative when it is
+/// released or leaves quarantine another way. Recall holds stay in
+/// PharmacyRecallQuarantineAction.
+model PharmacyQuarantineHoldEntry {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  inventoryLotId  String
+  stockLocationId String
+  /// SAFETY or INVENTORY.
+  authority       String
+  /// MANUAL, EXPIRY, CUSTOMER_RETURN, DELIVERY_RETURN, GOODS_IN, LEGACY, UNATTRIBUTED,
+  /// RELEASE or REMOVED.
+  origin          String
+  quantityUnits   Int
+  movementId      String?
+  actorId         String?
+  reason          String?
+  createdAt       DateTime @default(now())
+
+  @@unique([organizationId, id], map: "pharmacy_quarantine_hold_entries_org_id_key")
+  @@unique([organizationId, movementId, authority], map: "pharmacy_quarantine_hold_entries_movement_key")
+  @@index([organizationId, branchId, inventoryLotId, stockLocationId], map: "pharmacy_quarantine_hold_entries_position_idx")
+  @@map("pharmacy_quarantine_hold_entries")
+}
+
 model PharmacyRecallAcknowledgement {
   id             String               @id @default(cuid())
   organizationId String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))

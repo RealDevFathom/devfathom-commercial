@@ -137,6 +137,7 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyInventory.refreshStockSignals': ['pharmacy:inventory'],
   'pharmacyInventory.registerBatch': ['pharmacy:inventory'],
   'pharmacyInventory.releaseQuarantinedPart': ['pharmacy:inventory'],
+  'pharmacyInventory.releaseSafetyQuarantine': ['pharmacy:safety'],
   'pharmacyInventory.reserveSupplierClaim': ['pharmacy:inventory'],
   'pharmacyInventory.reverseDrapRecall': ['pharmacy:safety'],
   'pharmacyInventory.revokeColdChainSensor': ['pharmacy:inventory'],

@@ -834,8 +834,8 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'run-stock-branches-locations',
-        text: "Run stock at their branches: locations, temperature logs, batches, stock counts (approving others'), write-offs, releasing quarantine, transfers, supplier claims, shelf labels and expiry markdowns",
-        sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
+        text: "Run stock at their branches: locations, temperature logs, batches, stock counts (approving others'), write-offs, releasing stock that returns, receiving or expiry checks held in quarantine (never a safety hold), transfers, supplier claims, shelf labels and expiry markdowns",
+        sites: { 'src/server/routers/pharmacy-inventory.ts': 2 },
       },
       {
         id: 'workspace-administrator-reach-stock',
@@ -1123,6 +1123,14 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
         id: 'manage-recalls-whole-pharmacy',
         text: 'Manage recalls for the whole pharmacy, see recall contact lists, block or unblock batches and quarantine stock at any branch',
         sites: { 'src/server/routers/pharmacy-inventory.ts': 1 },
+      },
+      {
+        id: 'release-safety-quarantine-their-branches',
+        text: 'Release stock that pharmacy safety held in quarantine, at their branches, with a reason',
+        sites: {
+          'src/server/routers/pharmacy-inventory.ts': 1,
+          'src/app/(app)/pharmacy/inventory/page.tsx': 1,
+        },
       },
       {
         id: 'trace-recall-their-branches',
