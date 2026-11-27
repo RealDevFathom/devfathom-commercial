@@ -3,7 +3,7 @@ import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
 import { regulatoryProfileInForceWhere } from './regulatory-start';
-import { receivedAgainstOrder } from './purchasing-console';
+import { receivedAgainstOrder } from './received-against-order';
 import { recordAudit } from '@/server/audit';
 import { putUpload } from '@/lib/storage';
 import {
