@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { TRPCClientError } from '@trpc/client';
 import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
 import { Input } from '@/components/ui/input';
@@ -35,7 +36,7 @@ export function SupplierPoActionForm({ token }: { token: string }) {
         <PageHeader heading="Loading purchase order…" description="Checking your link." />
       </SectionCard>
     );
-  const response = order.error?.meta?.response;
+  const response = order.error instanceof TRPCClientError ? order.error.meta?.response : undefined;
   if (
     order.error?.data?.code === 'TOO_MANY_REQUESTS' ||
     (response instanceof Response && response.status === 429)

@@ -1,3 +1,4 @@
+import { TRPCClientError } from '@trpc/client';
 import { afterEach, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 import { SupplierPoActionForm } from './supplier-po-action-form';
@@ -49,7 +50,9 @@ it('shows progress while checking the link', () => {
 
 it.each([
   { data: { code: 'TOO_MANY_REQUESTS' } },
-  { meta: { response: new Response(null, { status: 429 }) } },
+  new TRPCClientError('Request failed', {
+    meta: { response: new Response(null, { status: 429 }) },
+  }),
 ])('shows retry guidance for a rate-limited page lookup', (error) => {
   query.mockReturnValue({ error });
   render(<SupplierPoActionForm token="synthetic" />);
