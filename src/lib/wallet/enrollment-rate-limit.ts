@@ -15,16 +15,18 @@ export async function admitWalletEnrollment(input: {
   ip: string;
   token: string;
   email?: string;
+  phone?: string;
 }): Promise<WalletEnrollmentAdmission> {
   const gates: RateLimitResult[] = [
     await rateLimit('wallet-enroll:global', 600, 60_000),
     await rateLimit(`wallet-enroll:ip:${input.ip}`, 30, TEN_MINUTES),
     await rateLimit(`wallet-enroll:token:${enrollmentFingerprint(input.token)}`, 300, TEN_MINUTES),
   ];
-  if (input.email) {
+  const recipient = input.phone ?? input.email;
+  if (recipient) {
     gates.push(
       await rateLimit(
-        `wallet-enroll:email:${enrollmentFingerprint(input.email)}`,
+        `wallet-enroll:${input.phone ? 'phone' : 'email'}:${enrollmentFingerprint(recipient)}`,
         5,
         FIFTEEN_MINUTES
       )

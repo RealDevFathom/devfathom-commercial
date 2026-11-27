@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { readBoundedJson } from '@/lib/http/read-bounded-body';
+import { issueVerifiedWallet } from '@/lib/wallet/issue';
 import { verifyEnrollment } from '@/lib/restaurant/wallet/enrollment';
 import {
   admitWalletEnrollment,
@@ -13,6 +14,8 @@ const inputSchema = z
   .object({
     token: tokenSchema,
     attemptId: z.string().trim().min(1).max(191),
+    consent: z.literal(true).optional(),
+    cardCode: z.string().min(1).max(64).optional(),
     otp: z.string().regex(/^\d{6}$/),
   })
   .strict();
@@ -31,6 +34,13 @@ export async function POST(request: Request) {
     organizationId: context.organization.id,
     ...parsed.data,
   });
+  if (result?.phoneJoin) {
+    const wallet = await issueVerifiedWallet(context.organization.id, result);
+    return Response.json(
+      { ok: true, wallet },
+      { headers: { 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer' } }
+    );
+  }
   return result
     ? Response.json({ ok: true, message: 'Your wallet passes are being prepared.' })
     : Response.json(INVALID, { status: 400 });
