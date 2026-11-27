@@ -34,6 +34,13 @@ the concept on 27 November 2026 and left the improvements below to the lead.
 12. **Shell.** Keep the existing app shell and navigation. The prototype's header is not part of
     this work.
 
+13. **Money owed needs real balances.** Handoff section 5 is wrong on one point: today the
+    dashboard read returns nothing for "You owe suppliers" and "Customers owe you"
+    (`accountsPayableMinor` and `accountsReceivableMinor` are always empty). Wire both to the
+    Finance ledger's own balance read, behind the same money permission and branch scope, with a
+    database test that the dashboard figure equals the Finance screen's figure. Until a figure is
+    known, the bar shows "Not available yet" with an empty track. Never draw an unknown as Rs 0.
+
 ## Rules that already stand
 
 - No permission keys, metric keys or "Source: ..." text anywhere staff can read.
