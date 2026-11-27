@@ -434,6 +434,7 @@ async function main() {
           organizationId,
           branchId: branch.id,
           reference: purchaseOrderReference + '-expiry',
+          status: 'APPROVED',
           supplierId: supplier.id,
           createdByUserId: receiver!.id,
         },

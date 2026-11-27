@@ -84,6 +84,7 @@ async function newLink() {
         organizationId: org,
         branchId: id('branch'),
         reference: unique('PO'),
+        status: 'SENT',
         supplierId: id('supplier'),
         createdByUserId: id('owner'),
       },

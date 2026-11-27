@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
+import { receivedAgainstOrder } from './purchasing-console';
 import { recordAudit } from '@/server/audit';
 import { putUpload } from '@/lib/storage';
 import {
@@ -127,6 +128,32 @@ export function supplierLinkId(token: string): string | null {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+async function assertOrderOpen(
+  db: ScopedDb,
+  organizationId: string,
+  order: { id: string; status: string }
+) {
+  if (order.status !== 'APPROVED' && order.status !== 'SENT' && order.status !== 'RECEIVING')
+    throw new SupplierLinkError('INVALID_LINK');
+  // A fully received order still has RECEIVING status. Use the receiving bench's
+  // posted quantities, including bonus units, and keep these figures private.
+  const received = await receivedAgainstOrder(db, { organizationId }, order.id);
+  if (!received.size) return;
+  const lines = await db.pharmacyPurchaseOrderLine.findMany({
+    where: { organizationId, purchaseOrderId: order.id },
+    select: { id: true, orderedCanonicalUnits: true, bonusCanonicalUnits: true },
+  });
+  if (
+    lines.length &&
+    lines.every(
+      (line) =>
+        (received.get(line.id)?.receivedUnits ?? 0) >=
+        line.orderedCanonicalUnits + line.bonusCanonicalUnits
+    )
+  )
+    throw new SupplierLinkError('INVALID_LINK');
+}
+
 export async function issueSupplierActionLink(
   db: ScopedDb,
   input: {
@@ -149,10 +176,12 @@ export async function issueSupplierActionLink(
     }),
     db.pharmacyPurchaseOrder.findFirst({
       where: { id: input.purchaseOrderId, branchId: input.branchId },
-      select: { id: true, supplierId: true },
+      select: { id: true, supplierId: true, status: true },
     }),
   ]);
-  if (!relationship || !purchaseOrder || relationship.supplierId !== purchaseOrder.supplierId)
+  if (!purchaseOrder) throw new SupplierLinkError('INVALID_LINK');
+  await assertOrderOpen(db, input.organizationId, purchaseOrder);
+  if (!relationship || relationship.supplierId !== purchaseOrder.supplierId)
     throw new SupplierLinkError('MISMATCH');
   const id = randomUUID();
   const secret = randomBytes(32).toString('base64url');
@@ -191,6 +220,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
         select: {
           id: true,
           reference: true,
+          status: true,
           branchId: true,
           supplierId: true,
           expectedDeliveryAt: true,
@@ -214,6 +244,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
     link.branchId !== link.purchaseOrder.branchId
   )
     throw new SupplierLinkError('INVALID_LINK');
+  await assertOrderOpen(db, link.organizationId, link.purchaseOrder);
   return link;
 }
 

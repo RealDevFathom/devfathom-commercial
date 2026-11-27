@@ -32,6 +32,7 @@ function fixture() {
         permissionOverrides: [],
       }),
     },
+    pharmacyGoodsReceiptLine: model(),
     pharmacyBranchAssignment: model(),
     pharmacyBranch: model(),
     pharmacySupplier: model(),
@@ -169,7 +170,11 @@ it('issues a signed link for an assigned procurement actor and matching supplier
   vi.stubEnv('AUTH_SECRET', 'supplier-link-security-test-key');
   try {
     f.db.pharmacySupplierRelationship.findFirst.mockResolvedValue({ supplierId: 'supplier' });
-    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'order', supplierId: 'supplier' });
+    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'order',
+      supplierId: 'supplier',
+      status: 'SENT',
+    });
     const result = await actions.issue();
     expect(result?.token).toEqual(expect.any(String));
     expect(f.db.pharmacySupplierActionLink.create).toHaveBeenCalledWith({
@@ -195,7 +200,11 @@ describe('supplier link expiry at issuance', () => {
     vi.setSystemTime(issuedAt);
     vi.stubEnv('AUTH_SECRET', 'synthetic-supplier-lifetime-fixture');
     f.db.pharmacySupplierRelationship.findFirst.mockResolvedValue({ supplierId: 'supplier' });
-    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({ id: 'order', supplierId: 'supplier' });
+    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
+      id: 'order',
+      supplierId: 'supplier',
+      status: 'SENT',
+    });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -292,6 +301,7 @@ describe.each(Object.keys(actions) as (keyof typeof actions)[])('%s owner access
         f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue({
           id: 'order',
           supplierId: 'supplier',
+          status: 'APPROVED',
         });
         f.db.pharmacySupplierActionLink.findFirst.mockResolvedValue({
           id: 'link',

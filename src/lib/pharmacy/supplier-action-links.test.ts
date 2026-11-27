@@ -31,6 +31,7 @@ function fakeDb() {
   const purchaseOrder = {
     id: 'po_a',
     reference: 'PO-1',
+    status: 'SENT',
     branchId: 'branch_a',
     supplierId: 'supplier_a',
     expectedDeliveryAt: null,
@@ -41,6 +42,24 @@ function fakeDb() {
   const db = {
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(db)),
     $queryRaw: vi.fn(async () => []),
+    pharmacyGoodsReceiptLine: {
+      findMany: vi.fn(
+        async (): Promise<
+          {
+            purchaseOrderLineId: string;
+            receivedCanonicalUnits: number;
+            bonusCanonicalUnits: number;
+            acceptedCanonicalUnits: number;
+            rejectedCanonicalUnits: number;
+          }[]
+        > => []
+      ),
+    },
+    pharmacyPurchaseOrderLine: {
+      findMany: vi.fn(async () => [
+        { id: 'line_a', orderedCanonicalUnits: 4, bonusCanonicalUnits: 1 },
+      ]),
+    },
     pharmacySupplierRelationship: { findFirst: vi.fn(async () => relationship) },
     pharmacyPurchaseOrder: { findFirst: vi.fn(async () => purchaseOrder) },
     pharmacySupplierActionLink: {
@@ -156,6 +175,57 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     });
   });
 
+  it.each(['DRAFT', 'SUBMITTED', 'CANCELLED', 'fully received'])(
+    'refuses issue and public access for a %s order',
+    async (status) => {
+      const state = await issued();
+      state.purchaseOrder.status = status === 'fully received' ? 'RECEIVING' : status;
+      if (status === 'fully received') {
+        state.rawDb.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+          {
+            purchaseOrderLineId: 'line_a',
+            receivedCanonicalUnits: 4,
+            bonusCanonicalUnits: 1,
+            acceptedCanonicalUnits: 5,
+            rejectedCanonicalUnits: 0,
+          },
+        ]);
+      }
+      const issue = () =>
+        issueSupplierActionLink(state.db, {
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          relationshipId: 'rel_a',
+          purchaseOrderId: 'po_a',
+          actorUserId: 'user_a',
+        });
+      for (const operation of [issue, () => getSupplierActionPage(state.db, state.token)]) {
+        expect(
+          await operation().then(
+            () => 'allowed',
+            (error) => error.reason
+          )
+        ).toBe('INVALID_LINK');
+      }
+      expect(state.rawDb.pharmacySupplierActionLink.create).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('keeps a partially received order open until its bonus units also arrive', async () => {
+    const state = await issued();
+    state.purchaseOrder.status = 'RECEIVING';
+    state.rawDb.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+      {
+        purchaseOrderLineId: 'line_a',
+        receivedCanonicalUnits: 4,
+        bonusCanonicalUnits: 0,
+        acceptedCanonicalUnits: 4,
+        rejectedCanonicalUnits: 0,
+      },
+    ]);
+    expect((await getSupplierActionPage(state.db, state.token)).reference).toBe('PO-1');
+  });
+
   it('25/26: supplier submission writes proposal evidence only and grants no approval operation', async () => {
     const state = await issued();
     const result = await submitSupplierEvidence(state.db, {
@@ -169,6 +239,8 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     expect(Object.keys(state.db)).toEqual([
       '$transaction',
       '$queryRaw',
+      'pharmacyGoodsReceiptLine',
+      'pharmacyPurchaseOrderLine',
       'pharmacySupplierRelationship',
       'pharmacyPurchaseOrder',
       'pharmacySupplierActionLink',
