@@ -35,7 +35,7 @@ function fakeDb() {
     supplierId: 'supplier_a',
     expectedDeliveryAt: null,
     lines: [
-      { id: 'line_a', lineNumber: 1, medicineId: 'med_a', packLevelId: 'pack_a', orderedPacks: 4 },
+      { id: 'line_a', lineNumber: 1, medicine: { productName: 'Test medicine' }, orderedPacks: 4 },
     ],
   };
   const db = {
@@ -136,7 +136,20 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     ).rejects.toMatchObject({ reason: 'MISMATCH' });
     state.purchaseOrder.supplierId = 'supplier_a';
     const live = await issued();
-    expect(await getSupplierActionPage(live.db, live.token)).toEqual({
+    const page = await getSupplierActionPage(live.db, live.token);
+    expect(Object.keys(page).sort()).toEqual(['expectedDeliveryAt', 'lines', 'reference']);
+    for (const line of page.lines) {
+      expect(Object.keys(line).sort()).toEqual(['id', 'lineNumber', 'medicine', 'orderedPacks']);
+      expect(Object.keys(line.medicine)).toEqual(['productName']);
+    }
+    const query = live.rawDb.pharmacySupplierActionLink.findFirst.mock.calls[0][0];
+    expect(query.include.purchaseOrder.select.lines.select).toEqual({
+      id: true,
+      lineNumber: true,
+      medicine: { select: { productName: true } },
+      orderedPacks: true,
+    });
+    expect(page).toEqual({
       reference: 'PO-1',
       expectedDeliveryAt: null,
       lines: live.purchaseOrder.lines,

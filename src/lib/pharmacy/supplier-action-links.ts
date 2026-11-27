@@ -199,9 +199,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
             select: {
               id: true,
               lineNumber: true,
-              medicineId: true,
               medicine: { select: { productName: true } },
-              packLevelId: true,
               orderedPacks: true,
             },
           },
