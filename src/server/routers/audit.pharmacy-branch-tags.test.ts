@@ -135,6 +135,7 @@ function makeDb() {
       ),
     },
     userPermissionOverride: { findMany: vi.fn(async () => []) },
+    pharmacyClinicalBranchAssignment: { findFirst: vi.fn(async () => null) },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async ({ where }: { where: { userId: string } }) =>
         (PEOPLE[where.userId]?.branches ?? []).map((branchId) => ({ branchId }))
