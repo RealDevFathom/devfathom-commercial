@@ -15,6 +15,8 @@
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { workspaceToday } from '@/lib/timezone';
+import { assignedClinicalBranchIds, isClinicalOwner } from './clinical-branch-access';
 import { maskedPatient } from './patient-prescriptions';
 import { prescriptionIsCurrent } from './prescription-calendar';
 
@@ -28,6 +30,7 @@ export type CounterPrescriptionLine = {
   directions: string;
   authorizedCanonicalUnits: number;
   filledCanonicalUnits: number;
+  fills: { date: string; quantity: number; label: string }[];
   /** Never negative: a cumulative over-fill is a defect to surface, not to hide. */
   remainingAuthorizedUnits: number;
   /** True only when a pharmacist has signed the RX-03 review item (RX-03). */
@@ -105,6 +108,7 @@ export async function readCounterPatientPanel(
   db: ScopedDb,
   organizationId: string,
   patientId: string,
+  viewerId: string,
   at: Date = new Date()
 ): Promise<CounterPatientPanel> {
   const patient = await db.pharmacyPatient.findFirst({
@@ -143,7 +147,15 @@ export async function readCounterPatientPanel(
               authorizedCanonicalUnits: true,
               medicine: { select: { productName: true } },
               presentation: { select: { presentation: true } },
-              fills: { select: { quantityCanonicalUnits: true } },
+              fills: {
+                select: {
+                  quantityCanonicalUnits: true,
+                  dispensedAt: true,
+                  branchId: true,
+                  branch: { select: { name: true } },
+                },
+                orderBy: [{ dispensedAt: 'desc' }, { fillSequence: 'desc' }],
+              },
               pharmacistReviewItems: {
                 select: {
                   decisions: {
@@ -163,6 +175,17 @@ export async function readCounterPatientPanel(
     where: { id: organizationId },
     select: { timezone: true },
   });
+
+  const branches = new Set<string>();
+  for (const prescription of patient.prescriptions) {
+    for (const line of prescription.lines) {
+      for (const fill of line.fills) if (fill.branchId) branches.add(fill.branchId);
+    }
+  }
+  const visible =
+    branches.size && !(await isClinicalOwner(db, organizationId, viewerId))
+      ? new Set(await assignedClinicalBranchIds(db, organizationId, viewerId, [...branches]))
+      : branches;
 
   const masked = maskedPatient(patient);
   const consent = patient.consents[0];
@@ -203,6 +226,15 @@ export async function readCounterPatientPanel(
           directions: line.directions,
           authorizedCanonicalUnits: line.authorizedCanonicalUnits,
           filledCanonicalUnits,
+          fills: line.fills.map((fill) => ({
+            date: workspaceToday(organization?.timezone, fill.dispensedAt),
+            quantity: fill.quantityCanonicalUnits,
+            label: !fill.branchId
+              ? 'Dispensing branch not recorded'
+              : visible.has(fill.branchId) && fill.branch
+                ? `Dispensed at ${fill.branch.name}`
+                : 'Dispensed at another branch',
+          })),
           remainingAuthorizedUnits: Math.max(
             0,
             line.authorizedCanonicalUnits - filledCanonicalUnits

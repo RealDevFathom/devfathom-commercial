@@ -558,6 +558,85 @@ describe('prescription capture and private delivery', () => {
     );
   });
 
+  it.each([false, true])(
+    'returns only the permitted fill history and counts every fill on the counter panel (System Owner: %s)',
+    async (owner) => {
+      mocks.can.mockResolvedValue(true);
+      mocks.hasModule.mockReturnValue(true);
+      const ctx = context();
+      const at = new Date('2026-11-01T22:15:30Z');
+      const fill = (id: string, name: string, qty: number) => ({
+        branchId: id,
+        branch: { name },
+        quantityCanonicalUnits: qty,
+        dispensedAt: at,
+        id: 'private-fill-' + id,
+        dispensedByUserId: 'private-staff',
+        idempotencyKey: 'private-key',
+      });
+      mocks.patient.mockResolvedValue({
+        id: 'patient-a',
+        displayName: 'Synthetic patient',
+        cnic: null,
+        phone: null,
+        consents: [],
+        prescriptions: [
+          {
+            id: 'rx',
+            prescriber: { name: 'Test physician' },
+            validFrom: at,
+            validUntil: at,
+            authorizedRepeats: 0,
+            lines: [
+              {
+                id: 'line',
+                medicine: { productName: 'Medicine' },
+                presentation: { presentation: 'Tablet' },
+                authorizedCanonicalUnits: 12,
+                pharmacistReviewItems: [],
+                fills: [fill('a', 'North', 2), fill('b', 'South', 5)],
+              },
+            ],
+          },
+        ],
+      });
+      Object.assign(ctx.db, {
+        user: {
+          findUnique: vi
+            .fn()
+            .mockResolvedValue(
+              owner
+                ? {
+                    role: 'ADMIN',
+                    status: 'ACTIVE',
+                    organizationRole: { isSystem: true, key: 'owner', permissions: [] },
+                    permissionOverrides: [],
+                  }
+                : null
+            ),
+        },
+        pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+        pharmacyClinicalBranchAssignment: {
+          findMany: vi.fn().mockResolvedValue([{ branchId: 'a' }]),
+        },
+      });
+      const result = await caller(ctx).counterPatientPanel({ patientId: 'patient-a' });
+      const line = result.prescriptions[0]!.lines[0]!;
+      expect(line.remainingAuthorizedUnits).toBe(5);
+      expect(line.filledCanonicalUnits).toBe(7);
+      expect(line.fills).toEqual([
+        { date: '2026-11-02', quantity: 2, label: 'Dispensed at North' },
+        {
+          date: '2026-11-02',
+          quantity: 5,
+          label: owner ? 'Dispensed at South' : 'Dispensed at another branch',
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain('private-');
+      if (!owner) expect(JSON.stringify(result)).not.toContain('South');
+    }
+  );
+
   it('refuses controlled fills so they cannot bypass witnessed counter dispensing', async () => {
     const ctx = context();
     const create = vi.fn();

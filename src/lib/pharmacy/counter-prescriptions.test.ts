@@ -46,7 +46,7 @@ describe('counter prescription calendar validity', () => {
       organization: { findUnique },
     } as unknown as ScopedDb;
 
-    const panel = await readCounterPatientPanel(db, 'org-a', 'patient-a', new Date(at));
+    const panel = await readCounterPatientPanel(db, 'org-a', 'patient-a', 'viewer', new Date(at));
 
     expect(panel.prescriptions[0]).toMatchObject({
       validFrom: '2026-10-22T00:00:00.000Z',

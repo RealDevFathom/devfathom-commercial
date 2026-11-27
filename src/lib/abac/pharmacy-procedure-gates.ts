@@ -1448,7 +1448,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.counterPatientPanel': {
-    gate: 'auditedProtectedProcedure + requireCounterPatientAccess: pharmacy:counter OR pharmacy:dispense',
+    gate: 'auditedProtectedProcedure + requireCounterPatientAccess: pharmacy:counter OR pharmacy:dispense; fill branch names require clinical admission or System Owner',
     lines: [
       'take-payment/search-patients-open-patients',
       'dispense-prescriptions/search-counter-patients-open',

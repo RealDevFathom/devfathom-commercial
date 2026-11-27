@@ -768,7 +768,8 @@ export const pharmacyPrescriptionsRouter = router({
         const panel = await readCounterPatientPanel(
           ctx.db,
           ctx.entitlements.organizationId,
-          input.patientId
+          input.patientId,
+          ctx.session.user.id
         );
         auditPatientRead({
           organizationId: ctx.entitlements.organizationId,
