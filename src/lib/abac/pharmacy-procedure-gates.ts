@@ -659,10 +659,18 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['manage-stock/run-stock-branches-locations'],
   },
   'pharmacyInventory.releaseQuarantinedPart': {
-    gate: 'inventoryControl -> pharmacy:inventory (assigned branch / admin exception)',
+    gate: 'inventoryControl -> pharmacy:inventory (assigned branch / admin exception); inside the stock transaction each unit is checked against its own hold: a workflow (inventory) hold is released on pharmacy:inventory, a safety hold only if the caller also holds pharmacy:safety; DRAP recall units never',
     lines: [
       'manage-stock/run-stock-branches-locations',
       'manage-stock/workspace-administrator-reach-stock',
+      'controlled-medicines/release-safety-quarantine-their-branches',
+    ],
+  },
+  'pharmacyInventory.releaseSafetyQuarantine': {
+    gate: 'regulatory -> pharmacy:safety (assigned branch / admin exception); inside the stock transaction each unit is checked against its own hold: a safety hold is released on pharmacy:safety, a workflow (inventory) hold only if the caller also holds pharmacy:inventory; DRAP recall units never',
+    lines: [
+      'controlled-medicines/release-safety-quarantine-their-branches',
+      'manage-stock/run-stock-branches-locations',
     ],
   },
   'pharmacyInventory.reserveSupplierClaim': {

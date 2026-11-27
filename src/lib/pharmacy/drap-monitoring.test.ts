@@ -216,6 +216,12 @@ describe('DRAP monitoring', () => {
         expect.objectContaining({ data: expect.objectContaining({ state: 'RECALLED' }) })
       );
       expect(quarantinePart).toHaveBeenCalledTimes(1);
+      // DEV-1052: a recall's units are held as a recall, never as a releasable manual hold.
+      expect(quarantinePart).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.objectContaining({ hold: 'RECALL' })
+      );
       expect(db.pharmacyRecallQuarantineAction.create).toHaveBeenCalledWith({
         data: expect.objectContaining({ ingestId: 'ingest-1', quantityUnits: 12 }),
       });

@@ -442,6 +442,8 @@ export async function confirmDrapRecall(
         reason: `DRAP recall ${ingest.sourceReference}: ${reason}`,
         idempotencyKeyPrefix: `drap:${ingest.id}:${balance.inventoryLotId}:${balance.stockLocationId}`,
         cause: 'RECALL',
+        // DEV-1052: unchanged. The recall action below owns these units.
+        hold: 'RECALL',
       }
     );
     await db.pharmacyRecallQuarantineAction.create({
