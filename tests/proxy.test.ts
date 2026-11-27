@@ -184,3 +184,19 @@ it('excludes exactly the three multipart routes from body cloning', async () => 
     expect(matches(path)).toBe(true);
   }
 });
+
+it('omits supplier and receipt link requests from development access logs', async () => {
+  const { default: config } = await import('../next.config');
+  const logging = config.logging && config.logging.incomingRequests;
+  const ignore = typeof logging === 'object' ? logging.ignore : [];
+  for (const path of [
+    '/supplier/po/example',
+    '/receipt/example',
+    '/receipt?example',
+    '/api/trpc/pharmacySupplierLinks.get?input=example',
+    '/api/trpc/other.get,pharmacySupplierLinks.get?batch=1',
+  ]) {
+    expect(ignore?.some((pattern) => pattern.test(path))).toBe(true);
+  }
+  expect(ignore?.some((pattern) => pattern.test('/api/trpc/other.get'))).toBe(false);
+});
