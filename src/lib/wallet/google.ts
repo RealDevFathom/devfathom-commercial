@@ -513,23 +513,10 @@ export type GoogleWalletClient = {
   expireLoyaltyObject(input: { serialNumber: string }): Promise<void>;
 };
 
-async function readErrorMessage(response: Response): Promise<string> {
-  // Google returns `{error: {message}}`; anything else is treated as opaque. The
-  // message is Google's own text about OUR request, so it carries no alias.
-  try {
-    const body = (await response.json()) as { error?: { message?: unknown } };
-    const message = body?.error?.message;
-    if (typeof message === 'string' && message.length > 0) return message.slice(0, 300);
-  } catch {
-    // Fall through to the generic form.
-  }
-  return `HTTP ${response.status}`;
-}
-
-function fail(operation: string, status: number, detail: string): GoogleWalletError {
+function fail(operation: string, status: number): GoogleWalletError {
   const { reason, retryable } = classifyGoogleWalletStatus(status);
   return new GoogleWalletError(
-    `Google Wallet ${operation} failed (${status}): ${detail}`,
+    `Google Wallet ${operation} failed (${status}).`,
     reason,
     retryable,
     status
@@ -554,9 +541,7 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
       if (error instanceof GoogleWalletError) throw error;
       // A network fault or timeout is exactly the case the outbox should retry.
       throw new GoogleWalletError(
-        `Google Wallet ${operation} could not reach the API: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `Google Wallet ${operation} could not reach the API.`,
         'PROVIDER_UNAVAILABLE',
         true
       );
@@ -595,12 +580,11 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
     );
 
     if (!response.ok) {
-      const detail = await readErrorMessage(response);
       // A token endpoint rejecting our assertion is always an auth fault, even
       // when it answers 400 — do not let the generic mapping call that INVALID_INPUT.
       const { retryable } = classifyGoogleWalletStatus(response.status);
       throw new GoogleWalletError(
-        `Google Wallet token exchange failed (${response.status}): ${detail}`,
+        `Google Wallet token exchange failed (${response.status}).`,
         response.status >= 500 || response.status === 429 ? 'PROVIDER_UNAVAILABLE' : 'AUTH_FAILED',
         retryable,
         response.status
@@ -673,13 +657,13 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
             },
             'class design'
           );
-          if (!updated.ok) throw fail('class design', updated.status, 'Design update failed');
+          if (!updated.ok) throw fail('class design', updated.status);
         }
       }
       return { id: loyaltyClass.id, created: false };
     }
     if (existing.status !== 404) {
-      throw fail('class read', existing.status, await readErrorMessage(existing));
+      throw fail('class read', existing.status);
     }
 
     const created = await authorized(
@@ -689,7 +673,7 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
     );
     // A concurrent issuance for the same org wins the race; that is success.
     if (created.status === 409) return { id: loyaltyClass.id, created: false };
-    if (!created.ok) throw fail('class insert', created.status, await readErrorMessage(created));
+    if (!created.ok) throw fail('class insert', created.status);
     return { id: loyaltyClass.id, created: true };
   }
 
@@ -717,7 +701,7 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
     );
     // Re-issuing after a delivery retry must not be an error — the pass exists.
     if (created.status === 409) return { id: object.id, created: false };
-    if (!created.ok) throw fail('object insert', created.status, await readErrorMessage(created));
+    if (!created.ok) throw fail('object insert', created.status);
     return { id: object.id, created: true };
   }
 
@@ -746,8 +730,7 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
       },
       'balance patch'
     );
-    if (!response.ok)
-      throw fail('balance patch', response.status, await readErrorMessage(response));
+    if (!response.ok) throw fail('balance patch', response.status);
   }
 
   async function expireLoyaltyObject(input: { serialNumber: string }): Promise<void> {
@@ -759,8 +742,7 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
     );
     // Already gone is the state we wanted; revocation must be idempotent (§8.5).
     if (response.status === 404) return;
-    if (!response.ok)
-      throw fail('object expiry', response.status, await readErrorMessage(response));
+    if (!response.ok) throw fail('object expiry', response.status);
   }
 
   return {
@@ -778,9 +760,5 @@ export function toGoogleWalletError(error: unknown): GoogleWalletError {
   if (error instanceof GoogleWalletConfigError) {
     return new GoogleWalletError(error.message, error.reason, false);
   }
-  return new GoogleWalletError(
-    `Google Wallet issuance failed: ${error instanceof Error ? error.message : String(error)}`,
-    'PROVIDER_FAILED',
-    false
-  );
+  return new GoogleWalletError('Google Wallet issuance failed.', 'PROVIDER_FAILED', false);
 }

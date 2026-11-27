@@ -36,7 +36,7 @@ import {
   readActiveLoyaltyCard,
   revokeLoyaltyCard,
 } from '@/lib/pharmacy/loyalty-card';
-import { issuePharmacyWalletTestPasses } from '@/lib/pharmacy/loyalty-wallet-pass';
+import { issuePharmacyWalletCardPreview } from '@/lib/pharmacy/loyalty-wallet-pass';
 import {
   LOYALTY_MEMBERSHIP_REASON_MAX,
   LOYALTY_MEMBERSHIP_REASON_MIN,
@@ -542,7 +542,7 @@ export const pharmacyLoyaltyRouter = router({
           });
           // DEV-747: the same card as Apple and Google Wallet TEST passes, with the ledger
           // balance as of this issue. Built here because the code exists only now.
-          const walletTestPasses = await issuePharmacyWalletTestPasses(
+          const walletTestPasses = await issuePharmacyWalletCardPreview(
             txDb(tx),
             scope.organizationId,
             { customerId: input.customerId, code: card.code }

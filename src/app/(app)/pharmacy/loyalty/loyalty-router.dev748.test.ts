@@ -34,7 +34,7 @@ vi.mock('@/lib/pharmacy/loyalty-card', () => ({
   readActiveLoyaltyCard: mocks.read,
 }));
 // DEV-747: the wallet test passes have their own tests (loyalty-router.dev747.test.ts).
-vi.mock('@/lib/pharmacy/loyalty-wallet-pass', () => ({ issuePharmacyWalletTestPasses: vi.fn() }));
+vi.mock('@/lib/pharmacy/loyalty-wallet-pass', () => ({ issuePharmacyWalletCardPreview: vi.fn() }));
 import type { TRPCContext } from '@/server/trpc';
 import { PharmacyLoyaltyError } from '@/lib/pharmacy/customer-loyalty';
 import { pharmacyLoyaltyRouter } from './loyalty-router';

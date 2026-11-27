@@ -131,9 +131,8 @@ function WalletTestPasses({ passes }: { passes: WalletTestPasses }) {
         points, 1 point = {formatPointValue(passes.pointValueMinor)}.
       </p>
       <p className="text-sm text-text-muted">
-        These are test passes. A phone will not add them to its Wallet until DevFathom’s Apple and
-        Google issuer accounts are approved; use them to check the pass content and the counter
-        scan.
+        These unsigned files preview the card and its counter QR. Shoppers can scan the branch
+        poster and verify their phone to see the wallet options available for this programme.
       </p>
       <div className="flex flex-wrap gap-3">
         <Button

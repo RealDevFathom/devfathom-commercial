@@ -166,6 +166,43 @@ it.skipIf(!runtime || !ownerUrl)(
           },
         });
         await balance(9);
+        const { issuePharmacyWalletCardPreview } =
+          await import('@/lib/pharmacy/loyalty-wallet-pass');
+        const preview = await issuePharmacyWalletCardPreview(db, id, {
+          customerId: card.customerId,
+          code: joined!.alias,
+        });
+        expect(preview?.apple).toHaveProperty('description', 'Synthetic rewards (TEST)');
+        expect(preview?.apple).toHaveProperty('storeCard.primaryFields.0.value', 9);
+        expect(preview?.google).toHaveProperty('barcode.value', joined!.alias);
+        expect(await db.walletPass.count()).toBe(2);
+        await db.walletPass.updateMany({
+          where: { platform: 'GOOGLE' },
+          data: { issuerMode: 'DEMO' },
+        });
+        await db.walletPass.updateMany({
+          where: { platform: 'APPLE' },
+          data: { issuerMode: 'LIVE' },
+        });
+        const original = await db.walletPass.findFirstOrThrow({ where: { platform: 'APPLE' } });
+        await db.walletTenantConfig.update({
+          where: { organizationId: id },
+          data: { programDisplayName: 'New design' },
+        });
+        const refreshed = await db.walletPass.findFirstOrThrow({ where: { platform: 'APPLE' } });
+        expect(refreshed.contentRevision).toBeGreaterThan(original.contentRevision);
+        send.mockClear();
+        expect(
+          (await deliverWalletUpdates(db, delivery, { mode: 'LIVE', platforms: ['GOOGLE'] }))
+            .claimed
+        ).toBe(0);
+        expect(
+          (await deliverWalletUpdates(db, delivery, { mode: 'DEMO', platforms: ['GOOGLE'] })).sent
+        ).toBe(1);
+        expect(send.mock.calls[0]![0]).toMatchObject({ balance: 9, refreshDesign: true });
+        expect(
+          (await deliverWalletUpdates(db, delivery, { mode: 'LIVE', platforms: ['APPLE'] })).sent
+        ).toBe(1);
       });
     } finally {
       vi.unstubAllEnvs();

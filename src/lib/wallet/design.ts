@@ -12,7 +12,11 @@ export const cardDesignInput = z
       .trim()
       .min(1)
       .max(64)
-      .regex(/^[\p{L}\p{M}\p{N} &’'.,()\-]+$/u),
+      .regex(/^[\p{L}\p{M}\p{N} &’'.,()\-]+$/u)
+      .refine(
+        (value) => !/(?:[\p{L}\p{N}-]+\.)+[a-z]{2,}\b/iu.test(value),
+        'Enter a programme name without a link.'
+      ),
     backgroundColor: colour,
     foregroundColor: colour,
     enabled: z.boolean(),

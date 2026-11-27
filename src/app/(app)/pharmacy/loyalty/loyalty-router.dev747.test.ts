@@ -34,7 +34,7 @@ vi.mock('@/lib/pharmacy/loyalty-card', () => ({
   readActiveLoyaltyCard: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/loyalty-wallet-pass', () => ({
-  issuePharmacyWalletTestPasses: mocks.wallet,
+  issuePharmacyWalletCardPreview: mocks.wallet,
 }));
 import type { TRPCContext } from '@/server/trpc';
 import { PharmacyLoyaltyError } from '@/lib/pharmacy/customer-loyalty';

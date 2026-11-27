@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { enrollPharmacyCard } from '@/lib/wallet/carriers';
+import { buildWalletFiles } from '@/lib/wallet/issue';
 import { randomBytes } from 'node:crypto';
 
 import { LOYALTY_POINT_VALUE_MINOR } from '@/lib/commerce/loyalty-arithmetic';
@@ -18,8 +20,8 @@ import { currentLoyaltyProgram } from './loyalty-program';
  * or a new balance: the ledger stays the only source of truth, and the balance on a pass is
  * what the ledger said when the card was issued.
  *
- * Live passes wait for Pakistan issuer eligibility, company issuer accounts and agreements,
- * secure credentials and a real-device pass (see docs/pharmacy/loyalty-wallet-passes.md).
+ * These legacy test-document builders remain available for old previews. Branch enrolment
+ * selects the configured issuer mode (see docs/pharmacy/loyalty-wallet-passes.md).
  * Until then every pass built here is unsigned, carries only placeholder test issuer
  * identifiers, and says on its face that it is a test pass. No issuer credential is read,
  * stored or needed.
@@ -177,4 +179,33 @@ export async function issuePharmacyWalletTestPasses(
     balancePoints,
     pointValueMinor: program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR,
   });
+}
+
+/** Staff may preview an enabled programme while the newly issued barcode is available.
+ * Signing and adding to a device belong to the phone-verified shopper flow. */
+export async function issuePharmacyWalletCardPreview(
+  db: ScopedDb,
+  organizationId: string,
+  input: { customerId: string; code: string }
+) {
+  const design = await db.walletTenantConfig.findUnique({ where: { organizationId } });
+  if (!design?.enabled) return undefined;
+  const passes = await enrollPharmacyCard(db, organizationId, input.customerId, input.code);
+  if (!passes) return undefined;
+  const balance = await customerPointsBalance(db, organizationId, input.customerId);
+  const program = await currentLoyaltyProgram(db, organizationId);
+  const { files } = await buildWalletFiles({
+    card: { alias: input.code, balance, passes },
+    design,
+    runtime: { mode: 'TEST' },
+    origin: 'https://wallet.example.invalid',
+  });
+  return {
+    mode: PHARMACY_WALLET_PASS_MODE,
+    notice: PHARMACY_WALLET_TEST_NOTICE,
+    balancePoints: balance,
+    pointValueMinor: program?.redemptionValueMinor ?? LOYALTY_POINT_VALUE_MINOR,
+    apple: files.apple!,
+    google: files.google!,
+  };
 }
