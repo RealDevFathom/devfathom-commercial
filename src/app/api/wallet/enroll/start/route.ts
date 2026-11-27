@@ -42,7 +42,18 @@ export async function POST(request: Request) {
       token,
       phone,
       sendOtp: async ({ otp }) => {
-        const config = readWhatsAppConfig();
+        const config =
+          process.env.WALLET_OTP_LIVE_SEND === 'approved'
+            ? readWhatsAppConfig({
+                PHARMACY_WHATSAPP_PROVIDER: 'meta',
+                PHARMACY_WHATSAPP_LIVE_SEND: 'approved',
+                PHARMACY_WHATSAPP_ORGANIZATION_ID: context.organization.id,
+                PHARMACY_WHATSAPP_ACCESS_TOKEN: process.env.WALLET_OTP_ACCESS_TOKEN,
+                PHARMACY_WHATSAPP_PHONE_NUMBER_ID: process.env.WALLET_OTP_PHONE_NUMBER_ID,
+                PHARMACY_WHATSAPP_TEMPLATE_PORTAL_SIGN_IN_CODE: process.env.WALLET_OTP_TEMPLATE,
+                PHARMACY_WHATSAPP_TEMPLATE_LANGUAGE: process.env.WALLET_OTP_LANGUAGE,
+              })
+            : readWhatsAppConfig();
         // An OTP must reach a separately controlled phone. A mock acknowledgement is never proof.
         if (
           config.provider !== 'meta' ||

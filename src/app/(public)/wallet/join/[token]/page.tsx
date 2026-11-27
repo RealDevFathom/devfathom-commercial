@@ -28,9 +28,14 @@ export default async function WalletJoinPage({ params }: { params: Promise<{ tok
               Join {link.programDisplayName}
             </h1>
             <p className="mt-3 mb-7 leading-7 text-text-muted">
-              Enroll at {link.branchName}. Verify your {link.phoneJoin?'phone':'email'} to request your wallet card.
+              Enroll at {link.branchName}. Verify your {link.phoneJoin ? 'phone' : 'email'} to
+              request your wallet card.
             </p>
-            <EnrollmentForm token={token} phoneJoin={link.phoneJoin} pharmacy={!!link.pharmacyBranchId} />
+            <EnrollmentForm
+              token={token}
+              phoneJoin={link.phoneJoin}
+              pharmacy={!!link.pharmacyBranchId}
+            />
           </>
         ) : (
           <div role="status">

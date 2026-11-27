@@ -9,7 +9,7 @@ const TOKEN_PATTERN = /^wpa_[0-9a-hjkmnp-tv-z]{26}(?:\.DFLC[A-Z2-7]{26})?$/;
 const MAX_BALANCE = 2_147_483_647;
 const CROCKFORD_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz';
 
-function encode128(bytes: Buffer) {
+export function encodeWalletEntropy(bytes: Buffer) {
   const bits = Array.from(bytes, (byte) => byte.toString(2).padStart(8, '0'))
     .join('')
     .padStart(130, '0');
@@ -19,8 +19,8 @@ function encode128(bytes: Buffer) {
   return value;
 }
 
-export function mintAppleAuthenticationToken() {
-  return `wpa_${encode128(randomBytes(16))}`;
+export function mintAppleAuthenticationToken(entropy = randomBytes(16)) {
+  return `wpa_${encodeWalletEntropy(entropy)}`;
 }
 
 export function hashAppleAuthenticationToken(token: string) {
@@ -35,6 +35,8 @@ export type ApplePassJson = {
   teamIdentifier: string;
   organizationName: 'DevFathom';
   description: string;
+  logoText?: string;
+  voided?: boolean;
   authenticationToken: string;
   webServiceURL: string;
   backgroundColor?: string;

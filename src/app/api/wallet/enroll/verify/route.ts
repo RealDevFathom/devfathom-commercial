@@ -1,7 +1,11 @@
 import { z } from 'zod';
 
 import { readBoundedJson } from '@/lib/http/read-bounded-body';
-import { issueVerifiedWallet } from '@/lib/wallet/issue';
+import {
+  issueVerifiedWallet,
+  WalletDemoAccountRequired,
+  WalletProviderUnavailable,
+} from '@/lib/wallet/issue';
 import { verifyEnrollment } from '@/lib/restaurant/wallet/enrollment';
 import {
   admitWalletEnrollment,
@@ -35,7 +39,29 @@ export async function POST(request: Request) {
     ...parsed.data,
   });
   if (result?.phoneJoin) {
-    const wallet = await issueVerifiedWallet(context.organization.id, result);
+    let wallet;
+    try {
+      wallet = await issueVerifiedWallet(context.organization.id, result);
+    } catch (error) {
+      if (error instanceof WalletDemoAccountRequired)
+        return Response.json(
+          { ok: false, message: 'A Google Wallet test account is required.' },
+          { status: 403 }
+        );
+      if (!(error instanceof WalletProviderUnavailable))
+        return Response.json(INVALID, { status: 400 });
+      // A provider failure happens after enrollment commits. Hand the verified shopper their
+      // card so a retry can recover this same balance without replacing or duplicating it.
+      return Response.json(
+        {
+          ok: true,
+          cardCode: result.alias,
+          message:
+            'Your card is ready. Keep its code and verify your phone again to retry adding it to a wallet.',
+        },
+        { headers: { 'Cache-Control': 'private, no-store' } }
+      );
+    }
     return Response.json(
       { ok: true, wallet },
       { headers: { 'Cache-Control': 'private, no-store', 'Referrer-Policy': 'no-referrer' } }

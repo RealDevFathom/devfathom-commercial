@@ -1,8 +1,8 @@
 import 'server-only';
 
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
+import { appleAssets } from './issue';
+import { walletRuntime } from './modes';
 
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import { consumeBoundedBody, readBoundedJson } from '@/lib/http/read-bounded-body';
@@ -40,6 +40,8 @@ async function platformPass(serialNumber: string) {
         loyaltyAccountId: true,
         customerId: true,
         pharmacyCard: { select: { customerId: true, codeHash: true } },
+        issuerMode: true,
+        platform: true,
         appleAuthTokenHash: true,
         status: true,
         contentRevision: true,
@@ -49,16 +51,29 @@ async function platformPass(serialNumber: string) {
   );
 }
 
-async function authenticate(request: Request, passTypeIdentifier: string, serialNumber: string) {
-  const pass = await platformPass(serialNumber);
-  const token = authToken(request);
-  if (!pass || !token || !pass.appleAuthTokenHash || pass.status !== 'ACTIVE') return null;
-  const configured = await withPlatformDb((db) =>
+async function legacyPassType() {
+  return withPlatformDb((db) =>
     db.platformSetting.findUnique({ where: { key: APPLE_WALLET_SETTING_KEYS.passTypeIdentifier } })
-  );
-  if (configured?.value !== passTypeIdentifier || !equalHash(token, pass.appleAuthTokenHash))
+  ).then((row) => row?.value);
+}
+async function authenticate(
+  request: Request,
+  passTypeIdentifier: string,
+  serialNumber: string,
+  allowRevoked = false
+) {
+  const pass = await platformPass(serialNumber),
+    token = authToken(request);
+  if (!pass || !token || !pass.appleAuthTokenHash || !equalHash(token, pass.appleAuthTokenHash))
     return null;
-  return { pass, token };
+  if (pass.platform && pass.platform !== 'APPLE') return null;
+  if (pass.status !== 'ACTIVE' && !(allowRevoked && pass.issuerMode === 'LIVE')) return null;
+  const type = pass.issuerMode
+    ? pass.issuerMode === 'LIVE'
+      ? walletRuntime().apple?.passTypeIdentifier
+      : null
+    : await legacyPassType();
+  return type === passTypeIdentifier ? { pass, token } : null;
 }
 
 function admitted(request: Request, serialNumber?: string) {
@@ -144,10 +159,9 @@ export async function listUpdatedApplePasses(
   const limited = await admitted(request);
   if (limited) return limited;
   if (!ID_PATTERN.test(input.deviceLibraryIdentifier)) return new Response(null, { status: 204 });
-  const configured = await withPlatformDb((db) =>
-    db.platformSetting.findUnique({ where: { key: APPLE_WALLET_SETTING_KEYS.passTypeIdentifier } })
-  );
-  if (configured?.value !== input.passTypeIdentifier) return new Response(null, { status: 204 });
+  const managed = walletRuntime().apple?.passTypeIdentifier === input.passTypeIdentifier;
+  const legacy = (await legacyPassType()) === input.passTypeIdentifier;
+  if (!managed && !legacy) return new Response(null, { status: 204 });
   const sinceRaw = new URL(request.url).searchParams.get('passesUpdatedSince');
   const since = sinceRaw === null ? -1 : Number.parseInt(sinceRaw, 10);
   if (!Number.isInteger(since)) return new Response(null, { status: 400 });
@@ -155,7 +169,14 @@ export async function listUpdatedApplePasses(
     db.walletPassRegistration.findMany({
       where: {
         deviceLibraryIdentifier: input.deviceLibraryIdentifier,
-        pass: { platform: 'APPLE', status: 'ACTIVE', contentRevision: { gt: since } },
+        pass: {
+          platform: 'APPLE',
+          contentRevision: { gt: since },
+          OR: [
+            ...(managed ? [{ issuerMode: 'LIVE' }] : []),
+            ...(legacy ? [{ issuerMode: null, status: 'ACTIVE' as const }] : []),
+          ],
+        },
       },
       select: { pass: { select: { serialNumber: true, contentRevision: true } } },
     })
@@ -174,19 +195,27 @@ export async function sendUpdatedApplePass(
 ) {
   const limited = await admitted(request, input.serialNumber);
   if (limited) return limited;
-  const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
+  const authenticated = await authenticate(
+    request,
+    input.passTypeIdentifier,
+    input.serialNumber,
+    true
+  );
   if (!authenticated) return EMPTY_401();
   const modified = request.headers.get('if-modified-since');
   if (
+    !authenticated.pass.issuerMode &&
     modified &&
     new Date(modified).getTime() >= Math.floor(authenticated.pass.updatedAt.getTime() / 1000) * 1000
   )
     return new Response(null, { status: 304 });
   const [credentials, projection] = await Promise.all([
-    loadAppleWalletCredentials({
-      readSetting: (key) =>
-        withPlatformDb((db) => db.platformSetting.findUnique({ where: { key } })),
-    }),
+    authenticated.pass.issuerMode
+      ? walletRuntime().apple
+      : loadAppleWalletCredentials({
+          readSetting: (key) =>
+            withPlatformDb((db) => db.platformSetting.findUnique({ where: { key } })),
+        }),
     withTenantDb(authenticated.pass.organizationId, async (db) => {
       const pass = authenticated.pass;
       const config = await db.walletTenantConfig.findUnique({
@@ -214,7 +243,7 @@ export async function sendUpdatedApplePass(
       return { config, alias: alias?.normalizedValue, balance };
     }),
   ]);
-  if (!projection.config || !projection.alias) return EMPTY_401();
+  if (!credentials || !projection.config || !projection.alias) return EMPTY_401();
   const passJson = buildApplePassJson({
     credentials,
     serialNumber: input.serialNumber,
@@ -226,8 +255,19 @@ export async function sendUpdatedApplePass(
     backgroundColor: projection.config.backgroundColor,
     foregroundColor: projection.config.foregroundColor,
   });
-  const icon = await readFile(path.join(process.cwd(), 'public/favicon.png'));
-  const archive = buildPkpass(passJson, credentials, { 'icon.png': icon });
+  const archive = buildPkpass(
+    {
+      ...passJson,
+      ...(authenticated.pass.issuerMode
+        ? {
+            logoText: projection.config.programDisplayName,
+            voided: authenticated.pass.status === 'REVOKED',
+          }
+        : {}),
+    },
+    credentials,
+    await appleAssets(projection.config.logoPng)
+  );
   return new Response(new Uint8Array(archive), {
     headers: {
       'Content-Type': 'application/vnd.apple.pkpass',

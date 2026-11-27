@@ -4,6 +4,8 @@ import { adminProcedure, router, type TRPCContext } from '../trpc';
 import { hasModule } from '@/lib/entitlements';
 import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { cardDesignInput, saveCardDesign } from '@/lib/wallet/design';
+import { walletRuntime } from '@/lib/wallet/modes';
+import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { branchPoster } from '@/lib/wallet/poster';
 
 function business(ctx: TRPCContext) {
@@ -47,7 +49,7 @@ export const walletCardsRouter = router({
         logo: design?.logoPng ? Buffer.from(design.logoPng).toString('base64') : null,
       },
       branches,
-      mode: 'TEST' as const,
+      mode: walletRuntime().mode,
     };
   }),
   save: adminProcedure
@@ -62,6 +64,10 @@ export const walletCardsRouter = router({
     .input(z.object({ branchId: z.string().min(1).max(128) }).strict())
     .mutation(({ ctx, input }) => {
       const org = business(ctx);
-      return branchPoster(ctx.db, org.id, org.vertical === 'PHARMACY', input.branchId);
+      return withTenantDb(
+        org.id,
+        (db) => branchPoster(db, org.id, org.vertical === 'PHARMACY', input.branchId),
+        { userId: ctx.session.user.id }
+      );
     }),
 });

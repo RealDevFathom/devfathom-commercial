@@ -1,3 +1,4 @@
+import '@testing-library/jest-dom/vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { WalletEditor } from './wallet-editor';

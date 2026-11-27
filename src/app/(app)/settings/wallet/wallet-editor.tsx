@@ -5,6 +5,12 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
+import {
+  openPrintWindow,
+  createPrintDocument,
+  serializePrintDocument,
+  sendToPrintWindow,
+} from '@/lib/browser-print/print-window';
 import { encodeQr, qrSvgPath } from '@/lib/qr/qr-code';
 
 type Design = {
@@ -23,6 +29,21 @@ type Props = {
   onPoster: (branchId: string) => Promise<string>;
 };
 
+function WalletQr({ text, label, className }: { text: string; label: string; className: string }) {
+  const matrix = encodeQr(text);
+  return (
+    <svg
+      className={className}
+      role="img"
+      aria-label={label}
+      viewBox={`0 0 ${matrix.length + 8} ${matrix.length + 8}`}
+      shapeRendering="crispEdges"
+    >
+      <rect width="100%" height="100%" fill="white" />
+      <path d={qrSvgPath(matrix)} fill="black" />
+    </svg>
+  );
+}
 export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props) {
   const [draft, setDraft] = useState(design),
     [saved, setSaved] = useState(design);
@@ -30,7 +51,7 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
     [message, setMessage] = useState(''),
     [error, setError] = useState('');
   const [poster, setPoster] = useState<{ branch: Branch; url: string } | null>(null);
-  const matrix = poster ? encodeQr(poster.url) : null;
+
   function edit<K extends keyof Design>(key: K, value: Design[K]) {
     setDraft((prev) => ({ ...prev, [key]: value }));
     setMessage('');
@@ -61,6 +82,23 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
       setError('The branch poster could not be prepared.');
     } finally {
       setBusy(false);
+    }
+  }
+  async function printPoster() {
+    const section = document.getElementById('wallet-branch-poster');
+    if (!section) return;
+    try {
+      const target = openPrintWindow('popup,width=640,height=768');
+      const doc = createPrintDocument('Branch enrollment poster');
+      const content = doc.importNode(section, true);
+      content.style.cssText = 'text-align:center;font-family:sans-serif;padding:2cm';
+      const qr = content.querySelector('svg');
+      qr?.setAttribute('width', '240');
+      qr?.setAttribute('height', '240');
+      doc.body.append(content);
+      await sendToPrintWindow(target, serializePrintDocument(doc));
+    } catch {
+      setError('The print window could not open. Allow pop-ups and try again.');
     }
   }
   async function upload(file: File | undefined) {
@@ -147,7 +185,7 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
             </fieldset>
           </form>
         </SectionCard>
-        <SectionCard title="Live preview">
+        <SectionCard title="Live preview" className="order-first lg:order-none">
           <section
             aria-label="Card preview"
             className="space-y-6 rounded-lg border border-border-default p-6"
@@ -161,14 +199,21 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
               />
             )}
             <h3 className="break-words text-2xl font-semibold">{draft.programDisplayName}</h3>
-            <div>
-              <div className="text-sm">Points</div>
-              <strong className="font-mono text-3xl">125</strong>
+            <div className="flex items-end justify-between gap-3">
+              <div>
+                <div className="text-sm">Points</div>
+                <strong className="font-mono text-3xl">125</strong>
+              </div>
+              <WalletQr
+                text="DFLCABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                label="Sample card barcode"
+                className="size-20 rounded-sm"
+              />
             </div>
           </section>
           <p className="mt-4 text-sm text-text-muted">
             {mode === 'TEST'
-              ? 'TEST · Unsigned sample. Its QR works at the counter.'
+              ? 'TEST · Issued cards are unsigned. Shoppers can scan their card code at the counter.'
               : mode === 'DEMO'
                 ? 'DEMO · Google Wallet test accounts only.'
                 : 'LIVE · Issuer-signed wallet cards.'}
@@ -202,7 +247,7 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
             <p>Enable and save the programme to prepare branch posters.</p>
           )}
         </div>
-        {poster && matrix && (
+        {poster && (
           <>
             <section
               id="wallet-branch-poster"
@@ -210,25 +255,15 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
             >
               <h3 className="text-2xl font-semibold">{saved.programDisplayName}</h3>
               <p>Scan to join at {poster.branch.name}</p>
-              <svg
-                className="mx-auto size-48 max-w-full bg-white"
-                role="img"
-                aria-label={poster.branch.name + ' enrollment QR'}
-                viewBox={'0 0 ' + (matrix.length + 8) + ' ' + (matrix.length + 8)}
-                shapeRendering="crispEdges"
-              >
-                <rect width="100%" height="100%" fill="white" />
-                <path d={qrSvgPath(matrix)} fill="black" />
-              </svg>
+              <WalletQr
+                text={poster.url}
+                label={poster.branch.name + ' enrollment QR'}
+                className="mx-auto size-48 max-w-full"
+              />
             </section>
-            <Button className="mt-4" variant="outline" onClick={() => window.print()}>
+            <Button className="mt-4" variant="outline" onClick={() => void printPoster()}>
               Print poster
             </Button>
-            <style>
-              {
-                '@media print { body * { visibility: hidden; } #wallet-branch-poster, #wallet-branch-poster * { visibility: visible; } #wallet-branch-poster { position: absolute; inset: 0; margin: 0; padding: 2cm; border: 0; } }'
-              }
-            </style>
           </>
         )}
       </SectionCard>

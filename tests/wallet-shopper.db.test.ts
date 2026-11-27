@@ -55,7 +55,9 @@ it.skipIf(!runtime || !ownerUrl)(
           data: {
             enabled: true,
             programDisplayName: 'Synthetic rewards',
-            googleClassSuffix: 'wgc_' + id,
+            googleClassSuffix: (await import('@/lib/wallet/alias'))
+              .mintWalletAlias()
+              .replace('wla_', 'wgc_'),
           },
         });
         return (await branchPoster(db, id, true, id)).split('/').at(-1)!;
@@ -76,6 +78,11 @@ it.skipIf(!runtime || !ownerUrl)(
       expect(await verifyEnrollment({ ...verify, organizationId: randomUUID() })).toBeNull();
       const joined = await verifyEnrollment(verify);
       expect(joined?.passes).toHaveLength(2);
+      const { issueVerifiedWallet } = await import('@/lib/wallet/issue');
+      vi.stubEnv('WALLET_MODE', 'TEST');
+      const files = await issueVerifiedWallet(id, joined!);
+      expect(files.mode).toBe('TEST');
+      expect(files.google).toHaveProperty('barcode.value', joined!.alias);
       expect(await verifyEnrollment(verify)).toBeNull();
       const send = vi.fn().mockResolvedValue(undefined);
       await withTenantDb(id, async (db) => {

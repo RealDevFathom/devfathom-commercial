@@ -8,6 +8,7 @@ import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { normalizeCustomerIdentifier } from '@/lib/restaurant/customers';
 import { mintWalletAlias } from './alias';
 import { loyaltyBalance } from '@/lib/restaurant/loyalty';
+import { walletRuntime } from './modes';
 import { joinPharmacyWallet } from './pharmacy-enrollment';
 import { ensureWalletPasses } from './carriers';
 
@@ -105,20 +106,23 @@ export async function resolveEnrollmentLink(hostOrganizationId: string, token: s
   });
 }
 
-type StartInput = { organizationId: string; token: string } & (
-  | {
-      email: string;
-      sendOtp: (data: { email: string; otp: string; programName: string }) => Promise<void>;
-    }
-  | {
-      phone: string;
-      sendOtp: (data: { phone: string; otp: string; programName: string }) => Promise<void>;
-    }
-);
-export async function startEnrollment(input: StartInput) {
+type EnrollmentRecipient = { organizationId: string; token: string };
+type EmailStart = EnrollmentRecipient & {
+  email: string;
+  sendOtp: (data: { email: string; otp: string; programName: string }) => Promise<void>;
+};
+type PhoneStart = EnrollmentRecipient & {
+  phone: string;
+  sendOtp: (data: { phone: string; otp: string; programName: string }) => Promise<void>;
+};
+export function startEnrollment(input: EmailStart): Promise<{ id: string } | null>;
+export function startEnrollment(input: PhoneStart): Promise<{ id: string } | null>;
+export async function startEnrollment(input: EmailStart | PhoneStart) {
   const link = await resolveEnrollmentLink(input.organizationId, input.token);
   const phone = 'phone' in input;
   if (!link || link.phoneJoin !== phone) return null;
+  const runtime = walletRuntime();
+  if (phone && runtime.mode === 'DEMO' && !runtime.demoPhones?.includes(input.phone)) return null;
   const kind = phone ? 'PHONE' : 'EMAIL';
   const value = normalizeCustomerIdentifier({ kind, value: phone ? input.phone : input.email });
   const otp = String(randomInt(1_000_000)).padStart(6, '0');
@@ -180,6 +184,13 @@ export async function verifyEnrollment(input: {
     ) {
       return null;
     }
+    const runtime = walletRuntime();
+    if (
+      link.phoneJoin &&
+      runtime.mode === 'DEMO' &&
+      !runtime.demoPhones?.includes(attempt.normalizedValue)
+    )
+      return null;
     if (!otpMatches(attempt.otpHash, input.otp)) {
       await db.walletEnrollmentAttempt.update({
         where: { id: attempt.id },
@@ -200,7 +211,7 @@ export async function verifyEnrollment(input: {
           );
           if (!issued) return null;
           await tx.walletEnrollmentAttempt.delete({ where: { id: attempt.id } });
-          return { ...issued, phoneJoin: true };
+          return { ...issued, phone: attempt.normalizedValue, phoneJoin: true };
         }
         if (!link.branchId || attempt.identifierKind === 'WALLET') return null;
         const kind = attempt.identifierKind;
@@ -292,6 +303,7 @@ export async function verifyEnrollment(input: {
         return {
           passes: serials,
           phoneJoin: link.phoneJoin,
+          phone: link.phoneJoin ? attempt.normalizedValue : undefined,
           alias: alias.normalizedValue,
           balance: await loyaltyBalance(tx, account.id),
         };

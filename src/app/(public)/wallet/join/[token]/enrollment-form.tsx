@@ -3,16 +3,25 @@
 import { useState, type FormEvent } from 'react';
 
 import type { WalletFiles } from '@/lib/wallet/issue';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 
 type Step = 'email' | 'otp' | 'done';
 
-export function EnrollmentForm({ token,phoneJoin=false,pharmacy=false }: { token: string;phoneJoin?:boolean;pharmacy?:boolean }) {
+export function EnrollmentForm({
+  token,
+  phoneJoin = false,
+  pharmacy = false,
+}: {
+  token: string;
+  phoneJoin?: boolean;
+  pharmacy?: boolean;
+}) {
   const [step, setStep] = useState<Step>('email');
   const [email, setEmail] = useState('');
-  const [consent,setConsent]=useState(false);
-  const [cardCode,setCardCode]=useState('');
-  const [wallet,setWallet]=useState<WalletFiles|null>(null);
+  const [retryCard, setRetryCard] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [cardCode, setCardCode] = useState('');
+  const [wallet, setWallet] = useState<WalletFiles | null>(null);
   const [otp, setOtp] = useState('');
   const [attemptId, setAttemptId] = useState('');
   const [pending, setPending] = useState(false);
@@ -27,16 +36,35 @@ export function EnrollmentForm({ token,phoneJoin=false,pharmacy=false }: { token
       const response = await fetch(`/api/wallet/enroll/${endpoint}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(step === 'email' ? (phoneJoin ? {token,phone:email} : { token, email }) : { token, attemptId, otp,...(phoneJoin?{consent,...(cardCode?{cardCode}:{})}:{}) }),
+        body: JSON.stringify(
+          step === 'email'
+            ? phoneJoin
+              ? { token, phone: email }
+              : { token, email }
+            : {
+                token,
+                attemptId,
+                otp,
+                ...(phoneJoin ? { consent, ...(cardCode ? { cardCode } : {}) } : {}),
+              }
+        ),
       });
-      const body = (await response.json()) as { ok: boolean; message: string; attemptId?: string;wallet?:WalletFiles };
+      const body = (await response.json()) as {
+        ok: boolean;
+        message: string;
+        attemptId?: string;
+        cardCode?: string;
+        wallet?: WalletFiles;
+      };
       if (!response.ok || !body.ok) throw new Error(body.message);
       if (step === 'email') {
         if (!body.attemptId) throw new Error('This enrollment request could not be completed.');
         setAttemptId(body.attemptId);
         setStep('otp');
       } else {
-        setWallet(body.wallet??null);setStep('done');
+        setRetryCard(body.cardCode ?? '');
+        setWallet(body.wallet ?? null);
+        setStep('done');
       }
     } catch (cause) {
       setError(
@@ -47,15 +75,73 @@ export function EnrollmentForm({ token,phoneJoin=false,pharmacy=false }: { token
     }
   }
 
-  if(wallet){
-    const jsonFile=(pass:object)=>'data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(pass,null,2));
-    return <section className="space-y-4"><h2 className="text-xl font-semibold">Your loyalty card</h2>
-      <p>{wallet.mode==='TEST'?'TEST · Download the unsigned sample. Its QR works at the counter.':wallet.mode==='DEMO'?'DEMO · Use a Google Wallet test account.':'LIVE · Add your card to your phone.'}</p>
-      <div className="flex flex-wrap gap-3">
-      {wallet.apple&&<Button asChild variant="outline"><a download="apple-test-pass.json" href={jsonFile(wallet.apple)}>Download Apple test pass</a></Button>}
-      {wallet.google&&<Button asChild variant="outline"><a download="google-test-pass.json" href={jsonFile(wallet.google)}>Download Google test pass</a></Button>}
-      {wallet.googleUrl&&<Button asChild><a href={wallet.googleUrl} rel="noreferrer">Add to Google Wallet</a></Button>}
-      {wallet.appleArchive&&<Button asChild><a download="loyalty.pkpass" href={'data:application/vnd.apple.pkpass;base64,'+wallet.appleArchive}>Add to Apple Wallet</a></Button>}</div></section>;
+  if (retryCard)
+    return (
+      <section role="status" className="space-y-3">
+        <h2>Your card is ready</h2>
+        <p>Keep this code and verify your phone again to retry adding it to your wallet.</p>
+        <code className="break-all">{retryCard}</code>
+        <Button
+          onClick={() => {
+            setCardCode(retryCard);
+            setRetryCard('');
+            setStep('email');
+            setOtp('');
+          }}
+        >
+          Try again
+        </Button>
+      </section>
+    );
+  if (wallet) {
+    const jsonFile = (pass: object) =>
+      'data:application/json;charset=utf-8,' + encodeURIComponent(JSON.stringify(pass, null, 2));
+    return (
+      <section className="space-y-4">
+        <h2 className="text-xl font-semibold">Your loyalty card</h2>
+        <p>
+          {wallet.mode === 'TEST'
+            ? 'TEST · Download the unsigned sample. Its QR works at the counter.'
+            : wallet.mode === 'DEMO'
+              ? 'DEMO · Use a Google Wallet test account.'
+              : 'LIVE · Add your card to your phone.'}
+        </p>
+        <div className="flex flex-wrap gap-3">
+          {wallet.apple && (
+            <a
+              className={buttonVariants({ variant: 'outline' })}
+              download="apple-test-pass.json"
+              href={jsonFile(wallet.apple)}
+            >
+              Download Apple test pass
+            </a>
+          )}
+          {wallet.google && (
+            <a
+              className={buttonVariants({ variant: 'outline' })}
+              download="google-test-pass.json"
+              href={jsonFile(wallet.google)}
+            >
+              Download Google test pass
+            </a>
+          )}
+          {wallet.googleUrl && (
+            <a className={buttonVariants()} href={wallet.googleUrl} rel="noreferrer">
+              Add to Google Wallet
+            </a>
+          )}
+          {wallet.appleArchive && (
+            <a
+              className={buttonVariants()}
+              download="loyalty.pkpass"
+              href={'data:application/vnd.apple.pkpass;base64,' + wallet.appleArchive}
+            >
+              Add to Apple Wallet
+            </a>
+          )}
+        </div>
+      </section>
+    );
   }
   if (step === 'done') {
     return (
@@ -72,13 +158,13 @@ export function EnrollmentForm({ token,phoneJoin=false,pharmacy=false }: { token
     <form className="space-y-5" onSubmit={submit} noValidate>
       <div className="space-y-2">
         <label htmlFor={step} className="block text-sm font-semibold text-text-strong">
-          {step === 'email' ? (phoneJoin?'Phone number':'Email address') : 'Six-digit code'}
+          {step === 'email' ? (phoneJoin ? 'Phone number' : 'Email address') : 'Six-digit code'}
         </label>
         <input
           id={step}
-          type={step === 'email' ? (phoneJoin?'tel':'email') : 'text'}
-          inputMode={step === 'email' ? (phoneJoin?'tel':'email') : 'numeric'}
-          autoComplete={step === 'email' ? (phoneJoin?'tel':'email') : 'one-time-code'}
+          type={step === 'email' ? (phoneJoin ? 'tel' : 'email') : 'text'}
+          inputMode={step === 'email' ? (phoneJoin ? 'tel' : 'email') : 'numeric'}
+          autoComplete={step === 'email' ? (phoneJoin ? 'tel' : 'email') : 'one-time-code'}
           value={step === 'email' ? email : otp}
           onChange={(event) =>
             step === 'email'
@@ -100,13 +186,36 @@ export function EnrollmentForm({ token,phoneJoin=false,pharmacy=false }: { token
           </p>
         ) : null}
       </div>
-      {step==='otp' && phoneJoin && <><label className="flex items-center gap-3"><input type="checkbox" checked={consent} onChange={e=>setConsent(e.target.checked)}/>I agree to join this loyalty programme.</label>
-       {pharmacy&&<label className="grid gap-2">Existing card code (if you already have one)<input maxLength={64} value={cardCode} onChange={e=>setCardCode(e.target.value)} className="min-h-11 rounded-control border border-border px-3"/></label>}</>}
+      {step === 'otp' && phoneJoin && (
+        <>
+          <label className="flex items-center gap-3">
+            <input
+              type="checkbox"
+              checked={consent}
+              onChange={(e) => setConsent(e.target.checked)}
+            />
+            I agree to join this loyalty programme.
+          </label>
+          {pharmacy && (
+            <label className="grid gap-2">
+              Existing card code (if you already have one)
+              <input
+                maxLength={64}
+                value={cardCode}
+                onChange={(e) => setCardCode(e.target.value)}
+                className="min-h-11 rounded-control border border-border px-3"
+              />
+            </label>
+          )}
+        </>
+      )}
       <Button
         type="submit"
         size="lg"
         className="min-h-11 w-full"
-        disabled={pending || (step === 'email' ? !email : otp.length !== 6 || (phoneJoin&&!consent))}
+        disabled={
+          pending || (step === 'email' ? !email : otp.length !== 6 || (phoneJoin && !consent))
+        }
       >
         {pending ? 'Please wait…' : step === 'email' ? 'Send my code' : 'Create my wallet pass'}
       </Button>

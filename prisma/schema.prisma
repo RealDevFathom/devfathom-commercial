@@ -17315,6 +17315,7 @@ model WalletPass {
   organizationId     String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   customerId         String?
   loyaltyAccountId   String?
+  issuerMode         String?
   pharmacyCardId     String?
   platform           WalletPassPlatform
   serialNumber       String             @unique
@@ -17407,17 +17408,15 @@ model WalletEnrollmentLink {
   active         Boolean   @default(true)
   createdAt      DateTime  @default(now())
   revokedAt      DateTime?
-
   branch RestaurantBranch? @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  pharmacyBranch PharmacyBranch? @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "wallet_link_pharmacy_branch_fk")
+  phoneJoin Boolean @default(false)
+  attempts WalletEnrollmentAttempt[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
   @@map("restaurant_wallet_enrollment_links")
-  pharmacyBranch PharmacyBranch? @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "wallet_link_pharmacy_branch_fk")
-  phoneJoin Boolean @default(false)
-  attempts WalletEnrollmentAttempt[]
-
 }
 
 model WalletEnrollmentAttempt {
@@ -17432,18 +17431,16 @@ model WalletEnrollmentAttempt {
   consumedAt      DateTime?
   failedAttempts  Int                    @default(0)
   createdAt       DateTime               @default(now())
-
   branch RestaurantBranch? @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  pharmacyBranch PharmacyBranch? @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "wallet_attempt_pharmacy_branch_fk")
+  linkId String?
+  link WalletEnrollmentLink? @relation(fields: [organizationId,linkId], references:[organizationId,id], onDelete:NoAction, onUpdate:NoAction, map:"wallet_attempt_link_fk")
 
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
   @@index([expiresAt])
   @@map("restaurant_wallet_enrollment_attempts")
-  pharmacyBranch PharmacyBranch? @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "wallet_attempt_pharmacy_branch_fk")
-  linkId String?
-  link WalletEnrollmentLink? @relation(fields: [organizationId,linkId], references:[organizationId,id], onDelete:NoAction, onUpdate:NoAction, map:"wallet_attempt_link_fk")
-
 }
 
 /// Effective-dated regulatory and selling policy, never historical batch MRP.

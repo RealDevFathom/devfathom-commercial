@@ -493,6 +493,7 @@ export type GoogleWalletClient = {
   ensureLoyaltyClass(input: {
     classSuffix: string;
     brand: GoogleWalletTenantBrand;
+    refreshBrand?: boolean;
   }): Promise<EnsureResult>;
   /** Create the pass object if absent; idempotent across re-issue retries (§8.2). */
   ensureLoyaltyObject(input: {
@@ -503,7 +504,11 @@ export type GoogleWalletClient = {
     pointsLabel?: string | null;
   }): Promise<EnsureResult>;
   /** Push a new balance (§8.4). Called only by lane L6's outbox worker. */
-  patchLoyaltyObjectBalance(input: { serialNumber: string; balance: number }): Promise<void>;
+  patchLoyaltyObjectBalance(input: {
+    serialNumber: string;
+    balance: number;
+    signedBalance?: boolean;
+  }): Promise<void>;
   /** Revocation (§8.5): the object stops being valid, the alias row is deleted. */
   expireLoyaltyObject(input: { serialNumber: string }): Promise<void>;
 };
@@ -635,6 +640,7 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
   async function ensureLoyaltyClass(input: {
     classSuffix: string;
     brand: GoogleWalletTenantBrand;
+    refreshBrand?: boolean;
   }): Promise<EnsureResult> {
     const loyaltyClass = buildLoyaltyClass({
       issuerId: credentials.issuerId,
@@ -647,7 +653,31 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
       { method: 'GET' },
       'class read'
     );
-    if (existing.ok) return { id: loyaltyClass.id, created: false };
+    if (existing.ok) {
+      if (input.refreshBrand) {
+        const current = (await existing.json()) as Partial<GoogleLoyaltyClass>;
+        if (
+          current.programName !== loyaltyClass.programName ||
+          current.hexBackgroundColor !== loyaltyClass.hexBackgroundColor ||
+          current.programLogo?.sourceUri.uri !== loyaltyClass.programLogo?.sourceUri.uri
+        ) {
+          const updated = await authorized(
+            '/loyaltyClass/' + encodeURIComponent(loyaltyClass.id),
+            {
+              method: 'PATCH',
+              body: JSON.stringify({
+                programName: loyaltyClass.programName,
+                hexBackgroundColor: loyaltyClass.hexBackgroundColor,
+                programLogo: loyaltyClass.programLogo,
+              }),
+            },
+            'class design'
+          );
+          if (!updated.ok) throw fail('class design', updated.status, 'Design update failed');
+        }
+      }
+      return { id: loyaltyClass.id, created: false };
+    }
     if (existing.status !== 404) {
       throw fail('class read', existing.status, await readErrorMessage(existing));
     }
@@ -694,9 +724,14 @@ export function createGoogleWalletClient(options: GoogleWalletClientOptions): Go
   async function patchLoyaltyObjectBalance(input: {
     serialNumber: string;
     balance: number;
+    signedBalance?: boolean;
   }): Promise<void> {
     const id = loyaltyObjectId(credentials.issuerId, input.serialNumber);
-    if (!Number.isInteger(input.balance) || input.balance < 0 || input.balance > MAX_BALANCE) {
+    if (
+      !Number.isInteger(input.balance) ||
+      input.balance < (input.signedBalance ? -MAX_BALANCE : 0) ||
+      input.balance > MAX_BALANCE
+    ) {
       throw new GoogleWalletError(
         'The wallet points balance must be a non-negative 32-bit integer.',
         'INVALID_INPUT',

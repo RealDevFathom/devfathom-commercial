@@ -44,7 +44,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
@@ -147,9 +147,9 @@ export function SettingsContent({
                 <CardTitle>Wallet loyalty card</CardTitle>
               </CardHeader>
               <CardContent>
-                <Button asChild variant="outline">
-                  <Link href="/settings/wallet">Manage card and branch posters</Link>
-                </Button>
+                <Link className={buttonVariants({ variant: 'outline' })} href="/settings/wallet">
+                  Manage card and branch posters
+                </Link>
               </CardContent>
             </Card>
           )}
