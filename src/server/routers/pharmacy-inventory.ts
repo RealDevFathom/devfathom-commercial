@@ -138,6 +138,7 @@ import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
 import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { assertInOrganization } from '../org-refs';
 import type { TRPCContext } from '../trpc';
 
@@ -1208,6 +1209,7 @@ export const pharmacyInventoryRouter = router({
     ),
 
   enrollColdChainSensor: inventoryControl
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1228,6 +1230,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   rotateColdChainSensorSecret: inventoryControl
+    .meta(refuseSupportSession)
     .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
@@ -1239,6 +1242,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   revokeColdChainSensor: inventoryControl
+    .meta(refuseSupportSession)
     .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);

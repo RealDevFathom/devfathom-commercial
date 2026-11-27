@@ -65,6 +65,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { assertInOrganization } from '../org-refs';
 import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const branchId = z.string().trim().min(1).max(128);
 const staffProcedure = capabilityProcedure('pharmacy:orders');
@@ -479,6 +480,7 @@ export const pharmacyOrderingRouter = router({
   // DEV-15 (#762): customer PWA. A sign-in link for one customer; the customer
   // signs in with a code sent to their stored phone.
   portalLink: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ branchId, customerId: z.string().trim().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {

@@ -20,6 +20,7 @@ import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { adminProcedure, auditedProtectedProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import {
   branchScopeOrForbidden,
   allocateSettledCounterReceiptPrintJob,
@@ -144,6 +145,7 @@ export const pharmacyPrintingRouter = router({
    * its hash is stored and the audit log records inputs, never this output.
    */
   enrollBridge: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -169,6 +171,7 @@ export const pharmacyPrintingRouter = router({
     }),
 
   revokeBridge: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ branchId: id, bridgeId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await branchScopeOrForbidden(ctx, input.branchId);

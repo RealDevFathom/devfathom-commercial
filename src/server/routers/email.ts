@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import type { Session } from 'next-auth';
 import { router, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { adapterForMailbox } from '@/lib/email/adapter';
 import { syncMailbox } from '@/lib/email/sync';
 import { buildConsentUrl, exchangeCode, isProviderConfigured } from '@/lib/email/oauth';
@@ -17,6 +18,11 @@ import { encryptToken, isEmailCryptoConfigured } from '@/lib/email/crypto';
  * SECURITY: every procedure that touches a mailbox or message re-verifies it
  * belongs to ctx.session.user.id. A user can NEVER reach another user's mailbox
  * or messages. Encrypted credentials are never selected back to the client.
+ *
+ * DEV-1053: a platform support session never reads, sends from or manages a member's
+ * mailbox. A mailbox receives the member's sign-in mail (password reset links, invitations),
+ * so reading it is a way to take the account over. Every procedure that touches a mailbox
+ * or a message carries `.meta(refuseSupportSession)`, queries included.
  */
 
 const providerInput = z.enum(['GMAIL', 'OUTLOOK']);
@@ -94,6 +100,7 @@ export const emailRouter = router({
 
   // Step 1 of connect: hand back a consent URL for the popup. No user config.
   connectStart: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ provider: providerInput }))
     .mutation(async ({ ctx, input }) => {
       const state = `${input.provider}:${randomBytes(32).toString('base64url')}`;
@@ -128,6 +135,7 @@ export const emailRouter = router({
 
   // Step 2: exchange the code, store an encrypted refresh token, kick off sync.
   connectCallback: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         provider: providerInput,
@@ -207,7 +215,7 @@ export const emailRouter = router({
     }),
 
   // All of the current user's connected accounts (never returns credentials).
-  listMailboxes: protectedProcedure.query(({ ctx }) =>
+  listMailboxes: protectedProcedure.meta(refuseSupportSession).query(({ ctx }) =>
     ctx.db.mailbox.findMany({
       where: { userId: ctx.session.user.id },
       select: {
@@ -225,6 +233,7 @@ export const emailRouter = router({
 
   // Unified message list. mailboxId omitted = across ALL of the user's mailboxes.
   listMessages: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ mailboxId: z.string().optional(), folder: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
@@ -262,6 +271,7 @@ export const emailRouter = router({
 
   // Full message; lazily backfills + caches the body on first open.
   getMessage: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .query(async ({ ctx, input }) => {
       const msg = await ownedMessage(ctx.db, ctx.session.user.id, input.id);
@@ -303,6 +313,7 @@ export const emailRouter = router({
 
   // Send from a specific connected account.
   sendMessage: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         mailboxId: z.string(),
@@ -329,6 +340,7 @@ export const emailRouter = router({
 
   // Local read-state (minimal scopes — no provider write).
   markRead: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const msg = await ownedMessage(ctx.db, ctx.session.user.id, input.id);
@@ -338,6 +350,7 @@ export const emailRouter = router({
 
   // On-demand refresh of one or all of the user's mailboxes.
   refresh: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ mailboxId: z.string().optional() }).optional())
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
@@ -359,6 +372,7 @@ export const emailRouter = router({
 
   // One-tap disconnect — cascade removes its synced messages.
   disconnect: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ mailboxId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       await ownedMailbox(ctx.db, ctx.session.user.id, input.mailboxId);

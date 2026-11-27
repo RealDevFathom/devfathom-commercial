@@ -45,7 +45,6 @@ const NO_MEMBER_SESSION: Record<string, string> = {
   'api/auth/[...nextauth]/route.ts': SIGN_IN,
   'api/login/route.ts': SIGN_IN,
   'login/submit/route.ts': SIGN_IN,
-  'api/password-reset/route.ts': SIGN_IN,
   'api/workspace-requests/route.ts': SIGN_IN,
   'api/sso/oidc/[connectionId]/callback/route.ts': SIGN_IN,
   'api/sso/oidc/[connectionId]/start/route.ts': SIGN_IN,

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { router, adminProcedure, entitlementIndependentAdminProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 import { WEBHOOK_EVENTS } from '@/lib/webhooks';
 import { assertWebhookUrl, assertWebhookUrlAllowed } from '@/lib/webhooks/safe-url';
@@ -84,6 +85,7 @@ export const webhooksRouter = router({
     }),
 
   create: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         url: urlSchema,
@@ -120,6 +122,7 @@ export const webhooksRouter = router({
     }),
 
   update: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),
@@ -139,6 +142,7 @@ export const webhooksRouter = router({
     }),
 
   delete: entitlementIndependentAdminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const deleted = await ctx.db.webhook.delete({

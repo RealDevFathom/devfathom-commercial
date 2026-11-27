@@ -41,7 +41,7 @@ import { verticalForModuleKey } from '@/lib/module-catalog';
 const USER_ID = 'restaurant_user';
 const notificationProbe = router({ team: teamRouter });
 
-function caller() {
+function caller(options: { support?: boolean } = {}) {
   return notificationProbe.createCaller({
     db: {
       notification: {
@@ -64,13 +64,27 @@ function caller() {
         role: 'ADMIN',
         department: 'LEADERSHIP',
         status: 'ACTIVE',
+        ...(options.support
+          ? {
+              isSupportSession: true,
+              supportSessionId: 'support_session_1',
+              platformUserId: 'platform_operator_1',
+            }
+          : {}),
       },
     },
     organization: {
       id: 'restaurant_org',
       vertical: verticalForModuleKey('restaurant-core')!,
     },
-    support: null,
+    support: options.support
+      ? {
+          supportSessionId: 'support_session_1',
+          organizationId: 'restaurant_org',
+          platformUserId: 'platform_operator_1',
+          tenantUserId: USER_ID,
+        }
+      : null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as unknown as TRPCContext);
@@ -89,11 +103,7 @@ describe('team shell notifications without HR entitlement', () => {
     const notificationProcedureNames = Object.keys(teamRouter._def.procedures).filter(
       (name) => name.includes('Notification') && !name.endsWith('NotificationPrefs')
     );
-    const exceptionNames = [
-      'getNotifications',
-      'markNotificationRead',
-      'markAllNotificationsRead',
-    ];
+    const exceptionNames = ['getNotifications', 'markNotificationRead', 'markAllNotificationsRead'];
 
     expect(notificationProcedureNames.sort()).toEqual(exceptionNames.sort());
   });
@@ -186,5 +196,57 @@ describe('team shell notifications without HR entitlement', () => {
         outcome: 'SUCCESS',
       })
     );
+  });
+
+  // DEV-1053: the "support access started" notice is the owner's record of the visit. The
+  // support session it announces cannot clear it, one at a time or all at once.
+  describe('the support access notice, in a support session', () => {
+    it('refuses to mark the notice read and writes nothing', async () => {
+      mocks.findUnique.mockResolvedValue({ userId: USER_ID, type: 'support_session_started' });
+
+      await expect(
+        caller({ support: true }).team.markNotificationRead({ id: 'notice_1' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message:
+          'A support session cannot mark the support access notice as read. It stays for the business owner.',
+      });
+      expect(mocks.update).not.toHaveBeenCalled();
+      expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+        expect.objectContaining({ path: 'team.markNotificationRead', outcome: 'FAILURE' })
+      );
+    });
+
+    it('still marks an ordinary notice read', async () => {
+      mocks.findUnique.mockResolvedValue({ userId: USER_ID, type: 'task_assigned' });
+
+      await expect(
+        caller({ support: true }).team.markNotificationRead({ id: 'notification_1' })
+      ).resolves.toEqual({ id: 'notification_1', isRead: true });
+      expect(mocks.update).toHaveBeenCalledWith({
+        where: { id: 'notification_1' },
+        data: { isRead: true },
+      });
+    });
+
+    it('leaves the notice unread when marking everything read', async () => {
+      await expect(caller({ support: true }).team.markAllNotificationsRead()).resolves.toEqual({
+        success: true,
+      });
+      expect(mocks.updateMany).toHaveBeenCalledWith({
+        where: { userId: USER_ID, isRead: false, type: { not: 'support_session_started' } },
+        data: { isRead: true },
+      });
+    });
+
+    it('lets the owner mark the notice read from their own session', async () => {
+      mocks.findUnique.mockResolvedValue({ userId: USER_ID, type: 'support_session_started' });
+
+      await expect(caller().team.markNotificationRead({ id: 'notice_1' })).resolves.toEqual({
+        id: 'notification_1',
+        isRead: true,
+      });
+      expect(mocks.update).toHaveBeenCalledTimes(1);
+    });
   });
 });
