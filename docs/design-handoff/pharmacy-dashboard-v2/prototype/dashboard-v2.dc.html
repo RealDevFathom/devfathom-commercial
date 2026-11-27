@@ -1,0 +1,493 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dashboard v2 · A1 Owner, all branches today</title>
+<script src="./support.js"></script>
+<link rel="stylesheet" href="ds/devfathom/tokens.css">
+<link rel="stylesheet" href="ds/devfathom/components/bundle.css">
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+body { margin: 0; }
+.db { --c-sales: var(--text-strong); --c-margin: var(--accent-brand); --c-soft: var(--border-strong); --c-amber: #c9822b; --c-track: var(--surface-sunken);
+  box-sizing: border-box; min-height: 100vh; padding: 22px; background: var(--fog); color: var(--text-body); font-family: var(--font-sans); font-size: 14px; line-height: 1.45; -webkit-font-smoothing: antialiased; }
+[data-theme="dark"] .db, .db[data-theme="dark"] { --c-amber: #e1bc72; }
+.db *, .db *::before, .db *::after { box-sizing: border-box; }
+.db button { font: inherit; color: inherit; cursor: pointer; }
+.db a { color: var(--text-strong); } .db a:hover { color: var(--accent-brand); }
+.db :focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.db-shell { display: flex; flex-direction: column; min-height: calc(100vh - 44px); overflow: hidden; border-radius: var(--radius-shell); background: var(--surface-page); box-shadow: var(--shadow-shell); }
+
+/* one header row, as on counter v3 */
+.db-bar { display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 0 24px; border-bottom: 1px solid var(--border-subtle); background: var(--surface-card); }
+.db-tile { width: 30px; height: 30px; flex: none; }
+.db-brand { margin: 0 14px 0 8px; font-size: 15px; font-weight: 600; letter-spacing: -0.02em; color: var(--text-strong); white-space: nowrap; }
+.db-nav { display: flex; align-items: center; gap: 2px; min-width: 0; flex: 1; overflow: hidden; }
+.db-nav a { display: inline-flex; align-items: center; height: 36px; padding: 0 13px; border-radius: 999px; font-size: 14px; font-weight: 500; color: var(--text-body); text-decoration: none; white-space: nowrap; }
+.db-nav a:hover { background: var(--muted); color: var(--text-strong); }
+.db-nav a[aria-current="page"] { background: var(--primary); color: var(--primary-foreground); }
+.db-bar .db-menu { display: none; }
+.db-end { display: flex; align-items: center; gap: 2px; flex: none; margin-inline-start: auto; }
+.db-icon { display: inline-grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 999px; background: none; color: var(--text-body); }
+.db-icon:hover { background: var(--muted); color: var(--text-strong); }
+.db-avatar { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 999px; background: var(--muted); font-size: 12px; font-weight: 600; color: var(--text-strong); }
+
+.db-main { flex: 1; padding: 20px 28px 26px; }
+.db-head { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin-bottom: 16px; }
+.db-head h1 { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 600; letter-spacing: -0.04em; color: var(--text-strong); }
+.db-head p { margin: 2px 0 0; font-size: 13px; color: var(--text-muted); }
+.db-head-end { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-inline-start: auto; }
+.db-seg { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--surface-sunken); border: 1px solid var(--border-subtle); }
+.db-seg button { height: 34px; padding: 0 14px; border: 0; border-radius: 999px; background: none; font-size: 13px; font-weight: 500; color: var(--text-muted); white-space: nowrap; }
+.db-seg button:hover { color: var(--text-strong); }
+.db-seg button[aria-pressed="true"] { background: var(--surface-card); color: var(--text-strong); font-weight: 600; box-shadow: var(--shadow-xs), 0 0 0 1px var(--border-default); }
+.db-seg-sm button { height: 28px; padding: 0 11px; font-size: 12px; }
+.db-live { display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: 999px; background: var(--success-tint); font-size: 12px; font-weight: 600; color: var(--success); white-space: nowrap; }
+.db-live i { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+.db-btn { display: inline-flex; align-items: center; gap: 7px; height: 40px; padding: 0 14px; border: 1px solid var(--border-default); border-radius: 999px; background: var(--surface-card); font-size: 13px; font-weight: 600; color: var(--text-strong); white-space: nowrap; }
+.db-btn:hover { border-color: var(--border-strong); }
+
+.db-grid { display: grid; gap: 16px; }
+.db-g4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.db-g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.db-grid + .db-grid { margin-top: 16px; }
+@media (min-width: 1181px) { .db-row-charts > .db-card { height: 300px; } .db-row-detail > .db-card { height: 244px; } }
+.db-card { display: flex; flex-direction: column; min-width: 0; padding: 18px 20px; border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); background: var(--surface-card); box-shadow: var(--shadow-xs); }
+.db-card h2 { margin: 0; font-size: 15px; line-height: 1.3; font-weight: 600; letter-spacing: -0.015em; color: var(--text-strong); }
+.db-say { margin: 3px 0 0; font-size: 13px; color: var(--text-muted); }
+.db-say b { font-weight: 600; color: var(--text-strong); }
+.db-card-head { display: flex; align-items: flex-start; gap: 12px; }
+.db-card-head > div:first-child { min-width: 0; flex: 1; }
+.db-link { display: inline-flex; align-items: center; gap: 4px; min-height: 24px; margin-top: auto; padding-top: 8px; font-size: 13px; font-weight: 600; text-decoration: none; }
+.db-num { font-variant-numeric: tabular-nums; }
+
+/* KPI tiles */
+.db-kpi { flex-direction: row; align-items: stretch; gap: 12px; padding: 14px 20px; }
+.db-kpi-text { min-width: 0; flex: 1; }
+.db-kpi-label { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500; color: var(--text-muted); }
+.db-kpi-label i { width: 8px; height: 8px; border-radius: 3px; background: var(--c-soft); }
+.db-kpi-value { margin: 6px 0 4px; font-size: 28px; line-height: 1.1; font-weight: 600; letter-spacing: -0.035em; color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.db-kpi-sub { font-size: 12.5px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.db-kpi-sub b { font-weight: 600; }
+.db-kpi-sub[data-tone="good"] b { color: var(--success); }
+.db-kpi-sub[data-tone="bad"] b { color: var(--destructive); }
+.db-spark { display: flex; flex-direction: column; justify-content: flex-end; width: 104px; flex: none; }
+.db-mini { display: flex; align-items: flex-end; gap: 2px; height: 44px; }
+.db-mini span { flex: 1; min-height: 2px; border-radius: 2px 2px 0 0; background: var(--c-soft); opacity: 0.45; }
+.db-mini span:last-child { opacity: 1; }
+.db-mini[data-k="sales"] span { background: var(--c-sales); }
+.db-mini[data-k="margin"] span { background: var(--c-margin); }
+.db-mini[data-k="bad"] span { background: var(--destructive); }
+.db-mini[data-k="good"] span { background: var(--success); }
+.db-mini[data-k="soft"] span { background: var(--text-muted); }
+.db-spark small { margin-top: 4px; font-size: 11px; color: var(--text-muted); text-align: end; }
+
+/* sales chart */
+.db-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; font-size: 12px; color: var(--text-muted); }
+.db-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.db-legend i { width: 10px; height: 10px; border-radius: 3px; }
+.db-legend i[data-k="sales"] { background: var(--c-sales); } .db-legend i[data-k="margin"] { background: var(--c-margin); }
+.db-legend i[data-k="today"] { background: repeating-linear-gradient(135deg, var(--c-sales) 0 2px, transparent 2px 4px); border: 1px solid var(--c-sales); }
+.db-legend i[data-k="avg"] { height: 0; border-radius: 0; border-top: 2px dashed var(--text-muted); }
+.db-plot { position: relative; display: grid; grid-template-columns: 52px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; flex: 1; min-height: 132px; margin-top: 14px; }
+.db-axis { position: relative; font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.db-axis > span { position: absolute; inset-inline-start: 0; transform: translateY(50%); white-space: nowrap; }
+.db-area { position: relative; border-bottom: 1px solid var(--border-default); }
+.db-gridline { position: absolute; inset-inline: 0; height: 0; border-top: 1px solid var(--border-subtle); }
+.db-avg { position: absolute; inset-inline: 0; z-index: 1; height: 0; border-top: 1.5px dashed var(--text-muted); pointer-events: none; }
+.db-bars { position: absolute; inset: 0; display: flex; align-items: flex-end; gap: 5px; padding: 0 2px; }
+.db-col { position: relative; display: flex; flex: 1; min-width: 0; height: 100%; align-items: flex-end; padding: 0; border: 0; background: none; border-radius: 6px 6px 0 0; }
+.db-col:hover, .db-col:focus-visible, .db-col[data-on="true"] { background: var(--primary-tint); }
+.db-stack { display: flex; flex-direction: column; justify-content: flex-end; width: 100%; max-width: 44px; margin: 0 auto; overflow: hidden; border-radius: 5px 5px 0 0; background: var(--c-sales); }
+.db-stack b { display: block; background: var(--c-margin); }
+.db-col[data-today="true"] .db-stack { background: repeating-linear-gradient(135deg, var(--c-sales) 0 3px, transparent 3px 6px); box-shadow: inset 0 0 0 1.5px var(--c-sales); }
+.db-days { display: flex; gap: 5px; grid-column: 2; padding: 6px 2px 0; font-size: 11px; color: var(--text-muted); }
+.db-days span { flex: 1; min-width: 0; overflow: hidden; text-align: center; white-space: nowrap; }
+.db-days span[data-on="true"] { font-weight: 600; color: var(--text-strong); }
+.db-readout { display: flex; flex-wrap: nowrap; white-space: nowrap; overflow: hidden; align-items: baseline; gap: 4px 14px; min-height: 22px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-subtle); font-size: 13px; color: var(--text-muted); }
+.db-readout b { font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+
+/* branches */
+.db-branches { display: flex; flex: 1; flex-direction: column; margin-top: 12px; }
+.db-br, .db-br-head { display: grid; grid-template-columns: 98px minmax(48px, 1fr) 78px 48px 68px 74px 78px; align-items: center; gap: 10px; width: 100%; padding: 0 8px; text-align: start; }
+.db-br-head { padding-bottom: 6px; font-size: 11.5px; line-height: 1.25; color: var(--text-muted); }
+.db-br-head > span:nth-child(n+3), .db-br > span:nth-child(n+3) { text-align: end; }
+.db-br { flex: 1; min-height: 44px; border: 0; border-top: 1px solid var(--border-subtle); border-radius: 0; background: none; font-size: 13px; font-variant-numeric: tabular-nums; }
+.db-br:hover { background: var(--surface-sunken); }
+.db-br[data-on="true"] { background: var(--surface-sunken); box-shadow: inset 3px 0 0 var(--c-margin); }
+.db-br[data-dim="true"] { opacity: 0.45; }
+.db-br-name { display: block; font-size: 14px; font-weight: 600; color: var(--text-strong); }
+.db-br-role { display: block; font-size: 12px; color: var(--text-muted); }
+.db-track { display: block; height: 14px; overflow: hidden; border-radius: 999px; background: var(--c-track); }
+.db-fill { display: flex; height: 100%; overflow: hidden; border-radius: 999px; background: var(--c-sales); }
+.db-fill b { display: block; height: 100%; background: var(--c-margin); }
+.db-br-val { font-size: 13.5px; font-weight: 600; color: var(--text-strong); white-space: nowrap; }
+.db-br-total { border-top: 1px solid var(--border-default); font-weight: 600; color: var(--text-strong); }
+
+/* expiry */
+.db-exp { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; flex: 1; align-items: end; min-height: 108px; margin-top: 14px; }
+.db-exp-col { display: flex; flex-direction: column; justify-content: flex-end; height: 100%; text-align: center; }
+.db-exp-val { margin-bottom: 4px; font-size: 12px; font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.db-exp-bar { border-radius: 6px 6px 0 0; background: var(--c-soft); }
+.db-exp-col[data-k="30"] .db-exp-bar { background: var(--destructive); }
+.db-exp-col[data-k="60"] .db-exp-bar { background: var(--c-amber); }
+.db-exp-lab { padding-top: 6px; border-top: 1px solid var(--border-default); font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
+
+/* money owed */
+.db-owed { display: flex; flex: 1; flex-direction: column; justify-content: space-around; gap: 10px; margin-top: 14px; }
+.db-owed-row > div:first-child { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 5px; font-size: 13px; }
+.db-owed-row b { font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.db-owed-row .db-track { height: 10px; }
+.db-owed-row[data-k="ap"] .db-fill { background: var(--c-sales); }
+.db-owed-row[data-k="ar"] .db-fill { background: var(--c-soft); }
+.db-owed-row[data-k="khata"] .db-fill { background: var(--c-amber); }
+
+/* stock */
+.db-big { display: flex; align-items: baseline; gap: 8px; margin-top: 10px; }
+.db-big strong { font-size: 34px; line-height: 1; font-weight: 600; letter-spacing: -0.04em; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.db-big > span { font-size: 13px; color: var(--text-muted); }
+.db-split { display: flex; flex: none; gap: 3px; height: 12px; margin-top: 10px; }
+.db-split > span { min-width: 4px; border-radius: 4px; }
+.db-split span[data-i="0"], .db-key i[data-i="0"] { background: var(--c-sales); }
+.db-split span[data-i="1"], .db-key i[data-i="1"] { background: var(--c-amber); }
+.db-split span[data-i="2"], .db-key i[data-i="2"] { background: var(--c-soft); }
+.db-split span[data-dim="true"] { opacity: 0.3; }
+.db-key { display: grid; gap: 3px; margin-top: 8px; font-size: 12.5px; color: var(--text-muted); }
+.db-key div { display: flex; align-items: center; gap: 7px; }
+.db-key i { width: 10px; height: 10px; flex: none; border-radius: 3px; }
+.db-key b { margin-inline-start: auto; font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.db-key div[data-dim="true"] { opacity: 0.45; }
+
+/* safety */
+.db-safe { display: grid; grid-template-columns: 84px minmax(0, 1fr); align-items: center; gap: 16px; flex: 1; margin-top: 12px; }
+.db-ring { position: relative; width: 84px; height: 84px; }
+.db-ring svg { display: block; width: 84px; height: 84px; transform: rotate(-90deg); }
+.db-ring div { position: absolute; inset: 0; display: grid; place-content: center; text-align: center; line-height: 1.1; }
+.db-ring b { font-size: 20px; font-weight: 600; letter-spacing: -0.03em; color: var(--text-strong); }
+.db-ring small { font-size: 10.5px; color: var(--text-muted); }
+.db-list { display: grid; gap: 5px; margin: 0; padding: 0; list-style: none; font-size: 13px; }
+.db-list li { display: flex; align-items: center; gap: 8px; }
+.db-list i { width: 8px; height: 8px; flex: none; border-radius: 999px; background: var(--c-soft); }
+.db-list li[data-tone="bad"] i { background: var(--destructive); }
+.db-list li[data-tone="warn"] i { background: var(--c-amber); }
+.db-list li[data-tone="ok"] i { background: var(--success); }
+.db-list b { margin-inline-start: auto; font-weight: 600; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1180px) {
+  .db-g4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .db-g2 { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 900px) {
+  .db-nav { display: none; }
+  .db-bar .db-menu { display: inline-grid; }
+  .db-brand { flex: 1; }
+}
+@media (max-width: 640px) {
+  .db { padding: 0; }
+  .db-shell { min-height: 100vh; border-radius: 0; }
+  .db-bar { padding: 0 8px; }
+  .db-main { padding: 16px 14px 24px; }
+  .db-g4 { grid-template-columns: minmax(0, 1fr); }
+  .db-head-end { margin-inline-start: 0; width: 100%; }
+  .db-seg { max-width: 100%; overflow-x: auto; }
+  .db-br { grid-template-columns: 96px minmax(0, 1fr) 88px; padding: 10px 4px; }
+  .db-spark { width: 84px; }
+}
+</style>
+</helmet>
+<div class="db">
+  <div class="db-shell">
+    <header class="db-bar">
+      <button type="button" class="db-icon db-menu" aria-label="Menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5h16"></path><path d="M4 12h16"></path><path d="M4 19h16"></path></svg></button>
+      <svg class="db-tile" viewBox="0 0 64 64" role="img" aria-label="DevFathom"><rect width="64" height="64" rx="18" fill="#111110"></rect><svg x="15" y="12" width="34" height="40" viewBox="34 33 148 166"><path d="M116 57 L155 97 L110 137 L75 175" fill="none" stroke="#ffffff" stroke-width="22" stroke-linecap="round" stroke-linejoin="round"></path><rect x="98" y="39" width="38" height="36" rx="12" fill="#ffffff"></rect><rect x="135" y="77" width="41" height="41" rx="13" fill="#ffffff"></rect><rect x="90" y="118" width="41" height="38" rx="13" fill="#ffffff"></rect><rect x="56" y="156" width="37" height="37" rx="12" fill="#ffffff"></rect><rect x="40" y="81" width="35" height="34" rx="11" fill="#ff684f"></rect></svg></svg>
+      <span class="db-brand">SehatCart</span>
+      <nav class="db-nav" aria-label="Pharmacy">
+        <a href="#home" aria-current="page">Home</a>
+        <a href="#sell">Sell</a>
+        <a href="#dispense">Dispense</a>
+        <a href="#stock">Stock</a>
+        <a href="#customers">Customers</a>
+        <a href="#money">Money</a>
+        <a href="#admin">Admin</a>
+        <a href="#workspace">Workspace</a>
+      </nav>
+      <div class="db-end">
+        <button type="button" class="db-icon" aria-label="Search" title="Search"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg></button>
+        <button type="button" class="db-icon" aria-label="Ask Fathom" title="Ask Fathom"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 3l1.9 5.1L18 10l-5.1 1.9L11 17l-1.9-5.1L4 10l5.1-1.9z"></path><path d="M19 15v4"></path><path d="M17 17h4"></path></svg></button>
+        <button type="button" class="db-icon" aria-label="Notifications" title="Notifications"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"></path><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"></path></svg></button>
+        <button type="button" class="db-icon" aria-label="Account: Imran Qureshi, Owner" title="Imran Qureshi · Owner"><span class="db-avatar">IQ</span></button>
+      </div>
+    </header>
+
+    <main class="db-main">
+      <div class="db-head">
+        <div>
+          <h1>{{head.title}}</h1>
+          <p>Wednesday 4 November 2026 · figures up to 14:05</p>
+        </div>
+        <div class="db-head-end">
+          <div class="db-seg" role="group" aria-label="Branch">
+            <sc-for list="{{branchTabs}}" as="b" hint-placeholder-count="4">
+              <button type="button" aria-pressed="{{b.pressed}}" onClick="{{b.pick}}">{{b.name}}</button>
+            </sc-for>
+          </div>
+          <span class="db-live" role="status"><i aria-hidden="true"></i>Live</span>
+          <button type="button" class="db-btn"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"></path><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"></path></svg>Edit dashboard</button>
+        </div>
+      </div>
+
+      <section class="db-grid db-g4" aria-label="Today's trade">
+        <sc-for list="{{kpis}}" as="k" hint-placeholder-count="4">
+          <article class="db-card db-kpi">
+            <div class="db-kpi-text">
+              <div class="db-kpi-label">{{k.label}}</div>
+              <div class="db-kpi-value">{{k.value}}</div>
+              <div class="db-kpi-sub" data-tone="{{k.tone}}"><b>{{k.subStrong}}</b> {{k.sub}}</div>
+            </div>
+            <div class="db-spark">
+              <div class="db-mini" data-k="{{k.kind}}" role="img" aria-label="{{k.sparkLabel}}"><sc-for list="{{k.bars}}" as="m" hint-placeholder-count="14"><span style="height: {{m.h}}%;"></span></sc-for></div>
+              <small>Last 14 days</small>
+            </div>
+          </article>
+        </sc-for>
+      </section>
+
+      <section class="db-grid db-g2 db-row-charts">
+        <article class="db-card">
+          <div class="db-card-head">
+            <div>
+              <h2>Sales and margin by day</h2>
+              <p class="db-say">{{trend.say}}</p>
+            </div>
+            <div class="db-seg db-seg-sm" role="group" aria-label="Days shown">
+              <sc-for list="{{rangeTabs}}" as="r" hint-placeholder-count="3">
+                <button type="button" aria-pressed="{{r.pressed}}" onClick="{{r.pick}}">{{r.label}}</button>
+              </sc-for>
+            </div>
+          </div>
+          <div class="db-legend" aria-hidden="true"><span><i data-k="sales"></i>Sales</span><span><i data-k="margin"></i>Margin (profit before costs)</span><span><i data-k="today"></i>Today so far</span><span><i data-k="avg"></i>Daily average</span></div>
+          <div class="db-plot">
+            <div class="db-axis" aria-hidden="true">
+              <sc-for list="{{trend.ticks}}" as="tk" hint-placeholder-count="4"><span style="bottom: {{tk.pos}}%;">{{tk.label}}</span></sc-for>
+            </div>
+            <div class="db-area">
+              <sc-for list="{{trend.ticks}}" as="tk" hint-placeholder-count="4"><div class="db-gridline" style="bottom: {{tk.pos}}%;"></div></sc-for>
+              <div class="db-avg" style="bottom: {{trend.avgPos}}%;"></div>
+              <div class="db-bars">
+                <sc-for list="{{trend.days}}" as="d" hint-placeholder-count="14">
+                  <button type="button" class="db-col" data-today="{{d.today}}" data-on="{{d.on}}" aria-label="{{d.aria}}" onMouseEnter="{{d.show}}" onFocus="{{d.show}}" onClick="{{d.show}}"><span class="db-stack" style="height: {{d.h}}%;"><b style="height: {{d.mh}}%;"></b></span></button>
+                </sc-for>
+              </div>
+            </div>
+            <div class="db-days" aria-hidden="true">
+              <sc-for list="{{trend.days}}" as="d" hint-placeholder-count="14"><span data-on="{{d.on}}">{{d.tick}}</span></sc-for>
+            </div>
+          </div>
+          <div class="db-readout" role="status"><span><b>{{trend.pick.day}}</b></span><span>Sales <b>{{trend.pick.sales}}</b></span><span>Margin <b>{{trend.pick.margin}}</b></span><span>{{trend.pick.note}}</span></div>
+        </article>
+
+        <article class="db-card">
+          <div class="db-card-head">
+            <div>
+              <h2>Branches today</h2>
+              <p class="db-say">{{branches.say}}</p>
+            </div>
+            <a class="db-link" style="margin-top: 0; padding-top: 0;" href="#branch-comparison">Compare branches</a>
+          </div>
+          
+          <div class="db-branches">
+            <div class="db-br-head" aria-hidden="true"><span>Branch</span><span>Sales and margin</span><span>Sales</span><span>Margin</span><span>Lost sales</span><span>Expiring in 30 days</span><span>Khata overdue</span></div>
+            <sc-for list="{{branches.rows}}" as="b" hint-placeholder-count="3">
+              <button type="button" class="db-br" data-on="{{b.on}}" data-dim="{{b.dim}}" aria-pressed="{{b.on}}" aria-label="{{b.aria}}" onClick="{{b.pick}}">
+                <span><span class="db-br-name">{{b.name}}</span><span class="db-br-role">{{b.share}} of sales</span></span>
+                <span class="db-track"><span class="db-fill" style="width: {{b.w}}%;"><b style="width: {{b.mw}}%;"></b></span></span>
+                <span class="db-br-val">{{b.sales}}</span>
+                <span>{{b.margin}}</span>
+                <span>{{b.lost}}</span>
+                <span>{{b.expiry}}</span>
+                <span>{{b.khata}}</span>
+              </button>
+            </sc-for>
+            <div class="db-br db-br-total"><span>All branches</span><span></span><span class="db-br-val">{{branches.total.sales}}</span><span>{{branches.total.margin}}</span><span>{{branches.total.lost}}</span><span>{{branches.total.expiry}}</span><span>{{branches.total.khata}}</span></div>
+          </div>
+        </article>
+      </section>
+
+      <section class="db-grid db-g4 db-row-detail">
+        <article class="db-card">
+          <h2>Stock about to expire</h2>
+          <p class="db-say"><b>{{expiry.first}}</b> of stock expires within 30 days.</p>
+          <div class="db-exp" role="img" aria-label="{{expiry.aria}}">
+            <sc-for list="{{expiry.bars}}" as="e" hint-placeholder-count="4">
+              <div class="db-exp-col" data-k="{{e.k}}"><div class="db-exp-val">{{e.value}}</div><div class="db-exp-bar" style="height: {{e.h}}%;"></div><div class="db-exp-lab">{{e.label}}</div></div>
+            </sc-for>
+          </div>
+          <a class="db-link" href="#expiry">See the batches</a>
+        </article>
+
+        <article class="db-card">
+          <h2>Money owed</h2>
+          <p class="db-say"><b>{{owed.claims}}</b> {{owed.claimsText}}</p>
+          <div class="db-owed">
+            <sc-for list="{{owed.rows}}" as="o" hint-placeholder-count="3">
+              <div class="db-owed-row" data-k="{{o.k}}"><div><span>{{o.label}}</span><b>{{o.value}}</b></div><span class="db-track"><span class="db-fill" style="width: {{o.w}}%;"></span></span></div>
+            </sc-for>
+          </div>
+          <a class="db-link" href="#money">Open money</a>
+        </article>
+
+        <article class="db-card">
+          <h2>Stock to reorder</h2>
+          <p class="db-say"><b>{{stock.orders}}</b> {{stock.ordersText}}</p>
+          <div class="db-big"><strong>{{stock.total}}</strong><span>medicines low or out of stock</span></div>
+          <div class="db-split" role="img" aria-label="{{stock.aria}}">
+            <sc-for list="{{stock.parts}}" as="p" hint-placeholder-count="3"><span data-i="{{p.i}}" data-dim="{{p.dim}}" style="flex: {{p.n}};"></span></sc-for>
+          </div>
+          <div class="db-key">
+            <sc-for list="{{stock.parts}}" as="p" hint-placeholder-count="3"><div data-dim="{{p.dim}}"><i data-i="{{p.i}}"></i>{{p.name}}<b>{{p.n}}</b></div></sc-for>
+          </div>
+          <a class="db-link" href="#purchasing">Review orders</a>
+        </article>
+
+        <article class="db-card">
+          <h2>Safety and cover</h2>
+          <p class="db-say">{{safety.say}}</p>
+          <div class="db-safe">
+            <div class="db-ring" role="img" aria-label="{{safety.ringAria}}">
+              <svg viewBox="0 0 84 84"><circle cx="42" cy="42" r="35" fill="none" stroke="var(--c-track)" stroke-width="9"></circle><circle cx="42" cy="42" r="35" fill="none" stroke="var(--success)" stroke-width="9" stroke-linecap="round" stroke-dasharray="{{safety.dash}}"></circle></svg>
+              <div><b>{{safety.cover}}</b><small>on duty</small></div>
+            </div>
+            <ul class="db-list">
+              <sc-for list="{{safety.rows}}" as="r" hint-placeholder-count="4"><li data-tone="{{r.tone}}"><i aria-hidden="true"></i>{{r.label}}<b>{{r.n}}</b></li></sc-for>
+            </ul>
+          </div>
+          <a class="db-link" href="#safety">Open safety</a>
+        </article>
+      </section>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"$preview":{"width":1440,"height":900}}'>
+// Sample data: SehatCart, three branches in Lahore, Wednesday 2026-11-04 at 14:05.
+// Every figure maps to a field the live command centre or branch comparison already returns;
+// the 14 and 30 day series is the same command centre read, once per day.
+const BRANCHES = [
+  { id: 'gul', name: 'Gulberg', base: 108000, marginRate: 0.225, today: 92180, refunds: 640, variance: 0, lost: 3200, expiry: [18400, 31200, 52100, 90300], khata: 26400, ap: 188200, ar: 51200, claims: 2, stock: 9, orders: 7, recalls: 1, quarantine: 24, queue: 1, exc: [1, 1, 0, 0], cover: 1 },
+  { id: 'jht', name: 'Johar Town', base: 71000, marginRate: 0.215, today: 61930, refunds: 600, variance: -350, lost: 4850, expiry: [15100, 25400, 41300, 71600], khata: 21350, ap: 141800, ar: 30600, claims: 1, stock: 8, orders: 6, recalls: 0, quarantine: 0, queue: 1, exc: [0, 1, 0, 1], cover: 1 },
+  { id: 'dha', name: 'DHA Phase 5', base: 38500, marginRate: 0.21, today: 32310, refunds: 0, variance: 0, lost: 1900, expiry: [8800, 15300, 25200, 42900], khata: 11000, ap: 82500, ar: 14500, claims: 1, stock: 6, orders: 4, recalls: 0, quarantine: 0, queue: 0, exc: [0, 0, 0, 0], cover: 1 }
+];
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const SEASON = [0.78, 1.02, 0.97, 1.0, 1.04, 0.9, 1.16]; // Sunday quiet, Saturday busiest
+const TODAY = Date.UTC(2026, 10, 4);
+const wobble = (i, salt) => { const x = Math.sin((i + 1) * 12.9898 + salt * 78.233) * 43758.5453; return x - Math.floor(x); };
+const rs = (n) => (n < 0 ? '−Rs ' : 'Rs ') + Math.abs(Math.round(n)).toLocaleString('en-PK');
+const rsK = (n) => (n >= 1000 ? 'Rs ' + (n / 1000).toLocaleString('en-PK', { maximumFractionDigits: 0 }) + 'k' : 'Rs ' + n);
+const pct = (n) => n.toLocaleString('en-PK', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+
+// 30 days per branch, oldest first; the last day is today so far.
+function series(b, salt) {
+  const out = [];
+  for (let i = 29; i >= 0; i--) {
+    const t = TODAY - i * 86400000, d = new Date(t), dow = d.getUTCDay();
+    const sales = i === 0 ? b.today : Math.round(b.base * SEASON[dow] * (0.93 + wobble(i, salt) * 0.16) / 10) * 10;
+    const margin = Math.round(sales * (b.marginRate + (wobble(i, salt + 5) - 0.5) * 0.02));
+    const refunds = i === 0 ? b.refunds : Math.round(wobble(i, salt + 9) * 1.9) * 310 + (wobble(i, salt + 2) > 0.6 ? 420 : 0);
+    const variance = i === 0 ? b.variance : (wobble(i, salt + 3) > 0.82 ? -Math.round(wobble(i, salt + 4) * 6) * 50 : 0);
+    out.push({ t, dow, date: d.getUTCDate(), mon: d.getUTCMonth(), sales, margin, refunds, variance });
+  }
+  return out;
+}
+const SERIES = Object.fromEntries(BRANCHES.map((b, i) => [b.id, series(b, i + 1)]));
+const sumBy = (rows, f) => rows.reduce((a, r) => a + f(r), 0);
+
+function mini(values) {
+  const hi = Math.max(...values.map((v) => Math.abs(v)), 1);
+  return values.map((v) => ({ h: Math.round((Math.abs(v) / hi) * 100) }));
+}
+
+class Component extends DCLogic {
+  state = { branch: 'all', range: 14, pick: -1 };
+  renderVals() {
+    const s = this.state;
+    const scope = s.branch === 'all' ? BRANCHES : BRANCHES.filter((b) => b.id === s.branch);
+    const one = scope.length === 1 ? scope[0] : null;
+    // daily totals for the branches in scope
+    const days = SERIES.gul.map((d, i) => ({ ...d, sales: sumBy(scope, (b) => SERIES[b.id][i].sales), margin: sumBy(scope, (b) => SERIES[b.id][i].margin), refunds: sumBy(scope, (b) => SERIES[b.id][i].refunds), variance: sumBy(scope, (b) => SERIES[b.id][i].variance) }));
+    const today = days[29], yesterday = days[28], last14 = days.slice(16);
+
+    const kpi = (label, value, tone, subStrong, sub, values, kind, sparkLabel) => ({ label, value, tone, subStrong, sub, kind, sparkLabel, bars: mini(values) });
+    const kpis = [
+      kpi('Sales today', rs(today.sales), '', rs(yesterday.sales), 'all day yesterday', last14.map((d) => d.sales), 'sales', 'Sales for each of the last 14 days'),
+      kpi('Margin today', rs(today.margin), '', pct((today.margin / today.sales) * 100), 'of sales', last14.map((d) => d.margin), 'margin', 'Margin for each of the last 14 days'),
+      kpi('Cash over or short', today.variance === 0 ? 'Rs 0' : rs(today.variance), today.variance === 0 ? 'good' : 'bad', today.variance === 0 ? 'Balanced' : 'Short', today.variance === 0 ? 'at the last day close' : (one ? 'at the last day close' : 'at Johar Town'), last14.map((d) => d.variance), today.variance === 0 ? 'good' : 'bad', 'Cash short at day close, last 14 days'),
+      kpi('Refunds today', rs(today.refunds), '', pct((today.refunds / today.sales) * 100), 'of sales', last14.map((d) => d.refunds), 'soft', 'Refunds for each of the last 14 days')
+    ];
+
+    // sales chart
+    const shown = days.slice(30 - s.range), full = shown.slice(0, -1);
+    const avg = sumBy(full, (d) => d.sales) / full.length;
+    const peak = Math.max(...shown.map((d) => d.sales));
+    const step = peak > 160000 ? 100000 : peak > 80000 ? 50000 : peak > 40000 ? 25000 : 10000;
+    const top = Math.ceil((peak * 1.05) / step) * step;
+    const ticks = []; for (let v = step; v <= top; v += step) ticks.push({ pos: (v / top) * 100, label: rsK(v) });
+    const pickIdx = s.pick >= 0 && s.pick < shown.length ? s.pick : shown.length - 1;
+    const labelEvery = s.range === 30 ? 5 : s.range === 14 ? 1 : 1;
+    const dayName = (d) => `${DOW[d.dow]} ${d.date} ${MON[d.mon]}`;
+    const trendDays = shown.map((d, i) => {
+      const isToday = i === shown.length - 1;
+      return { h: (d.sales / top) * 100, mh: (d.margin / d.sales) * 100, today: String(isToday), on: String(i === pickIdx),
+        tick: s.range === 30 ? ((shown.length - 1 - i) % labelEvery === 0 ? String(d.date) : '') : (s.range === 14 ? DOW[d.dow][0] + ' ' + d.date : DOW[d.dow] + ' ' + d.date),
+        aria: `${dayName(d)}${isToday ? ', today so far' : ''}: sales ${rs(d.sales)}, margin ${rs(d.margin)}`, show: () => this.setState({ pick: i }) };
+    });
+    const best = full.reduce((a, d) => (d.sales > a.sales ? d : a), full[0]);
+    const p = shown[pickIdx], pToday = pickIdx === shown.length - 1;
+    const diff = ((p.sales - avg) / avg) * 100;
+    const trend = { days: trendDays, ticks, avgPos: (avg / top) * 100,
+      say: `A normal day brings in ${rs(Math.round(avg / 100) * 100)}. ${DOW[best.dow]} ${best.date} ${MON[best.mon]} was the best day.`,
+      pick: { day: pToday ? 'Today so far' : dayName(p), sales: rs(p.sales), margin: `${rs(p.margin)} · ${pct((p.margin / p.sales) * 100)}`, note: pToday ? `${Math.round((p.sales / avg) * 100)}% of a normal day so far` : `${pct(Math.abs(diff))} ${diff >= 0 ? 'above' : 'below'} a normal day` } };
+
+    // branches
+    const totalToday = sumBy(BRANCHES, (b) => b.today), maxToday = Math.max(...BRANCHES.map((b) => b.today));
+    const lead = BRANCHES.reduce((a, b) => (b.today > a.today ? b : a), BRANCHES[0]);
+    const rows = BRANCHES.map((b) => { const m = SERIES[b.id][29].margin; return { name: b.name, w: (b.today / maxToday) * 100, mw: (m / b.today) * 100, sales: rs(b.today), share: pct((b.today / totalToday) * 100).replace('.0', ''), margin: pct((m / b.today) * 100), lost: rs(b.lost), expiry: rs(b.expiry[0]), khata: rs(b.khata), aria: `${b.name}: sales ${rs(b.today)}, margin ${pct((m / b.today) * 100)}, lost sales ${rs(b.lost)}, expiring in 30 days ${rs(b.expiry[0])}, khata overdue ${rs(b.khata)}`, on: String(s.branch === b.id), dim: String(s.branch !== 'all' && s.branch !== b.id), pick: () => this.setState({ branch: s.branch === b.id ? 'all' : b.id, pick: -1 }) }; });
+    const allMargin = sumBy(BRANCHES, (b) => SERIES[b.id][29].margin);
+    const branches = { rows, total: { sales: rs(totalToday), margin: pct((allMargin / totalToday) * 100), lost: rs(sumBy(BRANCHES, (b) => b.lost)), expiry: rs(sumBy(BRANCHES, (b) => b.expiry[0])), khata: rs(sumBy(BRANCHES, (b) => b.khata)) }, say: one ? `${one.name} brings in ${pct((one.today / totalToday) * 100)} of today’s sales. Pick it again to see all branches.` : `${lead.name} brings in ${pct((lead.today / totalToday) * 100)} of today’s sales. Pick a branch to see only its figures.` };
+
+    // expiry
+    const ex = [0, 1, 2, 3].map((i) => sumBy(scope, (b) => b.expiry[i]));
+    const expiry = { first: rs(ex[0]), aria: `Stock value expiring: ${rs(ex[0])} within 30 days, ${rs(ex[1])} within 60, ${rs(ex[2])} within 90, ${rs(ex[3])} within 180.`,
+      bars: ex.map((v, i) => ({ k: ['30', '60', '90', '180'][i], value: rsK(Math.round(v / 100) * 100), h: Math.max(6, (v / ex[3]) * 78), label: ['30 days', '60 days', '90 days', '180 days'][i] })) };
+
+    // money owed
+    const ap = sumBy(scope, (b) => b.ap), ar = sumBy(scope, (b) => b.ar), kh = sumBy(scope, (b) => b.khata), mx = Math.max(ap, ar, kh);
+    const nClaims = sumBy(scope, (b) => b.claims);
+    const owed = { claims: String(nClaims), claimsText: nClaims === 1 ? 'supplier claim is still open.' : 'supplier claims are still open.', rows: [{ k: 'ap', label: 'You owe suppliers', value: rs(ap), w: (ap / mx) * 100 }, { k: 'ar', label: 'Customers owe you', value: rs(ar), w: (ar / mx) * 100 }, { k: 'khata', label: 'Khata overdue', value: rs(kh), w: (kh / mx) * 100 }] };
+
+    // stock
+    const nOrders = sumBy(scope, (b) => b.orders);
+    const stock = { total: String(sumBy(scope, (b) => b.stock)), orders: String(nOrders), ordersText: nOrders === 1 ? 'purchase order is ready to review.' : 'purchase orders are ready to review.', aria: BRANCHES.map((b) => `${b.name} ${b.stock}`).join(', '),
+      parts: BRANCHES.map((b, i) => ({ i: String(i), n: b.stock, name: b.name, dim: String(s.branch !== 'all' && s.branch !== b.id) })) };
+
+    // safety and cover
+    const cover = sumBy(scope, (b) => b.cover), recalls = sumBy(scope, (b) => b.recalls), quarantine = sumBy(scope, (b) => b.quarantine), queue = sumBy(scope, (b) => b.queue), exc = sumBy(scope, (b) => b.exc.reduce((a, n) => a + n, 0));
+    const C = 2 * Math.PI * 35;
+    const safety = { cover: `${cover}/${scope.length}`, dash: `${(cover / scope.length) * C} ${C}`, ringAria: `${cover} of ${scope.length} ${scope.length === 1 ? 'branch has' : 'branches have'} a pharmacist on duty`,
+      say: cover < scope.length ? `${scope.length - cover} branch has no pharmacist on duty.` : recalls ? `${recalls} recall is open${one ? '' : ' at Gulberg'}.` : 'No recalls are open.',
+      rows: [{ label: 'Pharmacists on duty', n: `${cover} of ${scope.length}`, tone: cover === scope.length ? 'ok' : 'bad' }, { label: 'Recalls open', n: recalls, tone: recalls ? 'bad' : 'ok' }, { label: 'Units in quarantine', n: quarantine, tone: quarantine ? 'warn' : 'ok' }, { label: 'Safety checks waiting', n: queue, tone: queue ? 'warn' : 'ok' }, { label: 'Other problems', n: exc, tone: exc ? 'warn' : 'ok' }] };
+
+    return {
+      head: { title: one ? `Today at ${one.name}` : 'Today at SehatCart' },
+      branchTabs: [{ id: 'all', name: 'All branches' }, ...BRANCHES].map((b) => ({ name: b.name, pressed: String(s.branch === b.id), pick: () => this.setState({ branch: b.id, pick: -1 }) })),
+      rangeTabs: [7, 14, 30].map((n) => ({ label: `${n} days`, pressed: String(s.range === n), pick: () => this.setState({ range: n, pick: -1 }) })),
+      kpis, trend, branches, expiry, owed, stock, safety
+    };
+  }
+}
+</script>
+</body>
+</html>
