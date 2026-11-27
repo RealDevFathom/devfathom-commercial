@@ -232,6 +232,8 @@ async function verifyRestorationPin(
     organizationId: scope.organizationId,
     approverUserId: witness.id,
     credentialHash: credential.credentialHash,
+    approvalPinMustChange: credential.approvalPinMustChange,
+    deviceBound: credential.deviceId != null,
     secret: input.pin,
     action: options.supplierDispatch
       ? 'pharmacyPurchasing.dispatchPurchaseReturn'

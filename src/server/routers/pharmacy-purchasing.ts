@@ -1,8 +1,5 @@
-import {
-  currentPasswordInput,
-  requirePasswordReauthentication,
-} from '@/lib/password-reauthentication';
-import { ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
+import { currentPasswordInput } from '@/lib/password-reauthentication';
+import { requireOwnPinPassword } from '@/lib/pharmacy/own-pin';
 import { findDuplicateSupplierInvoice } from '@/lib/pharmacy/supplier-invoice-duplicate';
 import { Prisma } from '@/generated/prisma/client';
 import {
@@ -619,17 +616,12 @@ const purchasingRouter = router({
           code: 'FORBIDDEN',
           message: 'A support session cannot set or reset a PIN.',
         });
-      const person = await ctx.db.user.findFirst({
-        where: { id: userId, organizationId },
-        select: { phone: true },
-      });
-      const problem = ownPinProblem(input.pin, input.pin, { phone: person?.phone });
-      if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
-      await requirePasswordReauthentication(ctx.db, {
+      await requireOwnPinPassword(ctx.db, {
         organizationId,
         userId,
-        password: input.currentPassword,
-        purpose: 'pharmacy-pin',
+        currentPassword: input.currentPassword,
+        pin: input.pin,
+        confirmPin: input.pin,
       });
       return ctx.db.$transaction(async (tx) => {
         // Serialize initial profile/credential creation for this person.
@@ -673,6 +665,7 @@ const purchasingRouter = router({
           const credential = await issueOperatorCredential(txDb(tx), {
             staffProfileId: profile.id,
             type: 'PIN',
+            memberSelectedApprovalPin: true,
             secret: input.pin,
           });
           return { id: credential.id, staffProfileId: profile.id };

@@ -202,6 +202,9 @@ admin_files=(
 isolated_files=("$receipt_file" "$returns_file")
 mapfile -t files < <(git ls-files '*.db.test.ts' | grep -iE 'pharmacy|^src/lib/finance/recurring-expense\.db\.test\.ts$' | grep -vxF -f <(printf '%s\n' "${admin_files[@]}" "${isolated_files[@]}") | sort)
 
+# Cross-module approval security suites also use the shared restricted database.
+files+=(tests/shared-approval-pin-migration.db.test.ts src/server/routers/identity-change-paths.db.test.ts)
+
 status=0
 # Keep the same isolated databases for both passes to catch cross-run fixture leaks.
 for pass in 1 2; do

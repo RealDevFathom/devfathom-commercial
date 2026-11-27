@@ -159,6 +159,7 @@ function world() {
       return [];
     }),
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
+    notification: { create: vi.fn() },
     organization: { findFirst: vi.fn(async () => ({ requireApprovalAuthenticator: false })) },
     user: {
       findUnique: vi.fn(
@@ -494,6 +495,13 @@ describe('pharmacyPin.resetForMember', () => {
       w.caller('owner').resetForMember({ userId: 'cashier', currentPassword: PASSWORD })
     ).resolves.toEqual({ reset: true });
 
+    expect(w.db.notification.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        organizationId: ORG,
+        userId: 'cashier',
+        type: 'approval_pin_reset',
+      }),
+    });
     expect(w.credentials[0]!.revokedAt).toBeInstanceOf(Date);
     expect(await w.caller('cashier').status()).toMatchObject({ state: 'RESET' });
     expect(auditDetails().at(-1)).toMatchObject({

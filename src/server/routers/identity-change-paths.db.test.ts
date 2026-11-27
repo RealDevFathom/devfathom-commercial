@@ -57,6 +57,7 @@ const app = router({
   organizationAdmin: organizationAdminRouter,
   approvalAuthenticator: approvalAuthenticatorRouter,
   pharmacyPin: pharmacyPinRouter,
+  accountPin: pharmacyPinRouter,
   restaurantStaff: restaurantStaffRouter,
 });
 const suffix = randomBytes(6).toString('hex');
@@ -583,6 +584,246 @@ describe.skipIf(!databaseUrl)('DEV-974 identity-change paths against PostgreSQL'
     }
   });
 
+  it('protects a linked member’s credentials in a restaurant licensed for pharmacy', async () => {
+    const mixed = <T>(
+      actorId: string,
+      run: (caller: ReturnType<typeof app.createCaller>) => Promise<T>
+    ) =>
+      withTenantDb(organizationId, (db) => {
+        const ctx = context(db, actorId);
+        ctx.entitlements.enabledModules = ['restaurant-core', 'pharmacy-core'];
+        return run(app.createCaller(ctx));
+      });
+    const { admin, staff } = ids();
+    await client.query(
+      `INSERT INTO user_permission_overrides (id, "organizationId", "userId", capability, effect, reason, "updatedAt")
+       VALUES ($1,$2,$3,'staff:manage','ALLOW','test staff manager',now()),
+              ($4,$2,$3,'restaurant:configure','ALLOW','test manager',now())`,
+      [admin + '_manage', organizationId, admin, admin + '_configure']
+    );
+    const profileId = staff + '_profile';
+    await client.query(
+      `INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName","updatedAt")
+       VALUES ($1,$2,$3,'Test member',now())`,
+      [profileId, organizationId, staff]
+    );
+    const ownerProfile = ids().owner + '_profile';
+    await client.query(
+      'INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName","updatedAt") VALUES ($1,$2,$3,$3,now())',
+      [ownerProfile, organizationId, ids().owner]
+    );
+    await expect(
+      mixed(admin, (c) =>
+        c.restaurantStaff.issueCredential({
+          staffProfileId: profileId,
+          type: 'PIN',
+          secret: '582917',
+          currentPassword: PASSWORD,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Only the member can set their approval PIN. Use Settings, Your PIN to reset it.',
+    });
+    await expect(
+      mixed(admin, (c) =>
+        c.restaurantStaff.issueCredential({
+          staffProfileId: ownerProfile,
+          type: 'BADGE',
+          secret: 'synthetic-badge',
+          currentPassword: PASSWORD,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: "Only the owner can reset this person's PIN.",
+    });
+    // A synthetic, pre-existing restaurant badge is recoverable only after reauthentication.
+    const badge = await withTenantDb(organizationId, (db) =>
+      db.restaurantOperatorCredential.create({
+        data: { staffProfileId: profileId, type: 'BADGE', credentialHash: 'unused-fixture-hash' },
+        select: { id: true },
+      })
+    );
+    const revokeBadge = (currentPassword: string) =>
+      mixed(admin, (c) =>
+        c.restaurantStaff.revokeCredential({ credentialId: badge.id, currentPassword })
+      );
+    await expect(revokeBadge('wrong')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(revokeBadge(PASSWORD)).resolves.toMatchObject({
+      id: badge.id,
+      revokedAt: expect.any(Date),
+    });
+    await revokeBadge(PASSWORD);
+    expect(
+      await withTenantDb(organizationId, (db) =>
+        db.notification.count({ where: { userId: staff, type: 'operator_credential_reset' } })
+      )
+    ).toBe(1);
+    const self = (currentPassword: string) =>
+      mixed(staff, (c) =>
+        c.pharmacyPin.setMine({ pin: '582917', confirmPin: '582917', currentPassword })
+      );
+    await expect(self('incorrect')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(self(PASSWORD)).resolves.toEqual({ action: 'created', state: 'SET' });
+    const { id: credentialId } = await withTenantDb(organizationId, (db) =>
+      db.restaurantOperatorCredential.findFirstOrThrow({
+        where: { staffProfileId: profileId, type: 'PIN' },
+        select: { id: true },
+      })
+    );
+    await expect(
+      mixed(admin, (c) =>
+        c.restaurantStaff.rotateCredential({
+          credentialId,
+          secret: '382917',
+          currentPassword: PASSWORD,
+        })
+      )
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Only the member can set their approval PIN. Use Settings, Your PIN to reset it.',
+    });
+    await expect(
+      mixed(admin, (c) =>
+        c.restaurantStaff.revokeCredential({ credentialId, currentPassword: PASSWORD })
+      )
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Manage this approval PIN in Settings under Your PIN.',
+    });
+    await expect(
+      mixed(admin, (c) =>
+        c.pharmacyPin.resetForMember({ userId: staff, currentPassword: PASSWORD })
+      )
+    ).resolves.toEqual({ reset: true });
+    const state = await withTenantDb(organizationId, async (db) => ({
+      pin: await db.restaurantOperatorCredential.findUniqueOrThrow({
+        where: { id: credentialId },
+        select: { revokedAt: true },
+      }),
+      notices: await db.notification.count({
+        where: { userId: staff, type: 'approval_pin_reset', entityId: admin },
+      }),
+    }));
+    expect(state).toEqual({ pin: { revokedAt: expect.any(Date) }, notices: 1 });
+  });
+
+  it('clears the historical change requirement only after the member sets a PIN with their password', async () => {
+    const userId = ids().staff;
+    await withTenantDb(organizationId, async (db) => {
+      for (const displayName of ['First historical profile', 'Other historical profile']) {
+        const profile = await db.restaurantStaffProfile.create({ data: { displayName, userId } });
+        await db.restaurantOperatorCredential.create({
+          data: {
+            staffProfileId: profile.id,
+            type: 'PIN',
+            credentialHash: 'unused-historical-hash',
+            approvalPinMustChange: true,
+          },
+        });
+      }
+    });
+    const run = <T>(action: (caller: ReturnType<typeof app.createCaller>) => Promise<T>) =>
+      withTenantDb(organizationId, (db) => {
+        const ctx = context(db, userId);
+        ctx.entitlements.enabledModules = ['restaurant-core'];
+        return action(app.createCaller(ctx));
+      });
+    const save = (currentPassword: string) =>
+      run((c) => c.accountPin.setMine({ pin: '582931', confirmPin: '582931', currentPassword }));
+    await expect(run((c) => c.accountPin.status())).resolves.toMatchObject({
+      state: 'MUST_CHANGE',
+    });
+    await expect(save('incorrect')).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(run((c) => c.accountPin.status())).resolves.toMatchObject({
+      state: 'MUST_CHANGE',
+    });
+    await expect(save(PASSWORD)).resolves.toEqual({ action: 'changed', state: 'SET' });
+    await expect(run((c) => c.accountPin.status())).resolves.toMatchObject({ state: 'SET' });
+    const remaining = await withTenantDb(organizationId, (db) =>
+      db.restaurantOperatorCredential.count({
+        where: { staffProfile: { userId }, approvalPinMustChange: true },
+      })
+    );
+    expect(remaining).toBe(0);
+  });
+
+  it.each(
+    (['self', 'owner', 'second owner', 'administrator'] as const).flatMap((actor) =>
+      (['PIN', 'BADGE'] as const).map((type) => ({ actor, type }))
+    )
+  )('linked $type recovery by $actor', async ({ actor, type }) => {
+    const { owner, admin, staff } = ids();
+    const target = actor === 'self' ? staff : owner;
+    const actorId =
+      actor === 'second owner'
+        ? organizationId + '_second_owner'
+        : actor === 'administrator'
+          ? admin
+          : target;
+    if (actor === 'second owner')
+      await insertUser(
+        actorId,
+        'other-owner@test.invalid',
+        'ADMIN',
+        organizationId + '_owner_role'
+      );
+    const credential = await withTenantDb(organizationId, async (db) => {
+      const profile = await db.restaurantStaffProfile.create({
+        data: { displayName: 'Test member', userId: target },
+      });
+      const device =
+        type === 'PIN'
+          ? await db.restaurantRegisteredDevice.create({
+              data: {
+                name: 'Test register',
+                deviceSecretHash: randomBytes(32).toString('hex'),
+                branch: { create: { name: 'Recovery branch' } },
+              },
+            })
+          : null;
+      return db.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: profile.id,
+          type,
+          deviceId: device?.id,
+          credentialHash: 'unused-synthetic-hash',
+        },
+      });
+    });
+    const run = (password: string) =>
+      withTenantDb(organizationId, (db) => {
+        const caller = app.createCaller(context(db, actorId));
+        const input = { credentialId: credential.id, currentPassword: password };
+        return actorId === target
+          ? caller.restaurantStaff.revokeMyTerminalCredential(input)
+          : caller.restaurantStaff.revokeCredential(input);
+      });
+    if (actor === 'administrator') {
+      await client.query(
+        `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'staff:manage','ALLOW','test',now()),($4,$2,$3,'restaurant:configure','ALLOW','test',now())`,
+        [admin + '_manage', organizationId, admin, admin + '_configure']
+      );
+      await expect(run(PASSWORD)).rejects.toMatchObject({
+        message: "Only the owner can reset this person's PIN.",
+      });
+    } else {
+      await expect(run('wrong')).rejects.toMatchObject({
+        message: 'Your current password is incorrect.',
+      });
+      await expect(run(PASSWORD)).resolves.toMatchObject({
+        id: credential.id,
+        revokedAt: expect.any(Date),
+      });
+    }
+    expect(
+      await withTenantDb(organizationId, (db) =>
+        db.notification.count({ where: { userId: target, type: 'operator_credential_reset' } })
+      )
+    ).toBe(actor === 'second owner' ? 1 : 0);
+  });
+
   it('restaurant PIN: an administrator cannot set the PIN of, or link a profile to, the owner', async () => {
     // Restaurant staff management is granted by role or override, not by base role.
     await client.query(
@@ -631,11 +872,24 @@ describe.skipIf(!databaseUrl)('DEV-974 identity-change paths against PostgreSQL'
       )
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     // A staff member below the administrator still gets a PIN.
+    const device = await withTenantDb(organizationId, async (db) => {
+      const branch = await db.restaurantBranch.create({ data: { name: 'Test branch' } });
+      return db.restaurantRegisteredDevice.create({
+        data: {
+          name: 'Test register',
+          branchId: branch.id,
+          deviceSecretHash: randomBytes(32).toString('hex'),
+        },
+      });
+    });
     await asAdmin((caller) =>
       caller.restaurantStaff.issueCredential({
         staffProfileId: `${organizationId}_p_staff`,
         type: 'PIN',
         secret: '691358',
+        confirmPin: '691358',
+        deviceId: device.id,
+        currentPassword: PASSWORD,
       })
     );
     const credentials = await withTenantDb(organizationId, (db) =>

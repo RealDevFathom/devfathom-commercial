@@ -3484,6 +3484,8 @@ export const pharmacySalesRouter = router({
               organizationId: scope.organizationId,
               approverUserId: pharmacist.id,
               credentialHash: credential.credentialHash,
+              approvalPinMustChange: credential.approvalPinMustChange,
+              deviceBound: credential.deviceId != null,
               secret: authorization.pin,
               action: 'pharmacySales.controlledAuthorization',
               approverRight: 'pharmacy:dispense',

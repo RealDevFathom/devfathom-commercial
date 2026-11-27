@@ -254,6 +254,8 @@ export const pharmacySafetyRouter = router({
               organizationId,
               approverUserId: pharmacist.id,
               credentialHash: credential.credentialHash,
+              approvalPinMustChange: credential.approvalPinMustChange,
+              deviceBound: credential.deviceId != null,
               secret: input.pin,
               action: 'pharmacySafety.recordCorrection',
               approverRight: 'pharmacy:dispense',

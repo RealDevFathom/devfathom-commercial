@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
-import { router, capabilityProcedure, protectedProcedure } from '../trpc';
+import { router, capabilityProcedure, protectedProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
@@ -30,7 +30,12 @@ import {
 } from '@/lib/restaurant/credential-lifecycle';
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
 import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
-import { pinResetDenial } from '@/lib/pharmacy/own-pin';
+import { ownPinProblem } from '@/lib/pharmacy/own-pin-policy';
+import {
+  currentPasswordInput,
+  requirePasswordReauthentication,
+} from '@/lib/password-reauthentication';
+import { pinResetDenial, requireMemberPinReset } from '@/lib/pharmacy/own-pin';
 import {
   assertMayRemoveLogin,
   guardTerminalOnlyApprovers,
@@ -193,12 +198,111 @@ async function assertMaySetLinkedCredential(
   if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
 }
 
-async function linkedUserOf(db: ScopedDb, staffProfileId: string): Promise<string | null> {
-  const profile = await db.restaurantStaffProfile.findUnique({
-    where: { id: staffProfileId },
-    select: { userId: true },
+// Credential changes and account relinking take the same profile lock. In particular,
+// a terminal-only profile cannot acquire a login between its authorization and its write.
+async function lockCredentialProfile(db: ScopedDb, organizationId: string, staffProfileId: string) {
+  const [profile] = await db.$queryRaw<Array<{ userId: string | null; status: string }>>`
+    SELECT "userId", status FROM restaurant_staff_profiles
+    WHERE id = ${staffProfileId} AND "organizationId" = ${organizationId} FOR UPDATE`;
+  if (!profile) denyStaffBranchAccess();
+  return profile;
+}
+
+type CredentialChange =
+  | { operation: 'set'; type: 'PIN' | 'BADGE'; secret: string; confirmPin?: string }
+  | { operation: 'revoke'; type: 'PIN' | 'BADGE'; credentialId: string; selfOnly?: boolean };
+
+async function changeStaffCredential<T>(
+  ctx: TRPCContext,
+  staffProfileId: string,
+  deviceId: string | null | undefined,
+  currentPassword: string | undefined,
+  change: CredentialChange,
+  write: (db: ScopedDb) => Promise<T>
+): Promise<T> {
+  const actorId = ctx.session!.user.id;
+  const organizationId = ctx.entitlements.organizationId;
+  if (
+    ctx.support ||
+    ctx.session?.user.isSupportSession ||
+    ctx.session?.user.organizationId !== organizationId
+  )
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'A tenant member must manage this credential.',
+    });
+  return ctx.db.$transaction(async (tx) => {
+    const db = tx as unknown as ScopedDb;
+    const profile = await lockCredentialProfile(db, organizationId, staffProfileId);
+    const targetId = profile.userId;
+    annotateAudit(ctx, { metadata: { staffProfileId, forUserId: targetId, byUserId: actorId } });
+    if (change.operation === 'revoke' && change.selfOnly && targetId !== actorId)
+      denyStaffBranchAccess();
+    if (!targetId) return write(db);
+    const self = actorId === targetId;
+    if (change.type === 'PIN' && deviceId == null)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          self || change.operation === 'revoke'
+            ? 'Manage this approval PIN in Settings under Your PIN.'
+            : 'Only the member can set their approval PIN. Use Settings, Your PIN to reset it.',
+      });
+    if (!currentPassword)
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Re-enter your current account password.',
+      });
+    if (self)
+      await requirePasswordReauthentication(db, {
+        organizationId,
+        userId: actorId,
+        password: currentPassword,
+        purpose: 'pharmacy-pin',
+      });
+    else await requireMemberPinReset(db, { organizationId, actorId, targetId, currentPassword });
+    if (change.operation === 'set') {
+      if (profile.status !== 'ACTIVE')
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This staff profile is not active.' });
+      if (change.type === 'PIN') {
+        const person = await db.user.findFirst({
+          where: { id: targetId, organizationId },
+          select: { phone: true },
+        });
+        const problem = ownPinProblem(change.secret, change.confirmPin ?? '', {
+          phone: person?.phone,
+        });
+        if (problem) throw new TRPCError({ code: 'BAD_REQUEST', message: problem });
+      }
+    }
+    const notify =
+      !self &&
+      (change.operation === 'set' ||
+        (await db.restaurantOperatorCredential.findFirst({
+          where: { id: change.credentialId, revokedAt: null },
+          select: { id: true },
+        })));
+    const result = await write(db);
+    if (notify) {
+      const revoked = change.operation === 'revoke';
+      await tx.notification.create({
+        data: {
+          organizationId,
+          userId: targetId,
+          type: revoked ? 'operator_credential_reset' : 'operator_credential_changed',
+          title: revoked
+            ? 'Your restaurant credential was revoked'
+            : 'Your restaurant credential changed',
+          message: revoked
+            ? 'A staff manager revoked your restaurant operator credential.'
+            : 'A staff manager issued or rotated your restaurant operator credential.',
+          entityType: 'User',
+          entityId: actorId,
+        },
+      });
+    }
+    return result;
   });
-  return profile?.userId ?? null;
 }
 
 type InviteActor = Parameters<typeof subjectFromSession>[0];
@@ -743,9 +847,28 @@ export const restaurantStaffRouter = router({
             actorUserId: ctx.session!.user.id,
             staffProfileId: id,
           });
-        const staff = await guarded(ctx, 'restaurantStaff.update', (db) =>
-          updateStaffProfileWithinCommercialLimit(db, ctx.entitlements.limits, id, patch)
-        );
+        const staff = await guarded(ctx, 'restaurantStaff.update', async (db) => {
+          if (patch.userId !== undefined) {
+            const organizationId = workspaceOrganizationId(ctx);
+            const profile = await lockCredentialProfile(db, organizationId, id);
+            if (profile.userId !== patch.userId) {
+              // Pharmacy self-service and purchasing lock the member before saving a PIN.
+              if (profile.userId)
+                await db.$queryRaw`SELECT id FROM users WHERE id=${profile.userId} AND "organizationId"=${organizationId} FOR UPDATE`;
+              if (
+                await db.restaurantOperatorCredential.findFirst({
+                  where: { organizationId, staffProfileId: id, revokedAt: null },
+                  select: { id: true },
+                })
+              )
+                throw new TRPCError({
+                  code: 'FORBIDDEN',
+                  message: 'Reset the existing credentials before changing the linked account.',
+                });
+            }
+          }
+          return updateStaffProfileWithinCommercialLimit(db, ctx.entitlements.limits, id, patch);
+        });
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
           targetId: staff.id,
@@ -822,12 +945,68 @@ export const restaurantStaffRouter = router({
       });
     }),
 
+  myTerminalCredentials: protectedProcedure.query(({ ctx }) =>
+    ctx.db.restaurantOperatorCredential.findMany({
+      where: {
+        organizationId: workspaceOrganizationId(ctx),
+        staffProfile: { userId: ctx.session!.user.id },
+        revokedAt: null,
+        OR: [{ type: 'BADGE' }, { deviceId: { not: null } }],
+      },
+      select: { id: true, type: true, device: { select: { name: true } }, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    })
+  ),
+
+  revokeMyTerminalCredential: protectedProcedure
+    .input(
+      z.strictObject({
+        credentialId: z.string(),
+        currentPassword: currentPasswordInput,
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'RestaurantOperatorCredential',
+        targetId: input.credentialId,
+      });
+      const existing = await ctx.db.restaurantOperatorCredential.findFirst({
+        where: {
+          id: input.credentialId,
+          organizationId: workspaceOrganizationId(ctx),
+          staffProfile: { userId: ctx.session!.user.id },
+          OR: [{ type: 'BADGE' }, { deviceId: { not: null } }],
+        },
+        select: { type: true, deviceId: true, staffProfileId: true },
+      });
+      if (!existing) denyStaffBranchAccess();
+      return changeStaffCredential(
+        ctx,
+        existing.staffProfileId,
+        existing.deviceId,
+        input.currentPassword,
+        {
+          operation: 'revoke',
+          type: existing.type,
+          credentialId: input.credentialId,
+          selfOnly: true,
+        },
+        async (db) => {
+          const result = await revokeOperatorCredential(db, input);
+          return { id: result.id, revokedAt: result.revokedAt };
+        }
+      );
+    }),
+
   issueCredential: staffProcedure
     .input(
       z.object({
         staffProfileId: z.string(),
         type: CREDENTIAL_TYPE,
         secret: z.string().min(1),
+        currentPassword: currentPasswordInput.optional(),
+        confirmPin: z.string().max(16).optional(),
         deviceId: z.string().nullable().optional(),
       })
     )
@@ -851,12 +1030,19 @@ export const restaurantStaffRouter = router({
           if (!device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, device.branchId);
         }
-        await assertMaySetLinkedCredential(
-          ctx.db,
-          ctx.session!.user.id,
-          await linkedUserOf(ctx.db, input.staffProfileId)
+        const credential = await changeStaffCredential(
+          ctx,
+          input.staffProfileId,
+          input.deviceId,
+          input.currentPassword,
+          {
+            operation: 'set',
+            type: input.type,
+            secret: input.secret,
+            confirmPin: input.confirmPin,
+          },
+          (db) => issueOperatorCredential(db, input)
         );
-        const credential = await issueOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
           targetType: 'RestaurantOperatorCredential',
@@ -882,7 +1068,14 @@ export const restaurantStaffRouter = router({
     }),
 
   rotateCredential: staffProcedure
-    .input(z.object({ credentialId: z.string(), secret: z.string().min(1) }))
+    .input(
+      z.object({
+        credentialId: z.string(),
+        currentPassword: currentPasswordInput.optional(),
+        confirmPin: z.string().max(16).optional(),
+        secret: z.string().min(1),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       try {
@@ -893,7 +1086,12 @@ export const restaurantStaffRouter = router({
         );
         const existing = await ctx.db.restaurantOperatorCredential.findUnique({
           where: { id: input.credentialId },
-          select: { staffProfileId: true, deviceId: true, device: { select: { branchId: true } } },
+          select: {
+            type: true,
+            staffProfileId: true,
+            deviceId: true,
+            device: { select: { branchId: true } },
+          },
         });
         if (!existing) denyStaffBranchAccess();
         await assertAuthorizedStaffProfile(ctx.db, authorization, existing.staffProfileId);
@@ -902,12 +1100,19 @@ export const restaurantStaffRouter = router({
           if (!existing.device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, existing.device.branchId);
         }
-        await assertMaySetLinkedCredential(
-          ctx.db,
-          ctx.session!.user.id,
-          await linkedUserOf(ctx.db, existing.staffProfileId)
+        const credential = await changeStaffCredential(
+          ctx,
+          existing.staffProfileId,
+          existing.deviceId,
+          input.currentPassword,
+          {
+            operation: 'set',
+            type: existing.type,
+            secret: input.secret,
+            confirmPin: input.confirmPin,
+          },
+          (db) => rotateOperatorCredential(db, input)
         );
-        const credential = await rotateOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
           targetType: 'RestaurantOperatorCredential',
@@ -926,7 +1131,7 @@ export const restaurantStaffRouter = router({
     }),
 
   revokeCredential: staffProcedure
-    .input(z.object({ credentialId: z.string() }))
+    .input(z.object({ credentialId: z.string(), currentPassword: currentPasswordInput.optional() }))
     .mutation(async ({ ctx, input }) => {
       // Uniform C4 treatment for credential-bearing mutations: skip raw-input
       // capture (the credential id is still recorded below as the audit target).
@@ -939,7 +1144,12 @@ export const restaurantStaffRouter = router({
         );
         const existing = await ctx.db.restaurantOperatorCredential.findUnique({
           where: { id: input.credentialId },
-          select: { staffProfileId: true, deviceId: true, device: { select: { branchId: true } } },
+          select: {
+            type: true,
+            staffProfileId: true,
+            deviceId: true,
+            device: { select: { branchId: true } },
+          },
         });
         if (!existing) denyStaffBranchAccess();
         await assertAuthorizedStaffProfile(ctx.db, authorization, existing.staffProfileId);
@@ -948,7 +1158,14 @@ export const restaurantStaffRouter = router({
           if (!existing.device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, existing.device.branchId);
         }
-        const credential = await revokeOperatorCredential(ctx.db, input);
+        const credential = await changeStaffCredential(
+          ctx,
+          existing.staffProfileId,
+          existing.deviceId,
+          input.currentPassword,
+          { operation: 'revoke', type: existing.type, credentialId: input.credentialId },
+          (db) => revokeOperatorCredential(db, input)
+        );
         annotateAudit(ctx, {
           skipInput: true,
           targetType: 'RestaurantOperatorCredential',

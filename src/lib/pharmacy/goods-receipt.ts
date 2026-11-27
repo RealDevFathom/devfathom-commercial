@@ -192,6 +192,8 @@ export async function verifyControlledPurchaseWitness(
       organizationId: scope.organizationId,
       approverUserId: pharmacist.id,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: input.pin,
       action: 'pharmacy.goodsReceiptControlledWitness',
       approverRight: 'pharmacy:dispense',

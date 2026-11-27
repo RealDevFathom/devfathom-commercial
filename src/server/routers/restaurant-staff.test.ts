@@ -5,6 +5,7 @@
  * ABAC decision, entitlement check and audit writer are mocked so the test
  * exercises this lane's logic, not the platform middleware.
  */
+import { hashSync } from 'bcryptjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -61,7 +62,10 @@ import { restaurantStaffRouter } from './restaurant-staff';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import type { TRPCContext } from '../trpc';
 
+const password = 'synthetic-manager-password';
+const passwordHash = hashSync(password, 4);
 const db = {
+  notification: { create: vi.fn() },
   $queryRaw: mocks.raw,
   $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
   restaurantStaffProfile: {
@@ -96,12 +100,12 @@ function staffParty(
   return { id, role, status: 'ACTIVE', organizationRole, permissionOverrides: [] };
 }
 
-function caller() {
+function caller(enabledModules = ['restaurant-core']) {
   return restaurantStaffRouter.createCaller({
     db,
     entitlements: {
       organizationId: 'org_workspace',
-      enabledModules: ['restaurant-core'],
+      enabledModules,
       activeSeats: 1,
       seatLimit: 50,
       modules: [],
@@ -109,7 +113,13 @@ function caller() {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_gm', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      user: {
+        id: 'user_gm',
+        organizationId: 'org_workspace',
+        role: 'EMPLOYEE',
+        department: 'OPERATIONS',
+        status: 'ACTIVE',
+      },
     },
     organization: { id: 'org_workspace' },
     support: null,
@@ -124,7 +134,11 @@ beforeEach(() => {
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
   mocks.staffFindMany.mockResolvedValue([]);
   mocks.staffCount.mockResolvedValue(0);
-  mocks.raw.mockResolvedValue([{ id: 'org_1' }]);
+  mocks.raw.mockImplementation(async (sql: TemplateStringsArray) =>
+    Array.isArray(sql) && sql.join('').includes('FROM restaurant_staff_profiles')
+      ? [await mocks.staffFindUnique()]
+      : [{ id: 'org_1' }]
+  );
   mocks.staffFindFirst.mockResolvedValue(null);
   mocks.branchFindMany.mockImplementation(async (args?: { where?: { id?: { in?: string[] } } }) => {
     const ids = args?.where?.id?.in;
@@ -139,7 +153,7 @@ beforeEach(() => {
     staffParty(where.id, 'EMPLOYEE')
   );
   mocks.userFindMany.mockResolvedValue([]);
-  mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE' });
+  mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE', userId: null });
   mocks.staffCreate.mockImplementation(async ({ data }: { data: Record<string, unknown> }) => ({
     id: 'staff_new',
     ...data,
@@ -486,6 +500,13 @@ describe('DEV-974: a manager never sets the PIN of an administrator or the owner
     permissions: [{ capability: '*', effect: 'ALLOW' }],
   });
   beforeEach(() => {
+    mocks.userFindFirst.mockImplementation(async ({ where, select }) =>
+      select.password
+        ? { password: passwordHash }
+        : select.phone
+          ? { phone: null }
+          : mocks.userFindUnique({ where })
+    );
     mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
       where.id === 'user_owner'
         ? owner
@@ -504,14 +525,26 @@ describe('DEV-974: a manager never sets the PIN of an administrator or the owner
         type: 'PIN',
         revokedAt: null,
         staffProfileId: 'staff_1',
-        deviceId: null,
-        device: null,
+        deviceId: 'device_1',
+        device: { branchId: 'branch_1' },
       });
       await expect(
-        caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+        caller().issueCredential({
+          staffProfileId: 'staff_1',
+          type: 'PIN',
+          secret: '4821',
+          deviceId: 'device_1',
+          confirmPin: '4821',
+          currentPassword: password,
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       await expect(
-        caller().rotateCredential({ credentialId: 'cred_1', secret: '99887' })
+        caller().rotateCredential({
+          credentialId: 'cred_1',
+          secret: '99887',
+          confirmPin: '99887',
+          currentPassword: password,
+        })
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(mocks.credCreate).not.toHaveBeenCalled();
       expect(mocks.credUpdate).not.toHaveBeenCalled();
@@ -533,8 +566,107 @@ describe('DEV-974: a manager never sets the PIN of an administrator or the owner
   it('still sets the PIN of a staff member below the manager', async () => {
     mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', status: 'ACTIVE', userId: 'user_1' });
     await expect(
-      caller().issueCredential({ staffProfileId: 'staff_1', type: 'PIN', secret: '4821' })
+      caller().issueCredential({
+        staffProfileId: 'staff_1',
+        type: 'PIN',
+        secret: '4821',
+        deviceId: 'device_1',
+        confirmPin: '4821',
+        currentPassword: password,
+      })
     ).resolves.toMatchObject({ type: 'PIN' });
+  });
+});
+
+describe('shared pharmacy approval PINs', () => {
+  it.each([null, 'another-member'])(
+    'self-only revocation rechecks the locked profile link (%s)',
+    async (userId) => {
+      mocks.credFindFirst.mockResolvedValueOnce({
+        staffProfileId: 'staff_1',
+        type: 'BADGE',
+        deviceId: null,
+      });
+      mocks.raw.mockResolvedValueOnce([{ userId, status: 'ACTIVE' }]);
+      await expect(
+        caller().revokeMyTerminalCredential({ credentialId: 'cred_1', currentPassword: password })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You are not authorized to administer staff for this branch.',
+      });
+      expect(mocks.credFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ staffProfile: { userId: 'user_gm' } }),
+        })
+      );
+      expect(mocks.raw).toHaveBeenCalledOnce();
+      expect(mocks.credUpdate).not.toHaveBeenCalled();
+      expect(db.notification.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['restaurant-core', 'pharmacy-core', 'pharmacy-counter'])(
+    'directs issue, rotation and revocation to the password-protected PIN procedures with %s',
+    async (pharmacyModule) => {
+      const mixed = caller(['restaurant-core', pharmacyModule]);
+      mocks.raw.mockResolvedValue([{ userId: 'user_1', status: 'ACTIVE' }]);
+      mocks.staffFindUnique.mockResolvedValue({
+        id: 'staff_1',
+        status: 'ACTIVE',
+        userId: 'user_1',
+      });
+      mocks.credFindUnique.mockResolvedValue({
+        id: 'cred_1',
+        staffProfileId: 'staff_1',
+        type: 'PIN',
+        deviceId: null,
+        revokedAt: null,
+      });
+      // The test double cannot persist a credential, even if a guard is missing.
+      const unexpectedWrite = new Error('Unexpected credential write');
+      mocks.credCreate.mockRejectedValue(unexpectedWrite);
+      mocks.credUpdate.mockRejectedValue(unexpectedWrite);
+      await expect(
+        mixed.issueCredential({
+          staffProfileId: 'staff_1',
+          type: 'PIN',
+          secret: '4821',
+          currentPassword: password,
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only the member can set their approval PIN. Use Settings, Your PIN to reset it.',
+      });
+      await expect(
+        mixed.rotateCredential({
+          credentialId: 'cred_1',
+          secret: '4821',
+          currentPassword: password,
+        })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only the member can set their approval PIN. Use Settings, Your PIN to reset it.',
+      });
+      await expect(
+        mixed.revokeCredential({ credentialId: 'cred_1', currentPassword: password })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Manage this approval PIN in Settings under Your PIN.',
+      });
+      expect(mocks.credCreate).not.toHaveBeenCalled();
+      expect(mocks.credUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses to move an active approval PIN to a different account', async () => {
+    mocks.raw.mockResolvedValue([{ userId: 'user_1' }]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_1', userId: 'user_1' });
+    mocks.credFindFirst.mockResolvedValue({ id: 'cred_1' });
+    mocks.staffUpdate.mockRejectedValue(new Error('Unexpected profile write'));
+    await expect(
+      caller(['restaurant-core', 'pharmacy-core']).update({ id: 'staff_1', userId: 'user_2' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.staffUpdate).not.toHaveBeenCalled();
   });
 });
 
@@ -549,6 +681,9 @@ describe('credential mutations suppress the plaintext secret (C4)', () => {
     // The very first audit annotation sets skipInput, protecting the failure path too.
     expect(mocks.annotateAudit.mock.calls[0][1]).toEqual({ skipInput: true });
     // The stored hash is a real, verifiable bcrypt hash — never the plaintext.
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      metadata: { staffProfileId: 'staff_1', forUserId: null, byUserId: 'user_gm' },
+    });
     const stored = mocks.credCreate.mock.calls[0][0].data.credentialHash;
     expect(stored).not.toBe('4821');
     expect(await verifyOperatorCredential('PIN', '4821', stored)).toBe(true);

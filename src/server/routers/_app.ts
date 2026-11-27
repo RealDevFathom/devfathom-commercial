@@ -155,6 +155,7 @@ export const appRouter = router({
   pharmacyPharmacistCheck: pharmacyPharmacistCheckRouter,
   pharmacyRxSoloShift: pharmacyRxSoloShiftRouter,
   pharmacyPin: pharmacyPinRouter,
+  accountPin: pharmacyPinRouter,
   pharmacyDispensing: pharmacyDispensingRouter,
   pharmacySafety: pharmacySafetyRouter,
   pharmacySop: pharmacySopRouter,

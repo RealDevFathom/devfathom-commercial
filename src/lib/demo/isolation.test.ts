@@ -18,6 +18,7 @@ describe('demo isolation policy', () => {
     ['restaurantDevices.initiateEnrollment', 'mutation'],
     ['restaurantPayments.saveTerminalConfig', 'mutation'],
     ['restaurantStaff.issueCredential', 'mutation'],
+    ['restaurantStaff.revokeMyTerminalCredential', 'mutation'],
     ['team.inviteMember', 'mutation'],
     ['team.updateProfile', 'mutation'],
   ] as const)('blocks %s', (path, type) => {

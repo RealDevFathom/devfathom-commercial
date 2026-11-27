@@ -163,6 +163,8 @@ async function ownerPin(db: ScopedDb, scope: MarketingScope, pin: string | undef
       organizationId: scope.organizationId,
       approverUserId: scope.actorId,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: pin,
       action: 'pharmacy.marketing.basketInsightReview',
       approverRight: 'OWNER',

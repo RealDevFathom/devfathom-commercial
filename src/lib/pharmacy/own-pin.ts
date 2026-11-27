@@ -5,7 +5,10 @@ import { TRPCError } from '@trpc/server';
 import type { AuthzDb } from '@/lib/authz';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
-import type { ApprovalAuthenticatorParty } from '@/lib/approval-authenticator';
+import {
+  approvalAuthenticatorPartySelect,
+  type ApprovalAuthenticatorParty,
+} from '@/lib/approval-authenticator';
 import {
   issueOperatorCredential,
   revokeOperatorCredential,
@@ -31,6 +34,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 export type OwnPinState = {
   /** SET: an active PIN. NOT_SET: none yet. RESET: a manager reset it; set a new one. */
   state: 'SET' | 'NOT_SET' | 'RESET';
+  mustChange?: true;
   locked: boolean;
   lockedUntil: Date | null;
 };
@@ -54,7 +58,7 @@ export async function readOwnPinState(
     db.restaurantOperatorCredential.findFirst({
       where: activePin(organizationId, userId),
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      select: { failedAttempts: true, lockedUntil: true },
+      select: { failedAttempts: true, lockedUntil: true, approvalPinMustChange: true },
     }),
     db.restaurantOperatorCredential.findFirst({
       where: {
@@ -69,7 +73,12 @@ export async function readOwnPinState(
   ]);
   if (!active) return { state: revoked ? 'RESET' : 'NOT_SET', locked: false, lockedUntil: null };
   const locked = isLockedOut(active, now);
-  return { state: 'SET', locked, lockedUntil: locked ? active.lockedUntil : null };
+  return {
+    state: 'SET',
+    ...(active.approvalPinMustChange && { mustChange: true as const }),
+    locked,
+    lockedUntil: locked ? active.lockedUntil : null,
+  };
 }
 
 export class OwnPinError extends Error {
@@ -97,17 +106,22 @@ export async function saveOwnPin(
   const user = await db.$queryRaw<Array<{ name: string | null }>>`
     SELECT name FROM users WHERE id=${userId} AND "organizationId"=${organizationId} FOR UPDATE`;
   if (!user[0]) throw new OwnPinError('Your account was not found.', 'NOT_FOUND');
-  const current = await db.restaurantOperatorCredential.findFirst({
+  const [current, ...otherProfiles] = await db.restaurantOperatorCredential.findMany({
     where: activePin(organizationId, userId),
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: { id: true, staffProfileId: true },
   });
   if (current) {
-    const rotated = await rotateOperatorCredential(db, {
-      credentialId: current.id,
-      secret: input.pin,
-    });
-    return { action: 'changed', credentialId: rotated.id, staffProfileId: current.staffProfileId };
+    // Older accounts can have several linked staff profiles. Each approval surface
+    // must see the member's new PIN, including surfaces that select by profile.
+    for (const credential of [current, ...otherProfiles]) {
+      await rotateOperatorCredential(db, {
+        credentialId: credential.id,
+        secret: input.pin,
+        memberSelectedApprovalPin: true,
+      });
+    }
+    return { action: 'changed', credentialId: current.id, staffProfileId: current.staffProfileId };
   }
   const activeProfile = await db.restaurantStaffProfile.findFirst({
     where: { organizationId, userId, status: 'ACTIVE' },
@@ -140,10 +154,19 @@ export async function saveOwnPin(
   const issued = await issueOperatorCredential(db, {
     staffProfileId,
     type: 'PIN',
+    memberSelectedApprovalPin: true,
     secret: input.pin,
   });
   return { action: 'created', credentialId: issued.id, staffProfileId };
 }
+
+type OwnPinInput = {
+  organizationId: string;
+  userId: string;
+  currentPassword: string;
+  pin: string;
+  confirmPin: string;
+};
 
 /**
  * The one way a person sets their own PIN, for every screen that offers it ("Your PIN", the
@@ -153,14 +176,16 @@ export async function saveOwnPin(
  */
 export async function setOwnPinWithPassword(
   db: ScopedDb,
-  input: {
-    organizationId: string;
-    userId: string;
-    currentPassword: string;
-    pin: string;
-    confirmPin: string;
-  }
+  input: OwnPinInput
 ): Promise<{ action: 'created' | 'changed'; credentialId: string; staffProfileId: string }> {
+  const { organizationId, userId } = input;
+  await requireOwnPinPassword(db, input);
+  return db.$transaction((tx) =>
+    saveOwnPin(tx as unknown as ScopedDb, { organizationId, userId, pin: input.pin })
+  );
+}
+
+export async function requireOwnPinPassword(db: ScopedDb, input: OwnPinInput) {
   const { organizationId, userId } = input;
   const person = await db.user.findFirst({
     where: { id: userId, organizationId },
@@ -174,9 +199,29 @@ export async function setOwnPinWithPassword(
     password: input.currentPassword,
     purpose: 'pharmacy-pin',
   });
-  return db.$transaction((tx) =>
-    saveOwnPin(tx as unknown as ScopedDb, { organizationId, userId, pin: input.pin })
-  );
+}
+
+export async function requireMemberPinReset(
+  db: ScopedDb,
+  input: { organizationId: string; actorId: string; targetId: string; currentPassword: string }
+) {
+  const { organizationId, actorId, targetId } = input;
+  await requirePasswordReauthentication(db, {
+    organizationId,
+    userId: actorId,
+    password: input.currentPassword,
+    purpose: 'pharmacy-pin',
+  });
+  const readMember = (id: string) =>
+    db.user.findFirst({
+      where: { organizationId, id },
+      select: { ...approvalAuthenticatorPartySelect(), department: true },
+    });
+  const [actor, target] = await Promise.all([readMember(actorId), readMember(targetId)]);
+  if (!actor || !target)
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Staff member not found.' });
+  const denial = await pinResetDenial(db, actor, target);
+  if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
 }
 
 /**

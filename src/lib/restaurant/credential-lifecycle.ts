@@ -35,6 +35,8 @@ export class CredentialLifecycleError extends Error {
 }
 
 export type IssueCredentialInput = {
+  /** Granted only by a password-verified approval PIN self-service writer. */
+  memberSelectedApprovalPin?: true;
   staffProfileId: string;
   type: OperatorCredentialType;
   secret: string;
@@ -85,6 +87,8 @@ export async function issueOperatorCredential(db: ScopedDb, input: IssueCredenti
       deviceId,
       type: input.type,
       credentialHash,
+      approvalPinMustChange:
+        input.type === 'PIN' && deviceId === null && !input.memberSelectedApprovalPin,
       failedAttempts: 0,
       lockedUntil: null,
       revokedAt: null,
@@ -93,6 +97,8 @@ export async function issueOperatorCredential(db: ScopedDb, input: IssueCredenti
 }
 
 export type RotateCredentialInput = {
+  /** Only the password-verified self-service writer can clear the historical marker. */
+  memberSelectedApprovalPin?: true;
   credentialId: string;
   secret: string;
 };
@@ -106,7 +112,7 @@ export type RotateCredentialInput = {
 export async function rotateOperatorCredential(db: ScopedDb, input: RotateCredentialInput) {
   const existing = await db.restaurantOperatorCredential.findUnique({
     where: { id: input.credentialId },
-    select: { id: true, type: true, revokedAt: true },
+    select: { id: true, type: true, deviceId: true, revokedAt: true },
   });
   if (!existing) {
     throw new CredentialLifecycleError('Credential not found.', 'NOT_FOUND');
@@ -125,7 +131,13 @@ export async function rotateOperatorCredential(db: ScopedDb, input: RotateCreden
 
   return db.restaurantOperatorCredential.update({
     where: { id: input.credentialId },
-    data: { credentialHash, failedAttempts: 0, lockedUntil: null },
+    data: {
+      credentialHash,
+      failedAttempts: 0,
+      lockedUntil: null,
+      approvalPinMustChange:
+        existing.type === 'PIN' && existing.deviceId === null && !input.memberSelectedApprovalPin,
+    },
   });
 }
 

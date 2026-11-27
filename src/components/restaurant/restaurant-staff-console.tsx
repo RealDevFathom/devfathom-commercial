@@ -60,6 +60,53 @@ function formText(data: FormData, name: string) {
   return String(data.get(name) ?? '').trim();
 }
 
+function CredentialFields({
+  linked,
+  confirmPin = false,
+}: {
+  linked: boolean;
+  confirmPin?: boolean;
+}) {
+  return (
+    <>
+      {confirmPin && (
+        <label className="space-y-1.5">
+          <span className={labelClass}>Confirm PIN</span>
+          <Input
+            type="password"
+            name="confirmPin"
+            inputMode="numeric"
+            autoComplete="new-password"
+            required
+            className="h-11"
+          />
+        </label>
+      )}
+      {linked && (
+        <label className="space-y-1.5">
+          <span className={labelClass}>Your current password</span>
+          <Input
+            type="password"
+            name="currentPassword"
+            autoComplete="current-password"
+            required
+            className="h-11"
+          />
+        </label>
+      )}
+    </>
+  );
+}
+
+function takeCredentialFields(form: HTMLFormElement, data: FormData) {
+  for (const input of form.querySelectorAll<HTMLInputElement>('input[type="password"]'))
+    input.value = '';
+  return {
+    ...(data.has('currentPassword') && { currentPassword: String(data.get('currentPassword')) }),
+    ...(data.has('confirmPin') && { confirmPin: String(data.get('confirmPin')) }),
+  };
+}
+
 function StaffTableSkeleton() {
   return (
     <div role="status" aria-label="Loading restaurant staff" className="space-y-3 py-2">
@@ -94,6 +141,10 @@ export function RestaurantStaffConsole() {
   const [selectedStaff, setSelectedStaff] = useState<StaffProfile | null>(null);
   // SOP-1: the job-role multi-select target (separate from the credentials dialog).
   const [jobRolesStaff, setJobRolesStaff] = useState<StaffProfile | null>(null);
+  const [issueType, setIssueType] = useState('PIN');
+  const [issueDevice, setIssueDevice] = useState('');
+  const linked = Boolean(selectedStaff?.userId);
+  const sharedApprovalPin = linked && issueType === 'PIN' && !issueDevice;
   const [credentialError, setCredentialError] = useState('');
   const [revokeCredential, setRevokeCredential] = useState<Pick<Credential, 'id' | 'type'> | null>(
     null
@@ -235,13 +286,16 @@ export function RestaurantStaffConsole() {
     const secret = formText(data, 'secret');
     const type = formText(data, 'type') as 'PIN' | 'BADGE';
     const deviceId = formText(data, 'deviceId') || null;
-    const secretInput = form.elements.namedItem('secret');
-    if (secretInput instanceof HTMLInputElement) secretInput.value = '';
+    const fields = takeCredentialFields(form, data);
     setCredentialError('');
     issueCredential.mutate(
-      { staffProfileId: selectedStaff.id, type, secret, deviceId },
+      { staffProfileId: selectedStaff.id, type, secret, deviceId, ...fields },
       {
-        onSuccess: () => form.reset(),
+        onSuccess: () => {
+          form.reset();
+          setIssueDevice('');
+          setIssueType('PIN');
+        },
         onSettled: () => issueCredential.reset(),
       }
     );
@@ -250,11 +304,13 @@ export function RestaurantStaffConsole() {
   const submitRotation = (event: FormEvent<HTMLFormElement>, credentialId: string) => {
     event.preventDefault();
     const form = event.currentTarget;
-    const secret = formText(new FormData(form), 'secret');
+    const data = new FormData(form);
+    const secret = formText(data, 'secret');
+    const fields = takeCredentialFields(form, data);
     form.reset();
     setCredentialError('');
     rotateCredential.mutate(
-      { credentialId, secret },
+      { credentialId, secret, ...fields },
       { onSettled: () => rotateCredential.reset() }
     );
   };
@@ -656,6 +712,8 @@ export function RestaurantStaffConsole() {
         onOpenChange={(open) => {
           if (!open && !credentialsPending) {
             setSelectedStaff(null);
+            setIssueType('PIN');
+            setIssueDevice('');
             setRevokeCredential(null);
             setCredentialError('');
           }
@@ -681,7 +739,12 @@ export function RestaurantStaffConsole() {
           >
             <label className="space-y-1.5">
               <span className={labelClass}>Credential type</span>
-              <StudioSelect name="type" className={selectClass} defaultValue="PIN">
+              <StudioSelect
+                name="type"
+                className={selectClass}
+                value={issueType}
+                onChange={(event) => setIssueType(event.target.value)}
+              >
                 <option value="PIN">PIN</option>
                 <option value="BADGE">Badge</option>
               </StudioSelect>
@@ -694,6 +757,8 @@ export function RestaurantStaffConsole() {
                 loading={devicesQuery.isLoading}
                 error={Boolean(devicesQuery.error)}
                 allowEmpty
+                value={issueDevice}
+                onChange={setIssueDevice}
                 label="Device restriction"
               />
             </label>
@@ -708,7 +773,21 @@ export function RestaurantStaffConsole() {
                 className="h-11"
               />
             </label>
-            <Button type="submit" className="min-h-11 sm:col-span-2" disabled={credentialsPending}>
+            <CredentialFields linked={linked} confirmPin={issueType === 'PIN' && !!issueDevice} />
+            {sharedApprovalPin && (
+              <p className="sm:col-span-2 text-sm text-text-muted">
+                Choose a device for a terminal PIN. The member sets their own approval PIN in{' '}
+                <Link href="/settings/pin" className="underline">
+                  Settings, Your PIN
+                </Link>
+                .
+              </p>
+            )}
+            <Button
+              type="submit"
+              className="min-h-11 sm:col-span-2"
+              disabled={credentialsPending || sharedApprovalPin}
+            >
               {issueCredential.isPending ? 'Issuing…' : 'Issue credential'}
             </Button>
           </form>
@@ -771,7 +850,8 @@ export function RestaurantStaffConsole() {
                             : ''}
                         </p>
                       </div>
-                      {!credential.revokedAt ? (
+                      {!credential.revokedAt &&
+                      !(linked && credential.type === 'PIN' && !credential.deviceId) ? (
                         <Button
                           type="button"
                           variant="destructive"
@@ -786,9 +866,10 @@ export function RestaurantStaffConsole() {
                         </Button>
                       ) : null}
                     </div>
-                    {!credential.revokedAt ? (
+                    {!credential.revokedAt &&
+                    !(linked && credential.type === 'PIN' && !credential.deviceId) ? (
                       <form
-                        className="mt-4 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"
+                        className="mt-4 grid gap-3 sm:grid-cols-2 sm:items-end"
                         onSubmit={(event) => submitRotation(event, credential.id)}
                       >
                         <label className="space-y-1.5">
@@ -802,6 +883,10 @@ export function RestaurantStaffConsole() {
                             className="h-11"
                           />
                         </label>
+                        <CredentialFields
+                          linked={linked}
+                          confirmPin={credential.type === 'PIN' && !!credential.deviceId}
+                        />
                         <Button
                           type="submit"
                           variant="outline"
@@ -843,30 +928,37 @@ export function RestaurantStaffConsole() {
               {revokeCredentialMutation.error.message}
             </p>
           ) : null}
-          <DialogFooter>
-            <Button
-              type="button"
-              variant="outline"
-              className="min-h-11"
-              disabled={revokeCredentialMutation.isPending}
-              onClick={() => setRevokeCredential(null)}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button"
-              variant="destructive"
-              className="min-h-11"
-              disabled={revokeCredentialMutation.isPending}
-              onClick={() => {
-                if (revokeCredential) {
-                  revokeCredentialMutation.mutate({ credentialId: revokeCredential.id });
-                }
-              }}
-            >
-              {revokeCredentialMutation.isPending ? 'Revoking…' : 'Revoke credential'}
-            </Button>
-          </DialogFooter>
+          <form
+            className="grid gap-4"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const data = new FormData(event.currentTarget);
+              const fields = takeCredentialFields(event.currentTarget, data);
+              if (revokeCredential)
+                revokeCredentialMutation.mutate({ credentialId: revokeCredential.id, ...fields });
+            }}
+          >
+            <CredentialFields linked={linked} />
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11"
+                disabled={revokeCredentialMutation.isPending}
+                onClick={() => setRevokeCredential(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                variant="destructive"
+                className="min-h-11"
+                disabled={revokeCredentialMutation.isPending}
+              >
+                {revokeCredentialMutation.isPending ? 'Revoking…' : 'Revoke credential'}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

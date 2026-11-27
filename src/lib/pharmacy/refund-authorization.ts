@@ -112,6 +112,8 @@ export async function verifyRefundPin(
       organizationId,
       approverUserId: actorId,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: pin,
       action: input.action ?? 'pharmacy.refund',
       approverRight: 'pharmacy:manage',

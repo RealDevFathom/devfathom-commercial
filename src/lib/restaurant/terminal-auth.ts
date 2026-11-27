@@ -42,6 +42,7 @@ import {
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
 import { deviceBaseCapability, operatorHasCapability } from './operator-capability';
+import { ApprovalPinChangeRequired } from '@/lib/pharmacy/approval-pin-change-required';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
@@ -216,6 +217,7 @@ function respondToEscapedError(
   err: unknown,
   mapError: TerminalErrorMapper | undefined
 ): Response {
+  if (err instanceof ApprovalPinChangeRequired) return forbidden(err.message);
   const mapped = mapError?.(err) ?? null;
   if (mapped) return mapped;
   console.error(label, err);
@@ -701,6 +703,8 @@ export async function authenticateOperator(
         organizationId: credential.organizationId,
         approverUserId: profile.userId,
         credentialHash: credential.credentialHash,
+        approvalPinMustChange: credential.approvalPinMustChange,
+        deviceBound: credential.deviceId != null,
         credentialType: type,
         secret,
         action: approval.action,

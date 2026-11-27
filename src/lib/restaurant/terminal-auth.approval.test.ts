@@ -1,16 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/approval-authenticator', () => ({ verifyApprovalSecret: vi.fn() }));
-vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'dummy-hash') }));
-vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/restaurant/operator-credentials')>()),
-  verifyOperatorCredential: vi.fn(),
-}));
+vi.mock('@/lib/approval-authenticator', { spy: true });
+vi.mock('@/lib/restaurant/operator-credentials', { spy: true });
 
 import { authenticateOperator } from './terminal-auth';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
-import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import { ApprovalPinChangeRequired } from '@/lib/pharmacy/approval-pin-change-required';
+import {
+  hashOperatorCredential,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 
 /**
  * DEV-879: a restaurant manager's co-authorization (voids, comps, refunds, device and camera
@@ -20,8 +20,10 @@ import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials'
 
 const now = new Date('2026-11-17T10:00:00.000Z');
 
-function fakeDb() {
+function fakeDb({ approvalPinMustChange = false, credentialHash = 'hash' } = {}) {
   return {
+    organization: { findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }) },
+    auditLog: { create: vi.fn() },
     restaurantStaffProfile: {
       findUnique: vi.fn().mockResolvedValue({
         id: 'staff-manager',
@@ -37,7 +39,8 @@ function fakeDb() {
           id: 'cred',
           organizationId: 'org',
           deviceId: null,
-          credentialHash: 'hash',
+          credentialHash,
+          approvalPinMustChange,
           failedAttempts: 0,
           lockedUntil: null,
         },
@@ -54,7 +57,7 @@ beforeEach(() => {
 describe('authenticateOperator approvals (DEV-879)', () => {
   it('checks an approving PIN entry through the approval authenticator rule', async () => {
     const db = fakeDb();
-    vi.mocked(verifyApprovalSecret).mockResolvedValue('AUTHENTICATOR');
+    vi.mocked(verifyApprovalSecret).mockResolvedValueOnce('AUTHENTICATOR');
     await expect(
       authenticateOperator(db as never, {
         staffProfileId: 'staff-manager',
@@ -73,6 +76,8 @@ describe('authenticateOperator approvals (DEV-879)', () => {
       approverUserId: 'manager',
       credentialHash: 'hash',
       credentialType: 'PIN',
+      deviceBound: false,
+      approvalPinMustChange: false,
       secret: '123456',
       action: 'restaurant.terminal.coAuthorize',
       approverRight: 'coauth:approve',
@@ -82,9 +87,29 @@ describe('authenticateOperator approvals (DEV-879)', () => {
     expect(verifyOperatorCredential).not.toHaveBeenCalled();
   });
 
+  it('refuses a matching approval PIN that the member must change', async () => {
+    const pin = '579164';
+    const db = fakeDb({
+      approvalPinMustChange: true,
+      credentialHash: await hashOperatorCredential('PIN', pin),
+    });
+
+    await expect(
+      authenticateOperator(db as never, {
+        staffProfileId: 'staff-manager',
+        type: 'PIN',
+        secret: pin,
+        now,
+        approval: { action: 'restaurant.terminal.coAuthorize', approverRight: 'coauth:approve' },
+      })
+    ).rejects.toBeInstanceOf(ApprovalPinChangeRequired);
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
+  });
+
   it('strikes the durable lockout counter when the approval code is refused', async () => {
     const db = fakeDb();
-    vi.mocked(verifyApprovalSecret).mockResolvedValue(null);
+    vi.mocked(verifyApprovalSecret).mockResolvedValueOnce(null);
     await expect(
       authenticateOperator(db as never, {
         staffProfileId: 'staff-manager',
@@ -102,7 +127,7 @@ describe('authenticateOperator approvals (DEV-879)', () => {
 
   it('keeps operator sign-in on the PIN alone', async () => {
     const db = fakeDb();
-    vi.mocked(verifyOperatorCredential).mockResolvedValue(true);
+    vi.mocked(verifyOperatorCredential).mockResolvedValueOnce(true);
     await expect(
       authenticateOperator(db as never, {
         staffProfileId: 'staff-manager',

@@ -105,7 +105,10 @@ function createDb(state: State): ScopedDb {
       ),
     },
     restaurantJobRole: { findUnique: vi.fn(async () => state.role) },
-    restaurantOperatorCredential: { findFirst: vi.fn(async () => state.credential) },
+    restaurantOperatorCredential: {
+      findFirst: vi.fn(async () => state.credential),
+      updateMany: vi.fn(async ({ data }) => Object.assign(state.credential ?? {}, data)),
+    },
   } as unknown as ScopedDb;
 }
 
@@ -197,6 +200,32 @@ describe('provisionDemoRestaurantSeatInTransaction', () => {
       'true'
     );
   });
+
+  it.each(['issue', 'rotate', 'matching'])(
+    'leaves only the synthetic approver PIN ready after %s',
+    async (mode) => {
+      const state = emptyState();
+      const credential = {
+        id: 'synthetic-pin',
+        credentialHash: 'synthetic',
+        approvalPinMustChange: true,
+      };
+      if (mode === 'issue') {
+        mocks.issueCredential.mockImplementationOnce(async () => (state.credential = credential));
+      } else {
+        state.credential = credential;
+        mocks.verifyCredential.mockResolvedValueOnce(mode === 'matching');
+      }
+      const db = createDb(state);
+      await provisionDemoRestaurantSeatInTransaction(db, identity, now);
+      expect(db.restaurantOperatorCredential.updateMany).toHaveBeenCalledExactlyOnceWith({
+        where: { staffProfileId: 'staff_approver', type: 'PIN', deviceId: null, revokedAt: null },
+        data: { approvalPinMustChange: false },
+      });
+      expect(state.credential?.approvalPinMustChange).toBe(false);
+      expect(mocks.rotateCredential).toHaveBeenCalledTimes(mode === 'rotate' ? 1 : 0);
+    }
+  );
 
   it('preserves generated staff, role, and credential IDs on rerun', async () => {
     const state = emptyState();

@@ -147,13 +147,14 @@ async function ensureStaffAndAuthority(db: ScopedDb, identity: DemoSeatIdentity)
   if (!role.active) await updateJobRole(db, role.id, { active: true });
   if (existingRole) await setJobRoleCapabilities(db, role.id, RESTAURANT_CAPABILITIES);
 
+  const approverPin = {
+    staffProfileId: approver.id,
+    type: 'PIN' as const,
+    deviceId: null,
+    revokedAt: null,
+  };
   const credential = await db.restaurantOperatorCredential.findFirst({
-    where: {
-      staffProfileId: approver.id,
-      type: 'PIN',
-      deviceId: null,
-      revokedAt: null,
-    },
+    where: approverPin,
     select: { id: true, credentialHash: true },
   });
   const pin = deriveDemoApproverPin(identity.organizationId);
@@ -167,6 +168,11 @@ async function ensureStaffAndAuthority(db: ScopedDb, identity: DemoSeatIdentity)
   } else if (!(await verifyOperatorCredential('PIN', pin, credential.credentialHash))) {
     await rotateOperatorCredential(db, { credentialId: credential.id, secret: pin });
   }
+  // This synthetic demo approver uses the deterministic seat fixture on every bootstrap.
+  await db.restaurantOperatorCredential.updateMany({
+    where: approverPin,
+    data: { approvalPinMustChange: false },
+  });
 }
 
 export async function provisionDemoRestaurantSeatInTransaction(

@@ -121,6 +121,8 @@ async function verifyWitnessPin(
       organizationId: scope.organizationId,
       approverUserId: input.witnessId,
       credentialHash: credential.credentialHash,
+      approvalPinMustChange: credential.approvalPinMustChange,
+      deviceBound: credential.deviceId != null,
       secret: input.witnessPin,
       action: 'pharmacy.writeOffWitness',
       approverRight: 'pharmacy:dispense',

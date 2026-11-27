@@ -548,6 +548,8 @@ export const pharmacyReportsRouter = router({
               organizationId,
               approverUserId: actorId,
               credentialHash: credential.credentialHash,
+              approvalPinMustChange: credential.approvalPinMustChange,
+              deviceBound: credential.deviceId != null,
               secret: input.pin,
               action: 'pharmacyReports.transitionPharmacovigilanceReport',
               approverRight: 'OWNER',

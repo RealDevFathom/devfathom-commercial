@@ -1,8 +1,10 @@
 import 'server-only';
 
+import { ApprovalPinChangeRequired } from '@/lib/pharmacy/approval-pin-change-required';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import {
   isApprovalApproverRight,
+  isRestaurantApproverRight,
   type ApprovalApproverRight,
 } from '@/lib/approval-approver-rights';
 import type { ApprovalAuthenticatorParty } from '@/lib/approval-authenticator-party';
@@ -25,7 +27,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  *  - ON: an approver with a web login approves with the current 6-digit code from their
  *    authenticator app; their permanent PIN is refused (an approver who has not set up the
  *    app is held on the set-up screen and cannot approve). A staff profile with no web login
- *    (a terminal-only operator) cannot set up an app, so it keeps its PIN; the owner sees
+ *    (a terminal-only operator) cannot set up an app, so it keeps its PIN for restaurant approvals; the owner sees
  *    such profiles listed as "Cannot use an authenticator: no login".
  *  - OFF (only the owner can turn it off): everyone approves with their permanent PIN,
  *    whether or not they set up an app. App codes are not accepted while it is off; the
@@ -42,8 +44,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * is refused, so the same code cannot approve two actions. A refusal returns null and the
  * caller strikes the PIN credential's lockout counter exactly as it does for a wrong PIN,
  * in both modes. Each accepted approval writes one audit row naming the approver, the
- * action, the time and the method (AUTHENTICATOR, PIN, or BADGE for a restaurant operator's
- * badge, which follows the PIN rules); no code, PIN or badge is stored or logged.
+ * action, time and method (AUTHENTICATOR, PIN, or BADGE for restaurant approvals).
  *
  * Self-approval rules are unchanged: every caller decides who may approve (including the
  * solo-owner and sole-pharmacist exceptions) before the secret is checked. Each caller names
@@ -63,12 +64,9 @@ export type ApprovalSecretInput = {
   approverUserId: string | null | undefined;
   /** The approver's live PIN (or badge) credential hash. */
   credentialHash: string;
-  /**
-   * DEV-961: the kind of permanent credential `credentialHash` is (a restaurant operator may
-   * approve with a badge). A badge is a permanent secret like a PIN: it is accepted exactly
-   * where a PIN would be, and refused where an app code is required, since it cannot carry
-   * one. Defaults to PIN.
-   */
+  approvalPinMustChange: boolean;
+  deviceBound: boolean;
+  /** Restaurant badges can authorize a restaurant action when a permanent secret is accepted. */
   credentialType?: 'PIN' | 'BADGE';
   /** What the approver entered: their PIN or badge, or a code from their authenticator app. */
   secret: string;
@@ -107,8 +105,8 @@ export async function approvalSecretKindFor(
 
 /**
  * Check the approver's PIN or authenticator code. Returns how the approval was proven, or
- * null when it is refused. Never throws for a refusal, so the caller's transaction can
- * commit its lockout strike.
+ * null for a wrong secret so the caller can commit its lockout strike. A verified,
+ * change-required PIN raises a separate recovery message without a strike.
  */
 export async function verifyApprovalSecret(
   db: ScopedDb,
@@ -119,6 +117,12 @@ export async function verifyApprovalSecret(
   // DEV-961: an approval whose right is not in the shared registry is refused, so no route
   // can approve with a right the forced set-up does not know about.
   if (!isApprovalApproverRight(input.approverRight)) return null;
+  const credentialType = input.credentialType ?? 'PIN';
+  if (
+    !isRestaurantApproverRight(input.approverRight) &&
+    (!approverUserId || credentialType !== 'PIN' || input.deviceBound !== false)
+  )
+    return null;
   const organization = await db.organization.findFirst({
     where: { id: input.organizationId },
     select: { requireApprovalAuthenticator: true },
@@ -137,10 +141,10 @@ export async function verifyApprovalSecret(
         userId: approverUserId,
         now,
       })));
-  const credentialType = input.credentialType ?? 'PIN';
   if (pinAccepted) {
     if (!(await verifyOperatorCredential(credentialType, input.secret, input.credentialHash)))
       return null;
+    if (approverUserId && input.approvalPinMustChange) throw new ApprovalPinChangeRequired();
     await recordApproval(db, input, credentialType, approverUserId, now);
     return credentialType;
   }
@@ -155,10 +159,14 @@ export async function verifyApprovalSecret(
     },
     select: { id: true, encryptedSecret: true },
   });
-  if (!authenticator) return null;
-  return (await consumeApprovalCode(db, input, authenticator, approverUserId, now))
-    ? 'AUTHENTICATOR'
-    : null;
+  if (authenticator && (await consumeApprovalCode(db, input, authenticator, approverUserId, now)))
+    return 'AUTHENTICATOR';
+  if (
+    input.approvalPinMustChange &&
+    (await verifyOperatorCredential('PIN', input.secret, input.credentialHash))
+  )
+    throw new ApprovalPinChangeRequired();
+  return null;
 }
 
 /**

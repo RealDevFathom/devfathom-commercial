@@ -607,7 +607,13 @@ async function verifyOtherApproverPin(
       const credential = await db.restaurantOperatorCredential.findFirst({
         where: approverPinWhere(organizationId, approverId),
         orderBy: { id: 'asc' },
-        select: { credentialHash: true, failedAttempts: true, lockedUntil: true },
+        select: {
+          deviceId: true,
+          approvalPinMustChange: true,
+          credentialHash: true,
+          failedAttempts: true,
+          lockedUntil: true,
+        },
       });
       if (!credential) return refuse('NOT_ELIGIBLE');
       const now = new Date();
@@ -619,6 +625,8 @@ async function verifyOtherApproverPin(
         organizationId,
         approverUserId: approverId,
         credentialHash: credential.credentialHash,
+        approvalPinMustChange: credential.approvalPinMustChange,
+        deviceBound: credential.deviceId != null,
         secret: pin,
         action: 'pharmacy.shiftVarianceApproval',
         requestedById: scope.actorId,

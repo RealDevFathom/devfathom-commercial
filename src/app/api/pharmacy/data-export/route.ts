@@ -22,6 +22,7 @@ import {
   verifyOwnerExportPin,
   type OwnerExportPinResult,
 } from '@/lib/pharmacy/owner-data-export-pin';
+import { ApprovalPinChangeRequired } from '@/lib/pharmacy/approval-pin-change-required';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
 import { rateLimit } from '@/lib/rate-limit';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -216,7 +217,17 @@ export async function POST(request: Request) {
       { ...jobMetadata, pinCheck: 'MISSING' }
     );
   }
-  const pinCheck = await verifyOwnerExportPin({ organizationId, userId, pin });
+  let pinCheck: OwnerExportPinResult;
+  try {
+    pinCheck = await verifyOwnerExportPin({ organizationId, userId, pin });
+  } catch (error) {
+    if (error instanceof ApprovalPinChangeRequired)
+      return audited(ctx, target, json(403, { error: error.message }), {
+        ...jobMetadata,
+        pinCheck: 'MUST_CHANGE',
+      });
+    throw error;
+  }
   if (pinCheck !== 'OK') {
     return audited(ctx, target, PIN_REFUSAL[pinCheck](), { ...jobMetadata, pinCheck });
   }
