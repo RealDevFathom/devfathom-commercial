@@ -35,7 +35,18 @@ vi.mock('@/lib/pharmacy/counter-device-store', async (importOriginal) => {
 });
 vi.mock('@/lib/pharmacy/counter-offline-transport', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/pharmacy/counter-offline-transport')>();
-  return { ...actual, establishCounterSession: h.establish, fetchCounterSnapshots: h.snapshots };
+  return {
+    ...actual,
+    establishCounterSession: h.establish,
+    fetchCounterSnapshots: h.snapshots,
+    reserveCounterReceipts: async () => ({
+      id: 'lease_fixture',
+      deviceId: FIXTURE_SCOPE.deviceId,
+      blockStart: 1,
+      blockEnd: 100,
+      nextNumber: 1,
+    }),
+  };
 });
 vi.mock('@/lib/pharmacy/counter-shell', () => ({ armCounterShell: h.arm }));
 

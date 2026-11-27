@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { toast } from 'sonner';
 
 import {
   counterOfflineReadiness,
@@ -67,6 +68,7 @@ import {
   ed25519Supported,
   webCryptoSnapshotVerifier,
 } from '@/lib/pharmacy/counter-snapshot-verifier';
+import { useReceiptLeaseRenewal } from './use-receipt-lease-renewal';
 
 export type CounterOfflineStatus =
   /** This browser is not an enrolled counter: online-only, exactly as before. */
@@ -178,6 +180,7 @@ type Opened = {
   state: CounterRuntimeState | null;
   unreachable?: boolean;
   hasSession?: boolean;
+  leaseSession?: { runtime: PharmacyCounterRuntime; sessionToken: string };
   credentialExpiresAt?: string | null;
   renewalFailed?: boolean;
 };
@@ -241,7 +244,12 @@ export function useCounterOffline(input: {
   }, []);
 
   const open = useCallback(
-    async (enrolled: CounterEnrolment, isOnline: boolean, key: string, cancelled: () => boolean) => {
+    async (
+      enrolled: CounterEnrolment,
+      isOnline: boolean,
+      key: string,
+      cancelled: () => boolean
+    ) => {
       const finish = (next: Omit<Opened, 'key'>) => {
         if (cancelled()) return;
         // The readiness clock must not lag the snapshots just installed, or a
@@ -257,7 +265,9 @@ export function useCounterOffline(input: {
       }
       if (cancelled()) return;
       sealerRef.current =
-        record && record.deviceId === enrolled.deviceId ? counterSaleSealer(record.signingKey) : null;
+        record && record.deviceId === enrolled.deviceId
+          ? counterSaleSealer(record.signingKey)
+          : null;
       if (!record || record.deviceId !== enrolled.deviceId) {
         return finish({
           status: 'unavailable',
@@ -376,6 +386,10 @@ export function useCounterOffline(input: {
       finish({
         status: 'ready',
         hasSession: Boolean(counter.sessionToken),
+        leaseSession:
+          counter.sessionToken && !unreachable
+            ? { runtime: counter.runtime, sessionToken: counter.sessionToken }
+            : undefined,
         message,
         state: counter.runtime.snapshot(),
         unreachable,
@@ -405,6 +419,13 @@ export function useCounterOffline(input: {
   );
 
   const current = opened && opened.key === openKey && enrolledHere ? opened : null;
+  const leaseSession = current?.leaseSession;
+  const leaseRenewal = useReceiptLeaseRenewal(leaseSession?.runtime ?? null, leaseSession ?? null);
+  useEffect(() => {
+    if (leaseRenewal?.status === 'RENEWED') refresh();
+  }, [leaseRenewal, refresh]);
+  const leaseWarning =
+    leaseRenewal?.status === 'FAILED' ? 'Receipt numbers could not be reserved.' : null;
   const serverUnreachable = online && current?.unreachable === true;
   // A dropped line behind a working Wi-Fi: try the server again every minute.
   useEffect(() => {
@@ -447,6 +468,15 @@ export function useCounterOffline(input: {
       state?.queue ? unsettledCommands(state.queue).sort((a, b) => a.sequence - b.sequence) : [],
     [state]
   );
+  // The online counter's inline offline message only appears with receipts waiting to send.
+  const leaseToast = queued.length === 0 || current?.message ? leaseWarning : null;
+  useEffect(() => {
+    if (!leaseToast) return;
+    const id = toast.warning(leaseToast);
+    return () => {
+      toast.dismiss(id);
+    };
+  }, [leaseToast]);
   const ready = current?.status === 'ready' && state !== null;
   const canResolveConflict = online && !serverUnreachable && current?.hasSession;
   const enrolmentName = enrolment?.name ?? '';
@@ -560,7 +590,7 @@ export function useCounterOffline(input: {
   return {
     status: current?.status ?? 'opening',
     enrolment,
-    message: current?.message ?? null,
+    message: current?.message ?? leaseWarning,
     readiness,
     rows,
     nowMs,
