@@ -19,7 +19,9 @@ import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
+import { withCommittedApproverCheck } from '@/lib/restaurant/approver-authentication';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
@@ -160,17 +162,33 @@ export const restaurantCamerasRouter = router({
           throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
         throw error;
       }
-      const auth = await authenticateOperator(ctx.db, {
-        staffProfileId: input.approvingStaffProfileId,
-        type: input.approvingType,
-        secret: input.approvingSecret,
-        now: new Date(),
-        approval: {
-          action: 'restaurantCameras.revokeGateway',
-          approverRight: 'coauth:approve',
-          requestedByStaffProfileId: input.actingStaffProfileId,
-        },
-      });
+      // DEV-1055: a wrong credential fails this request and rolls its transaction
+      // back. The credential check therefore commits in its own tenant
+      // transaction, so its strike lands on the same durable counter the terminal
+      // routes use; the per-approver budget stays as a second, outer limit.
+      const approverOrganizationId =
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId;
+      const auth = await authenticateApproverWithinBudget(
+        approverOrganizationId,
+        input.approvingStaffProfileId,
+        () =>
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now: new Date(),
+                approval: {
+                  action: 'restaurantCameras.revokeGateway',
+                  approverRight: 'coauth:approve',
+                  requestedByStaffProfileId: input.actingStaffProfileId,
+                },
+              })
+          )
+      );
       if (!auth.ok)
         throw new TRPCError({
           code: auth.reason === 'LOCKED' ? 'TOO_MANY_REQUESTS' : 'FORBIDDEN',

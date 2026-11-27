@@ -27,7 +27,9 @@ import {
   renamePrinterInventory,
   retirePrinterInventory,
 } from '@/lib/restaurant/printer-inventory';
+import { withCommittedApproverCheck } from '@/lib/restaurant/approver-authentication';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import {
   CommercialLimitError,
   enrollDeviceWithinCommercialLimits,
@@ -555,17 +557,33 @@ export const restaurantDevicesRouter = router({
 
       await assertApproverCanCoAuthorize(ctx.db, input.approvingStaffProfileId, device.branchId);
       const now = new Date();
-      const auth = await authenticateOperator(ctx.db, {
-        staffProfileId: input.approvingStaffProfileId,
-        type: input.approvingType,
-        secret: input.approvingSecret,
-        now,
-        approval: {
-          action: 'restaurantDevices.revoke',
-          approverRight: coAuthorizationApprovalCapability,
-          requestedByStaffProfileId: actingStaffProfileId,
-        },
-      });
+      // DEV-1055: a wrong credential fails this request and rolls its transaction
+      // back. The credential check therefore commits in its own tenant
+      // transaction, so its strike lands on the same durable counter the terminal
+      // routes use; the per-approver budget stays as a second, outer limit.
+      const approverOrganizationId =
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId;
+      const auth = await authenticateApproverWithinBudget(
+        approverOrganizationId,
+        input.approvingStaffProfileId,
+        () =>
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now,
+                approval: {
+                  action: 'restaurantDevices.revoke',
+                  approverRight: coAuthorizationApprovalCapability,
+                  requestedByStaffProfileId: actingStaffProfileId,
+                },
+              })
+          )
+      );
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
           throw new TRPCError({
@@ -666,17 +684,33 @@ export const restaurantDevicesRouter = router({
       }
 
       await assertApproverCanCoAuthorize(ctx.db, input.approvingStaffProfileId, device.branchId);
-      const auth = await authenticateOperator(ctx.db, {
-        staffProfileId: input.approvingStaffProfileId,
-        type: input.approvingType,
-        secret: input.approvingSecret,
-        now: new Date(),
-        approval: {
-          action: 'restaurantDevices.rotate',
-          approverRight: coAuthorizationApprovalCapability,
-          requestedByStaffProfileId: actingStaffProfileId,
-        },
-      });
+      // DEV-1055: a wrong credential fails this request and rolls its transaction
+      // back. The credential check therefore commits in its own tenant
+      // transaction, so its strike lands on the same durable counter the terminal
+      // routes use; the per-approver budget stays as a second, outer limit.
+      const approverOrganizationId =
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId;
+      const auth = await authenticateApproverWithinBudget(
+        approverOrganizationId,
+        input.approvingStaffProfileId,
+        () =>
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now: new Date(),
+                approval: {
+                  action: 'restaurantDevices.rotate',
+                  approverRight: coAuthorizationApprovalCapability,
+                  requestedByStaffProfileId: actingStaffProfileId,
+                },
+              })
+          )
+      );
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
           throw new TRPCError({

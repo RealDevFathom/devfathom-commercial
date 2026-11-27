@@ -34,6 +34,10 @@ vi.mock('@/lib/abac', async (importOriginal) => {
 import { compareSync, hashSync } from 'bcryptjs';
 import { rateLimit } from '@/lib/rate-limit';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import {
+  applyOperatorAttemptCharge,
+  isOperatorAttemptCharge,
+} from '@/lib/test-support/operator-attempt-charge';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacyPinRouter } from './pharmacy-pin';
@@ -155,6 +159,10 @@ function world() {
         return user && user.organizationId === organizationId
           ? [{ id, name: user.name, email: user.email }]
           : [];
+      }
+      // DEV-1055: the atomic attempt charge authenticateOperator makes before a compare.
+      if (isOperatorAttemptCharge(strings as unknown as TemplateStringsArray)) {
+        return applyOperatorAttemptCharge((id) => credentials.find((row) => row.id === id), values);
       }
       return [];
     }),

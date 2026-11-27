@@ -23,6 +23,12 @@ import { Prisma } from '@/generated/prisma/client';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { matchScore, norm } from '@/lib/ai/context';
 import { appUrl, templates } from '@/lib/email';
+import {
+  TaskRuleError,
+  assertAssigneesAreProjectMembers,
+  assertReplyTargetInTask,
+  eligibleColumnDefaultAssigneeIds,
+} from '@/lib/projects/task-rules';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM". Mirrors the
 // helper in the projects router so assistant-sent emails match human-sent ones.
@@ -138,6 +144,20 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
   /** ADMIN or a member of the task's owning project (member-level write gate). */
   const canWriteTask = (task: ResolvedTask): Promise<boolean> =>
     h.canAccessProject(task.column.board.projectId);
+
+  /**
+   * DEV-1055: run one of the task rules the projects router enforces (the SAME
+   * function, see `task-rules.ts`) and report a broken rule as a tool error.
+   */
+  async function brokenTaskRule(check: () => Promise<void>): Promise<string | null> {
+    try {
+      await check();
+      return null;
+    } catch (error) {
+      if (error instanceof TaskRuleError) return error.message;
+      throw error;
+    }
+  }
 
   /** Resolve a single assignee name (or "me") to a user id. */
   async function resolveAssignee(
@@ -493,14 +513,28 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           assigneeIds.push(a.id);
         }
       }
-      if (assigneeIds.length === 0) assigneeIds.push(h.ctx.userId);
+      // DEV-1055: named assignees must be members of the project, exactly as
+      // projects.createTask requires. Resolving a name only proves the person is
+      // in the workspace, not that they belong to this project.
+      const notMembers = await brokenTaskRule(() =>
+        assertAssigneesAreProjectMembers(h.db, proj.id, assigneeIds)
+      );
+      if (notMembers) return { error: notMembers };
+      // The default self-assignment follows the same rule: an administrator who
+      // can reach the project without being a member of it is not assigned.
+      if (
+        assigneeIds.length === 0 &&
+        !(await brokenTaskRule(() =>
+          assertAssigneesAreProjectMembers(h.db, proj.id, [h.ctx.userId])
+        ))
+      ) {
+        assigneeIds.push(h.ctx.userId);
+      }
 
-      // Merge the column's default assignees (additive), mirroring the router.
-      const columnDefaults = await h.db.columnDefaultAssignee.findMany({
-        where: { columnId: column.id },
-        select: { userId: true },
-      });
-      const merged = [...new Set([...assigneeIds, ...columnDefaults.map((d) => d.userId)])];
+      // Merge the column's default assignees (additive), mirroring the router:
+      // only those who may still work on the project (DEV-1055).
+      const columnDefaults = await eligibleColumnDefaultAssigneeIds(h.db, column.id, proj.id);
+      const merged = [...new Set([...assigneeIds, ...columnDefaults])];
 
       const maxOrder = await h.db.task.aggregate({
         _max: { order: true },
@@ -692,13 +726,16 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
           data: { columnId: target.id, order: newOrder },
         });
         // Auto-assign the target column's default assignees (additive).
-        const defaults = await tx.columnDefaultAssignee.findMany({
-          where: { columnId: target.id },
-          select: { userId: true },
-        });
+        // DEV-1055: only those who may still work on the project (administrators
+        // or current members), the same shared filter projects.moveTask applies.
+        const defaults = await eligibleColumnDefaultAssigneeIds(
+          tx,
+          target.id,
+          task.column.board.projectId
+        );
         if (defaults.length > 0) {
           await tx.taskAssignee.createMany({
-            data: defaults.map((d) => ({ taskId: task.id, userId: d.userId })),
+            data: defaults.map((userId) => ({ taskId: task.id, userId })),
             skipDuplicates: true,
           });
         }
@@ -799,6 +836,15 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       else if (m === 'remove') final = [...existingIds].filter((id) => !resolvedSet.includes(id));
       else final = resolvedSet;
 
+      // DEV-1055: the resulting assignee set must be project members, exactly as
+      // projects.updateTaskAssignees requires. Removing people adds nobody.
+      if (m !== 'remove') {
+        const notMembers = await brokenTaskRule(() =>
+          assertAssigneesAreProjectMembers(h.db, task.column.board.projectId, final)
+        );
+        if (notMembers) return { error: notMembers };
+      }
+
       // Mirror updateTaskAssignees: full replace of the assignee set.
       await h.db.taskAssignee.deleteMany({ where: { taskId: task.id } });
       if (final.length > 0) {
@@ -867,6 +913,13 @@ export function buildTasksTools(h: AssistantHelpers): ToolSet {
       const { task } = r;
       if (!(await canWriteTask(task)))
         return { error: 'You do not have access to that task’s project.' };
+
+      // DEV-1055: a reply's parent must be a comment on this same task, exactly
+      // as projects.addComment requires.
+      const wrongParent = await brokenTaskRule(() =>
+        assertReplyTargetInTask(h.db, task.id, replyToCommentId)
+      );
+      if (wrongParent) return { error: wrongParent };
 
       const comment = await h.db.taskComment.create({
         data: {

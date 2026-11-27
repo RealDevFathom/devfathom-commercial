@@ -11,6 +11,10 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
 import { authenticateOperator } from './terminal-auth';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
 import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials';
+import {
+  applyOperatorAttemptCharge,
+  isOperatorAttemptCharge,
+} from '@/lib/test-support/operator-attempt-charge';
 
 /**
  * DEV-879: a restaurant manager's co-authorization (voids, comps, refunds, device and camera
@@ -21,7 +25,21 @@ import { verifyOperatorCredential } from '@/lib/restaurant/operator-credentials'
 const now = new Date('2026-11-17T10:00:00.000Z');
 
 function fakeDb() {
+  // The durable credential row: the attempt charge and the clear both move it.
+  const credential = {
+    id: 'cred',
+    organizationId: 'org',
+    deviceId: null,
+    credentialHash: 'hash',
+    failedAttempts: 0,
+    lockedUntil: null as Date | null,
+    revokedAt: null,
+  };
   return {
+    credential,
+    $queryRaw: vi.fn(async (query: TemplateStringsArray, ...values: unknown[]) =>
+      isOperatorAttemptCharge(query) ? applyOperatorAttemptCharge(() => credential, values) : []
+    ),
     restaurantStaffProfile: {
       findUnique: vi.fn().mockResolvedValue({
         id: 'staff-manager',
@@ -32,17 +50,11 @@ function fakeDb() {
     },
     restaurantBranch: { findUnique: vi.fn() },
     restaurantOperatorCredential: {
-      findMany: vi.fn().mockResolvedValue([
-        {
-          id: 'cred',
-          organizationId: 'org',
-          deviceId: null,
-          credentialHash: 'hash',
-          failedAttempts: 0,
-          lockedUntil: null,
-        },
-      ]),
-      update: vi.fn(),
+      findMany: vi.fn(async () => [{ ...credential }]),
+      findUnique: vi.fn(async () => ({ ...credential })),
+      update: vi.fn(async ({ data }: { data: Partial<typeof credential> }) =>
+        Object.assign(credential, data)
+      ),
     },
   };
 }
@@ -94,10 +106,9 @@ describe('authenticateOperator approvals (DEV-879)', () => {
         approval: { action: 'restaurant.terminal.orderApproval', approverRight: 'coauth:approve' },
       })
     ).resolves.toEqual({ ok: false, reason: 'INVALID' });
-    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
-      where: { id: 'cred' },
-      data: expect.objectContaining({ failedAttempts: 1 }),
-    });
+    // DEV-1055: the strike is charged atomically before the check and is kept.
+    expect(db.credential).toMatchObject({ failedAttempts: 1, lockedUntil: null });
+    expect(db.restaurantOperatorCredential.update).not.toHaveBeenCalled();
   });
 
   it('keeps operator sign-in on the PIN alone', async () => {
