@@ -1005,6 +1005,44 @@ async function newLink() {
       });
     });
 
+    it('holds the order document advisory lock through storage and releases it at commit', async () => {
+      const { token } = await newLink();
+      const linkId = supplierLinks.supplierLinkId(token)!;
+      const link = await inOrg((db) =>
+        db.pharmacySupplierActionLink.findUniqueOrThrow({
+          where: { id: linkId },
+          select: { purchaseOrderId: true },
+        })
+      );
+      const observer = new pg.Client({ connectionString: runtimeUrl });
+      await observer.connect();
+      const lockAvailable = async () =>
+        (
+          await observer.query<{ available: boolean }>(
+            'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS available',
+            ['supplier-document-cap:' + link.purchaseOrderId]
+          )
+        ).rows[0]!.available;
+      try {
+        vi.mocked(putUpload).mockImplementationOnce(async () => {
+          expect(await lockAvailable()).toBe(false);
+        });
+        await inOrg(async (db) => {
+          await supplierLinks.uploadSupplierDocument(db, {
+            token,
+            fileName: 'invoice.pdf',
+            declaredMimeType: 'application/pdf',
+            content: Buffer.from('%PDF-1.7'),
+            idempotencyKey: 'check-lock',
+          });
+          expect(await lockAvailable()).toBe(false);
+        });
+        expect(await lockAvailable()).toBe(true);
+      } finally {
+        await observer.end();
+      }
+    });
+
     it('serializes document byte reservations across independent transactions before storage writes', async () => {
       const { token } = await newLink();
       const linkId = supplierLinks.supplierLinkId(token)!;

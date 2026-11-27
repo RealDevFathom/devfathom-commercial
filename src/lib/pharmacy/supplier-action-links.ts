@@ -504,7 +504,8 @@ async function uploadDocument(
   });
   if (existing) return existing;
   // Links for the same order share this cap, including a replacement supplier.
-  await db.$queryRaw`SELECT id FROM pharmacy_purchase_orders WHERE id=${link.purchaseOrderId} FOR NO KEY UPDATE`;
+  const capKey = 'supplier-document-cap:' + link.purchaseOrderId;
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${capKey}, 0))`;
   const count = await db.pharmacySupplierDocument.count({
     where: {
       organizationId: link.organizationId,
