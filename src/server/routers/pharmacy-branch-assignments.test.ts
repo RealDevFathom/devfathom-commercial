@@ -45,6 +45,13 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
       })),
       findMany: vi.fn(async () => [
         {
+          id: 'legacy-admin',
+          name: 'Legacy admin',
+          email: 'legacy@example.test',
+          role: 'ADMIN',
+          organizationRole: null,
+        },
+        {
           id: 'cashier-1',
           name: 'Amina',
           email: 'amina@example.test',
@@ -120,6 +127,8 @@ describe('pharmacy branch assignments', () => {
       { ...grant, user: { name: 'Legacy admin' } },
     ]);
     f.db.pharmacyClinicalBranchAssignment.findFirst.mockResolvedValue(grant);
+    const full = { id: 'full-legacy', userId: grant.userId, branchId: grant.branchId };
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([full]);
     const list = await f.caller.list();
     expect(list.members.map((m) => m.id)).not.toContain('legacy-admin');
     expect(list.assignments).toContainEqual({
@@ -142,6 +151,10 @@ describe('pharmacy branch assignments', () => {
       data: { active: false },
     });
     expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+    f.db.pharmacyClinicalBranchAssignment.findMany.mockResolvedValue([]);
+    expect((await f.caller.list()).assignments).toEqual([
+      { ...full, branchName: 'Counter A', userName: 'Legacy admin' },
+    ]);
   });
 
   it('requires another administrator to change the acting member’s own branch access', async () => {

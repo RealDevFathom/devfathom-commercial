@@ -262,7 +262,7 @@ export const pharmacyBranchAssignmentsRouter = router({
           organizationId,
           status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
         },
-        select: memberSelect,
+        select: { ...memberSelect, role: true },
         orderBy: { name: 'asc' },
       }),
       ctx.db.pharmacyBranchAssignment.findMany({
@@ -290,6 +290,11 @@ export const pharmacyBranchAssignmentsRouter = router({
     );
     const branchName = new Map(branches.map((branch) => [branch.id, branch.name]));
     const memberName = new Map(members.map((member) => [member.id, member.name]));
+    // A legacy administrator can hold grants without qualifying for a new full assignment.
+    for (const person of people) {
+      if (person.role === 'ADMIN' && !person.organizationRole)
+        memberName.set(person.id, person.name);
+    }
     return {
       branches,
       members,
