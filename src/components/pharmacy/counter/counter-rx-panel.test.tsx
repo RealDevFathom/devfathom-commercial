@@ -170,6 +170,8 @@ describe('CounterRxPanel checks', () => {
         })}
       />
     );
+    expect(screen.getByRole('heading', { name: 'Patient', level: 3 })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Safety blocks', level: 3 })).toBeVisible();
     const history = screen.getByRole('list', { name: 'Fill history for Amoxicillin 625 mg' });
     expect(
       within(history)
