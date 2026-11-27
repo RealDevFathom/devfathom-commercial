@@ -17,6 +17,7 @@ vi.mock('@/server/audit', async () => {
   };
 });
 
+import { SUPPORT_SESSION_REFUSED_MESSAGE } from '@/lib/tenancy/support-session-rule';
 import { OPEN_ATTEMPT_STATUSES } from '@/lib/pharmacy/card-terminal/open-attempts';
 import type { TRPCContext } from '../trpc';
 import { pharmacyBranchAssignmentsRouter } from './pharmacy-branch-assignments';
@@ -120,6 +121,25 @@ beforeEach(() => {
 });
 
 describe('pharmacy branch assignments', () => {
+  it('refuses support-session grants and revocations before looking up either kind of assignment', async () => {
+    const f = fixture();
+    Object.assign(f.context.session.user, { isSupportSession: true });
+    const refusal = { code: 'FORBIDDEN', message: SUPPORT_SESSION_REFUSED_MESSAGE };
+    await expect(
+      f.caller.assign({ branchId: 'branch-a', userId: 'cashier-1' })
+    ).rejects.toMatchObject(refusal);
+    await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject(refusal);
+    await expect(
+      f.caller.unassign({ assignmentId: 'clinical-1', clinicalOnly: true })
+    ).rejects.toMatchObject(refusal);
+    expect(f.db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyClinicalBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.upsert).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+    expect(f.db.pharmacyClinicalBranchAssignment.update).not.toHaveBeenCalled();
+  });
+
   it('lists and separately revokes the clinical admission of a legacy administrator', async () => {
     const f = fixture();
     const grant = { id: 'clinical-1', userId: 'legacy-admin', branchId: 'branch-a' };
