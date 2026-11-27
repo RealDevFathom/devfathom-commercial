@@ -81,6 +81,7 @@ export async function resolveEnrollmentLink(hostOrganizationId: string, token: s
     return null;
   }
   return withTenantDb(candidate.organizationId, async (db) => {
+    if (!candidate.branchId) return null;
     const access = await licensed(db, candidate.organizationId);
     if (!access.ok) return null;
     const [branch, config] = await Promise.all([
@@ -91,7 +92,12 @@ export async function resolveEnrollmentLink(hostOrganizationId: string, token: s
       }),
     ]);
     if (!branch || !config?.enabled) return null;
-    return { ...candidate, branchName: branch.name, programDisplayName: config.programDisplayName };
+    return {
+      ...candidate,
+      branchId: candidate.branchId,
+      branchName: branch.name,
+      programDisplayName: config.programDisplayName,
+    };
   });
 }
 

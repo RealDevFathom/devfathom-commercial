@@ -193,6 +193,8 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  walletLinks WalletEnrollmentLink[]
+  walletAttempts WalletEnrollmentAttempt[]
   printBridges PharmacyPrintBridge[]
   printJobs PharmacyPrintJob[]
   customerPortalLinks    PharmacyCustomerPortalLink[]
@@ -17399,24 +17401,30 @@ model WalletTenantConfig {
 model WalletEnrollmentLink {
   id             String    @id @default(cuid())
   organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
+  branchId       String?
+  pharmacyBranchId String?
   tokenHash      String    @unique
   active         Boolean   @default(true)
   createdAt      DateTime  @default(now())
   revokedAt      DateTime?
 
-  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  branch RestaurantBranch? @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
   @@map("restaurant_wallet_enrollment_links")
+  pharmacyBranch PharmacyBranch? @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "wallet_link_pharmacy_branch_fk")
+  phoneJoin Boolean @default(false)
+  attempts WalletEnrollmentAttempt[]
+
 }
 
 model WalletEnrollmentAttempt {
   id              String                 @id @default(cuid())
   organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
+  branchId        String?
+  pharmacyBranchId String?
   identifierKind  CustomerIdentifierKind
   normalizedValue String
   otpHash         String
@@ -17425,13 +17433,17 @@ model WalletEnrollmentAttempt {
   failedAttempts  Int                    @default(0)
   createdAt       DateTime               @default(now())
 
-  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  branch RestaurantBranch? @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
   @@index([expiresAt])
   @@map("restaurant_wallet_enrollment_attempts")
+  pharmacyBranch PharmacyBranch? @relation(fields: [organizationId, pharmacyBranchId], references: [organizationId, id], onDelete: NoAction, onUpdate: NoAction, map: "wallet_attempt_pharmacy_branch_fk")
+  linkId String?
+  link WalletEnrollmentLink? @relation(fields: [organizationId,linkId], references:[organizationId,id], onDelete:NoAction, onUpdate:NoAction, map:"wallet_attempt_link_fk")
+
 }
 
 /// Effective-dated regulatory and selling policy, never historical batch MRP.

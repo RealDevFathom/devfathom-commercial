@@ -19,6 +19,11 @@
 export const SUPPORT_MAY_NOT: ReadonlyArray<{ reason: string; mutations: readonly string[] }> = [
   {
     reason:
+      'Wallet programme branding, activation and branch enrollment posters belong to the business admin.',
+    mutations: ['walletCards.save', 'walletCards.poster'],
+  },
+  {
+    reason:
       'Members: creating, inviting, activating or deactivating a member, or changing who a member is.',
     mutations: [
       'organizationAdmin.createMember',
