@@ -1,9 +1,10 @@
 /**
- * DEV-1055: the back-office approvals that verify a manager's PIN or badge inside
- * the request transaction (device revoke, device rotate, camera gateway revoke)
- * count attempts per approver OUTSIDE that transaction. A wrong credential fails
- * the request, which rolls back the durable strike on the credential row, so
- * without this budget a signed-in caller could guess a manager's PIN without limit.
+ * DEV-1055: the back-office approvals that verify a manager's PIN or badge (device
+ * revoke, device rotate, camera gateway revoke) count attempts per approver in the
+ * rate-limit store, outside the request transaction. A wrong credential fails the
+ * request and rolls its transaction back; the credential check commits its durable
+ * strike in its own transaction (covered by the database suite), and this budget
+ * is the second, outer limit.
  *
  * Runs the REAL routers and the real in-memory rate-limit store; the credential
  * check itself is stubbed (its lockout is covered by the database suite).
@@ -18,7 +19,13 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: vi.fn(() => ({})),
+  // The credential check commits in its own tenant transaction; here it is a stub.
+  withTenantDb: vi.fn((_organizationId: string, run: (tx: unknown) => unknown) =>
+    run({ $queryRawUnsafe: vi.fn(async () => []) })
+  ),
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/abac', async () => {
   const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');

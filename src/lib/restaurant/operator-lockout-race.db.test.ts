@@ -13,6 +13,13 @@
  * exactly as each terminal request does. Requires TEST_DATABASE_URL (a migrated,
  * throwaway database reached as the restricted runtime role, so row level
  * security is in force); without it the suite reports itself skipped.
+ *
+ * The back-office approvals (tRPC) test the same PIN. Their request answers a
+ * wrong PIN with an error that rolls the request transaction back, so the check
+ * commits in its own tenant transaction and lands on the SAME counter: guesses
+ * split across the terminal route and an approval still stop at five compares.
+ * That case runs the real router inside a request transaction that rolls back on
+ * failure, as the HTTP handler does; only Auth.js and the ABAC engine are mocked.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -36,10 +43,25 @@ vi.mock('bcryptjs', async (importOriginal) => {
   return { ...actual, compare, default: { ...actual, compare } };
 });
 
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/lib/abac', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+  return { ...actual, can: vi.fn(async () => true) };
+});
+vi.mock('@/server/audit', () => ({
+  annotateAudit: vi.fn(),
+  ipFromHeaders: vi.fn(() => null),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: vi.fn(),
+}));
+
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_dev1055_${suffix}`;
 const otherOrgId = `org_dev1055_other_${suffix}`;
 const branchId = `branch_dev1055_${suffix}`;
+const adminUserId = `user_dev1055_${suffix}`;
+const actingStaffId = `staff_dev1055_acting_${suffix}`;
+let approverRoleId: string;
 const PIN = '482915';
 const WRONG_PIN = '000000';
 
@@ -47,6 +69,7 @@ type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   authenticateOperator: (typeof import('@/lib/restaurant/terminal-auth'))['authenticateOperator'];
   hash: (typeof import('@/lib/restaurant/operator-credentials'))['hashOperatorCredential'];
+  devicesRouter: (typeof import('@/server/routers/restaurant-devices'))['restaurantDevicesRouter'];
 };
 let deps: Deps;
 let staffSeq = 0;
@@ -79,6 +102,84 @@ function attempt(staffProfileId: string, secret: string, now = new Date(), organ
   );
 }
 
+/** Let the operator approve co-authorizations at the branch, and enrol a device to revoke. */
+async function asApproverWithDevice(staffProfileId: string): Promise<string> {
+  const deviceId = `device_dev1055_${suffix}_${staffSeq}`;
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.restaurantStaffJobRole.create({
+      data: { staffProfileId, jobRoleId: approverRoleId, branchId },
+    });
+    await tx.restaurantRegisteredDevice.create({
+      data: { id: deviceId, branchId, name: deviceId, deviceSecretHash: `secret_${deviceId}` },
+    });
+  });
+  return deviceId;
+}
+
+/**
+ * One back-office device revocation approved with `secret`, as one tRPC request
+ * makes it: the whole request runs in ONE tenant transaction, and a refusal
+ * throws out of it, rolling back everything the request wrote in it.
+ */
+function approveRevoke(approvingStaffProfileId: string, deviceId: string, secret: string) {
+  return deps.withTenantDb(orgId, (tx) =>
+    deps.devicesRouter
+      .createCaller({
+        db: tx,
+        entitlements: {
+          organizationId: orgId,
+          seatLimit: 10,
+          activeSeats: 0,
+          enabledModules: ['restaurant-core'],
+          modules: [
+            {
+              key: 'restaurant-core',
+              name: 'Restaurant Core',
+              enabled: true,
+              source: 'PACKAGE',
+              seatLimit: null,
+              expiresAt: null,
+            },
+          ],
+          limits: {},
+        },
+        session: {
+          expires: 'later',
+          user: {
+            id: adminUserId,
+            role: 'ADMIN',
+            department: 'LEADERSHIP',
+            status: 'ACTIVE',
+            organizationId: orgId,
+          },
+        },
+        organization: { id: orgId },
+        support: null,
+        requestMeta: { ip: '203.0.113.1', userAgent: null },
+        audit: { detail: {} },
+      } as never)
+      .revoke({
+        deviceId,
+        approvingStaffProfileId,
+        approvingType: 'PIN',
+        approvingSecret: secret,
+        reason: 'lockout race',
+      })
+  );
+}
+
+function deviceState(deviceId: string) {
+  return deps.withTenantDb(orgId, async (tx) => ({
+    status: (
+      await tx.restaurantRegisteredDevice.findUniqueOrThrow({
+        where: { id: deviceId },
+        select: { status: true },
+      })
+    ).status,
+    coAuthorizations: await tx.restaurantCoAuthorization.count({ where: { targetId: deviceId } }),
+  }));
+}
+
 function credentialState(credentialId: string) {
   return deps.withTenantDb(orgId, (tx) =>
     tx.restaurantOperatorCredential.findUniqueOrThrow({
@@ -90,15 +191,17 @@ function credentialState(credentialId: string) {
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, credentials, terminalAuth] = await Promise.all([
+  const [scopedDb, credentials, terminalAuth, devices] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('@/lib/restaurant/operator-credentials'),
     import('@/lib/restaurant/terminal-auth'),
+    import('@/server/routers/restaurant-devices'),
   ]);
   deps = {
     withTenantDb: scopedDb.withTenantDb,
     authenticateOperator: terminalAuth.authenticateOperator,
     hash: credentials.hashOperatorCredential,
+    devicesRouter: devices.restaurantDevicesRouter,
   };
 
   await scopedDb.withPlatformDb(async (tx) => {
@@ -123,6 +226,45 @@ beforeAll(async () => {
   await deps.withTenantDb(orgId, (tx) =>
     tx.restaurantBranch.create({ data: { id: branchId, name: 'Lockout race' } })
   );
+  // The signed-in administrator who asks for the back-office approvals, and the
+  // job role that lets a manager approve them.
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.organizationDepartment.create({ data: { key: 'LEADERSHIP', name: 'Leadership' } });
+    await tx.user.create({
+      data: {
+        id: adminUserId,
+        name: 'Lockout race administrator',
+        email: `lockout-race-${suffix}@example.test`,
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        title: 'Administrator',
+      },
+    });
+    await tx.restaurantStaffProfile.create({
+      data: {
+        id: actingStaffId,
+        userId: adminUserId,
+        displayName: 'Acting administrator',
+        status: 'ACTIVE',
+      },
+    });
+    const managerRole = await tx.restaurantJobRole.create({
+      data: { key: `lockout-manager-${suffix}`, name: 'Device manager', active: true },
+    });
+    await tx.restaurantJobRoleCapability.create({
+      data: { jobRoleId: managerRole.id, capability: 'devices:manage' },
+    });
+    await tx.restaurantStaffJobRole.create({
+      data: { staffProfileId: actingStaffId, jobRoleId: managerRole.id, branchId },
+    });
+    const approverRole = await tx.restaurantJobRole.create({
+      data: { key: `lockout-approver-${suffix}`, name: 'Device approver', active: true },
+    });
+    await tx.restaurantJobRoleCapability.create({
+      data: { jobRoleId: approverRole.id, capability: 'coauth:approve' },
+    });
+    approverRoleId = approverRole.id;
+  });
 });
 
 beforeEach(() => {
@@ -218,6 +360,104 @@ describeIfDatabase('DEV-1055: operator PIN lockout under concurrent guesses (rea
     await expect(credentialState(operator.credentialId)).resolves.toEqual({
       failedAttempts: 0,
       lockedUntil: null,
+    });
+  }, 60_000);
+
+  it('stops at 5 compares when wrong PINs are split across the terminal route and a tRPC approval', async () => {
+    const operator = await newOperator();
+    const deviceId = await asApproverWithDevice(operator.staffProfileId);
+
+    // Three wrong PINs on the terminal route...
+    for (let i = 0; i < 3; i += 1) {
+      await expect(attempt(operator.staffProfileId, WRONG_PIN)).resolves.toEqual({
+        ok: false,
+        reason: 'INVALID',
+      });
+    }
+    expect(compares.count).toBe(3);
+
+    // ...then two on the back-office approval. Each refusal rolls its request
+    // transaction back, and the charge is still counted on the same credential.
+    await expect(approveRevoke(operator.staffProfileId, deviceId, WRONG_PIN)).rejects.toMatchObject(
+      { code: 'FORBIDDEN', message: 'Invalid approving credential.' }
+    );
+    await expect(credentialState(operator.credentialId)).resolves.toEqual({
+      failedAttempts: 4,
+      lockedUntil: null,
+    });
+    await expect(approveRevoke(operator.staffProfileId, deviceId, WRONG_PIN)).rejects.toMatchObject(
+      { code: 'FORBIDDEN', message: 'Invalid approving credential.' }
+    );
+    expect(compares.count).toBe(5);
+
+    const state = await credentialState(operator.credentialId);
+    expect(state.failedAttempts).toBe(0);
+    expect(state.lockedUntil).not.toBeNull();
+    expect(state.lockedUntil!.getTime()).toBeGreaterThan(Date.now());
+
+    // The credential is now locked on BOTH routes: even the correct PIN is
+    // refused without a compare, and nothing is revoked.
+    await expect(approveRevoke(operator.staffProfileId, deviceId, PIN)).rejects.toMatchObject({
+      code: 'TOO_MANY_REQUESTS',
+    });
+    await expect(attempt(operator.staffProfileId, PIN)).resolves.toMatchObject({
+      ok: false,
+      reason: 'LOCKED',
+    });
+    for (let i = 0; i < 3; i += 1) {
+      await expect(attempt(operator.staffProfileId, WRONG_PIN)).resolves.toMatchObject({
+        ok: false,
+        reason: 'LOCKED',
+      });
+    }
+    expect(compares.count).toBe(5);
+    await expect(deviceState(deviceId)).resolves.toEqual({ status: 'ACTIVE', coAuthorizations: 0 });
+  }, 60_000);
+
+  it('stops at 5 compares when the terminal route and tRPC approvals guess at the same moment', async () => {
+    const operator = await newOperator();
+    const deviceId = await asApproverWithDevice(operator.staffProfileId);
+
+    const [terminal, approvals] = await Promise.all([
+      Promise.all(Array.from({ length: 6 }, () => attempt(operator.staffProfileId, WRONG_PIN))),
+      Promise.allSettled(
+        Array.from({ length: 4 }, () => approveRevoke(operator.staffProfileId, deviceId, WRONG_PIN))
+      ),
+    ]);
+
+    expect(terminal.every((result) => !result.ok)).toBe(true);
+    expect(approvals.every((result) => result.status === 'rejected')).toBe(true);
+    expect(compares.count).toBe(5);
+
+    const state = await credentialState(operator.credentialId);
+    expect(state.failedAttempts).toBe(0);
+    expect(state.lockedUntil).not.toBeNull();
+    await expect(deviceState(deviceId)).resolves.toEqual({ status: 'ACTIVE', coAuthorizations: 0 });
+  }, 60_000);
+
+  it('a correct approval after wrong PINs on both routes clears the shared counter and revokes', async () => {
+    const operator = await newOperator();
+    const deviceId = await asApproverWithDevice(operator.staffProfileId);
+
+    for (let i = 0; i < 2; i += 1) await attempt(operator.staffProfileId, WRONG_PIN);
+    for (let i = 0; i < 2; i += 1) {
+      await expect(
+        approveRevoke(operator.staffProfileId, deviceId, WRONG_PIN)
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    }
+    await expect(credentialState(operator.credentialId)).resolves.toEqual({
+      failedAttempts: 4,
+      lockedUntil: null,
+    });
+
+    await approveRevoke(operator.staffProfileId, deviceId, PIN);
+    await expect(credentialState(operator.credentialId)).resolves.toEqual({
+      failedAttempts: 0,
+      lockedUntil: null,
+    });
+    await expect(deviceState(deviceId)).resolves.toEqual({
+      status: 'REVOKED',
+      coAuthorizations: 1,
     });
   }, 60_000);
 });

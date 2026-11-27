@@ -1,14 +1,14 @@
 import 'server-only';
 
 import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
-import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { operatorHasCapability } from './checkout-routes';
 import {
   hasOwnerPinReauthentication,
   recordOwnerPinReauthentication,
   withOwnerReauthenticationScope,
 } from './owner-reauthentication';
-import { authenticateOperator } from './terminal-auth';
+import { authenticateOperatorCommitted } from './approver-authentication';
 
 /**
  * Back-office (L2, tRPC) maker-checker approval.
@@ -18,9 +18,10 @@ import { authenticateOperator } from './terminal-auth';
  * profile, unrevoked credential, durable failed-attempt lockout). The approver
  * must then hold `capability` at the target's branch.
  *
- * The credential check commits in its own `withTenantDb` transaction, so a
- * refused request never rolls back the brute-force counter. A `FOR UPDATE` lock
- * on the credential rows serializes parallel guesses.
+ * The credential check commits in its own tenant transaction
+ * (`authenticateOperatorCommitted`), so a refused request never rolls back the
+ * brute-force counter. A `FOR UPDATE` lock on the credential rows serializes
+ * parallel guesses.
  *
  * Self-approval (approver === session actor) is allowed only for a sole owner:
  * a fresh PIN (never a badge), plus the server-side `isSoloOwner` check (exactly
@@ -86,26 +87,16 @@ export async function verifyBackOfficeApprover(
   // possession factor and can be used by whoever holds it.
   if (selfApproval && request.type !== 'PIN') return { ok: false };
 
-  const auth = await withTenantDb(request.organizationId, async (tx) => {
-    await tx.$queryRawUnsafe(
-      `SELECT id FROM restaurant_operator_credentials
-       WHERE "staffProfileId" = $1 AND type::text = $2
-         AND "deviceId" IS NULL AND "revokedAt" IS NULL
-       ORDER BY id FOR UPDATE`,
-      approvingStaffProfileId,
-      request.type
-    );
-    return authenticateOperator(tx, {
-      staffProfileId: approvingStaffProfileId,
-      type: request.type,
-      secret: request.secret,
-      now,
-      approval: {
-        action: `restaurant.backOfficeApproval.${request.capability}`,
-        approverRight: request.capability,
-        requestedByStaffProfileId: request.actingStaffProfileId,
-      },
-    });
+  const auth = await authenticateOperatorCommitted(request.organizationId, {
+    staffProfileId: approvingStaffProfileId,
+    type: request.type,
+    secret: request.secret,
+    now,
+    approval: {
+      action: `restaurant.backOfficeApproval.${request.capability}`,
+      approverRight: request.capability,
+      requestedByStaffProfileId: request.actingStaffProfileId,
+    },
   });
   if (!auth.ok || auth.staffProfileId !== approvingStaffProfileId) return { ok: false };
 

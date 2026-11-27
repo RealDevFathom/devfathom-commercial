@@ -4,17 +4,19 @@ import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/operator-credentials';
 
 /**
- * DEV-1055: a per-approver budget for back-office approvals that verify a manager's
- * PIN or badge inside the request's own transaction (device revoke, device rotate,
- * camera gateway revoke).
+ * DEV-1055: a per-approver budget for the back-office approvals that verify a
+ * manager's PIN or badge (device revoke, device rotate, camera gateway revoke).
  *
  * Those requests answer a wrong credential with an error, and an error rolls the
- * request transaction back, taking the durable strike on the credential row with
- * it. Without a counter outside that transaction, a signed-in caller could guess
- * a manager's PIN without limit. This budget lives in the rate-limit store, which
- * does not belong to the request transaction: the same five attempts per lockout
- * window as the credential itself, per approver, shared by all three approvals.
- * A correct credential restores it, as a correct PIN clears the strikes.
+ * request transaction back. The credential check itself commits in its own tenant
+ * transaction (`authenticateOperatorCommitted`), so its strike lands on the one
+ * durable counter on the credential row that the terminal routes also use, and
+ * that counter is the authoritative limit across every route. This budget is a
+ * second, outer limit in the rate-limit store, which does not belong to the
+ * request transaction either: the same five attempts per lockout window, per
+ * approver, shared by all three approvals. An exhausted budget refuses without
+ * touching the credential. A correct credential restores it, as a correct PIN
+ * clears the strikes.
  */
 function budgetKey(organizationId: string, approvingStaffProfileId: string) {
   return `restaurant-approver-credential:${organizationId}:${approvingStaffProfileId}`;

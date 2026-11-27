@@ -19,7 +19,7 @@ import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
-import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { authenticateOperatorCommitted } from '@/lib/restaurant/approver-authentication';
 import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
@@ -162,13 +162,16 @@ export const restaurantCamerasRouter = router({
         throw error;
       }
       // DEV-1055: a wrong credential fails this request and rolls its transaction
-      // back, strike included, so the attempts are also counted per approver
-      // outside the transaction (see approver-attempt-budget.ts).
+      // back. The credential check therefore commits in its own tenant
+      // transaction, so its strike lands on the same durable counter the terminal
+      // routes use; the per-approver budget stays as a second, outer limit.
+      const approverOrganizationId =
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId;
       const auth = await authenticateApproverWithinBudget(
-        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId,
+        approverOrganizationId,
         input.approvingStaffProfileId,
         () =>
-          authenticateOperator(ctx.db, {
+          authenticateOperatorCommitted(approverOrganizationId, {
             staffProfileId: input.approvingStaffProfileId,
             type: input.approvingType,
             secret: input.approvingSecret,
