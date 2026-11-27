@@ -156,6 +156,32 @@ beforeEach(() => {
 });
 
 describe('CounterRxPanel checks', () => {
+  it('shows the branch-safe fill history beside the remaining quantity', () => {
+    const rx = patient.prescriptions[0]!;
+    const line = rx.lines[0]!;
+    const fills = [
+      { label: 'Dispensed at Central', date: '2026-11-25', quantity: 1 },
+      { label: 'Dispensed at another branch', date: '2026-11-26', quantity: 1 },
+    ];
+    render(
+      <CounterRxPanel
+        {...props({
+          patient: { ...patient, prescriptions: [{ ...rx, lines: [{ ...line, fills }] }] },
+        })}
+      />
+    );
+    const history = screen.getByRole('list', { name: 'Fill history for Amoxicillin 625 mg' });
+    expect(
+      within(history)
+        .getAllByRole('listitem')
+        .map((item) => item.textContent)
+    ).toEqual([
+      'Dispensed at Central · 2026-11-25 · 1 unit',
+      'Dispensed at another branch · 2026-11-26 · 1 unit',
+    ]);
+    expect(screen.getByText('4 of 6 units left')).toBeVisible();
+  });
+
   it('leads with safety blocks, keeps notices distinct, and only acknowledges advice', () => {
     render(
       <CounterRxPanel

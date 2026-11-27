@@ -780,6 +780,20 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                                 }
                               />
                             )}
+                            {line.fills?.length ? (
+                              <ul
+                                aria-label={`Fill history for ${line.medicineName}`}
+                                className="w-full space-y-1 text-sm text-text-body"
+                              >
+                                {line.fills.map((fill, index) => (
+                                  <li key={`${fill.date}-${index}`}>
+                                    <span>{fill.label}</span> ·{' '}
+                                    <time dateTime={fill.date}>{fill.date}</time> · {fill.quantity}{' '}
+                                    {fill.quantity === 1 ? 'unit' : 'units'}
+                                  </li>
+                                ))}
+                              </ul>
+                            ) : null}
                           </li>
                         ))}
                       </ul>
