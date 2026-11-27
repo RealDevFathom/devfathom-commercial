@@ -160,6 +160,16 @@ export async function otherRxReviewSigners(
             },
           },
         },
+        {
+          clinicalBranchAssignments: {
+            some: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              active: true,
+              branch: { organizationId: scope.organizationId, active: true },
+            },
+          },
+        },
       ],
     },
     select: SIGNER_SELECT,

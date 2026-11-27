@@ -44,7 +44,7 @@ export default async function PharmacyBranchAssignmentsPage() {
       <PageHeader
         eyebrow="Pharmacy"
         heading="Branch assignments"
-        description="Assign an active pharmacy member to a branch, or remove an assignment. Administrators can still open every branch."
+        description="Assign an active pharmacy member to a branch, or remove an assignment. The System Owner has clinical access at every branch."
       />
       <BranchCashMode />
       <SectionCard title="Who works at which branch" titleLevel={2}>

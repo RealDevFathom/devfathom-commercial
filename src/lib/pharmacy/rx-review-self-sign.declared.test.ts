@@ -60,6 +60,10 @@ function fixture(
     )
   );
   const db = {
+    pharmacyClinicalBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyBranchAssignment: {
       findFirst: vi.fn(
         async ({

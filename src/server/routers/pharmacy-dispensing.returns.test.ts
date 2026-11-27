@@ -36,6 +36,7 @@ function fixture(
       }),
     },
     pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'b' }) },
+    pharmacyClinicalBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ branchId: 'b' }) },
     pharmacyReturnVerificationTask: {
       findMany: vi.fn().mockResolvedValue([{ id: 'task-1' }, { id: 'task-2' }]),
@@ -57,6 +58,24 @@ function fixture(
   };
 }
 describe('OTC return verification queue', () => {
+  it('admits a clinical-only member to return verification with the dispensing capability', async () => {
+    const f = fixture();
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    f.db.pharmacyClinicalBranchAssignment.findFirst.mockResolvedValue({ branchId: 'b' });
+    await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).resolves.toHaveLength(2);
+    expect(f.db.pharmacyClinicalBranchAssignment.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org',
+        userId: 'u',
+        branchId: 'b',
+        active: true,
+        user: { organizationId: 'org', status: 'ACTIVE' },
+        branch: { organizationId: 'org', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
+
   it('requires pharmacist capability', async () => {
     const f = fixture(false);
     await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).rejects.toMatchObject({

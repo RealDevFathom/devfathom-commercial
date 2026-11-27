@@ -1,5 +1,5 @@
 import { can, subjectFromSession } from '@/lib/abac';
-import { isClinicalOwner } from '@/lib/pharmacy/clinical-branch-access';
+import { assignedClinicalBranchIds, isClinicalOwner } from '@/lib/pharmacy/clinical-branch-access';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { annotateAudit } from '@/server/audit';
@@ -30,8 +30,9 @@ import { protectedProcedure, capabilityProcedure, router, type TRPCContext } fro
 
 async function registerReadScope(ctx: TRPCContext, organizationId: string, userId: string) {
   // Support register views keep the assignment rule they already use.
-  if (!ctx.support && (await isClinicalOwner(ctx.db, organizationId, userId))) return null;
-  return assignedRegisterBranchIds(ctx.db, organizationId, userId);
+  if (ctx.support) return assignedRegisterBranchIds(ctx.db, organizationId, userId);
+  if (await isClinicalOwner(ctx.db, organizationId, userId)) return null;
+  return assignedClinicalBranchIds(ctx.db, organizationId, userId);
 }
 
 async function organizationBranch(ctx: TRPCContext, branchId: string, registerView = false) {

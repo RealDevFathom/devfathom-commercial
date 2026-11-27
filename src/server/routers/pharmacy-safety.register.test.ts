@@ -41,6 +41,10 @@ function fixture(provisional: boolean | undefined, profileExists = true, branchP
   };
   const db = {
     user: { findUnique: vi.fn().mockResolvedValue(null) },
+    pharmacyClinicalBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-1' }]) },
     pharmacyBranch: {
       findMany: vi.fn().mockResolvedValue([{ id: 'branch-1', name: 'Main' }]),

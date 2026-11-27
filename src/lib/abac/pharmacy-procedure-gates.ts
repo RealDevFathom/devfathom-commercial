@@ -110,7 +110,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyBranchAssignments.assign': {
-    gate: 'adminProcedure (admin:access)',
+    gate: 'adminProcedure (admin:access), another member only',
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyBranchAssignments.cashModes': {
@@ -134,7 +134,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyBranchAssignments.unassign': {
-    gate: 'adminProcedure (admin:access)',
+    gate: 'adminProcedure (admin:access), another member only',
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyCameras.capturePending': {
@@ -250,7 +250,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/see-returns-awaiting-verification'],
   },
   'pharmacyDispensing.reviewQueue': {
-    gate: "capabilityProcedure('pharmacy:dispense') + clinicalReviewScope (active assigned branches or tenant owner); patient names require pharmacy:prescriptions",
+    gate: "capabilityProcedure('pharmacy:dispense') + clinicalReviewScope (active full or clinical-only assignments, or System Owner); patient names require pharmacy:prescriptions",
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.selfSignReview': {

@@ -246,6 +246,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
           organizationRole: { permissions: [] },
         })),
       },
+      pharmacyClinicalBranchAssignment: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       pharmacyBranchAssignment: { findMany: vi.fn(async () => [{ branchId: BRANCH }]) },
       pharmacyRecallNotice: { count: vi.fn(async () => counts.recalls) },
       pharmacySupplierClaim: { count: vi.fn(async () => counts.claims) },

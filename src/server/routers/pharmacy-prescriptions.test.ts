@@ -1408,6 +1408,10 @@ describe('DEV-938 refill reminder branch assignment', () => {
     ctx.db = {
       ...ctx.db,
       pharmacyBranch: { findFirst: branchFind },
+      pharmacyClinicalBranchAssignment: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       pharmacyBranchAssignment: { findFirst: assignmentFind },
       prescriptionFill: { findFirst: fillFind },
       patientConsent: { findFirst: consentFind },
@@ -1609,6 +1613,10 @@ describe('DEV-962 a fill records the branch that dispensed it', () => {
     ctx.db = {
       ...ctx.db,
       pharmacyBranch: { findFirst: branchFind },
+      pharmacyClinicalBranchAssignment: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       pharmacyBranchAssignment: { findFirst: assignmentFind },
       prescriptionFill: { create: fillCreate },
     } as unknown as typeof ctx.db;

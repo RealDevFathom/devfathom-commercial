@@ -645,6 +645,38 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
 });
 
 describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
+  it('uses a clinical-only grant at the counter without giving the member a purchasing branch', async () => {
+    const { procurementBranchIds } = await import('@/lib/pharmacy/procurement-access');
+    await tenant(async (db) => {
+      const api = pharmacyDispensingRouter.createCaller({
+        db,
+        ...context(byId(ids.admin)),
+      } as never);
+      const key = { userId: ids.admin, branchId: ids.branch };
+      const clinical = await db.pharmacyClinicalBranchAssignment.create({ data: key });
+      await expect(api.returnVerificationQueue({ branchId: ids.branch })).resolves.toEqual([]);
+      for (const branchId of [ids.otherBranch, ids.foreignBranch]) {
+        await expect(api.returnVerificationQueue({ branchId })).rejects.toMatchObject({
+          code: 'NOT_FOUND',
+          message: 'This branch is unavailable.',
+        });
+      }
+      expect(await procurementBranchIds(db, ids.org, ids.admin)).toEqual([]);
+      const full = await db.pharmacyBranchAssignment.create({ data: key });
+      await db.pharmacyClinicalBranchAssignment.update({
+        where: { id: clinical.id },
+        data: { active: false },
+      });
+      await expect(api.returnVerificationQueue({ branchId: ids.branch })).resolves.toEqual([]);
+      expect(await procurementBranchIds(db, ids.org, ids.admin)).toEqual([ids.branch]);
+      await db.pharmacyBranchAssignment.update({ where: { id: full.id }, data: { active: false } });
+      await expect(api.returnVerificationQueue({ branchId: ids.branch })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: 'This branch is unavailable.',
+      });
+    });
+  });
+
   it('checks admission and tenant ownership before opening a return queue', async () => {
     await tenant(async (db) => {
       const queue = (who: string, branchId: string) =>

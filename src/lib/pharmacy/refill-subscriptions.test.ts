@@ -231,6 +231,10 @@ function fakeDb(
       findFirst: async () => ({ id: 'pharmacist', organizationId: 'org', status: 'ACTIVE' }),
     },
     // DEV-941: the pharmacist works at this branch.
+    pharmacyClinicalBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyBranchAssignment: {
       findFirst: vi.fn(async ({ where }: { where: { userId: string; branchId: string } }) =>
         where.userId === 'pharmacist' && where.branchId === 'branch' ? { branchId: 'branch' } : null

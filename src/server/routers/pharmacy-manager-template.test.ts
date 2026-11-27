@@ -93,6 +93,10 @@ function fixture({
       findFirst: vi.fn(async () => null),
     },
     pharmacySupplier: { findMany: vi.fn(async () => []) },
+    pharmacyClinicalBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyBranchAssignment: {
       // Without a branchId this answers "assigned to some branch" (the rail's check).
       findFirst: vi.fn(

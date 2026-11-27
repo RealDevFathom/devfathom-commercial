@@ -9,6 +9,32 @@ export function isClinicalOwner(
   return actorIsPharmacyOwner(db, organizationId, userId, 'system-owner');
 }
 
+type ClinicalDb = Pick<ScopedDb, 'pharmacyBranchAssignment' | 'pharmacyClinicalBranchAssignment'>;
+
+export async function assignedClinicalBranchIds(
+  db: ClinicalDb,
+  organizationId: string,
+  userId: string,
+  selected?: string[]
+) {
+  const query = {
+    where: {
+      organizationId,
+      userId,
+      active: true,
+      branch: { organizationId, active: true },
+      user: { organizationId, status: 'ACTIVE' as const },
+      ...(selected ? { branchId: { in: selected } } : {}),
+    },
+    select: { branchId: true },
+  };
+  const [full, clinical] = await Promise.all([
+    db.pharmacyBranchAssignment.findMany(query),
+    db.pharmacyClinicalBranchAssignment.findMany(query),
+  ]);
+  return [...new Set([...full, ...clinical].map((row) => row.branchId))];
+}
+
 export async function clinicalBranchAssignmentDenial(
   db: ScopedDb,
   user: { id: string; role: string },
@@ -26,18 +52,21 @@ export async function clinicalBranchAssignmentDenial(
   }
   // Check the usual admission path first. A session role only orders the live checks.
   if (user.role === 'ADMIN' && (await ownsBranch())) return null;
-  const assignment = await db.pharmacyBranchAssignment.findFirst({
+  const query = {
     where: {
       organizationId,
       userId: user.id,
       branchId,
       active: true,
       branch: { organizationId, active: true },
-      user: { organizationId, status: 'ACTIVE' },
+      user: { organizationId, status: 'ACTIVE' as const },
     },
     select: { branchId: true },
-  });
+  };
+  const assignment = await db.pharmacyBranchAssignment.findFirst(query);
   if (assignment?.branchId === branchId) return null;
+  const clinical = await db.pharmacyClinicalBranchAssignment.findFirst(query);
+  if (clinical?.branchId === branchId) return null;
   if (user.role !== 'ADMIN' && (await ownsBranch())) return null;
   return 'branch_forbidden';
 }

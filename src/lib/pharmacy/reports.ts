@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { pharmacyBranchDayWindows, type PharmacyBranchDayEnds } from './business-day';
 import { pharmacyBranchWindowSql, spanOf } from './business-day-sql';
 
-import { isClinicalOwner } from './clinical-branch-access';
+import { assignedClinicalBranchIds, isClinicalOwner } from './clinical-branch-access';
 import { grossMarginQuery } from './finance-reports';
 import {
   hasPharmacyReportDimension,
@@ -353,19 +353,7 @@ async function scopedSafetyQueueQuery(
   const owner = await isClinicalOwner(db, organizationId, userId);
   const visible = owner
     ? selectedBranches
-    : (
-        await db.pharmacyBranchAssignment.findMany({
-          where: {
-            organizationId,
-            userId,
-            active: true,
-            branchId: { in: selectedBranches },
-            branch: { organizationId, active: true },
-            user: { organizationId, status: 'ACTIVE' },
-          },
-          select: { branchId: true },
-        })
-      ).map((row) => row.branchId);
+    : await assignedClinicalBranchIds(db, organizationId, userId, selectedBranches);
   if (!visible.length) return null;
   const branches = Prisma.join(visible);
   return Prisma.sql`

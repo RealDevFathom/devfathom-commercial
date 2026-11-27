@@ -67,6 +67,11 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
         };
       }),
     },
+    pharmacyClinicalBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+      update: vi.fn(),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ id: 'pba-1', branchId: 'branch-a', userId: 'cashier-1' }]),
       findFirst: vi.fn(async (args?: { where?: { id?: string } }) =>
@@ -108,6 +113,37 @@ beforeEach(() => {
 });
 
 describe('pharmacy branch assignments', () => {
+  it('lists and separately revokes the clinical admission of a legacy administrator', async () => {
+    const f = fixture();
+    const grant = { id: 'clinical-1', userId: 'legacy-admin', branchId: 'branch-a' };
+    f.db.pharmacyClinicalBranchAssignment.findMany.mockResolvedValue([
+      { ...grant, user: { name: 'Legacy admin' } },
+    ]);
+    f.db.pharmacyClinicalBranchAssignment.findFirst.mockResolvedValue(grant);
+    const list = await f.caller.list();
+    expect(list.members.map((m) => m.id)).not.toContain('legacy-admin');
+    expect(list.assignments).toContainEqual({
+      ...grant,
+      branchName: 'Counter A',
+      userName: 'Legacy admin',
+      clinicalOnly: true,
+    });
+    const input = { assignmentId: grant.id, clinicalOnly: true };
+    f.context.session.user.id = grant.userId;
+    await expect(f.caller.unassign(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Another administrator must change your branch access.',
+    });
+    expect(f.db.pharmacyClinicalBranchAssignment.update).not.toHaveBeenCalled();
+    f.context.session.user.id = 'admin-1';
+    await expect(f.caller.unassign(input)).resolves.toEqual({ id: grant.id });
+    expect(f.db.pharmacyClinicalBranchAssignment.update).toHaveBeenCalledWith({
+      where: { id: grant.id },
+      data: { active: false },
+    });
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+  });
+
   it('requires another administrator to change the acting member’s own branch access', async () => {
     const f = fixture();
     f.context.session.user.id = 'cashier-1';

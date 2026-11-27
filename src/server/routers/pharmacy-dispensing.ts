@@ -80,12 +80,16 @@ async function clinicalReviewScope(ctx: TRPCContext) {
       ON line."organizationId" = review."organizationId" AND line.id = review."saleLineId"
     JOIN pharmacy_branches branch
       ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
-    JOIN pharmacy_branch_assignments assignment
+    JOIN (
+      SELECT "organizationId", "branchId", "userId" FROM pharmacy_branch_assignments WHERE active
+      UNION
+      SELECT "organizationId", "branchId", "userId" FROM pharmacy_clinical_branch_assignments WHERE active
+    ) assignment
       ON assignment."organizationId" = branch."organizationId" AND assignment."branchId" = branch.id
     JOIN users member
       ON member."organizationId" = assignment."organizationId" AND member.id = assignment."userId"
     WHERE member.status = 'ACTIVE' AND review."organizationId" = ${organizationId} AND assignment."userId" = ${userId}
-      AND branch.active AND assignment.active
+      AND branch.active
   `;
   return { organizationId, id: { in: reviews.map((review) => review.id) } };
 }
