@@ -255,7 +255,7 @@ export const SUPPORT_MAY: Readonly<Record<string, string>> = {
     'closePeriod createSettlementBatch importBankLine post publishTaxProfile reconcile reopenPeriod reverse',
   pharmacyGeneralJournal: 'cancelDraft createDraft post reverse updateDraft',
   pharmacyInventory:
-    'acknowledgeRecall acknowledgeSignal allocateForSale allocateRequestedTransfer allocateTransfer approveCount approveSafetyStock approveTransfer breakPack closeRecall configureTemperatureMonitoring confirmDrapPrice confirmDrapRecall createCount createDraftAction createLocation createRecall dismissDrapRecall dismissSignal dispatchTransfer draftExpiryMarkdown draftExpiryReturn draftExpiryReturnClaim importTemperatureCsv ingestDrapFile ingestDrapManual markStaleSignals quarantineExpiring quarantinePart receiveLot receiveTransferLine receiveTransferWithVariance recordTemperature recordUnrecordedBatch refreshStockSignals registerBatch releaseQuarantinedPart reserveSupplierClaim reverseDrapRecall setBatchState setBranchTransfersEnabled snoozeSignal transfer writeOff',
+    'acknowledgeRecall acknowledgeSignal allocateForSale allocateRequestedTransfer allocateTransfer approveCount approveSafetyStock approveTransfer breakPack closeRecall configureTemperatureMonitoring confirmDrapPrice confirmDrapRecall createCount createDraftAction createLocation createRecall dismissDrapRecall dismissSignal dispatchTransfer draftExpiryMarkdown draftExpiryReturn draftExpiryReturnClaim importTemperatureCsv ingestDrapFile ingestDrapManual markStaleSignals quarantineExpiring quarantinePart receiveLot receiveTransferLine receiveTransferWithVariance recordTemperature recordUnrecordedBatch refreshStockSignals registerBatch releaseQuarantinedPart releaseSafetyQuarantine reserveSupplierClaim reverseDrapRecall setBatchState setBranchTransfersEnabled snoozeSignal transfer writeOff',
   pharmacyInvoiceCapture: 'read',
   pharmacyMarketing:
     'approve approveTemplate assist attributeReceipts capture createDraft generateBaskets generateGrowth issueVoucher profileHealth resumeSending reviewBasket reviewGrowth reviewReply revokeVoucher sandbox sandboxDue updateSendPolicy',
@@ -269,7 +269,7 @@ export const SUPPORT_MAY: Readonly<Record<string, string>> = {
   pharmacyOwnerImport: 'commit preview upload',
   pharmacyPackLabel: 'read',
   pharmacyPrescriptions:
-    'capture captureRefillReminder createPatient createPrescriber draftCartFromSource extractSource fill recordConsent uploadSource',
+    'capture captureRefillReminder createPatient createPrescriber draftCartFromSource extractSource recordConsent uploadSource',
   pharmacyPrinting: 'enqueueReceipt retryJob',
   pharmacyPurchasing:
     'allocateCentralReceipt allocateSupplierCredit approvePurchaseOrder authenticatePack createCentralPurchaseOrder createGoodsReceipt createPurchaseOrder createPurchaseReturn createRequisition createSupplier decideReceiptDebitNote dispatchPurchaseReturn ignoreLostDemandAdvice issueDebitNote postGoodsReceipt recordQuote recordSupplierCredit recordSupplierLicence requestLostDemandTransfer resolveReceivingException reverseGoodsReceipt sendPurchaseOrder setLostDemandTriggerSettings setSupplierAuthorization submitPurchaseOrder submitPurchaseReturn submitRequisition verifySupplierLicence',
@@ -350,6 +350,8 @@ export const SUPPORT_MAY_NOTES: Readonly<Record<string, string>> = {
   'chat.removeMember': 'Removes a member from a channel.',
   'notes.setShares': 'Shares one note with existing members.',
   'team.updateProfile': 'Name, phone, bio and skills. It cannot change the sign-in email.',
+  'pharmacyInventory.releaseSafetyQuarantine':
+    'Stock, not access: the same release as releaseQuarantinedPart, behind the safety permission the member already holds. Whether support may release a safety hold is the owner\u2019s call.',
   'organizationAdmin.retryDomain': 'Re-checks a host the owner added. Adding a host is refused.',
   'organizationAdmin.upsertDepartment': 'A department label, not a permission.',
   'organizationAdmin.removeDepartment': 'A department label, not a permission.',
