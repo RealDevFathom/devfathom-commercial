@@ -135,7 +135,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
 
     const content = Buffer.from(await file.arrayBuffer());
     // Check the token again when writing under the existing link lock.
-    await withTenantDb(
+    const staffAudit = await withTenantDb(
       organizationId,
       async (db) => {
         const document = await uploadSupplierDocument(db, { token, ...input.data, content });
@@ -162,19 +162,33 @@ export const POST = uploadPost(async (request, readUploadForm) => {
               : {}),
           },
         } satisfies Parameters<typeof recordAudit>[0];
-        if (outside) await recordAudit({ ...auditRow, actorType: 'ANONYMOUS' }, db);
-        else
-          recordAudit({
-            ...auditRow,
-            actorType: 'USER',
-            actorId: userId,
-            actorName: user?.name,
-            actorEmail: user?.email,
-            actorRole: user?.role,
-          });
+        if (outside) {
+          await recordAudit({ ...auditRow, actorType: 'ANONYMOUS' }, db);
+          return null;
+        }
+        return auditRow;
       },
       { userId, timeout: 60_000 }
     );
+    if (staffAudit) {
+      await withTenantDb(
+        organizationId,
+        async (db) => {
+          await recordAudit(
+            {
+              ...staffAudit,
+              actorType: 'USER',
+              actorId: userId,
+              actorName: user?.name,
+              actorEmail: user?.email,
+              actorRole: user?.role,
+            },
+            db
+          );
+        },
+        { userId }
+      );
+    }
     return new Response(null, { status: 204, headers: { 'Cache-Control': 'private, no-store' } });
   } catch (error) {
     const passwordChange = responseForPasswordChange(error);

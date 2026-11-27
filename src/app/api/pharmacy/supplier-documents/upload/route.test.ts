@@ -112,7 +112,8 @@ it('uploads a full 10 MB document through the per-user and per-business slot', a
       actorId: 'supplier-user',
       targetId: 'doc',
       metadata: { branchId: 'branch' },
-    })
+    }),
+    db
   );
   expect(JSON.stringify(mocks.audit.mock.calls)).not.toContain(token);
   expect(mocks.permission.mock.invocationCallOrder[0]).toBeLessThan(
@@ -286,3 +287,36 @@ it.each(['rate', 'expired', 'origin', 'inactive'] as const)(
     expect(mocks.store).not.toHaveBeenCalled();
   }
 );
+
+it('does not record a successful staff upload if its tenant transaction fails to commit', async () => {
+  mocks.scope
+    .mockImplementationOnce(async (_org, run) => run(db))
+    .mockImplementationOnce(async (_org, run) => {
+      await run(db);
+      throw new Error('synthetic commit failure');
+    });
+  expect((await POST(upload(pdf(8)))).status).toBe(500);
+  expect(mocks.store).toHaveBeenCalledOnce();
+  expect(mocks.audit).not.toHaveBeenCalled();
+});
+
+it('awaits the staff audit write before returning upload success', async () => {
+  let release!: () => void;
+  mocks.audit.mockReturnValueOnce(
+    new Promise<void>((resolve) => {
+      release = resolve;
+    })
+  );
+  let done = false;
+  const response = POST(upload(pdf(8))).then((result) => {
+    done = true;
+    return result;
+  });
+  try {
+    await vi.waitFor(() => expect(mocks.audit).toHaveBeenCalledOnce());
+    expect(done).toBe(false);
+  } finally {
+    release();
+  }
+  expect((await response).status).toBe(204);
+});
