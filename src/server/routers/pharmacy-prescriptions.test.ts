@@ -602,18 +602,16 @@ describe('prescription capture and private delivery', () => {
       });
       Object.assign(ctx.db, {
         user: {
-          findUnique: vi
-            .fn()
-            .mockResolvedValue(
-              owner
-                ? {
-                    role: 'ADMIN',
-                    status: 'ACTIVE',
-                    organizationRole: { isSystem: true, key: 'owner', permissions: [] },
-                    permissionOverrides: [],
-                  }
-                : null
-            ),
+          findUnique: vi.fn().mockResolvedValue(
+            owner
+              ? {
+                  role: 'ADMIN',
+                  status: 'ACTIVE',
+                  organizationRole: { isSystem: true, key: 'owner', permissions: [] },
+                  permissionOverrides: [],
+                }
+              : null
+          ),
         },
         pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
         pharmacyClinicalBranchAssignment: {
