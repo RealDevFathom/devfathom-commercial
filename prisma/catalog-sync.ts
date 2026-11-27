@@ -4,6 +4,7 @@ import type { Prisma } from '../src/generated/prisma/client.js';
 import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
 import {
   HOSPITALITY_PACKAGES,
+  UNIVERSITY_PACKAGES,
   packageDefaultSeats,
   PHARMACY_PACKAGES,
   RESTAURANT_PACKAGES,
@@ -75,7 +76,12 @@ export async function syncPlatformCatalog(
   }
   const packages = restaurantPackage
     ? [restaurantPackage]
-    : [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES];
+    : [
+        ...RESTAURANT_PACKAGES,
+        ...PHARMACY_PACKAGES,
+        ...HOSPITALITY_PACKAGES,
+        ...UNIVERSITY_PACKAGES,
+      ];
   const modules = restaurantPackage
     ? CATALOG_MODULES.filter(
         (module) => module.band === 'BASELINE' || restaurantPackage.moduleKeys.includes(module.key)

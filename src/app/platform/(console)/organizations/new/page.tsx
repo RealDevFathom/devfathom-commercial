@@ -304,7 +304,7 @@ export default async function NewOrganizationPage({
                 // A pharmacy launches in the Pakistan market (its province list is
                 // Pakistan), so it starts on PKR rather than the commercial USD
                 // default the operator would otherwise have to override by hand.
-                defaultValue: vertical === 'PHARMACY' ? 'PKR' : 'USD',
+                defaultValue: vertical === 'PHARMACY' || vertical === 'UNIVERSITY' ? 'PKR' : 'USD',
               },
               {
                 name: 'timezone',
@@ -316,7 +316,10 @@ export default async function NewOrganizationPage({
                 // rather than on UTC. A pharmacy launches in the same Pakistan
                 // market, so it defaults to Asia/Karachi too.
                 defaultValue:
-                  vertical === 'RESTAURANT' || vertical === 'HOSPITALITY' || vertical === 'PHARMACY'
+                  vertical === 'RESTAURANT' ||
+                  vertical === 'HOSPITALITY' ||
+                  vertical === 'PHARMACY' ||
+                  vertical === 'UNIVERSITY'
                     ? 'Asia/Karachi'
                     : 'UTC',
                 help: 'Search by city or IANA name. Timezones are grouped by region.',

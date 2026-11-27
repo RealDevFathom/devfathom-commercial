@@ -1,6 +1,7 @@
 import {
   AGENCY_MODULES,
   HOSPITALITY_MODULES,
+  UNIVERSITY_MODULES,
   PHARMACY_MODULES,
   RESTAURANT_MODULES,
   type OrganizationVertical,
@@ -63,7 +64,7 @@ export const MODULE_CATALOG: readonly ModuleDefinition[] = [
     ...module,
     band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
   })),
-  ...HOSPITALITY_MODULES.map((module) => ({
+  ...[...HOSPITALITY_MODULES, ...UNIVERSITY_MODULES].map((module) => ({
     ...module,
     band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
   })),
@@ -157,6 +158,7 @@ const VERTICAL_BASELINE_MODULES: Readonly<
   Partial<Record<OrganizationVertical, readonly string[]>>
 > = {
   PHARMACY: ['audit'],
+  UNIVERSITY: ['audit'],
 };
 
 export function verticalBaselineModules(
@@ -388,6 +390,8 @@ export function moduleForProcedure(path: string): string | null {
 }
 
 export function moduleForApiScope(scope: string): string | null {
+  if (scope === 'university:integrations:read' || scope === 'university:integrations:write')
+    return 'university-core';
   const domain = scope.split(':')[0];
   if (domain === 'tasks' || domain === 'projects') return 'projects';
   if (domain === 'team') return 'hr';
@@ -408,6 +412,12 @@ export function moduleForApiScope(scope: string): string | null {
  * catalog instead of repeating module strings in the sidebar.
  */
 export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
+  ...UNIVERSITY_MODULES.filter((module) => !module.mandatory).map(
+    (module) => [module.routePrefix, module.key] as const
+  ),
+  ['/university/student-support', 'university-academics'],
+  ['/university/community', 'university-services'],
+  ['/university', 'university-core'],
   ['/hotel/settings', 'hotel-core'],
   // R-lane (WHA-210): the OCR menu-import review console. Listed before the
   // restaurant core catch-all because `moduleForPath` takes the first prefix match.

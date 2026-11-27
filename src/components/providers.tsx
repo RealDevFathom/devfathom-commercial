@@ -12,6 +12,10 @@ export function Providers({ children }: { children: React.ReactNode }) {
   if (
     pathname === '/login' ||
     pathname.startsWith('/login/') ||
+    pathname === '/apply' ||
+    pathname.startsWith('/apply/') ||
+    pathname === '/student' ||
+    pathname.startsWith('/student/') ||
     pathname === '/terminal' ||
     pathname === '/pos' ||
     pathname === '/kds'

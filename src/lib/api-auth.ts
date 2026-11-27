@@ -10,7 +10,11 @@ import {
   withPlatformDb,
   withTenantDb,
 } from '@/lib/tenancy/scoped-db';
-import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import {
+  hasModule,
+  resolveCurrentOrganizationEntitlements,
+  resolveOrganizationEntitlements,
+} from '@/lib/entitlements';
 import { approvalAuthenticatorGate } from '@/lib/approval-authenticator-gate';
 import { APPROVAL_AUTHENTICATOR_SETUP_MESSAGE } from '@/lib/auth/session-state';
 import { moduleForApiScope } from '@/lib/module-catalog';
@@ -71,7 +75,7 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
             id: true,
             role: true,
             status: true,
-            organization: { select: { id: true, status: true } },
+            organization: { select: { id: true, status: true, vertical: true } },
           },
         },
       },
@@ -103,9 +107,12 @@ export async function authenticateApiRequest(request: Request): Promise<ApiConte
       })
     ).catch(() => {});
 
-    const entitlements = await withTenantDb(candidate.organizationId, (tenantDb) =>
-      resolveOrganizationEntitlements(candidate.organizationId, tenantDb)
-    );
+    const entitlements =
+      candidate.user.organization.vertical === 'UNIVERSITY'
+        ? await resolveCurrentOrganizationEntitlements(candidate.organizationId)
+        : await withTenantDb(candidate.organizationId, (tenantDb) =>
+            resolveOrganizationEntitlements(candidate.organizationId, tenantDb)
+          );
     if (!hasModule(entitlements, 'api')) {
       return NextResponse.json(
         { error: 'API access is not enabled for this organization.' },
@@ -301,6 +308,16 @@ export function withApiAuth<T extends unknown[]>(
   };
 }
 
+/** A deliberate business-rule refusal. The message must be safe for the caller. */
+export class ApiRequestError extends Error {
+  constructor(
+    public status: 400 | 403 | 409 | 422,
+    safeMessage: string
+  ) {
+    super(safeMessage);
+  }
+}
+
 export function auditedApiError(
   request: Request,
   scope: string,
@@ -308,6 +325,17 @@ export function auditedApiError(
   ctx: ApiContext | null,
   err: unknown
 ): NextResponse {
+  if (err instanceof ApiRequestError) {
+    recordRestAudit({
+      request,
+      ctx,
+      scope,
+      status: err.status,
+      error: err.message,
+      durationMs: Date.now() - start,
+    });
+    return NextResponse.json({ error: err.message }, { status: err.status });
+  }
   // Log the full error server-side, but never leak DB/Prisma internals or
   // stack details to the client — respond with a generic 500.
   console.error('API error in %s:', scope, err);
@@ -339,6 +367,16 @@ export const AVAILABLE_SCOPES = [
     value: 'finance:write',
     label: 'Finance (write)',
     description: 'Create, update transactions and invoices',
+  },
+  {
+    value: 'university:integrations:read',
+    label: 'University event delivery',
+    description: 'Read assigned university event topics',
+  },
+  {
+    value: 'university:integrations:write',
+    label: 'University acknowledgments',
+    description: 'Acknowledge assigned university deliveries',
   },
   { value: 'meetings:read', label: 'Meetings (read)', description: 'Read meetings' },
   { value: 'meetings:write', label: 'Meetings (write)', description: 'Create, update meetings' },

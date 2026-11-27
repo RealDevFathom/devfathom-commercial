@@ -38,6 +38,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   HOSPITALITY_MODULES,
+  UNIVERSITY_MODULES,
+  UNIVERSITY_PACKAGES,
   HOSPITALITY_PACKAGES,
   PHARMACY_MODULES,
   PHARMACY_PACKAGES,
@@ -193,16 +195,16 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
       const restaurantModules = RESTAURANT_MODULES.filter((module) =>
         ['restaurant-core', 'restaurant-pos'].includes(module.key)
       );
-      for (const module of restaurantModules) {
+      for (const spec of restaurantModules) {
         await db.platformModule.upsert({
-          where: { key: module.key },
+          where: { key: spec.key },
           update: {},
           create: {
-            key: module.key,
-            name: module.name,
-            category: module.category,
-            routePrefix: module.routePrefix,
-            band: module.mandatory ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL',
+            key: spec.key,
+            name: spec.name,
+            category: spec.category,
+            routePrefix: spec.routePrefix,
+            band: spec.mandatory ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL',
             vertical: 'RESTAURANT',
           },
         });
@@ -215,8 +217,8 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
           defaultSeats: 25,
         },
       });
-      for (const module of restaurantModules) {
-        const row = await db.platformModule.findUniqueOrThrow({ where: { key: module.key } });
+      for (const spec of restaurantModules) {
+        const row = await db.platformModule.findUniqueOrThrow({ where: { key: spec.key } });
         await db.platformPackageModule.create({
           data: { packageId: restaurantPackage.id, moduleId: row.id, enabled: true },
         });
@@ -269,6 +271,7 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
       ...RESTAURANT_PACKAGES,
       ...PHARMACY_PACKAGES,
       ...HOSPITALITY_PACKAGES,
+      ...UNIVERSITY_PACKAGES,
     ];
     const missingPackages = verticalPackages.filter(
       (definition) => !registeredPackages.has(definition.key)
@@ -339,6 +342,13 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     }
     for (const definition of HOSPITALITY_PACKAGES) {
       expectVerticalPackage(definition, 'HOSPITALITY', 'hotel-core');
+    }
+
+    for (const definition of UNIVERSITY_MODULES) {
+      expect(after.modules.map((row) => row.key)).toContain(definition.key);
+    }
+    for (const definition of UNIVERSITY_PACKAGES) {
+      expectVerticalPackage(definition, 'UNIVERSITY', 'university-core');
     }
 
     // The pre-existing package is untouched: same links, same version.

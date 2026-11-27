@@ -24,6 +24,8 @@ const publicPaths = [
   '/wallet',
   // DEV-15: customer PWA; its own portal session, never a staff session.
   '/my-pharmacy',
+  '/apply',
+  '/student',
   // DEV-16: tokenized hosted receipts; the token, not a session, grants access.
   '/receipt',
 ];

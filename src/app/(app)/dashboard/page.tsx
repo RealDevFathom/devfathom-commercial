@@ -60,6 +60,12 @@ export default async function DashboardPage({
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
 
+  if (
+    ssr?.entitlements.vertical === 'UNIVERSITY' &&
+    ssr.entitlements.enabledModules.includes('university-core')
+  )
+    redirect('/university');
+
   const organizationId = ssr?.organization?.id;
   const user = ssr?.session?.user;
   // Only fresh sign-ins choose an operational landing. Read effective grants

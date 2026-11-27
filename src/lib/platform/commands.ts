@@ -772,9 +772,9 @@ const organizationInput = z
     displayName: requiredText,
     deploymentMode: z.enum(['SHARED', 'DEDICATED']).default('SHARED'),
     packageId: id,
-    timezone: z.string().trim().min(1).max(100).default('UTC'),
+    timezone: z.string().trim().min(1).max(100).optional(),
     locale: z.string().trim().min(2).max(20).default('en'),
-    currency: currency.default('USD'),
+    currency: currency.optional(),
     // Only a platform super admin may use this untrusted override.
     seatLimit: z.unknown().optional(),
     gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
@@ -797,6 +797,11 @@ const organizationInput = z
     firstBranchCity: z.string().trim().min(1).max(120).optional(),
     firstBranchProvinceCode: z.string().trim().min(2).max(16).optional(),
   })
+  .transform((input) => ({
+    ...input,
+    timezone: input.timezone ?? (input.vertical === 'UNIVERSITY' ? 'Asia/Karachi' : 'UTC'),
+    currency: input.currency ?? (input.vertical === 'UNIVERSITY' ? 'PKR' : 'USD'),
+  }))
   .superRefine((input, ctx) => {
     // WHA-1206 — a vertical that is provisioned with a first branch has to be
     // given that branch's own required columns at creation. Which columns those
@@ -804,6 +809,7 @@ const organizationInput = z
     // than as one shared set. AGENCY provisions no branch and asks for nothing.
     const branchFields: Record<OrganizationVertical, readonly (keyof typeof input)[]> = {
       AGENCY: [],
+      UNIVERSITY: [],
       RESTAURANT: ['firstBranchName', 'firstBranchAddress', 'businessDayCutoff'],
       HOSPITALITY: ['firstBranchName', 'firstBranchAddress', 'firstBranchCity'],
       PHARMACY: [
@@ -814,7 +820,7 @@ const organizationInput = z
       ],
     };
     const required = branchFields[input.vertical];
-    if (required.length === 0) return;
+    if (required.length === 0 && input.vertical !== 'UNIVERSITY') return;
     for (const field of required) {
       if (!input[field])
         ctx.addIssue({
@@ -1103,7 +1109,7 @@ async function bootstrapOrganization(
   const adminRole = await db.organizationRole.create({
     data: {
       organizationId: organization.id,
-      key: demo ? 'owner' : 'admin',
+      key: demo ? 'owner' : input.vertical === 'UNIVERSITY' ? 'university-admin' : 'admin',
       name: demo ? 'Owner / Administrator' : 'Organization administrator',
       description: 'Full organization administration',
       isSystem: true,
@@ -1269,7 +1275,11 @@ async function bootstrapOrganization(
   const hospitalityRoleIds = new Map<string, string>();
   if (input.vertical !== 'AGENCY') {
     for (const template of roleTemplatesForVertical(input.vertical)) {
-      if (demo && template.key === 'owner') continue;
+      if (
+        (demo && template.key === 'owner') ||
+        (input.vertical === 'UNIVERSITY' && template.key === 'university-admin')
+      )
+        continue;
       const role = await db.organizationRole.create({
         data: {
           organizationId: organization.id,

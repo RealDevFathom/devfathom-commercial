@@ -13,7 +13,7 @@ vi.mock('@/components/entitlements-provider', () => ({
 }));
 vi.mock('@/lib/trpc', () => ({ trpc: {} }));
 
-import { ProjectsShortcut } from './topbar';
+import { ProjectsShortcut, WorkspaceBrandLink } from './topbar';
 
 afterEach(cleanup);
 
@@ -24,7 +24,19 @@ describe('Topbar projects shortcut', () => {
     expect(screen.queryByRole('link', { name: 'Open projects' })).not.toBeInTheDocument();
   });
 
-  it.each(ALL_VERTICALS.filter((vertical) => vertical !== 'PHARMACY'))(
+  it('names the university workspace and hides agency projects', () => {
+    mocks.vertical = 'UNIVERSITY';
+    render(
+      <>
+        <WorkspaceBrandLink vertical="UNIVERSITY" />
+        <ProjectsShortcut />
+      </>
+    );
+    expect(screen.getByText('University workspace')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Open projects' })).not.toBeInTheDocument();
+  });
+
+  it.each(ALL_VERTICALS.filter((vertical) => vertical !== 'PHARMACY' && vertical !== 'UNIVERSITY'))(
     'stays available for %s',
     (vertical) => {
       mocks.vertical = vertical;

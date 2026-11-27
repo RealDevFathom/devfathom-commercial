@@ -57,6 +57,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { workspaceSubtitleForVertical } from '@/lib/vertical-catalog';
 import { easeOutExpo } from '@/lib/motion';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -72,7 +73,7 @@ import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/modu
 import type { EntitlementView } from '@/lib/module-catalog';
 import type { Action } from '@/lib/abac/policies';
 
-type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'Firm';
+type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'University' | 'Firm';
 
 /** A hospitality property capability, as the property scope check names it. */
 export type HotelCapability = Extract<Action, `hotel:${string}`>;
@@ -129,6 +130,13 @@ interface NavItem {
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
 // numbered index (recomputed after RBAC filtering so numbers stay contiguous).
 export const navigation: NavItem[] = [
+  {
+    label: 'University',
+    href: '/university',
+    icon: Landmark,
+    group: 'University',
+    module: 'university-core',
+  },
   {
     label: 'Dashboard',
     href: '/dashboard',
@@ -641,7 +649,14 @@ export const navigation: NavItem[] = [
   },
 ];
 
-const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];
+const GROUP_ORDER: NavGroup[] = [
+  'Workspace',
+  'Restaurant',
+  'Pharmacy',
+  'Hospitality',
+  'University',
+  'Firm',
+];
 
 type VisibleNavItem = (typeof navigation)[number];
 
@@ -811,6 +826,7 @@ export function visibleNavigation(
         !isModuleGranted(moduleKey, entitlements.enabledModules, entitlements.vertical)
       )
         return false;
+      if (item.group === 'University' && entitlements.vertical !== 'UNIVERSITY') return false;
       if (item.group === 'Hospitality')
         return (item.hotelCapabilities ?? []).some((capability) =>
           hotelCapabilities.includes(capability)
@@ -923,7 +939,7 @@ export function useVisibleNavigation() {
   // labels with icons, never by numeric prefixes.
   const pharmacy = entitlements.vertical === 'PHARMACY';
 
-  return { bestMatch, filteredNav, indexByHref, pharmacy };
+  return { bestMatch, filteredNav, indexByHref, pharmacy, vertical: entitlements.vertical };
 }
 
 interface SidebarProps {
@@ -955,7 +971,7 @@ export function Sidebar({
   // presents the last person as the one at the computer.
   const browserOnline = useBrowserOnline();
   const { icons } = usePreferences();
-  const { bestMatch, filteredNav, indexByHref, pharmacy } = useVisibleNavigation();
+  const { bestMatch, filteredNav, indexByHref, pharmacy, vertical } = useVisibleNavigation();
   const numbered = icons !== 'architectural' && !pharmacy;
   // DEV-497: a pharmacy drawer uses the same task menus as the desktop bar.
   const sections = pharmacy
@@ -1024,7 +1040,7 @@ export function Sidebar({
               {brand?.displayName ?? 'DevFathom'}
             </span>
             <span className="font-mono text-[9px] uppercase tracking-[0.2em] text-sidebar-foreground/55">
-              Company workspace
+              {workspaceSubtitleForVertical(vertical)}
             </span>
           </div>
         )}

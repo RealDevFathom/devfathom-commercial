@@ -202,6 +202,25 @@ describe('TopNavigation vertical visibility', () => {
   });
 });
 
+it('identifies the university workspace in the mobile drawer', () => {
+  render(
+    <EntitlementsProvider
+      value={{
+        organizationId: 'uni',
+        vertical: 'UNIVERSITY',
+        seatLimit: 10,
+        activeSeats: 1,
+        enabledModules: ['university-core'],
+        modules: [],
+        limits: {},
+      }}
+    >
+      <Sidebar collapsible={false} />
+    </EntitlementsProvider>
+  );
+  expect(screen.getByText('University workspace')).toBeInTheDocument();
+  expect(screen.queryByText('Company workspace')).not.toBeInTheDocument();
+});
 describe.each(['ltr', 'rtl'])('%s mobile drawer placement', (dir) => {
   it('anchors the visible sidebar and its inner border to the workspace direction', () => {
     render(
@@ -1051,7 +1070,9 @@ describe('menu drawer user chip with the browser offline', () => {
     const { container } = renderDrawer(collapsed);
     const chip = container.querySelector('[data-sidebar-identity="offline"]');
     expect(chip).not.toBeNull();
-    expect(chip).toHaveTextContent(collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked');
+    expect(chip).toHaveTextContent(
+      collapsed ? 'Offline. Sign-in not checked.' : 'OfflineSign-in not checked'
+    );
     expect(container).not.toHaveTextContent('Ayesha Khan');
     expect(container).not.toHaveTextContent('Branch manager');
     expect(container).not.toHaveTextContent(/\bAK\b/);

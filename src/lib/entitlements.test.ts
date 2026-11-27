@@ -1,10 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn() }));
+const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn(), withTenantDb: vi.fn() }));
 
-vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
+vi.mock('@/lib/tenancy/scoped-db', () => mocks);
 
-import { resolveOrganizationEntitlements } from './entitlements';
+import {
+  resolveCurrentOrganizationEntitlements,
+  resolveOrganizationEntitlements,
+} from './entitlements';
 
 describe('baseline entitlement resolution', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -209,5 +212,104 @@ describe('DEV-913 pharmacy audit log entitlement', () => {
     );
     const result = await resolveOrganizationEntitlements('org_1', db as never, now);
     expect(result.enabledModules).toEqual(['audit']);
+  });
+});
+
+describe('current entitlement snapshots', () => {
+  const moduleId = 'mod_academics';
+  const moduleKey = 'university-academics';
+
+  function gate() {
+    let open!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    return { wait, open };
+  }
+
+  it('shares queued reads by tenant, releases the tenant connection, and observes a revocation while a prior snapshot is still finishing', async () => {
+    const connection = gate();
+    const firstControlRead = gate();
+    const controlStarted = gate();
+    const disabled = new Set<string>();
+    const held = new Set<string>();
+    mocks.withTenantDb.mockImplementation(async (id, read) => {
+      await connection.wait;
+      held.add(id);
+      try {
+        return await read({
+          organization: {
+            findUnique: () => ({ id, seatLimit: 5, packageId: id, vertical: 'UNIVERSITY' }),
+          },
+          organizationModule: {
+            findMany: () =>
+              disabled.has(id)
+                ? [
+                    {
+                      moduleId,
+                      status: 'DISABLED',
+                      seatLimit: null,
+                      startsAt: new Date(0),
+                      expiresAt: null,
+                      overrides: null,
+                    },
+                  ]
+                : [],
+          },
+          organizationLimit: { findMany: () => [] },
+          user: { count: () => 1 },
+        });
+      } finally {
+        held.delete(id);
+      }
+    });
+    let firstAlpha = true;
+    mocks.withPlatformDb.mockImplementation(async (read) =>
+      read({
+        platformModule: {
+          findMany: () => [
+            { id: moduleId, key: moduleKey, name: 'Academics', band: 'VERTICAL_OPTIONAL' },
+          ],
+        },
+        platformContract: { findMany: () => [] },
+        platformPackage: {
+          findUnique: async ({ where }: { where: { id: string } }) => {
+            expect(held.has(where.id)).toBe(false);
+            if (where.id === 'alpha' && firstAlpha) {
+              firstAlpha = false;
+              controlStarted.open();
+              await firstControlRead.wait;
+            }
+            return { moduleLinks: [{ limits: null, module: { id: moduleId, active: true } }] };
+          },
+        },
+      })
+    );
+    const prior = resolveCurrentOrganizationEntitlements('alpha');
+    expect(resolveCurrentOrganizationEntitlements('alpha')).toBe(prior);
+    const other = resolveCurrentOrganizationEntitlements('bravo');
+    expect(other).not.toBe(prior);
+    connection.open();
+    await controlStarted.wait;
+    disabled.add('alpha');
+    const fresh = await resolveCurrentOrganizationEntitlements('alpha');
+    expect(fresh.enabledModules).not.toContain(moduleKey);
+    firstControlRead.open();
+    expect((await prior).enabledModules).toContain(moduleKey);
+    expect((await other).organizationId).toBe('bravo');
+    disabled.delete('alpha');
+    expect((await resolveCurrentOrganizationEntitlements('alpha')).enabledModules).toContain(
+      moduleKey
+    );
+  });
+
+  it('drops failed queued reads so the tenant can retry immediately', async () => {
+    mocks.withTenantDb
+      .mockRejectedValueOnce(new Error('connection one'))
+      .mockRejectedValueOnce(new Error('connection two'));
+    const first = resolveCurrentOrganizationEntitlements('retry');
+    expect(resolveCurrentOrganizationEntitlements('retry')).toBe(first);
+    await expect(first).rejects.toThrow('connection one');
+    await expect(resolveCurrentOrganizationEntitlements('retry')).rejects.toThrow('connection two');
   });
 });

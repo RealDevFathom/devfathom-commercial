@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   deleteToken: vi.fn(),
   createTenantDb: vi.fn(),
   resolveEntitlements: vi.fn(),
+  currentEntitlements: vi.fn(),
   recordRestAudit: vi.fn(),
   approvalAuthenticatorGate: vi.fn(),
 }));
@@ -22,6 +23,7 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: (entitlements: { enabledModules: string[] }, key: string) =>
     entitlements.enabledModules.includes(key),
   resolveOrganizationEntitlements: mocks.resolveEntitlements,
+  resolveCurrentOrganizationEntitlements: mocks.currentEntitlements,
 }));
 vi.mock('@/lib/approval-authenticator-gate', () => ({
   approvalAuthenticatorGate: mocks.approvalAuthenticatorGate,
@@ -69,6 +71,33 @@ describe('authenticateApiRequest entitlement enforcement', () => {
         },
       },
     ]);
+  });
+
+  it('uses the current separated entitlement read for university provider tokens', async () => {
+    mocks.findMany.mockResolvedValueOnce([
+      {
+        id: 'token_1',
+        organizationId: 'org_1',
+        userId: 'user_1',
+        tokenHash: 'hash',
+        scopes: [],
+        expiresAt: null,
+        user: {
+          role: 'MEMBER',
+          status: 'ACTIVE',
+          organization: { id: 'org_1', status: 'ACTIVE', vertical: 'UNIVERSITY' },
+        },
+      },
+    ]);
+    mocks.currentEntitlements.mockResolvedValueOnce({ enabledModules: [] });
+    const result = await authenticateApiRequest(
+      new Request('https://university.example/api/v1/university/events', {
+        headers: { Authorization: 'Bearer df_existing_valid_token' },
+      })
+    );
+    expect((result as Response).status).toBe(403);
+    expect(mocks.currentEntitlements).toHaveBeenCalledWith('org_1');
+    expect(mocks.resolveEntitlements).not.toHaveBeenCalled();
   });
 
   it('returns 403 for an existing valid token when API access is disabled', async () => {
