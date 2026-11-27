@@ -123,6 +123,7 @@ export type CounterTenderPanelProps = {
   balanceMinor: number | null;
   state: CounterTenderBillState;
   blocked: boolean;
+  blockedReason?: string;
   pending?: boolean;
   /** The payment request is held until the connection returns; it has not been sent. */
   queued?: boolean;
@@ -194,6 +195,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       confirmedChangeMinor,
       state,
       blocked,
+      blockedReason = 'Resolve the safety block shown on the bill before taking payment.',
       pending = false,
       queued = false,
       disabled = false,
@@ -314,8 +316,13 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       cashReceived ?? (type === 'CASH' && editable && amountValid ? formatMinor(amountMinor!) : '');
     const typedCash = amountInputToMinor(cashText);
     const cashReceivedMinor = typedCash.status === 'OK' ? typedCash.minor : null;
-    const cashInvalid = type === 'CASH' && typedCash.status === 'INVALID';
-    const cashError = typedCash.status === 'INVALID' ? amountInputError(typedCash.reason) : null;
+    const cashMissing =
+      editable && amountValid && cashReceived !== null && typedCash.status === 'EMPTY';
+    const cashInvalid = type === 'CASH' && (cashMissing || typedCash.status === 'INVALID');
+    const cashError =
+      typedCash.status === 'INVALID'
+        ? amountInputError(typedCash.reason)
+        : 'Enter the cash received or choose Exact.';
     const cashShort =
       type === 'CASH' &&
       cashReceivedMinor !== null &&
@@ -506,7 +513,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       : disabled
                         ? 'Wait for the current counter action to finish before taking payment.'
                         : blocked
-                          ? 'Resolve the safety block in the prescription panel before taking payment.'
+                          ? null // The payment lock already describes the reason to the submit button.
                           : type === 'CASH' && cashDrawerClosed
                             ? null // The Cash button already shows and describes the drawer reason.
                             : prepaidShort
@@ -515,30 +522,28 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                                 ? amountError
                                 : type === 'WALLET' && !APPROVER_PIN.test(prepaidPin)
                                   ? 'Ask the customer to enter their prepaid PIN.'
-                                  : cashInvalid
-                                    ? cashError
-                                    : cashShort
-                                      ? copy.tender.cashShort
-                                      : manual && manualSettingsLoading
-                                        ? 'Loading merchant details…'
-                                        : manual && (manualSettingsError || !merchant)
-                                          ? 'Reload merchant details before taking payment.'
-                                          : manual &&
-                                              (!capture?.success ||
-                                                (referenceSkipped && !merchant?.allowReferenceSkip))
-                                            ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
-                                            : bankTransfer && !transferCapture?.success
-                                              ? providerRef.trim() !== '' &&
-                                                looksLikeCardNumber(providerRef)
-                                                ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
-                                                : 'Enter the bank transfer reference before taking payment.'
-                                              : manualCard && !cardCapture?.success
-                                                ? 'Enter the card reference and approval code from the terminal slip.'
-                                                : khataLoading
-                                                  ? 'Loading Khata accounts…'
-                                                  : isKhata && !account
-                                                    ? 'Choose a family Khata account before taking payment.'
-                                                    : 'A manager or owner must approve the credit limit increase first.';
+                                  : cashInvalid || cashShort
+                                    ? null // The cash field and submit button share the inline error.
+                                    : manual && manualSettingsLoading
+                                      ? 'Loading merchant details…'
+                                      : manual && (manualSettingsError || !merchant)
+                                        ? 'Reload merchant details before taking payment.'
+                                        : manual &&
+                                            (!capture?.success ||
+                                              (referenceSkipped && !merchant?.allowReferenceSkip))
+                                          ? 'Enter the payer’s name and 4–6 transaction ID digits, or use the allowed reference skip.'
+                                          : bankTransfer && !transferCapture?.success
+                                            ? providerRef.trim() !== '' &&
+                                              looksLikeCardNumber(providerRef)
+                                              ? 'This looks like a card number. Enter the bank’s transfer reference instead.'
+                                              : 'Enter the bank transfer reference before taking payment.'
+                                            : manualCard && !cardCapture?.success
+                                              ? 'Enter the card reference and approval code from the terminal slip.'
+                                              : khataLoading
+                                                ? 'Loading Khata accounts…'
+                                                : isKhata && !account
+                                                  ? 'Choose a family Khata account before taking payment.'
+                                                  : 'A manager or owner must approve the credit limit increase first.';
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -903,10 +908,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               className="space-y-2 rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-text-body"
             >
               <StatusPill status="blocked" tone="danger" label="Payment locked" />
-              <p>
-                This bill carries an unresolved safety block. Resolve it in the prescription panel
-                before taking payment.
-              </p>
+              <p>This bill carries an unresolved safety block. {blockedReason}</p>
             </div>
           ) : null}
 
@@ -1510,6 +1512,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               'tender-status tender-error',
               blocked ? 'tender-blocked' : '',
               type === 'CASH' && cashDrawerClosed ? 'tender-cash-drawer' : '',
+              cashInvalid || cashShort ? 'tender-cash-error' : '',
               disabledReason ? 'tender-disabled-reason' : '',
             ]
               .filter(Boolean)

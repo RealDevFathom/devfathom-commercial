@@ -90,6 +90,8 @@ export type CounterAlertLine = {
   medicine: CounterAlertMedicine;
   /** Blocked lots FEFO refused for this line (INV-03). */
   blocked: readonly BlockReason[];
+  /** The last pack scan for this specific bill line did not match. */
+  packCheckBlocked?: boolean;
   /** A verified prescription covering this line, when one has been attached. */
   prescription: {
     id: string;
@@ -144,6 +146,18 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
   const alerts: CounterAlert[] = [];
   const { medicine } = line;
   const name = medicine.displayName;
+
+  if (line.packCheckBlocked) {
+    push(alerts, {
+      key: `pack-mismatch:${line.ref}`,
+      severity: 'SAFETY_BLOCK',
+      code: 'PACK_MISMATCH',
+      message: `The scanned pack does not match the bill line for ${name}.`,
+      saleLineRef: line.ref,
+      remedy:
+        'Set the pack aside and tell the pharmacist. Open More, then Pack check to scan a matching pack.',
+    });
+  }
 
   for (const reason of line.blocked) {
     push(alerts, {

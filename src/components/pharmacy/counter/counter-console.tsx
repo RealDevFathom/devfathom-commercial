@@ -30,6 +30,7 @@ import {
   Star,
   UserRound,
   WifiOff,
+  X,
 } from 'lucide-react';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -141,11 +142,7 @@ import {
   counterMedicineDisplayName,
   counterMedicineGenericName,
 } from '@/lib/pharmacy/counter-display-name';
-import {
-  counterAlertsFor,
-  hasBlockingAlert,
-  type CounterAlertLine,
-} from '@/lib/pharmacy/counter-alerts';
+import { counterAlertsFor, type CounterAlertLine } from '@/lib/pharmacy/counter-alerts';
 import {
   COUNTER_ACTION_LABELS,
   formatBinding,
@@ -882,6 +879,7 @@ function ScopedPharmacyCounterConsole({
   const discardedTenderKeys = useRef(new Set<string>());
 
   const searchRef = useRef<HTMLInputElement>(null);
+  const resultScrollRef = useRef<HTMLDivElement>(null);
   const quantityRef = useRef<HTMLInputElement>(null);
   const focusQuantityOnStage = useRef(false);
   // The default quantity of 1 is a proposal until the cashier has looked at it (DEV-633).
@@ -902,6 +900,19 @@ function ScopedPharmacyCounterConsole({
   // DEV-977B (Counter v2, A6): the result the arrows are on. Moving through results no longer
   // stages a line; Enter adds the highlighted one in one step.
   const [highlightId, setHighlightId] = useState<string | null>(null);
+  const dismissResults = () => {
+    setResultsDismissed(true);
+    setHighlightId(null);
+    searchRef.current?.focus({ preventScroll: true });
+  };
+  // Arrows keep focus in the scan field. Reveal the highlighted medicine even when it
+  // is below the visible part of the results in a short counter window.
+  useEffect(() => {
+    const list = resultScrollRef.current;
+    if (resultsDismissed || !highlightId || !list) return;
+    const row = list.querySelector('[data-counter-add-result][aria-pressed="true"]');
+    row?.scrollIntoView?.({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+  }, [highlightId, resultsDismissed]);
   // DEV-977B: "Adds as" (F3 pack, F4 strip, F5 unit), chosen before or while searching. Null
   // adds each medicine in its usual unit.
   const [addUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
@@ -1501,6 +1512,7 @@ function ScopedPharmacyCounterConsole({
           activeIngredients: line.activeIngredients ?? [],
         },
         blocked: [],
+        packCheckBlocked: line.packCheckBlocked,
         emergencySupply: line.emergencySupply ?? false,
         prescription: prescriptionLine
           ? {
@@ -1526,10 +1538,13 @@ function ScopedPharmacyCounterConsole({
     return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone, pharmacistCheckOff });
   }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
-  const packBlocked = cart?.lines.some((line) => line.packCheckBlocked) === true;
-  const blocked = hasBlockingAlert(alerts) || packBlocked;
+  const safetyBlocks = alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK');
+  const blocked = safetyBlocks.length > 0;
+  const safetyBlockReason = safetyBlocks.some((alert) => alert.code === 'PACK_MISMATCH')
+    ? 'Open More, then Pack check to scan a matching pack before taking payment.'
+    : 'Resolve the safety block shown on the bill before taking payment.';
   const safetyLabel = blocked
-    ? `${alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK').length} safety block · payment locked`
+    ? `${safetyBlocks.length} ${plural('safety block', safetyBlocks.length)} · payment locked`
     : `No safety blocks · ${alerts.length} notes to pass on`;
   const loyaltyLabel = customerQuery.data
     ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
@@ -1795,27 +1810,25 @@ function ScopedPharmacyCounterConsole({
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
         : tenderReadRequired
           ? 'Refresh this bill to verify payment before taking more money.'
-          : packBlocked
-            ? 'Resolve the pack check or remove the blocked line before taking payment.'
-            : blocked
-              ? 'Resolve the safety block in the prescription panel before taking payment.'
-              : billState === 'idle'
-                ? 'Add an item to start a sale before taking payment.'
-                : billState === 'loading'
-                  ? 'Checking the bill. Please wait before taking payment.'
-                  : billState === 'error' || billState === 'stale'
-                    ? 'Refresh the bill to check the balance before taking payment.'
-                    : billState === 'settled'
-                      ? 'This bill is already paid. Start a new sale.'
-                      : billState === 'unavailable'
-                        ? cart?.status === 'HELD'
-                          ? 'Resume this bill before taking payment.'
-                          : currentBill && lineCount === 0
-                            ? 'Add an item to this bill before taking payment.'
-                            : 'Refresh the bill or start a new sale before taking payment.'
-                        : busy
-                          ? 'Wait for the current counter action to finish before taking payment.'
-                          : null;
+          : blocked
+            ? safetyBlockReason
+            : billState === 'idle'
+              ? 'Add an item to start a sale before taking payment.'
+              : billState === 'loading'
+                ? 'Checking the bill. Please wait before taking payment.'
+                : billState === 'error' || billState === 'stale'
+                  ? 'Refresh the bill to check the balance before taking payment.'
+                  : billState === 'settled'
+                    ? 'This bill is already paid. Start a new sale.'
+                    : billState === 'unavailable'
+                      ? cart?.status === 'HELD'
+                        ? 'Resume this bill before taking payment.'
+                        : currentBill && lineCount === 0
+                          ? 'Add an item to this bill before taking payment.'
+                          : 'Refresh the bill or start a new sale before taking payment.'
+                      : busy
+                        ? 'Wait for the current counter action to finish before taking payment.'
+                        : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -2172,6 +2185,7 @@ function ScopedPharmacyCounterConsole({
   // its first result; nothing is added until the cashier presses Enter on what they see.
   const searchAndHighlight = useCallback(
     async (text: string) => {
+      setResultsDismissed(false);
       const search = await runSearch(text);
       if (!search || search.blocked) return;
       try {
@@ -2181,10 +2195,7 @@ function ScopedPharmacyCounterConsole({
         );
         // A changed query, branch or scanner invalidates the in-flight selection.
         if (search.revision !== scannerRevision.current) return;
-        if (result.rows[0]) {
-          setResultsDismissed(false);
-          setHighlightId(result.rows[0].medicineId);
-        }
+        if (result.rows[0]) setHighlightId(result.rows[0].medicineId);
       } catch (error) {
         if (search.revision === scannerRevision.current)
           setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
@@ -4274,15 +4285,27 @@ function ScopedPharmacyCounterConsole({
   }
 
   const connectionOnline = online && !offlineMode.serverUnreachable;
-  const statusLine = [
-    connectionOnline ? 'Online' : 'Offline',
-    branches.find((entry) => entry.id === branchId)?.name,
-    counterLabel(deviceId),
-  ]
+  const showBillSummary = Boolean(saleId || heldSaleId || sessionBusy || !canSettlePayments);
+  const tillStep = dayClosed
+    ? 'Business day closed'
+    : drawerRequired
+      ? 'Cash drawer'
+      : shiftRequired
+        ? 'Cash shift'
+        : null;
+  const preparingTill = !showBillSummary && Boolean(tillStep);
+  const statusLine = [connectionOnline ? 'Online' : 'Offline', counterLabel(deviceId)]
     .filter(Boolean)
     .join(' · ');
   const searchRows =
     searchCurrent && !searchQuery.isPlaceholderData ? (searchQuery.data?.rows ?? []) : [];
+  const resultsOpen = searchState !== 'idle' && !resultsDismissed;
+  const visibleSelectionId =
+    highlightId ??
+    activeRow?.medicineId ??
+    (searchState === 'ready' ? searchRows[0]?.medicineId : null) ??
+    null;
+  const highlightedRow = searchRows.find((row) => row.medicineId === visibleSelectionId);
   const actionBar = (
     <CounterActionBar>
       <label className="sr-only" htmlFor="counter-branch">
@@ -4306,7 +4329,7 @@ function ScopedPharmacyCounterConsole({
           setActiveSale(null);
           setHeldSaleId(null);
         }}
-        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56 xl:max-w-44"
+        className="h-11 max-w-56 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56 xl:max-w-44"
       >
         {branches.map((branch) => (
           <option key={branch.id} value={branch.id}>
@@ -4322,7 +4345,7 @@ function ScopedPharmacyCounterConsole({
         role="group"
         aria-label="Counter status"
         tabIndex={statusStripScrolls ? 0 : undefined}
-        className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto rounded-full [scrollbar-width:none] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto rounded-full max-md:order-last max-md:basis-full [scrollbar-width:none] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <div className="flex shrink-0 items-center gap-2" aria-label="Bill status">
           <StatusPill
@@ -4363,7 +4386,7 @@ function ScopedPharmacyCounterConsole({
         ref={actionsButtonRef}
         type="button"
         variant="ghost"
-        className="order-last h-11 shrink-0 gap-2 px-3 xl:px-2"
+        className="ms-auto h-11 shrink-0 gap-2 px-3 md:order-last md:ms-0 xl:px-2"
         aria-expanded={actionsOpen}
         aria-controls="counter-actions"
         onClick={() => setActionsOpen(!actionsOpen)}
@@ -4480,14 +4503,16 @@ function ScopedPharmacyCounterConsole({
           }}
           className="inline-flex min-h-11 items-center rounded-md px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring"
         >
-          Skip to scan or search
+          {tillStep ? `Skip to ${tillStep.toLowerCase()}` : 'Skip to scan or search'}
         </a>
-        <a
-          href="#counter-bill-total"
-          className="inline-flex min-h-11 items-center rounded-md px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          Skip to bill total
-        </a>
+        {!preparingTill && (
+          <a
+            href="#counter-bill-total"
+            className="inline-flex min-h-11 items-center rounded-md px-3 text-sm font-semibold focus-visible:outline-2 focus-visible:outline-ring"
+          >
+            {showBillSummary ? 'Skip to bill total' : 'Skip to bill options'}
+          </a>
+        )}
       </nav>
       {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
       {counterBusyReason ? (
@@ -4556,13 +4581,17 @@ function ScopedPharmacyCounterConsole({
         </div>
       )}
       <div
-        className="min-h-0 flex-1 overflow-y-auto pb-28 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_auto_minmax(0,1fr)] lg:overflow-hidden lg:pb-0 xl:grid-cols-[minmax(0,1fr)_380px]"
+        className={
+          preparingTill
+            ? 'min-h-0 flex-1 overflow-y-auto'
+            : 'min-h-0 flex-1 overflow-y-auto lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_auto_minmax(0,1fr)] lg:overflow-hidden xl:grid-cols-[minmax(0,1fr)_380px]'
+        }
         data-counter-console=""
       >
         {/* From 1024px this wrapper steps aside (display: contents) and its sections take
             their places in the counter grid: search and bill on the left, the line being
             added on the right. */}
-        <div className="min-w-0 lg:contents">
+        <div className={preparingTill ? 'mx-auto w-full max-w-3xl' : 'min-w-0 lg:contents'}>
           {branchAuthorized && !saleId && saleReadiness.data ? (
             <div className="shrink-0 px-4 pt-3 lg:col-start-1 lg:row-start-1 lg:border-e lg:border-border-subtle lg:px-6 lg:pt-4">
               <CounterSaleReadiness
@@ -4578,15 +4607,15 @@ function ScopedPharmacyCounterConsole({
           <section
             id="counter-scan-search"
             tabIndex={-1}
-            aria-label="Counter bill"
-            className="relative z-10 shrink-0 border-b border-border-subtle bg-surface-page px-4 py-3 outline-none focus-visible:outline-2 focus-visible:outline-ring max-lg:sticky max-lg:top-0 lg:col-start-1 lg:row-start-2 lg:self-start lg:border-e lg:px-6 lg:pt-4 lg:pb-3.5"
+            aria-label={tillStep ?? 'Counter bill'}
+            className={`relative z-10 shrink-0 border-b border-border-subtle bg-surface-page px-4 py-3 outline-none focus-visible:outline-2 focus-visible:outline-ring lg:col-start-1 lg:row-start-2 lg:self-start lg:px-6 lg:pt-4 lg:pb-3.5 ${preparingTill ? 'border-transparent' : 'lg:border-e'} ${resultsOpen || tillStep ? '' : 'max-lg:sticky max-lg:top-0'}`}
           >
             {/* DEV-972: the search help sits beside the heading, so the medicines found start
                 directly under the search box. DEV-977: both are announced, not drawn; the
                 field shows its key and the results list shows how to move through it. */}
             <div className="sr-only">
-              <h2>Scan or search</h2>
-              {!dayClosed && !drawerRequired ? (
+              <h2>{tillStep ?? 'Scan or search'}</h2>
+              {!tillStep ? (
                 <p id="counter-search-help">
                   {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
                   selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)} opens
@@ -4812,6 +4841,8 @@ function ScopedPharmacyCounterConsole({
                         ref={searchRef}
                         // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
                         data-counter-scan=""
+                        aria-controls="counter-search-results"
+                        onClick={() => setResultsDismissed(false)}
                         autoFocus
                         autoComplete="off"
                         value={query}
@@ -4857,16 +4888,14 @@ function ScopedPharmacyCounterConsole({
                             !searchQuery.isPlaceholderData
                               ? (searchQuery.data?.rows ?? [])
                               : [];
-                          const resultsShown = searchState !== 'idle' && !resultsDismissed;
                           // DEV-977B (Counter v2): Escape closes the results over the bill.
                           if (
                             event.key === 'Escape' &&
-                            resultsShown &&
+                            resultsOpen &&
                             !event.nativeEvent.isComposing
                           ) {
                             event.preventDefault();
-                            setResultsDismissed(true);
-                            setHighlightId(null);
+                            dismissResults();
                             return;
                           }
                           // DEV-977B: Shift+Enter opens the line form for the highlighted result
@@ -4882,7 +4911,7 @@ function ScopedPharmacyCounterConsole({
                             const target =
                               readyRows.find((row) => row.medicineId === highlightId) ??
                               readyRows[0];
-                            if (!target) return;
+                            if (!resultsOpen || !target) return;
                             event.preventDefault();
                             stageWithOptions(target);
                             return;
@@ -4896,30 +4925,21 @@ function ScopedPharmacyCounterConsole({
                           )
                             return;
                           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-                            const rows = searchQuery.data?.rows ?? [];
-                            if (
-                              busy ||
-                              !searchCurrent ||
-                              searchQuery.isFetching ||
-                              searchQuery.isError ||
-                              searchQuery.isPlaceholderData ||
-                              rows.length === 0
-                            )
-                              return;
+                            if (!readyRows.length) return;
                             event.preventDefault();
-                            const index = rows.findIndex(
-                              (row) => row.medicineId === (highlightId ?? activeRow?.medicineId)
-                            );
+                            const index = resultsOpen
+                              ? readyRows.findIndex((row) => row.medicineId === visibleSelectionId)
+                              : -1;
                             const next =
                               event.key === 'ArrowDown'
-                                ? (index + 1) % rows.length
+                                ? (index + 1) % readyRows.length
                                 : index < 0
-                                  ? rows.length - 1
-                                  : (index - 1 + rows.length) % rows.length;
+                                  ? readyRows.length - 1
+                                  : (index - 1 + readyRows.length) % readyRows.length;
                             // Arrowing through results keeps focus in search (DEV-633). DEV-977B:
                             // it highlights a result; nothing is staged until it is added.
                             setResultsDismissed(false);
-                            setHighlightId(rows[next]!.medicineId);
+                            setHighlightId(readyRows[next]!.medicineId);
                             return;
                           }
                           if (event.key !== 'Enter') return;
@@ -4940,9 +4960,10 @@ function ScopedPharmacyCounterConsole({
                           }
                           // DEV-977B (Counter v2, A6): Enter adds the highlighted result (the
                           // first one until the arrows move) in one step.
-                          const highlighted = highlightId
-                            ? readyRows.find((row) => row.medicineId === highlightId)
-                            : undefined;
+                          const highlighted =
+                            resultsOpen && highlightId
+                              ? readyRows.find((row) => row.medicineId === highlightId)
+                              : undefined;
                           if (highlighted) {
                             addRowNow(highlighted);
                             return;
@@ -4956,7 +4977,7 @@ function ScopedPharmacyCounterConsole({
                             } else void addToCart();
                             return;
                           }
-                          const first = resultsShown ? readyRows[0] : undefined;
+                          const first = resultsOpen ? readyRows[0] : undefined;
                           if (first) addRowNow(first);
                           else void searchAndHighlight(trimmed);
                         }}
@@ -4980,18 +5001,15 @@ function ScopedPharmacyCounterConsole({
                       </kbd>
                     </span>
                   </div>
-                  <div
-                    className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:px-0"
-                    aria-label="Bill context"
-                  >
+                  <div className="flex flex-wrap items-center gap-2" aria-label="Bill context">
                     <Button
                       variant="outline"
-                      className="min-h-11 shrink-0 rounded-full px-3.5 text-[13px]"
+                      className="min-h-11 max-w-full shrink-0 rounded-full px-3.5 text-[13px]"
                       onClick={openChecks}
                       aria-label={`${patient?.displayName ?? 'Patient + prescription'} · ${formatBinding(keymap.bindings.focusPrescriptionPanel)}`}
                     >
                       <UserRound aria-hidden="true" />
-                      <span>{patient?.displayName ?? 'Patient'}</span>
+                      <span className="min-w-0 truncate">{patient?.displayName ?? 'Patient'}</span>
                       <span className="hidden md:inline">
                         {patient ? '' : ' + prescription'} ·{' '}
                         {formatBinding(keymap.bindings.focusPrescriptionPanel)}
@@ -5004,24 +5022,34 @@ function ScopedPharmacyCounterConsole({
                       aria-label={safetyLabel}
                     >
                       <ShieldCheck aria-hidden="true" />
-                      <span className="hidden md:inline">{safetyLabel}</span>
-                      <span className="md:hidden">{blocked ? 'Safety block' : 'No blocks'}</span>
+                      <span className="hidden md:inline">
+                        {alerts.length ? safetyLabel : 'No safety blocks'}
+                      </span>
+                      <span className="md:hidden">
+                        {blocked
+                          ? 'Safety block'
+                          : alerts.length
+                            ? `${alerts.length} ${plural('note', alerts.length)}`
+                            : 'No blocks'}
+                      </span>
                     </Button>
                     <Button
                       variant="outline"
-                      className="min-h-11 shrink-0 rounded-full px-3.5 text-[13px]"
+                      className="min-h-11 max-w-full shrink-0 rounded-full px-3.5 text-[13px]"
                       onClick={() => setLoyaltyOpen(true)}
                       aria-label={loyaltyLabel}
                     >
                       <Star aria-hidden="true" />
-                      <span className="hidden md:inline">{loyaltyLabel}</span>
+                      <span className="hidden md:inline">
+                        {customerQuery.data ? loyaltyLabel : 'Loyalty and khata'}
+                      </span>
                       <span className="md:hidden">Loyalty</span>
                     </Button>
                     {/* DEV-977B (Counter v2, A1 and A6): the unit the next result is added in. */}
                     <div
                       role="radiogroup"
                       aria-label="Adds as"
-                      className="hidden shrink-0 items-center gap-2 text-xs text-text-muted lg:ms-auto lg:flex"
+                      className="flex items-center gap-2 text-xs text-text-muted lg:ms-auto"
                     >
                       <span aria-hidden="true">Adds as</span>
                       <span className="inline-flex overflow-hidden rounded-[var(--radius-sm)] border border-border-default bg-surface-card">
@@ -5055,53 +5083,84 @@ function ScopedPharmacyCounterConsole({
                 </div>
               )}
             </div>
-            {/* DEV-977 (Counter v2, A6 and B5): results drop over the bill. While the
-                field is too short to search they stay in place for screen readers only. */}
+          </section>
+          {/* Desktop results share the bill's grid cell, so even a tall toolbar leaves
+                the last match reachable. On smaller screens they follow the search in flow. */}
+          <div
+            id="counter-search-results"
+            hidden={Boolean(tillStep)}
+            data-counter-results=""
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !event.nativeEvent.isComposing) {
+                event.preventDefault();
+                dismissResults();
+              }
+            }}
+            className={
+              searchState === 'idle'
+                ? 'sr-only'
+                : resultsDismissed
+                  ? 'hidden'
+                  : 'relative z-20 mx-4 mb-2 flex max-h-[50dvh] flex-col overflow-hidden rounded-2xl border border-border-default bg-surface-card lg:col-start-1 lg:row-start-3 lg:mx-6 lg:mb-0 lg:max-h-full lg:self-start lg:shadow-lg'
+            }
+          >
+            {resultsOpen ? (
+              <div className="flex shrink-0 items-center gap-2 border-b border-border-subtle ps-4 pe-1 text-xs text-text-muted">
+                <span className="me-auto" role="status">
+                  {searchState === 'ready'
+                    ? `${searchRows.length} ${searchRows.length === 1 ? 'result' : 'results'}${searchQuery.data?.truncated ? ' (more match: keep typing)' : ''}`
+                    : 'Search results'}
+                  {searchState === 'ready' && highlightedRow ? (
+                    <span className="sr-only">
+                      {'. Selected: '}
+                      {[
+                        counterMedicineDisplayName(highlightedRow),
+                        highlightedRow.strength,
+                        highlightedRow.presentation,
+                      ]
+                        .filter(Boolean)
+                        .join(', ')}
+                    </span>
+                  ) : null}
+                </span>
+                <span aria-hidden="true" className="hidden lg:inline">
+                  ↑ ↓ move · Enter adds
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="touch"
+                  aria-label="Close search results"
+                  onClick={dismissResults}
+                >
+                  <X aria-hidden="true" /> Close
+                </Button>
+              </div>
+            ) : null}
             <div
-              data-counter-results=""
+              ref={resultScrollRef}
               className={
-                searchState === 'idle'
-                  ? 'sr-only'
-                  : resultsDismissed
-                    ? 'hidden'
-                    : 'absolute inset-x-3 top-full z-20 -mt-1 max-h-[min(35rem,calc(100dvh-12.5rem))] overflow-y-auto rounded-2xl border border-border-default bg-surface-card shadow-lg lg:inset-x-6 lg:max-h-[calc(100dvh-18.75rem)]'
+                resultsOpen
+                  ? `min-h-0 overflow-y-auto ${searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}`
+                  : undefined
               }
             >
-              {searchState === 'ready' && searchRows.length > 0 ? (
-                <div className="sticky top-0 z-10 flex flex-wrap justify-between gap-x-3 gap-y-1 border-b border-border-subtle bg-surface-card px-4 py-2.5 text-xs text-text-muted">
-                  <span>
-                    {searchRows.length} {searchRows.length === 1 ? 'result' : 'results'}
-                    {searchQuery.data?.truncated ? ' (more match: keep typing)' : ''}
-                  </span>
-                  <span aria-hidden="true">↑ ↓ move · Enter adds · Esc closes</span>
-                </div>
-              ) : null}
-              <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
-                <CounterSearchResults
-                  rows={
-                    searchCurrent && !searchQuery.isPlaceholderData
-                      ? (searchQuery.data?.rows ?? [])
-                      : []
-                  }
-                  state={searchState}
-                  query={trimmedQuery}
-                  disabled={busy || !branchAuthorized}
-                  disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
-                  activeMedicineId={
-                    highlightId ??
-                    activeRow?.medicineId ??
-                    (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
-                  }
-                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                  onSelect={stageRow}
-                  onAdd={addRowNow}
-                  slow={slowSearch}
-                  onCaptureDemand={() => void captureShortfall()}
-                  onRetry={() => {
-                    if (searchCurrent) void searchQuery.refetch();
-                  }}
-                />
-              </div>
+              <CounterSearchResults
+                rows={searchRows}
+                state={searchState}
+                query={trimmedQuery}
+                disabled={busy || !branchAuthorized}
+                disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
+                activeMedicineId={visibleSelectionId}
+                error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                onSelect={stageWithOptions}
+                onAdd={addRowNow}
+                slow={slowSearch}
+                onCaptureDemand={() => void captureShortfall()}
+                onRetry={() => {
+                  if (searchCurrent) void searchQuery.refetch();
+                }}
+              />
               {searchState === 'ready' && searchRows.length > 0 ? (
                 <p
                   aria-hidden="true"
@@ -5117,12 +5176,19 @@ function ScopedPharmacyCounterConsole({
                 </p>
               ) : null}
             </div>
-          </section>
+          </div>
           {/* DEV-977B (Counter v2): the bill column. A result is added in one step and changed on
               its bill line; the line form below opens only when asked for (Shift+Enter) or for an
               exception, above the bill, so the totals and Take payment are never covered. */}
           <div
             data-counter-bill-column=""
+            hidden={preparingTill}
+            onFocusCapture={() => {
+              if (resultsOpen) {
+                setResultsDismissed(true);
+                setHighlightId(null);
+              }
+            }}
             className="min-w-0 lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto lg:border-e lg:border-border-subtle"
           >
             {activeRow && !drawerRequired && !dayClosed ? (
@@ -5343,8 +5409,9 @@ function ScopedPharmacyCounterConsole({
         </div>
         <aside
           id="counter-bill-total"
+          hidden={preparingTill}
           tabIndex={-1}
-          aria-label="Bill total"
+          aria-label={showBillSummary ? 'Bill total' : 'Bill options'}
           className="flex min-w-0 flex-col gap-3.5 p-4 outline-none lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:min-h-0 lg:overflow-y-auto lg:bg-surface-card lg:p-5 [&_button]:rounded-[var(--radius-sm)]"
         >
           <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-card px-4 py-3.5">
@@ -5374,7 +5441,7 @@ function ScopedPharmacyCounterConsole({
           {/* DEV-972: the next item's voucher and discount sit in the bill total's own header
                 row, never between the search box and its results, and add no row above Pay. */}
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <Eyebrow>Bill total</Eyebrow>
+            <Eyebrow>{showBillSummary ? 'Bill total' : 'Next item'}</Eyebrow>
             <div className="flex flex-wrap items-center justify-end gap-2">
               {!dayClosed && !drawerRequired ? (
                 <div
@@ -5441,186 +5508,194 @@ function ScopedPharmacyCounterConsole({
                   />
                 </div>
               ) : null}
-              <span className="text-xs text-text-muted">
-                {lineCount} {lineCount === 1 ? 'line' : 'lines'}
-              </span>
+              {showBillSummary && (
+                <span className="text-xs text-text-muted">
+                  {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+                </span>
+              )}
             </div>
           </div>
-          <dl className="grid gap-2 text-sm">
-            {(
-              [
-                ['Gross', cart?.totals.grossMinor],
-                ['Discount', cart?.totals.discountMinor],
-                ['Total', cart?.totals.netMinor],
-                ['Tendered', cart?.totals.tenderedMinor],
-              ] as const
-            ).map(([label, value]) => (
-              <div
-                key={label}
-                className={`flex items-baseline justify-between gap-3 ${label === 'Total' ? 'border-t border-border-subtle pt-2 text-[15px] font-semibold text-text-strong' : 'text-text-body'}`}
-              >
-                <dt>{label}</dt>
-                <dd
-                  className={`tabular-nums ${label === 'Discount' && value ? 'font-semibold text-success' : 'font-semibold text-text-strong'}`}
-                >
-                  {currentBill && value !== undefined ? formatMinor(value) : '—'}
-                </dd>
-              </div>
-            ))}
-          </dl>
-          {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
-          {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
-            <CounterBillDiscountEntry
-              branchId={branchId}
-              saleId={cart.saleId}
-              lines={cart.lines}
-              disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
-              requestApproval={requestBillDiscountApproval}
-              onChanged={(message) => {
-                setNotice({ tone: 'success', message });
-                void cartQuery.refetch();
-              }}
-            />
-          ) : null}
-          <div className="grid gap-3.5">
-            <div className="grid gap-0.5 rounded-2xl bg-surface-sunken px-4 py-3.5">
-              <p className="flex items-center gap-1.5 text-[13px] font-semibold text-text-body">
-                {/* Counter v2 A3: a paid bill says so with a mark, not by colour alone. */}
-                {billState === 'settled' ? (
-                  <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-success" />
-                ) : null}
-                {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
-              </p>
-              <p className="text-[34px] leading-tight font-semibold tracking-[-0.02em] text-text-strong tabular-nums">
-                {billState === 'settled' && currentBill
-                  ? formatMinor(cart.totals.tenderedMinor)
-                  : balanceMinor === null
-                    ? '—'
-                    : formatMinor(balanceMinor)}
-              </p>
-              <div className="empty:hidden">
-                <CounterChangeDue minor={confirmedChangeMinor} />
-              </div>
-            </div>
-            {billState === 'settled' ? (
-              <div className="space-y-2">
-                <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
-                  Start next bill
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 w-full"
-                  onClick={() => {
-                    if (settledReceipt) {
-                      if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
-                      setLastReceipt({ branchId, receipt: settledReceipt });
-                    }
-                    setReceiptOpen(true);
+          {showBillSummary && (
+            <>
+              <dl className="grid gap-2 text-sm">
+                {(
+                  [
+                    ['Gross', cart?.totals.grossMinor],
+                    ['Discount', cart?.totals.discountMinor],
+                    ['Total', cart?.totals.netMinor],
+                    ['Tendered', cart?.totals.tenderedMinor],
+                  ] as const
+                ).map(([label, value]) => (
+                  <div
+                    key={label}
+                    className={`flex items-baseline justify-between gap-3 ${label === 'Total' ? 'border-t border-border-subtle pt-2 text-[15px] font-semibold text-text-strong' : 'text-text-body'}`}
+                  >
+                    <dt>{label}</dt>
+                    <dd
+                      className={`tabular-nums ${label === 'Discount' && value ? 'font-semibold text-success' : 'font-semibold text-text-strong'}`}
+                    >
+                      {currentBill && value !== undefined ? formatMinor(value) : '—'}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+              {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
+              {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
+                <CounterBillDiscountEntry
+                  branchId={branchId}
+                  saleId={cart.saleId}
+                  lines={cart.lines}
+                  disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
+                  requestApproval={requestBillDiscountApproval}
+                  onChanged={(message) => {
+                    setNotice({ tone: 'success', message });
+                    void cartQuery.refetch();
                   }}
-                >
-                  Preview receipt
-                </Button>
-                <Button
-                  variant="outline"
-                  className="h-11 w-full"
-                  disabled={printPending}
-                  aria-busy={printPending || undefined}
-                  onClick={() => void printReceipt()}
-                >
-                  {printPending
-                    ? 'Printing receipt…'
-                    : `Print · ${formatBinding(keymap.bindings.printReceipt)}`}
-                </Button>
+                />
+              ) : null}
+              <div className="grid gap-3.5">
+                <div className="grid gap-0.5 rounded-2xl bg-surface-sunken px-4 py-3.5">
+                  <p className="flex items-center gap-1.5 text-[13px] font-semibold text-text-body">
+                    {/* Counter v2 A3: a paid bill says so with a mark, not by colour alone. */}
+                    {billState === 'settled' ? (
+                      <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-success" />
+                    ) : null}
+                    {billState === 'settled'
+                      ? `Paid · receipt ${cart?.receiptNumber}`
+                      : 'Balance due'}
+                  </p>
+                  <p className="text-[34px] leading-tight font-semibold tracking-[-0.02em] text-text-strong tabular-nums">
+                    {billState === 'settled' && currentBill
+                      ? formatMinor(cart.totals.tenderedMinor)
+                      : balanceMinor === null
+                        ? '—'
+                        : formatMinor(balanceMinor)}
+                  </p>
+                  <div className="empty:hidden">
+                    <CounterChangeDue minor={confirmedChangeMinor} />
+                  </div>
+                </div>
+                {billState === 'settled' ? (
+                  <div className="space-y-2">
+                    <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
+                      Start next bill
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-11 w-full"
+                      onClick={() => {
+                        if (settledReceipt) {
+                          if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
+                          setLastReceipt({ branchId, receipt: settledReceipt });
+                        }
+                        setReceiptOpen(true);
+                      }}
+                    >
+                      Preview receipt
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="h-11 w-full"
+                      disabled={printPending}
+                      aria-busy={printPending || undefined}
+                      onClick={() => void printReceipt()}
+                    >
+                      {printPending
+                        ? 'Printing receipt…'
+                        : `Print · ${formatBinding(keymap.bindings.printReceipt)}`}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button
+                    className="h-14 w-full justify-between px-5 text-[17px]"
+                    disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+                    aria-describedby="counter-pay-reason"
+                    onClick={openPayment}
+                  >
+                    <span>Take payment</span>
+                    <span className="sr-only">·</span>
+                    <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
+                      {formatBinding(keymap.bindings.openTender)}
+                    </kbd>
+                  </Button>
+                )}
               </div>
-            ) : (
-              <Button
-                className="h-14 w-full justify-between px-5 text-[17px]"
-                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
-                aria-describedby="counter-pay-reason"
-                onClick={openPayment}
-              >
-                <span>Take payment</span>
-                <span className="sr-only">·</span>
-                <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
-                  {formatBinding(keymap.bindings.openTender)}
-                </kbd>
-              </Button>
-            )}
-          </div>
-          {!canSettlePayments ? (
-            <div
-              role="status"
-              className={`text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
-            >
-              <p id="counter-pay-reason">{payDisabledReason}</p>
-              {settlementAccess.isError ? (
-                <Button
-                  variant="outline"
-                  className="mt-2 min-h-11"
-                  onClick={() => void settlementAccess.refetch()}
+              {!canSettlePayments ? (
+                <div
+                  role="status"
+                  className={`text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
                 >
-                  Retry payment access
+                  <p id="counter-pay-reason">{payDisabledReason}</p>
+                  {settlementAccess.isError ? (
+                    <Button
+                      variant="outline"
+                      className="mt-2 min-h-11"
+                      onClick={() => void settlementAccess.refetch()}
+                    >
+                      Retry payment access
+                    </Button>
+                  ) : null}
+                </div>
+              ) : (
+                <p
+                  id="counter-pay-reason"
+                  className={`text-xs ${blocked ? 'rounded-[var(--radius-sm)] bg-destructive/10 px-3.5 py-3 text-[13px] font-semibold text-destructive' : 'text-text-muted'}`}
+                >
+                  {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
+                </p>
+              )}
+              {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
+                <Button variant="outline" className="min-h-11 w-full" onClick={openPayment}>
+                  Review payment status
                 </Button>
               ) : null}
-            </div>
-          ) : (
-            <p
-              id="counter-pay-reason"
-              className={`text-xs ${blocked ? 'rounded-[var(--radius-sm)] bg-destructive/10 px-3.5 py-3 text-[13px] font-semibold text-destructive' : 'text-text-muted'}`}
-            >
-              {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
-            </p>
+              <div className="grid grid-cols-3 gap-2" aria-label="Bill actions">
+                <Button
+                  variant="outline"
+                  className="h-11 px-2 text-xs"
+                  disabled={busy || !saleId || cart?.status !== 'OPEN'}
+                  aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
+                  onClick={() => void runTransition('hold')}
+                >
+                  Hold{' '}
+                  <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+                    {formatBinding(keymap.bindings.holdSale)}
+                  </kbd>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 px-2 text-xs"
+                  disabled={busy || !heldSaleId}
+                  aria-describedby={resumeReasonId}
+                  onClick={() => void runTransition('resume')}
+                >
+                  Resume{' '}
+                  <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+                    {formatBinding(keymap.bindings.resumeSale)}
+                  </kbd>
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 px-2 text-xs text-destructive"
+                  disabled={busy || !saleId || cart?.status !== 'OPEN'}
+                  aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
+                  onClick={() => setVoidOpen(true)}
+                >
+                  Void
+                </Button>
+              </div>
+              {billActionReason ? (
+                <p id="counter-bill-action-reason" className="text-xs text-text-muted">
+                  {billActionReason}
+                </p>
+              ) : null}
+              {resumeReasonId === 'counter-resume-reason' ? (
+                <p id="counter-resume-reason" className="text-xs text-text-muted">
+                  {resumeDisabledReason}
+                </p>
+              ) : null}
+            </>
           )}
-          {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
-            <Button variant="outline" className="min-h-11 w-full" onClick={openPayment}>
-              Review payment status
-            </Button>
-          ) : null}
-          <div className="grid grid-cols-3 gap-2" aria-label="Bill actions">
-            <Button
-              variant="outline"
-              className="h-11 px-2 text-xs"
-              disabled={busy || !saleId || cart?.status !== 'OPEN'}
-              aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
-              onClick={() => void runTransition('hold')}
-            >
-              Hold{' '}
-              <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-                {formatBinding(keymap.bindings.holdSale)}
-              </kbd>
-            </Button>
-            <Button
-              variant="outline"
-              className="h-11 px-2 text-xs"
-              disabled={busy || !heldSaleId}
-              aria-describedby={resumeReasonId}
-              onClick={() => void runTransition('resume')}
-            >
-              Resume{' '}
-              <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-                {formatBinding(keymap.bindings.resumeSale)}
-              </kbd>
-            </Button>
-            <Button
-              variant="outline"
-              className="h-11 px-2 text-xs text-destructive"
-              disabled={busy || !saleId || cart?.status !== 'OPEN'}
-              aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
-              onClick={() => setVoidOpen(true)}
-            >
-              Void
-            </Button>
-          </div>
-          {billActionReason ? (
-            <p id="counter-bill-action-reason" className="text-xs text-text-muted">
-              {billActionReason}
-            </p>
-          ) : null}
-          {resumeReasonId === 'counter-resume-reason' ? (
-            <p id="counter-resume-reason" className="text-xs text-text-muted">
-              {resumeDisabledReason}
-            </p>
-          ) : null}
           {packApproval ? (
             <CounterPackApprovalDialog
               medicineName={packApproval.medicineName}
@@ -5701,44 +5776,63 @@ function ScopedPharmacyCounterConsole({
           />
         </aside>
       </div>
-      <div
-        aria-label="Phone payment"
-        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
-      >
-        <div className="min-w-0 flex-1">
-          <p id="counter-phone-pay-reason" className="text-xs text-text-muted">
-            {canSettlePayments || settlementDenied
-              ? (payDisabledReason ?? 'Balance due')
-              : 'Balance due'}
-          </p>
-          <p className="text-2xl leading-tight font-semibold text-text-strong tabular-nums">
-            {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
-          </p>
+      {saleId && (
+        <div
+          aria-label="Phone payment"
+          className="z-30 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border-default bg-surface-card px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
+        >
+          {billState !== 'settled' &&
+            payDisabledReason &&
+            (canSettlePayments || settlementDenied) && (
+              <p id="counter-phone-pay-reason" className="w-full text-xs text-text-muted">
+                {payDisabledReason}
+              </p>
+            )}
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-text-muted">
+              {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
+            </p>
+            <p className="break-words text-2xl leading-tight font-semibold text-text-strong tabular-nums">
+              {billState === 'settled'
+                ? formatMinor(paidMinor)
+                : balanceMinor === null
+                  ? '—'
+                  : formatMinor(balanceMinor)}
+            </p>
+          </div>
+          <Button
+            variant="outline"
+            className="h-14 min-w-11 rounded-[var(--radius-sm)]"
+            onClick={() => {
+              const total = document.getElementById('counter-bill-total');
+              total?.focus({ preventScroll: true });
+              total?.scrollIntoView({ block: 'start' });
+            }}
+          >
+            Totals
+          </Button>
+          {billState === 'settled' ? (
+            <Button className="h-14 text-base" disabled={busy} onClick={startNextBill}>
+              Next bill
+            </Button>
+          ) : (
+            <Button
+              className="h-14 min-w-36 rounded-[var(--radius-sm)] text-[17px]"
+              disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+              // While payment access is unresolved, the reason (with its retry) sits in the bill panel.
+              aria-describedby={
+                payDisabledReason && (canSettlePayments || settlementDenied)
+                  ? 'counter-phone-pay-reason'
+                  : 'counter-pay-reason'
+              }
+              onClick={openPayment}
+            >
+              Take payment{' '}
+              <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
+            </Button>
+          )}
         </div>
-        <Button
-          variant="outline"
-          className="h-14 min-w-11 rounded-[var(--radius-sm)]"
-          onClick={() =>
-            document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
-          }
-        >
-          Bill
-        </Button>
-        <Button
-          className="h-14 min-w-36 rounded-[var(--radius-sm)] text-[17px]"
-          disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
-          // While payment access is unresolved, the reason (with its retry) sits in the bill panel.
-          aria-describedby={
-            canSettlePayments || settlementDenied
-              ? 'counter-phone-pay-reason'
-              : 'counter-pay-reason'
-          }
-          onClick={openPayment}
-        >
-          Take payment{' '}
-          <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
-        </Button>
-      </div>
+      )}
       <CounterOverlay
         title="Take payment"
         // Counter v2 (A2, C4): the sheet's name carries the bill total, as drawn.
@@ -5781,6 +5875,7 @@ function ScopedPharmacyCounterConsole({
           tenders={currentBill ? cart.tenders : undefined}
           state={billState}
           blocked={blocked}
+          blockedReason={safetyBlockReason}
           pending={pending === 'tender'}
           queued={paymentQueued}
           disabled={busy || !saleId}
@@ -6382,7 +6477,7 @@ function ScopedPharmacyCounterConsole({
           }}
         />
       </CounterOverlay>
-      <p className="sr-only" aria-live="polite">
+      <p hidden={Boolean(tillStep)} className="sr-only" aria-live="polite">
         {COUNTER_ACTION_LABELS.focusSearch}: {formatBinding(keymap.bindings.focusSearch)}
       </p>
     </>

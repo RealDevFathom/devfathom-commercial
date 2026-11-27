@@ -74,7 +74,7 @@ const SHOTS = [
   ['a1-bill-1440-dark', 'sale', 1440, 900, { theme: 'dark' }],
   ['a6-search-1440', 'search', 1440, 900, { type: 'amox' }],
   ['a6-search-1366x768', 'search', 1366, 768, { type: 'amox' }],
-  ['a6-staged-1366x768', 'staged', 1366, 768, { type: 'amox', arrow: true }],
+  ['a6-staged-1366x768', 'staged', 1366, 768, { type: 'amox', stageWithKeyboard: true }],
   ['bill-1366x768', 'sale', 1366, 768, {}],
   ['bill-1366x768-dark', 'sale', 1366, 768, { theme: 'dark' }],
   ['b5-search-error-1024', 'error', 1024, 768, { type: 'risek' }],
@@ -126,14 +126,16 @@ try {
       if (options.pick) {
         await page
           .getByRole('list', { name: 'Search results' })
-          .getByRole('button')
+          .getByRole('button', { name: /^Quantity or batch first/ })
           .first()
           .click();
-        await page.waitForTimeout(300);
       }
-      if (options.arrow) {
+      if (options.stageWithKeyboard) {
         await field.press('ArrowDown');
-        await page.waitForTimeout(300);
+        await field.press('Shift+Enter');
+      }
+      if (options.pick || options.stageWithKeyboard) {
+        await page.getByRole('region', { name: 'Next line' }).waitFor();
       }
     }
     if (options.more) {
@@ -159,16 +161,21 @@ try {
           }
           node = node.parentElement;
         }
-        return box.bottom <= innerHeight + 1 && box.top >= -1;
+        if (box.bottom > innerHeight + 1 || box.top < -1) return false;
+        // A fixed payment bar or open search panel can cover a row inside its scrollport.
+        const middle = box.left + box.width / 2;
+        return [box.top + 1, box.bottom - 1].every((y) =>
+          element.contains(document.elementFromPoint(middle, y))
+        );
       };
       const cut = (element) => element.scrollWidth > element.clientWidth + 1;
       const list = document.querySelector('[aria-label="Search results"]');
-      const resultButtons = list ? [...list.querySelectorAll(':scope > li > button')] : [];
+      const resultRows = list?.checkVisibility() ? [...list.querySelectorAll(':scope > li')] : [];
       const rows = [...document.querySelectorAll('[aria-label="Cart lines"] tbody tr:first-child')];
       return {
         pageOverflowX: document.documentElement.scrollWidth > innerWidth,
-        results: resultButtons.length,
-        resultsFullyVisible: resultButtons.filter(visible).length,
+        results: resultRows.length,
+        resultsFullyVisible: resultRows.filter(visible).length,
         billLines: rows.length,
         billLinesFullyVisible: rows.filter(visible).length,
         billCellsCut: rows.flatMap((row) => [...row.querySelectorAll('th, td')]).filter(cut).length,

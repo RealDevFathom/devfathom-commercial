@@ -94,12 +94,20 @@ describe('CounterCartPanel', () => {
         .map((cell) => cell.textContent)
     ).toEqual(['1', '2 × strip20 units', expect.stringContaining('Batch B-0'), '47.00']);
     expect(within(row).getByRole('rowheader')).toHaveTextContent(
-      'Tablet · strip · 20 units @ 25.00 · less 3.00'
+      'Tablet · PKR 25.00 per strip · less 3.00'
     );
     expect(within(row).getByRole('list')).toHaveTextContent('Rack STORE-1');
     expect(screen.queryByText('Gross')).toBeNull();
     expect(screen.queryByText('Tendered')).toBeNull();
     expect(screen.queryByText('Balance')).toBeNull();
+  });
+
+  it('labels the rounded per-strip price when a mixed-batch line costs an extra paisa', () => {
+    const bill = cart([inDays(400), inDays(401)]);
+    Object.assign(bill.lines[0]!, { quantity: 2, canonicalUnits: 20, lineTotalMinor: 5001 });
+    render(<CounterCartPanel cart={bill} state="ready" onRetry={vi.fn()} now={NOW} />);
+    expect(screen.getByRole('rowheader')).toHaveTextContent('PKR 25.00 per strip (average)');
+    expect(screen.getByText('50.01')).toBeVisible();
   });
 
   it('renders actual line-specific notes and safety remedies once, without treating expiry as FEFO', () => {
@@ -346,7 +354,7 @@ it('DEV-705 displays a loose tablet line with its quantity and exact price', () 
   render(<CounterCartPanel cart={value} state="ready" onRetry={vi.fn()} now={NOW} />);
   expect(screen.getByText('1 × tablet')).toBeVisible();
   expect(screen.getByText('1 tablet')).toBeVisible();
-  expect(screen.getByRole('rowheader')).toHaveTextContent('Tablet · tablet · 1 tablet @ 2.50');
+  expect(screen.getByRole('rowheader')).toHaveTextContent('Tablet · PKR 2.50 per tablet');
 });
 
 describe('DEV-977 bill states (Counter v2)', () => {
@@ -453,12 +461,23 @@ describe('DEV-977B (Counter v2, A1) quantity, unit and removal on the bill line'
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(controls.onChange).not.toHaveBeenCalled();
     expect(input).toHaveValue('1');
-    fireEvent.change(input, { target: { value: '12a' } });
+    for (const invalid of ['1.5', '-2', '12a']) {
+      fireEvent.change(input, { target: { value: invalid } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      expect(controls.onChange).not.toHaveBeenCalled();
+      expect(input).toHaveValue('1');
+      expect(input).toHaveAccessibleDescription(/Quantity unchanged/);
+    }
+    fireEvent.change(input, { target: { value: '12' } });
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(controls.onChange).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ saleLineId: 'line-a' }),
       expect.objectContaining({ quantity: 12 })
     );
+    // Without a confirmed update the bill still has one strip, even after focus moves away.
+    expect(input).toHaveValue('1');
+    fireEvent.blur(input);
+    expect(controls.onChange).toHaveBeenCalledTimes(1);
     // At one, minus takes the line off the bill.
     fireEvent.click(screen.getByRole('button', { name: '− Synthetic tablet' }));
     expect(controls.onRemove).toHaveBeenCalledTimes(1);
@@ -514,7 +533,7 @@ describe('DEV-977B (Counter v2, A1) quantity, unit and removal on the bill line'
   ])('offers only removal on a line with a %s', (_, overrides) => {
     const controls = renderLine(editable(overrides));
     expect(screen.queryByLabelText('Quantity: Synthetic tablet')).not.toBeInTheDocument();
-    expect(screen.getByText(/remove it and add it again to change it/)).toBeInTheDocument();
+    expect(screen.getByText(/remove it and add it again/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove Synthetic tablet' }));
     expect(controls.onRemove).toHaveBeenCalledTimes(1);
     cleanup();
@@ -532,6 +551,14 @@ describe('DEV-977B (Counter v2, A1) quantity, unit and removal on the bill line'
       expect(screen.getByRole('button', { name })).toBeDisabled();
     expect(screen.getByLabelText('Quantity: Synthetic tablet')).toBeDisabled();
     expect(controls.onChange).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it.each(['COMPLETED', 'VOID', 'HELD'])('shows only the recorded line on a %s bill', (status) => {
+    renderLine({ ...editable(), status }, true);
+    expect(screen.getByText('2 × strip')).toBeVisible();
+    expect(screen.queryByLabelText('Quantity: Synthetic tablet')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Remove Synthetic tablet' })).toBeNull();
     cleanup();
   });
 

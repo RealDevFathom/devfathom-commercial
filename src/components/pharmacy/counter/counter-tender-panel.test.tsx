@@ -1170,6 +1170,28 @@ describe('DEV-499 tender speed', () => {
     );
   });
 
+  it('requires a cash figure after the cashier clears the prefill', async () => {
+    const { props } = setup();
+    const cash = screen.getByLabelText('Cash received');
+    const take = screen.getByRole('button', { name: 'Take payment' });
+    fireEvent.change(cash, { target: { value: '' } });
+    expect(cash).toHaveAttribute('aria-invalid', 'true');
+    expect(take).toBeDisabled();
+    expect(take).toHaveAccessibleDescription(/Enter the cash received or choose Exact/);
+    fireEvent.keyDown(cash, { key: 'Enter' });
+    expect(props.onTender).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Exact' }));
+    expect(cash).toHaveValue('250.00');
+    expect(take).toBeEnabled();
+    fireEvent.click(take);
+    await waitFor(() =>
+      expect(props.onTender).toHaveBeenCalledExactlyOnceWith(
+        { type: 'CASH', amountMinor: 25000, cashReceivedMinor: 25000 },
+        { amount: '', cashReceived: '250.00' }
+      )
+    );
+  });
+
   it('sets Cash received from quick-cash buttons and shows the change', async () => {
     const { props } = setup({ balanceMinor: 70000 });
     const quick = within(screen.getByRole('group', { name: 'Quick cash' }));

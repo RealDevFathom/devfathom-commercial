@@ -344,15 +344,15 @@ test('a11y — counter targets, names, skip destinations and full-page axe acros
   const scanLink = page.getByRole('link', { name: 'Skip to scan or search' });
   await pressControl(scanLink);
   await expect(page.getByLabel('Scan or search')).toBeFocused();
-  await pressControl(page.getByRole('link', { name: 'Skip to bill total' }));
-  await expect(page.getByRole('complementary', { name: 'Bill total' })).toBeFocused();
+  await pressControl(page.getByRole('link', { name: 'Skip to bill options' }));
+  await expect(page.getByRole('complementary', { name: 'Bill options' })).toBeFocused();
   await page.setViewportSize({ width: 375, height: 900 });
   // DEV-977 (Counter v2): every action below 1280px sits in the action row's More menu.
   await pressControl(page.getByRole('button', { name: 'More', exact: true }));
   await pressControl(page.getByRole('button', { name: 'Shortcuts', exact: true }));
   await expectCounterTargets(page);
   await page.keyboard.press('Escape');
-  await pressControl(page.getByRole('button', { name: 'Open bills', exact: true }));
+  await pressControl(page.getByRole('button', { name: /^Open bills(?: \(\d+\))?$/ }));
   await expectCounterTargets(page);
   await page.keyboard.press('Escape');
 });
@@ -750,7 +750,8 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(cart.getByRole('row').filter({ hasText: otc.name }).last()).toContainText(
     '1 × pack'
   );
-  await expect(cart).toContainText(`pack · ${otc.unitsPerPack} tablets @ ${packPrice}`);
+  await expect(cart).toContainText(`PKR ${packPrice} per pack`);
+  await expect(cart).toContainText(`${otc.unitsPerPack} tablets`);
 
   await tenderCash(page, billTotal);
 
@@ -1666,6 +1667,12 @@ test('Counter v2 — cash with change, the paid bill and its receipt, and a prin
   const totals = page.getByRole('complementary', { name: 'Bill total' });
   await expect(totals).toContainText(`Paid · receipt ${receiptNumber}`);
   await expect(totals).toContainText('497.50');
+  const desktopViewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 375, height: 812 });
+  const phonePayment = page.getByLabel('Phone payment');
+  await expect(phonePayment.getByText(`Paid · receipt ${receiptNumber}`)).toBeVisible();
+  await expect(phonePayment.getByRole('button', { name: 'Next bill' })).toBeEnabled();
+  await page.setViewportSize(desktopViewport);
   await qaShots(page, 'paid', {
     focus: totals.getByRole('button', { name: 'Start next bill', exact: true }),
   });

@@ -253,6 +253,7 @@ export function CounterSearchResults({
                   disabled={disabled}
                   aria-describedby={reason ? reasonId : undefined}
                   aria-pressed={active}
+                  data-counter-add-result={onAdd ? '' : undefined}
                   onClick={() => (onAdd ?? onSelect)(row)}
                   // DEV-977B (Counter v2): a result row is at least 64px, as drawn.
                   className={`grid min-h-16 w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-s-[3px] px-4 py-3 text-start focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50 ${
@@ -262,27 +263,42 @@ export function CounterSearchResults({
                       : 'border-s-transparent hover:bg-surface-sunken'
                   }`}
                 >
-                  <span
-                    dir="auto"
-                    className="min-w-0 break-words text-sm font-semibold text-text-strong"
-                  >
-                    {counterMedicineDisplayName(row)}
-                    {row.composition ? (
-                      <span dir="auto" className="block text-xs font-normal text-text-body">
-                        {row.composition}
-                      </span>
-                    ) : null}
-                    {counterMedicineGenericName(row) ? (
-                      <span dir="auto" className="block text-xs font-normal text-text-muted">
-                        {counterMedicineGenericName(row)}
+                  <span className="contents min-w-0 lg:flex lg:flex-wrap lg:items-center lg:gap-x-2 lg:gap-y-1">
+                    <span
+                      dir="auto"
+                      className="min-w-0 break-words text-sm font-semibold text-text-strong"
+                    >
+                      {counterMedicineDisplayName(row)}
+                      {row.composition ? (
+                        <span dir="auto" className="block text-xs font-normal text-text-body">
+                          {row.composition}
+                        </span>
+                      ) : null}
+                      {counterMedicineGenericName(row) ? (
+                        <span dir="auto" className="block text-xs font-normal text-text-muted">
+                          {counterMedicineGenericName(row)}
+                        </span>
+                      ) : null}
+                    </span>
+                    {safety.length > 0 ? (
+                      <span className="col-span-2 row-start-3 flex flex-wrap gap-1">
+                        {safety.map((flag) => (
+                          <StatusPill
+                            key={flag.status}
+                            status={flag.status}
+                            tone={flag.tone}
+                            label={flag.label}
+                            className="shrink-0"
+                          />
+                        ))}
                       </span>
                     ) : null}
                   </span>
-                  <span className="w-full text-end font-mono text-sm tabular-nums text-text-strong">
-                    <span className="sr-only">Pack MRP </span>
+                  <span className="col-start-2 row-start-1 w-full text-end font-mono text-sm tabular-nums text-text-strong">
+                    <span className="me-1.5 font-sans text-xs text-text-muted">Pack MRP </span>
                     {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
                   </span>
-                  <span className="col-span-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
+                  <span className="col-span-2 row-start-2 flex min-w-0 flex-wrap gap-x-3 break-words text-xs text-text-muted">
                     {/* DEV-977 phase 3 (owner, 21 Nov 2026): imported medicines carry their strength
                         in the name, so a missing one shows nothing here, not a placeholder. */}
                     {row.strength ? (
@@ -318,19 +334,6 @@ export function CounterSearchResults({
                     {notes.length ? ` · ${notes.join(' · ')}` : ''}
                     {` · ${MATCH_LABEL[row.matchedOn]}`}
                   </span>
-                  {safety.length > 0 ? (
-                    <span className="col-span-2 flex flex-wrap gap-1">
-                      {safety.map((flag) => (
-                        <StatusPill
-                          key={flag.status}
-                          status={flag.status}
-                          tone={flag.tone}
-                          label={flag.label}
-                          className="shrink-0"
-                        />
-                      ))}
-                    </span>
-                  ) : null}
                   {row.blocked.length > 0 ? (
                     <span className="col-span-2 text-xs text-warning">
                       Blocked stock present: {row.blocked.join(', ').toLowerCase()}.
