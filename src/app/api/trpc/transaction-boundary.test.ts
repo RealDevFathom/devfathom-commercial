@@ -893,6 +893,9 @@ it('replays an anonymous supplier submission at exactly 256 KiB for tenant looku
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual([{ result: { data: { json: payload } } }]);
+  expect(admitAnonymousRequest).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'supplier-link', token: payload.token })
+  );
   expect(organizationForAnonymousToken).toHaveBeenCalledWith(payload.token);
   expect(harness.scopeTenants).toEqual([ORGANIZATION.id]);
 });

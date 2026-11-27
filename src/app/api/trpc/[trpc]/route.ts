@@ -458,7 +458,14 @@ async function handleAnonymous(req: Request): Promise<Response> {
 
   // Throttle BEFORE any database work, so neither the platform-scope token
   // lookup nor the tenant transaction can be driven by an unauthenticated flood.
-  const admitted = await admitAnonymousRequest({ kind: routing.kind, token, ip: clientIp(req) });
+  const supplierOperation = routing.procedures.some(
+    (path) => path === 'pharmacySupplierLinks.get' || path === 'pharmacySupplierLinks.submit'
+  );
+  const admitted = await admitAnonymousRequest({
+    kind: supplierOperation && routing.procedures.length === 1 ? 'supplier-link' : routing.kind,
+    token,
+    ip: clientIp(req),
+  });
   if (!admitted.ok) {
     return Response.json(
       { error: 'Too many requests. Please try again later.' },
@@ -469,11 +476,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
   const boundedRequest = tokenNeedsBody ? tokenRequest : await boundPost(req, ANONYMOUS_BODY_BYTES);
   if (boundedRequest instanceof Response) return boundedRequest;
 
-  if (
-    routing.procedures.some(
-      (path) => path === 'pharmacySupplierLinks.get' || path === 'pharmacySupplierLinks.submit'
-    )
-  ) {
+  if (supplierOperation) {
     // Each token lookup and rate-limit charge represents one supplier operation.
     if (routing.procedures.length !== 1)
       return Response.json({ error: 'Use one supplier link at a time.' }, { status: 400 });
