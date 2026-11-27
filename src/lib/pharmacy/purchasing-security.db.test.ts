@@ -811,6 +811,51 @@ async function newLink() {
       });
     });
 
+    it.each([
+      ['oversize', 413],
+      ['wrong content type', 400],
+    ] as const)('refuses a signed-out supplier upload with %s', async (reason, status) => {
+      const { token } = await newLink();
+      const { POST } = await import('@/app/api/pharmacy/supplier-documents/upload/route');
+      const {
+        SUPPLIER_DOCUMENT_MAX_BYTES,
+        SUPPLIER_DOCUMENT_TOKEN_HEADER,
+        SUPPLIER_ACCESS_HEADER,
+        SUPPLIER_DOCUMENT_UPLOAD_URL,
+      } = await import('./supplier-document-contract');
+      const actor = vi
+        .spyOn(await import('@/lib/tenancy/tenant-actor'), 'resolveTenantActor')
+        .mockResolvedValue(null);
+      try {
+        const bytes =
+          reason === 'oversize' ? new Uint8Array(SUPPLIER_DOCUMENT_MAX_BYTES + 1) : 'ordinary text';
+        const form = new FormData();
+        form.set('file', new File([bytes], 'fixture.pdf', { type: 'application/pdf' }));
+        form.set('idempotencyKey', 'invalid-fixture');
+        const origin = 'https://pharmacy.example.test';
+        const calls = vi.mocked(putUpload).mock.calls.length;
+        const res = await POST(
+          new Request(origin + SUPPLIER_DOCUMENT_UPLOAD_URL, {
+            method: 'POST',
+            body: form,
+            headers: {
+              origin,
+              [SUPPLIER_ACCESS_HEADER]: 'order-link',
+              [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+            },
+          })
+        );
+        expect(res.status).toBe(status);
+        expect(putUpload).toHaveBeenCalledTimes(calls);
+        const actionLinkId = supplierLinks.supplierLinkId(token)!;
+        expect(
+          await inOrg((db) => db.pharmacySupplierSubmission.count({ where: { actionLinkId } }))
+        ).toBe(0);
+      } finally {
+        actor.mockRestore();
+      }
+    });
+
     it('keeps supplier evidence, document access and audit rows on the issuing order', async () => {
       const { token } = await newLink();
       const linkId = supplierLinks.supplierLinkId(token)!;
