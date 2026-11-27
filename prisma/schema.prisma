@@ -17383,6 +17383,8 @@ model WalletTenantConfig {
   id                 String   @id @default(cuid())
   organizationId     String   @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   programDisplayName String
+  enabled            Boolean  @default(false)
+  logoPng            Bytes?
   logoFileId         String?
   backgroundColor    String?
   foregroundColor    String?

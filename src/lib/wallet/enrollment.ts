@@ -87,10 +87,10 @@ export async function resolveEnrollmentLink(hostOrganizationId: string, token: s
       db.restaurantBranch.findUnique({ where: { id: candidate.branchId }, select: { name: true } }),
       db.walletTenantConfig.findUnique({
         where: { organizationId: candidate.organizationId },
-        select: { programDisplayName: true },
+        select: { programDisplayName: true, enabled: true },
       }),
     ]);
-    if (!branch || !config) return null;
+    if (!branch || !config?.enabled) return null;
     return { ...candidate, branchName: branch.name, programDisplayName: config.programDisplayName };
   });
 }
