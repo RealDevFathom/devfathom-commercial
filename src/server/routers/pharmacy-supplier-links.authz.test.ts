@@ -35,7 +35,7 @@ import type { ProcedureMeta, TRPCContext } from '../trpc';
 
 const PERMISSION = 'You do not have permission for this action.';
 const OUTSIDE_BRANCH = 'Branch is outside your scope.';
-const FUTURE = new Date('2030-01-01T00:00:00.000Z');
+const FUTURE = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
 const template = (key: string) =>
   PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!.capabilities;

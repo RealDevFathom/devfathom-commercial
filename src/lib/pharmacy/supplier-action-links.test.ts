@@ -7,6 +7,7 @@ import {
   SUPPLIER_LINK_LIMITS,
   uploadSupplierDocument,
 } from './supplier-action-links';
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 vi.mock('@/lib/storage', () => ({ putUpload: vi.fn().mockResolvedValue({}) }));
 import { putUpload } from '@/lib/storage';
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
@@ -30,16 +31,50 @@ function fakeDb() {
   const purchaseOrder = {
     id: 'po_a',
     reference: 'PO-1',
+    status: 'SENT',
     branchId: 'branch_a',
     supplierId: 'supplier_a',
     expectedDeliveryAt: null,
     lines: [
-      { id: 'line_a', lineNumber: 1, medicineId: 'med_a', packLevelId: 'pack_a', orderedPacks: 4 },
+      { id: 'line_a', lineNumber: 1, medicine: { productName: 'Test medicine' }, orderedPacks: 4 },
     ],
   };
   const db = {
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(db)),
     $queryRaw: vi.fn(async () => []),
+    $executeRaw: vi.fn(async () => 1),
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => ({
+        name: 'Buyer branch',
+        regulatoryProfiles: [
+          {
+            premises: {
+              phone: ' 555-0100 ',
+              addressLine: 'private address',
+              staffName: 'private name',
+            },
+          },
+        ],
+      })),
+    },
+    pharmacyGoodsReceiptLine: {
+      findMany: vi.fn(
+        async (): Promise<
+          {
+            purchaseOrderLineId: string;
+            receivedCanonicalUnits: number;
+            bonusCanonicalUnits: number;
+            acceptedCanonicalUnits: number;
+            rejectedCanonicalUnits: number;
+          }[]
+        > => []
+      ),
+    },
+    pharmacyPurchaseOrderLine: {
+      findMany: vi.fn(async () => [
+        { id: 'line_a', orderedCanonicalUnits: 4, bonusCanonicalUnits: 1 },
+      ]),
+    },
     pharmacySupplierRelationship: { findFirst: vi.fn(async () => relationship) },
     pharmacyPurchaseOrder: { findFirst: vi.fn(async () => purchaseOrder) },
     pharmacySupplierActionLink: {
@@ -50,10 +85,20 @@ function fakeDb() {
       findFirst: vi.fn(async ({ where }) => {
         const link = stored.find((row) => row.id === where.id);
         if (!link || where.expiresAt.gt >= (link.expiresAt as Date) || link.revokedAt) return null;
-        return { ...link, relationship, purchaseOrder };
+        return {
+          ...link,
+          relationship,
+          purchaseOrder,
+          _count: {
+            submissions: stored.filter(
+              (row) => row.actionLinkId === link.id && row.source === 'SIGNED_LINK'
+            ).length,
+          },
+        };
       }),
     },
     pharmacySupplierDocument: {
+      count: vi.fn(async () => documents.length),
       findUnique: vi.fn(
         async ({ where }) =>
           documents.find(
@@ -125,11 +170,77 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     ).rejects.toMatchObject({ reason: 'MISMATCH' });
     state.purchaseOrder.supplierId = 'supplier_a';
     const live = await issued();
-    expect(await getSupplierActionPage(live.db, live.token)).toEqual({
+    const page = await getSupplierActionPage(live.db, live.token);
+    expect(Object.keys(page).sort()).toEqual([
+      'buyerBranch',
+      'expectedDeliveryAt',
+      'lines',
+      'reference',
+    ]);
+    for (const line of page.lines) {
+      expect(Object.keys(line).sort()).toEqual(['id', 'lineNumber', 'medicine', 'orderedPacks']);
+      expect(Object.keys(line.medicine)).toEqual(['productName']);
+    }
+    const query = live.rawDb.pharmacySupplierActionLink.findFirst.mock.calls[0][0];
+    expect(query.include.purchaseOrder.select.lines.select).toEqual({
+      id: true,
+      lineNumber: true,
+      medicine: { select: { productName: true } },
+      orderedPacks: true,
+    });
+    expect(page).toEqual({
+      buyerBranch: { name: 'Buyer branch', phone: '555-0100' },
       reference: 'PO-1',
       expectedDeliveryAt: null,
       lines: live.purchaseOrder.lines,
     });
+  });
+
+  it.each(['DRAFT', 'SUBMITTED', 'CANCELLED', 'fully received'])(
+    'refuses issue and public access for a %s order',
+    async (status) => {
+      const state = await issued();
+      state.purchaseOrder.status = status === 'fully received' ? 'RECEIVING' : status;
+      if (status === 'fully received') {
+        state.rawDb.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+          {
+            purchaseOrderLineId: 'line_a',
+            receivedCanonicalUnits: 4,
+            bonusCanonicalUnits: 1,
+            acceptedCanonicalUnits: 5,
+            rejectedCanonicalUnits: 0,
+          },
+        ]);
+      }
+      const issue = () =>
+        issueSupplierActionLink(state.db, {
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          relationshipId: 'rel_a',
+          purchaseOrderId: 'po_a',
+          actorUserId: 'user_a',
+        });
+      await expect(issue()).rejects.toMatchObject({ reason: 'ORDER_NOT_OPEN' });
+      await expect(getSupplierActionPage(state.db, state.token)).rejects.toMatchObject({
+        reason: 'INVALID_LINK',
+      });
+      expect(state.rawDb.pharmacySupplierActionLink.create).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('keeps a partially received order open until its bonus units also arrive', async () => {
+    const state = await issued();
+    state.purchaseOrder.status = 'RECEIVING';
+    state.rawDb.pharmacyGoodsReceiptLine.findMany.mockResolvedValue([
+      {
+        purchaseOrderLineId: 'line_a',
+        receivedCanonicalUnits: 4,
+        bonusCanonicalUnits: 0,
+        acceptedCanonicalUnits: 4,
+        rejectedCanonicalUnits: 0,
+      },
+    ]);
+    expect((await getSupplierActionPage(state.db, state.token)).reference).toBe('PO-1');
   });
 
   it('25/26: supplier submission writes proposal evidence only and grants no approval operation', async () => {
@@ -145,6 +256,10 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     expect(Object.keys(state.db)).toEqual([
       '$transaction',
       '$queryRaw',
+      '$executeRaw',
+      'pharmacyBranch',
+      'pharmacyGoodsReceiptLine',
+      'pharmacyPurchaseOrderLine',
       'pharmacySupplierRelationship',
       'pharmacyPurchaseOrder',
       'pharmacySupplierActionLink',
@@ -340,5 +455,60 @@ describe('supplier link lifetime budgets', () => {
         payload: { byteSize: 0 },
       })
     ).rejects.toMatchObject({ reason: 'INVALID_UPLOAD' });
+  });
+});
+
+it('claims a scanned document as purchase order evidence using a local-store-compatible name', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  const doc = await uploadSupplierDocument(s.db, {
+    token: s.token,
+    idempotencyKey: 'invoice',
+    fileName: 'invoice.pdf',
+    declaredMimeType: 'application/pdf',
+    content: Buffer.from('%PDF-1.7'),
+  });
+  expect(s.rawDb.$executeRaw).toHaveBeenCalledWith(
+    expect.arrayContaining([expect.stringContaining('pg_advisory_xact_lock')]),
+    'supplier-document-cap:po_a'
+  );
+  expect(doc.ownerType).toBe('PHARMACY_PURCHASE_ORDER');
+  expect(doc.storageUri).toMatch(/^supplier-po-[a-f0-9-]+$/);
+});
+
+it('refuses a page after the last available response has been used', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  for (let i = 0; i < SUPPLIER_LINK_LIMITS.submissions; i++)
+    s.stored.push({ actionLinkId: s.stored[0].id, source: 'SIGNED_LINK' });
+  await expect(getSupplierActionPage(s.db, s.token)).rejects.toMatchObject({
+    reason: 'INVALID_LINK',
+  });
+});
+
+it('refuses a full order even when the current link still has room', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  s.rawDb.pharmacySupplierDocument.count.mockResolvedValue(SUPPLIER_LINK_LIMITS.documents);
+  await expect(
+    uploadSupplierDocument(s.db, {
+      token: s.token,
+      idempotencyKey: 'later',
+      fileName: 'invoice.pdf',
+      declaredMimeType: 'application/pdf',
+      content: Buffer.from('%PDF-1.7'),
+    })
+  ).rejects.toMatchObject({ reason: 'LINK_LIMIT_EXCEEDED' });
+  expect(s.rawDb.pharmacySupplierDocument.create).not.toHaveBeenCalled();
+});
+
+it('rejects an exhausted link before a new upload body is admitted', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-test-signing-key');
+  const s = await issued();
+  for (let i = 0; i < SUPPLIER_LINK_LIMITS.submissions; i++)
+    s.stored.push({ actionLinkId: s.stored[0].id, source: 'SIGNED_LINK' });
+  const { assertSupplierDocumentPermission } = await import('./supplier-action-links');
+  await expect(assertSupplierDocumentPermission(s.db, s.token)).rejects.toMatchObject({
+    reason: 'INVALID_LINK',
   });
 });

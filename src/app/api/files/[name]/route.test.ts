@@ -550,3 +550,9 @@ describe('private attachment delivery', () => {
     await expect(read('ordinary.png')).rejects.toBe(error);
   });
 });
+
+it('leaves supplier order documents to their procurement reader', async () => {
+  const name = 'supplier-po-00000000-0000-4000-8000-000000000001-' + 'a'.repeat(64);
+  expect((await read(name)).status).toBe(404);
+  expect(mocks.getUpload).not.toHaveBeenCalled();
+});

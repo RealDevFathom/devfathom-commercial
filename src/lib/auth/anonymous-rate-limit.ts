@@ -57,16 +57,19 @@ function tokenFingerprint(token: string | null): string {
 export type AnonymousAdmission = { ok: true } | { ok: false; retryAfter: number };
 
 export async function admitAnonymousRequest(input: {
-  kind: 'token' | 'host';
+  kind: 'token' | 'host' | 'supplier-link' | 'supplier-upload';
   token: string | null;
   ip: string;
 }): Promise<AnonymousAdmission> {
+  const supplier = input.kind === 'supplier-link' || input.kind === 'supplier-upload';
+  const chargeAddress = !supplier || input.ip !== 'unknown';
   const gates: RateLimitResult[] = [
     await rateLimit('anon:trpc:global', GLOBAL_LIMIT, GLOBAL_WINDOW_MS),
-    await rateLimit(`anon:trpc:ip:${input.ip}`, IP_LIMIT, IP_WINDOW_MS),
   ];
+  if (chargeAddress)
+    gates.push(await rateLimit(`anon:trpc:ip:${input.ip}`, IP_LIMIT, IP_WINDOW_MS));
 
-  if (input.kind === 'token') {
+  if (input.kind !== 'host') {
     gates.push(
       await rateLimit(
         `anon:trpc:token:${tokenFingerprint(input.token)}`,
@@ -76,6 +79,13 @@ export async function admitAnonymousRequest(input: {
     );
   }
 
+  if (input.kind === 'supplier-upload') {
+    gates.push(
+      await rateLimit(`supplier-upload:token:${tokenFingerprint(input.token)}`, 4, TOKEN_WINDOW_MS)
+    );
+    if (chargeAddress)
+      gates.push(await rateLimit(`supplier-upload:ip:${input.ip}`, 8, IP_WINDOW_MS));
+  }
   const blocked = gates.find((gate) => !gate.ok);
   return blocked ? { ok: false, retryAfter: blocked.retryAfter } : { ok: true };
 }

@@ -27,6 +27,8 @@ export const REST_TENANT_ACTOR: Readonly<Record<string, string>> = {
   'pharmacy/sop/evidence': 'Runs a pharmacySop procedure with the support identity in the context.',
   'restaurant/sop/evidence':
     'Runs a restaurantSopExecution procedure with the support identity in the context.',
+  'pharmacy/supplier-documents/[id]':
+    'Resolves the tenant actor, returns one supplier document the member’s branches may procure for, and audits the read.',
   'pharmacy/supplier-documents/upload':
     'Runs a pharmacySupplierLinks procedure with the support identity in the context.',
   'pharmacy/print':

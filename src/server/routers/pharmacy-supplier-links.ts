@@ -48,7 +48,11 @@ async function assertBranch(ctx: TRPCContext, branchId: string) {
 
 function mapError(error: unknown): never {
   if (!(error instanceof SupplierLinkError)) throw error;
-  if (error.reason === 'INVALID_LINK') throw genericLinkError();
+  if (error.reason === 'EXPIRY_NOT_FUTURE')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be in the future.' });
+  if (error.reason === 'EXPIRY_TOO_LATE')
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be within 30 days.' });
+  if (error.reason === 'INVALID_LINK' || error.exhausted) throw genericLinkError();
   throw new TRPCError({
     code:
       error.reason === 'LINK_LIMIT_EXCEEDED'
@@ -70,7 +74,10 @@ export const pharmacySupplierLinksRouter = router({
   }),
   submit: publicProcedure.input(supplierLinkSubmitInput).mutation(async ({ ctx, input }) => {
     try {
-      return await submitSupplierEvidence(ctx.db, input);
+      const result = await submitSupplierEvidence(ctx.db, input);
+      return ctx.session?.user
+        ? result
+        : { id: result.id, kind: result.kind, version: result.version };
     } catch (error) {
       mapError(error);
     }
@@ -92,12 +99,15 @@ export const pharmacySupplierLinksRouter = router({
     .meta(PROCUREMENT)
     .input(
       z
-        .object({ branchId: id, relationshipId: id, purchaseOrderId: id, expiresAt: z.date() })
+        .object({
+          branchId: id,
+          relationshipId: id,
+          purchaseOrderId: id,
+          expiresAt: z.date().optional(),
+        })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (input.expiresAt <= new Date())
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be in the future.' });
       await assertBranch(ctx, input.branchId);
       try {
         return await issueSupplierActionLink(ctx.db, {
@@ -106,6 +116,12 @@ export const pharmacySupplierLinksRouter = router({
           actorUserId: ctx.session.user.id,
         });
       } catch (error) {
+        if (error instanceof SupplierLinkError && error.reason === 'ORDER_NOT_OPEN')
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'Only approved, sent or receiving orders with items still to arrive can have a supplier link.',
+          });
         mapError(error);
       }
     }),

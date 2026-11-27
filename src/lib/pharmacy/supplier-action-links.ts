@@ -2,6 +2,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
+import { regulatoryProfileInForceWhere } from './regulatory-start';
+import { receivedAgainstOrder } from './received-against-order';
+import { recordAudit } from '@/server/audit';
 import { putUpload } from '@/lib/storage';
 import {
   structuralSupplierFileScanner,
@@ -13,11 +16,15 @@ export class SupplierLinkError extends Error {
   constructor(
     public readonly reason:
       | 'INVALID_LINK'
+      | 'ORDER_NOT_OPEN'
+      | 'EXPIRY_NOT_FUTURE'
+      | 'EXPIRY_TOO_LATE'
       | 'MISMATCH'
       | 'IDEMPOTENCY_CONFLICT'
       | 'INVALID_UPLOAD'
       | 'INVALID_CORRECTION'
-      | 'LINK_LIMIT_EXCEEDED'
+      | 'LINK_LIMIT_EXCEEDED',
+    public readonly exhausted = false
   ) {
     super(reason);
   }
@@ -84,8 +91,9 @@ async function assertLinkBudget(
       ? sum + size
       : Infinity;
   }, 0);
+  if (rows.length >= SUPPLIER_LINK_LIMITS.submissions)
+    throw new SupplierLinkError('LINK_LIMIT_EXCEEDED', true);
   if (
-    rows.length >= SUPPLIER_LINK_LIMITS.submissions ||
     usedBytes + bytes > SUPPLIER_LINK_LIMITS.totalPayloadBytes ||
     (kind === 'DOCUMENT' &&
       (documents.length >= SUPPLIER_LINK_LIMITS.documents ||
@@ -120,6 +128,35 @@ export function supplierLinkId(token: string): string | null {
   return expected.length === candidate.length && timingSafeEqual(expected, candidate) ? id : null;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+async function assertOrderOpen(
+  db: ScopedDb,
+  organizationId: string,
+  order: { id: string; status: string },
+  reason: 'INVALID_LINK' | 'ORDER_NOT_OPEN'
+) {
+  if (order.status !== 'APPROVED' && order.status !== 'SENT' && order.status !== 'RECEIVING')
+    throw new SupplierLinkError(reason);
+  // A fully received order still has RECEIVING status. Use the receiving bench's
+  // posted quantities, including bonus units, and keep these figures private.
+  const received = await receivedAgainstOrder(db, { organizationId }, order.id);
+  if (!received.size) return;
+  const lines = await db.pharmacyPurchaseOrderLine.findMany({
+    where: { organizationId, purchaseOrderId: order.id },
+    select: { id: true, orderedCanonicalUnits: true, bonusCanonicalUnits: true },
+  });
+  if (
+    lines.length &&
+    lines.every(
+      (line) =>
+        (received.get(line.id)?.receivedUnits ?? 0) >=
+        line.orderedCanonicalUnits + line.bonusCanonicalUnits
+    )
+  )
+    throw new SupplierLinkError(reason);
+}
+
 export async function issueSupplierActionLink(
   db: ScopedDb,
   input: {
@@ -128,19 +165,26 @@ export async function issueSupplierActionLink(
     relationshipId: string;
     purchaseOrderId: string;
     actorUserId: string;
-    expiresAt: Date;
+    expiresAt?: Date;
   }
 ) {
+  const now = Date.now();
+  const expiresAt = input.expiresAt ?? new Date(now + 14 * DAY_MS);
+  if (!(expiresAt.getTime() > now)) throw new SupplierLinkError('EXPIRY_NOT_FUTURE');
+  if (expiresAt.getTime() > now + 30 * DAY_MS) throw new SupplierLinkError('EXPIRY_TOO_LATE');
+
   const [relationship, purchaseOrder] = await Promise.all([
     db.pharmacySupplierRelationship.findFirst({
       where: { id: input.relationshipId, branchId: input.branchId, active: true, revokedAt: null },
     }),
     db.pharmacyPurchaseOrder.findFirst({
       where: { id: input.purchaseOrderId, branchId: input.branchId },
-      select: { id: true, supplierId: true },
+      select: { id: true, supplierId: true, status: true },
     }),
   ]);
-  if (!relationship || !purchaseOrder || relationship.supplierId !== purchaseOrder.supplierId)
+  if (!purchaseOrder) throw new SupplierLinkError('INVALID_LINK');
+  await assertOrderOpen(db, input.organizationId, purchaseOrder, 'ORDER_NOT_OPEN');
+  if (!relationship || relationship.supplierId !== purchaseOrder.supplierId)
     throw new SupplierLinkError('MISMATCH');
   const id = randomUUID();
   const secret = randomBytes(32).toString('base64url');
@@ -153,11 +197,11 @@ export async function issueSupplierActionLink(
       supplierRelationshipId: input.relationshipId,
       purchaseOrderId: input.purchaseOrderId,
       tokenHash: digest(secret),
-      expiresAt: input.expiresAt,
+      expiresAt,
       createdByUserId: input.actorUserId,
     },
   });
-  return { token: `${body}.${signature(body)}`, expiresAt: input.expiresAt };
+  return { token: `${body}.${signature(body)}`, expiresAt };
 }
 
 async function liveLink(db: ScopedDb, token: string, now = new Date()) {
@@ -173,20 +217,22 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
       relationship: { active: true, revokedAt: null },
     },
     include: {
-      relationship: { select: { supplierId: true } },
+      _count: { select: { submissions: { where: { source: 'SIGNED_LINK' } } } },
+      relationship: { select: { supplierId: true, branchId: true } },
       purchaseOrder: {
         select: {
           id: true,
           reference: true,
+          status: true,
           branchId: true,
           supplierId: true,
           expectedDeliveryAt: true,
           lines: {
+            orderBy: { lineNumber: 'asc' },
             select: {
               id: true,
               lineNumber: true,
-              medicineId: true,
-              packLevelId: true,
+              medicine: { select: { productName: true } },
               orderedPacks: true,
             },
           },
@@ -196,9 +242,18 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
   });
   if (
     !link ||
+    link.branchId !== link.relationship.branchId ||
     link.relationship.supplierId !== link.purchaseOrder.supplierId ||
     link.branchId !== link.purchaseOrder.branchId
   )
+    throw new SupplierLinkError('INVALID_LINK');
+  await assertOrderOpen(db, link.organizationId, link.purchaseOrder, 'INVALID_LINK');
+  return link;
+}
+
+async function usableLink(db: ScopedDb, token: string) {
+  const link = await liveLink(db, token);
+  if (link._count.submissions >= SUPPLIER_LINK_LIMITS.submissions)
     throw new SupplierLinkError('INVALID_LINK');
   return link;
 }
@@ -206,13 +261,49 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
 // Use the same live-link permission check before the HTTP transport reads a file.
 // The write checks it again inside the transaction in case it changed mid-upload.
 export async function assertSupplierDocumentPermission(db: ScopedDb, token: string) {
-  const link = await liveLink(db, token);
+  const link = await usableLink(db, token);
   return link.branchId;
 }
 
 export async function getSupplierActionPage(db: ScopedDb, token: string) {
-  const link = await liveLink(db, token);
+  const link = await usableLink(db, token);
+  const branch = await db.pharmacyBranch.findFirst({
+    where: { organizationId: link.organizationId, id: link.branchId },
+    select: {
+      name: true,
+      regulatoryProfiles: {
+        where: regulatoryProfileInForceWhere(new Date()),
+        orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+        take: 1,
+        select: { premises: true },
+      },
+    },
+  });
+  if (!branch) throw new SupplierLinkError('INVALID_LINK');
+  const premises = branch.regulatoryProfiles[0]?.premises;
+  const phone =
+    premises &&
+    typeof premises === 'object' &&
+    !Array.isArray(premises) &&
+    typeof premises.phone === 'string'
+      ? premises.phone.trim() || null
+      : null;
+  await recordAudit(
+    {
+      organizationId: link.organizationId,
+      actorType: 'ANONYMOUS',
+      source: 'TRPC',
+      category: 'pharmacy',
+      operation: 'READ',
+      action: 'pharmacySupplierLinks.get',
+      targetType: 'PharmacyPurchaseOrder',
+      targetId: link.purchaseOrderId,
+      metadata: { branchId: link.branchId, actionLinkId: link.id },
+    },
+    db
+  );
   return {
+    buyerBranch: { name: branch.name, phone },
     reference: link.purchaseOrder.reference,
     expectedDeliveryAt: link.purchaseOrder.expectedDeliveryAt,
     lines: link.purchaseOrder.lines,
@@ -308,7 +399,28 @@ export async function submitSupplierEvidence(
 ) {
   // Documents must pass the byte scanner and storage path, never a forged JSON reservation.
   if (input.kind === 'DOCUMENT') throw new SupplierLinkError('INVALID_UPLOAD');
-  return withLinkWrite(db, input.token, (tx) => submitEvidence(tx, input));
+  return withLinkWrite(db, input.token, async (tx) => {
+    const submission = await submitEvidence(tx, input);
+    await recordAudit(
+      {
+        organizationId: submission.organizationId,
+        actorType: 'ANONYMOUS',
+        source: 'TRPC',
+        category: 'pharmacy',
+        operation: 'CREATE',
+        action: 'pharmacySupplierLinks.submit',
+        targetType: 'PharmacySupplierSubmission',
+        targetId: submission.id,
+        metadata: {
+          branchId: submission.branchId,
+          actionLinkId: submission.actionLinkId,
+          kind: submission.kind,
+        },
+      },
+      tx
+    );
+    return submission;
+  });
 }
 
 export async function recordManualSupplierEvidence(
@@ -382,7 +494,7 @@ async function uploadDocument(
     payload,
     now: input.now,
   });
-  const objectName = `supplier-po/${link.id}/${file.sha256}`;
+  const objectName = `supplier-po-${link.id}-${file.sha256}`;
   const existing = await db.pharmacySupplierDocument.findUnique({
     where: {
       organizationId_submissionId_sha256: {
@@ -393,6 +505,16 @@ async function uploadDocument(
     },
   });
   if (existing) return existing;
+  // Links for the same order share this cap, including a replacement supplier.
+  const capKey = 'supplier-document-cap:' + link.purchaseOrderId;
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${capKey}, 0))`;
+  const count = await db.pharmacySupplierDocument.count({
+    where: {
+      organizationId: link.organizationId,
+      submission: { actionLink: { purchaseOrderId: link.purchaseOrderId } },
+    },
+  });
+  if (count >= SUPPLIER_LINK_LIMITS.documents) throw new SupplierLinkError('LINK_LIMIT_EXCEEDED');
   await putUpload(link.organizationId, objectName, input.content, file.mimeType);
   const { mode, ...document } = file;
   return db.pharmacySupplierDocument.create({
@@ -402,6 +524,7 @@ async function uploadDocument(
       submissionId: submission.id,
       fileName: input.fileName,
       ...document,
+      ownerType: 'PHARMACY_PURCHASE_ORDER',
       storageUri: objectName,
       scanMode: mode,
       malwareChecked: mode === 'MALWARE_SCANNED',

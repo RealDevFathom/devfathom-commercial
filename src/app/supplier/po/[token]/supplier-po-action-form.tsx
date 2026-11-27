@@ -1,11 +1,16 @@
 'use client';
 
 import { useState } from 'react';
+import { TRPCClientError } from '@trpc/client';
 import { browserUuid } from '@/lib/browser-uuid';
 import { trpc } from '@/lib/trpc';
+import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
+import { PageHeader } from '@/components/ui/page-header';
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import {
+  SUPPLIER_ACCESS_HEADER,
   SUPPLIER_DOCUMENT_MAX_BYTES,
   SUPPLIER_DOCUMENT_MAX_MB,
   SUPPLIER_DOCUMENT_SIZE_MESSAGE,
@@ -18,6 +23,8 @@ export function SupplierPoActionForm({ token }: { token: string }) {
   const order = trpc.pharmacySupplierLinks.get.useQuery({ token }, { retry: false });
   const submit = trpc.pharmacySupplierLinks.submit.useMutation();
   const [uploading, setUploading] = useState(false);
+  const [linkEnded, setLinkEnded] = useState(false);
+  const [confirmRejection, setConfirmRejection] = useState(false);
   const [eta, setEta] = useState('');
   const [proposal, setProposal] = useState('');
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -25,17 +32,30 @@ export function SupplierPoActionForm({ token }: { token: string }) {
 
   if (order.isLoading)
     return (
-      <SectionCard title="Loading purchase order…">
-        <p className="text-sm text-text-muted">Checking this secure link.</p>
+      <SectionCard>
+        <PageHeader heading="Loading purchase order…" description="Checking your link." />
       </SectionCard>
     );
-  if (order.error || !order.data)
+  const response = order.error instanceof TRPCClientError ? order.error.meta?.response : undefined;
+  if (
+    order.error?.data?.code === 'TOO_MANY_REQUESTS' ||
+    (response instanceof Response && response.status === 429)
+  )
     return (
-      <SectionCard title="Link unavailable">
-        <p role="alert" className="text-sm text-destructive">
-          This link is invalid, expired, or revoked. Contact the pharmacy if you still need to
-          respond.
-        </p>
+      <SectionCard>
+        <PageHeader
+          heading="Supplier response"
+          description="Too many tries. Wait a few minutes and open the link again."
+        />
+      </SectionCard>
+    );
+  if (order.error || !order.data || linkEnded)
+    return (
+      <SectionCard>
+        <PageHeader
+          heading="This link is not valid"
+          description="Ask the pharmacy for a new link."
+        />
       </SectionCard>
     );
 
@@ -47,28 +67,37 @@ export function SupplierPoActionForm({ token }: { token: string }) {
     submit.mutate(
       { token, kind, payload, idempotencyKey: browserUuid() },
       {
-        onSuccess: () =>
-          setMessage('Response recorded as supplier evidence. The pharmacy will review it.'),
-        onError: (error) => setMessage(error.message),
+        onSuccess: () => setMessage('Response sent. The pharmacy will review it.'),
+        onError: (error) => {
+          if (error.data?.code === 'NOT_FOUND') setLinkEnded(true);
+          else
+            setMessage(
+              error.data?.code === 'TOO_MANY_REQUESTS'
+                ? 'Too many tries. Please try again later.'
+                : 'Your response could not be saved. Check the details and try again.'
+            );
+        },
       }
     );
   };
 
   return (
     <>
-      <header className="space-y-2">
-        <p className="font-mono text-xs tracking-wider text-text-muted uppercase">
-          Supplier response
-        </p>
-        <h1 className="font-display text-4xl font-semibold tracking-tight text-text-strong">
-          Purchase order {order.data.reference}
-        </h1>
-        <p className="text-sm text-text-muted">
-          Your response is a proposal or evidence record. It does not change stock, pricing,
-          receipts, or pharmacy approvals.
-        </p>
-      </header>
-      <SectionCard title="Order lines" eyebrow="One purchase order only">
+      <PageHeader
+        eyebrow="Supplier response"
+        heading={`Purchase order ${order.data.reference}`}
+        description="Confirm the order or suggest a change. The pharmacy reviews your response before changing the order."
+      />
+      <p className="text-sm text-text-body">
+        Buying branch: {order.data.buyerBranch.name}
+        {order.data.buyerBranch.phone && ` · ${order.data.buyerBranch.phone}`}
+      </p>
+      <SectionCard title="Order lines">
+        {order.data.lines.length === 0 && (
+          <p className="text-sm text-text-muted">
+            There are no items on this order. Contact the pharmacy for details.
+          </p>
+        )}
         <div className="space-y-3">
           {order.data.lines.map((line) => (
             <label
@@ -76,9 +105,11 @@ export function SupplierPoActionForm({ token }: { token: string }) {
               className="grid gap-2 border-b border-border-subtle pb-3 sm:grid-cols-[1fr_9rem] sm:items-center"
             >
               <span className="text-sm">
-                Line {line.lineNumber} · {line.orderedPacks} packs
+                {line.medicine.productName} · {line.orderedPacks} packs ordered
+                <br />
+                Packs you can supply
               </span>
-              <input
+              <Input
                 aria-label={`Accepted packs for line ${line.lineNumber}`}
                 type="number"
                 min={0}
@@ -90,16 +121,21 @@ export function SupplierPoActionForm({ token }: { token: string }) {
                     [line.id]: Number(event.target.value),
                   }))
                 }
-                className="h-11 rounded-sm border border-border bg-background px-3"
+                className="h-11 rounded-control"
               />
             </label>
           ))}
         </div>
         <div className="mt-5 flex flex-wrap gap-3">
-          <Button disabled={submit.isPending} onClick={() => send('ACKNOWLEDGEMENT', {})}>
-            Acknowledge
+          <Button
+            className="min-h-11"
+            disabled={submit.isPending}
+            onClick={() => send('ACKNOWLEDGEMENT', {})}
+          >
+            Confirm order
           </Button>
           <Button
+            className="min-h-11"
             variant="outline"
             disabled={submit.isPending}
             onClick={() =>
@@ -116,43 +152,76 @@ export function SupplierPoActionForm({ token }: { token: string }) {
             Accept quantities shown
           </Button>
           <Button
+            className="min-h-11"
             variant="destructive"
             disabled={submit.isPending}
-            onClick={() => send('REJECTION', {})}
+            onClick={() => setConfirmRejection(true)}
           >
-            Reject order
+            Decline order
           </Button>
         </div>
+        {confirmRejection && (
+          <div
+            className="mt-4 space-y-3"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') setConfirmRejection(false);
+            }}
+          >
+            <p>Tell the pharmacy you cannot supply this order?</p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                className="min-h-11"
+                variant="outline"
+                onClick={() => setConfirmRejection(false)}
+              >
+                Cancel
+              </Button>
+              <Button
+                className="min-h-11"
+                variant="destructive"
+                disabled={submit.isPending}
+                onClick={() => {
+                  setConfirmRejection(false);
+                  send('REJECTION', {});
+                }}
+              >
+                Confirm decline
+              </Button>
+            </div>
+          </div>
+        )}
       </SectionCard>
-      <SectionCard title="Delivery and substitution proposals">
+      <SectionCard title="Delivery and suggested changes">
         <div className="grid gap-5">
           <label className="grid gap-2 text-sm font-medium">
             Estimated arrival
-            <input
+            <Input
               type="datetime-local"
               value={eta}
               onChange={(event) => setEta(event.target.value)}
-              className="h-11 rounded-sm border border-border bg-background px-3"
+              className="h-11 rounded-control"
             />
           </label>
           <Button
+            className="min-h-11"
             variant="outline"
             disabled={!eta || submit.isPending}
             onClick={() => send('ETA', { eta: new Date(eta).toISOString() })}
           >
-            Send ETA
+            Send delivery date
           </Button>
           <label className="grid gap-2 text-sm font-medium">
             Proposed substitution
-            <textarea
+            <Textarea
               value={proposal}
               onChange={(event) => setProposal(event.target.value)}
               rows={3}
-              className="rounded-sm border border-border bg-background p-3"
+              className="rounded-control"
               placeholder="Clearly identify the proposed product and pack."
             />
           </label>
           <Button
+            className="min-h-11"
             variant="outline"
             disabled={!proposal.trim() || submit.isPending}
             onClick={() =>
@@ -167,7 +236,7 @@ export function SupplierPoActionForm({ token }: { token: string }) {
         title="Supporting document"
         eyebrow={`PDF, PNG or JPEG · ${SUPPLIER_DOCUMENT_MAX_MB} MB maximum`}
       >
-        <input
+        <Input
           aria-label="Supporting document"
           type="file"
           accept={SUPPLIER_DOCUMENT_TYPES.join(',')}
@@ -190,10 +259,14 @@ export function SupplierPoActionForm({ token }: { token: string }) {
               form.set('idempotencyKey', browserUuid());
               const response = await fetch(SUPPLIER_DOCUMENT_UPLOAD_URL, {
                 method: 'POST',
-                headers: { [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token },
+                headers: {
+                  [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+                  [SUPPLIER_ACCESS_HEADER]: 'order-link',
+                },
                 body: form,
               });
-              if (response.ok) setMessage('Document recorded as evidence.');
+              if (response.ok) setMessage('Document sent to the pharmacy.');
+              else if (response.status === 404) setLinkEnded(true);
               else if (response.headers.get('content-type')?.startsWith('text/plain'))
                 setMessage(await response.text());
               else setMessage('The document could not be saved. Try again shortly.');
@@ -203,7 +276,7 @@ export function SupplierPoActionForm({ token }: { token: string }) {
               setUploading(false);
             }
           }}
-          className="block w-full text-sm"
+          className="h-auto min-h-11 rounded-control py-2 text-sm"
         />
       </SectionCard>
       {message ? (

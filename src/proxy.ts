@@ -78,6 +78,7 @@ export async function proxy(request: Request) {
   if (isPrivateUploadPath(pathname)) return new NextResponse(null, { status: 404 });
   const { requestHeaders, hostWithPort, csp } = proxyRequestHeaders(request);
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
+  const supplierOrderPage = /^\/supplier\/po\/[^/]+\/?$/.test(pathname);
   const next = () => {
     const response = NextResponse.next({ request: { headers: requestHeaders } });
     // Next uses the proxy's response header in place of the handler's policy.
@@ -89,8 +90,8 @@ export async function proxy(request: Request) {
     if (pathname === '/demo' || pathname.startsWith('/demo/')) {
       response.headers.set('X-Robots-Tag', 'noindex, nofollow');
     }
-    if (pathname === '/receipt' || pathname.startsWith('/receipt/')) {
-      // A receipt link is private: never indexed, cached, or leaked as a referrer.
+    if (supplierOrderPage || pathname === '/receipt' || pathname.startsWith('/receipt/')) {
+      // A bearer link is private: never indexed, cached, or leaked as a referrer.
       response.headers.set('X-Robots-Tag', 'noindex, nofollow, noarchive');
       response.headers.set('Referrer-Policy', 'no-referrer');
       response.headers.set('Cache-Control', 'private, no-store');
@@ -145,6 +146,13 @@ export async function proxy(request: Request) {
   // deployment's canonical URL and authenticates with its own bearer secret.
   if (isPlatformApi && !isCronWorker && !isPlatformHost) {
     return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+  }
+
+  if (supplierOrderPage) {
+    if (isPlatformHost) return new NextResponse(null, { status: 404 });
+    if (request.method !== 'GET' && request.method !== 'HEAD')
+      return new NextResponse(null, { status: 405, headers: { Allow: 'GET, HEAD' } });
+    return next();
   }
 
   // Framework assets and API routes must bypass host-level page redirects.

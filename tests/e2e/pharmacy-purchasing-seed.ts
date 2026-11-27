@@ -131,7 +131,7 @@ async function main() {
 
     // Everything below is tenant data, so it runs with the organization GUC set
     // and under the same forced RLS the application runs under.
-    await prisma.$transaction(async (tx) => {
+    const { supplierOrder, expiryOrderId } = await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
         `SELECT set_config('app.current_organization_id', '${organizationId}', true)`
       );
@@ -366,8 +366,9 @@ async function main() {
       // against a part-received order would see 30 units outstanding where the
       // first saw 100, and the spec would fail for a reason that is the fixture's
       // rather than the product's. The reference is handed to the spec below.
+      let purchaseOrderId: string;
       {
-        await tx.pharmacyPurchaseOrder.create({
+        const order = await tx.pharmacyPurchaseOrder.create({
           data: {
             organizationId,
             branchId: branch.id,
@@ -409,17 +410,46 @@ async function main() {
             },
           },
         });
+        purchaseOrderId = order.id;
       }
 
       // Quarantine is referenced by the capture form even when nothing is
       // rejected, so fail loudly here rather than in the browser.
       if (!quarantine) throw new Error('Quarantine location was not provisioned.');
+      const relationship = await tx.pharmacySupplierRelationship.upsert({
+        where: {
+          organizationId_branchId_supplierId: {
+            organizationId,
+            branchId: branch.id,
+            supplierId: supplier.id,
+          },
+        },
+        create: { organizationId, branchId: branch.id, supplierId: supplier.id },
+        update: {},
+        select: { id: true },
+      });
+      // A relationship has one link per order. Expiry and revocation use separate fixtures.
+      const expiryOrder = await tx.pharmacyPurchaseOrder.create({
+        data: {
+          organizationId,
+          branchId: branch.id,
+          reference: purchaseOrderReference + '-expiry',
+          status: 'APPROVED',
+          supplierId: supplier.id,
+          createdByUserId: receiver!.id,
+        },
+        select: { id: true },
+      });
+      return {
+        supplierOrder: { branchId: branch.id, relationshipId: relationship.id, purchaseOrderId },
+        expiryOrderId: expiryOrder.id,
+      };
     });
 
     mkdirSync(path.dirname(HANDLE_PATH), { recursive: true });
     writeFileSync(
       HANDLE_PATH,
-      `${JSON.stringify({ organizationId, purchaseOrderReference }, null, 2)}\n`
+      `${JSON.stringify({ organizationId, purchaseOrderReference, supplierOrder, expiryOrderId }, null, 2)}\n`
     );
     process.stdout.write(
       `PH-PUR fixture ready: organization ${organizationId}, order ${purchaseOrderReference}\n`

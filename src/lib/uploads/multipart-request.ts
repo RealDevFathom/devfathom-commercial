@@ -69,7 +69,11 @@ export function uploadPost(
 ) {
   return async (request: Request) => {
     const { requestHeaders, csp } = proxyRequestHeaders(request);
-    const routed = new Request(request, {
+    // Next wraps the incoming request. Reuse its stream without asking the
+    // native Request constructor to read private fields from the wrapper.
+    const routed = new Request(request.url, {
+      method: request.method,
+      signal: request.signal,
       headers: requestHeaders,
       body: request.body,
       duplex: 'half',

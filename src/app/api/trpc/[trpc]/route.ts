@@ -32,6 +32,8 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { anonymousToken, classifyAnonymousRequest } from '@/lib/auth/anonymous-access';
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
+import { trustedRequestOrigin } from '@/lib/http-origin';
+import { supplierLinkId } from '@/lib/pharmacy/supplier-action-links';
 import { clientIp } from '@/lib/rate-limit';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { proxyRequestHeaders } from '@/lib/security/proxy-request-headers';
@@ -403,12 +405,12 @@ function runAnonymously(req: Request, organization: TenantOrganization) {
  * Returning 401 here instead would tell an unauthenticated caller whether a
  * token string exists somewhere in the system.
  */
-function runFallback(req: Request) {
+function runFallback(req: Request, context: { invalidSupplierToken?: boolean } = {}) {
   return fetchRequestHandler({
     endpoint: TRPC_ENDPOINT,
     req,
     router: anonymousFallbackRouter,
-    createContext: () => ({}),
+    createContext: () => context,
   });
 }
 
@@ -457,17 +459,39 @@ async function handleAnonymous(req: Request): Promise<Response> {
 
   // Throttle BEFORE any database work, so neither the platform-scope token
   // lookup nor the tenant transaction can be driven by an unauthenticated flood.
-  const admitted = await admitAnonymousRequest({ kind: routing.kind, token, ip: clientIp(req) });
-  if (!admitted.ok) {
-    return Response.json(
-      { error: 'Too many requests. Please try again later.' },
-      { status: 429, headers: { 'retry-after': String(admitted.retryAfter) } }
-    );
+  const supplierOperation = routing.procedures.some(
+    (path) => path === 'pharmacySupplierLinks.get' || path === 'pharmacySupplierLinks.submit'
+  );
+  const invalidSupplierToken =
+    supplierOperation && routing.procedures.length === 1 && (!token || !supplierLinkId(token));
+  if (!invalidSupplierToken) {
+    const admitted = await admitAnonymousRequest({
+      kind: supplierOperation && routing.procedures.length === 1 ? 'supplier-link' : routing.kind,
+      token,
+      ip: clientIp(req),
+    });
+    if (!admitted.ok) {
+      return Response.json(
+        { error: 'Too many requests. Please try again later.' },
+        { status: 429, headers: { 'retry-after': String(admitted.retryAfter) } }
+      );
+    }
   }
 
   const boundedRequest = tokenNeedsBody ? tokenRequest : await boundPost(req, ANONYMOUS_BODY_BYTES);
   if (boundedRequest instanceof Response) return boundedRequest;
 
+  if (supplierOperation) {
+    // Each token lookup and rate-limit charge represents one supplier operation.
+    if (routing.procedures.length !== 1)
+      return Response.json({ error: 'Use one supplier link at a time.' }, { status: 400 });
+    if (
+      routing.procedures[0] === 'pharmacySupplierLinks.submit' &&
+      req.headers.get('origin') !== trustedRequestOrigin(req)
+    )
+      return Response.json({ error: 'Forbidden.' }, { status: 403 });
+    if (invalidSupplierToken) return runFallback(boundedRequest, { invalidSupplierToken: true });
+  }
   if (routing.kind === 'token') {
     const organizationId = await organizationForAnonymousToken(token);
     const organization = organizationId ? await resolveOrganizationById(organizationId) : null;
@@ -517,6 +541,11 @@ async function dispatch(req: Request) {
       req = bounded;
     }
 
+    if (
+      procedurePaths(req).includes('pharmacySupplierLinks.submit') &&
+      req.headers.get('origin') !== trustedRequestOrigin(req)
+    )
+      return Response.json({ error: 'Forbidden.' }, { status: 403 });
     const organization = await requireOrganizationForRequest(
       req,
       actor.session.user.organizationId

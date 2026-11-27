@@ -7,7 +7,11 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TRPCContext } from '@/server/trpc';
 import { assertDisposableRlsDatabase } from '../../../tests/disposable-rls-database';
 
-vi.mock('@/lib/storage', () => ({ putUpload: vi.fn().mockResolvedValue({}) }));
+vi.mock('@/lib/storage', async (original) => ({
+  ...(await original<typeof import('@/lib/storage')>()),
+  putUpload: vi.fn().mockResolvedValue({}),
+  getUpload: vi.fn(async () => Buffer.from('%PDF-1.7')),
+}));
 import { putUpload } from '@/lib/storage';
 
 const runtimeUrl = process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL;
@@ -80,6 +84,7 @@ async function newLink() {
         organizationId: org,
         branchId: id('branch'),
         reference: unique('PO'),
+        status: 'SENT',
         supplierId: id('supplier'),
         createdByUserId: id('owner'),
       },
@@ -92,7 +97,6 @@ async function newLink() {
       relationshipId: id('relationship'),
       purchaseOrderId: order.id,
       actorUserId: id('owner'),
-      expiresAt: expiry,
     })
   );
 }
@@ -807,6 +811,190 @@ async function newLink() {
       });
     });
 
+    it.each([
+      ['oversize', 413],
+      ['wrong content type', 400],
+    ] as const)('refuses a signed-out supplier upload with %s', async (reason, status) => {
+      const { token } = await newLink();
+      const { POST } = await import('@/app/api/pharmacy/supplier-documents/upload/route');
+      const {
+        SUPPLIER_DOCUMENT_MAX_BYTES,
+        SUPPLIER_DOCUMENT_TOKEN_HEADER,
+        SUPPLIER_ACCESS_HEADER,
+        SUPPLIER_DOCUMENT_UPLOAD_URL,
+      } = await import('./supplier-document-contract');
+      const actor = vi
+        .spyOn(await import('@/lib/tenancy/tenant-actor'), 'resolveTenantActor')
+        .mockResolvedValue(null);
+      try {
+        const bytes =
+          reason === 'oversize' ? new Uint8Array(SUPPLIER_DOCUMENT_MAX_BYTES + 1) : 'ordinary text';
+        const form = new FormData();
+        form.set('file', new File([bytes], 'fixture.pdf', { type: 'application/pdf' }));
+        form.set('idempotencyKey', 'invalid-fixture');
+        const origin = 'https://pharmacy.example.test';
+        const calls = vi.mocked(putUpload).mock.calls.length;
+        const res = await POST(
+          new Request(origin + SUPPLIER_DOCUMENT_UPLOAD_URL, {
+            method: 'POST',
+            body: form,
+            headers: {
+              origin,
+              [SUPPLIER_ACCESS_HEADER]: 'order-link',
+              [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+            },
+          })
+        );
+        expect(res.status).toBe(status);
+        expect(putUpload).toHaveBeenCalledTimes(calls);
+        const actionLinkId = supplierLinks.supplierLinkId(token)!;
+        expect(
+          await inOrg((db) => db.pharmacySupplierSubmission.count({ where: { actionLinkId } }))
+        ).toBe(0);
+      } finally {
+        actor.mockRestore();
+      }
+    });
+
+    it('keeps supplier evidence, document access and audit rows on the issuing order', async () => {
+      const { token } = await newLink();
+      const linkId = supplierLinks.supplierLinkId(token)!;
+      const { POST } = await import('@/app/api/pharmacy/supplier-documents/upload/route');
+      const {
+        SUPPLIER_DOCUMENT_TOKEN_HEADER,
+        SUPPLIER_ACCESS_HEADER,
+        SUPPLIER_DOCUMENT_UPLOAD_URL,
+      } = await import('./supplier-document-contract');
+      const tenantActor = await import('@/lib/tenancy/tenant-actor');
+      const actor = vi.spyOn(tenantActor, 'resolveTenantActor').mockResolvedValue(null);
+      try {
+        const form = new FormData();
+        form.set('file', new File(['%PDF-1.7'], 'invoice.pdf', { type: 'application/pdf' }));
+        form.set('idempotencyKey', 'invoice');
+        const origin = 'https://pharmacy.example.test';
+        const response = await POST(
+          new Request(origin + SUPPLIER_DOCUMENT_UPLOAD_URL, {
+            method: 'POST',
+            body: form,
+            headers: {
+              origin,
+              [SUPPLIER_ACCESS_HEADER]: 'order-link',
+              [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+            },
+          })
+        );
+        expect(response.status).toBe(204);
+        const document = await inOrg(async (db) => {
+          await supplierLinks.getSupplierActionPage(db, token);
+          const evidence = await supplierLinks.submitSupplierEvidence(db, {
+            token,
+            kind: 'ACKNOWLEDGEMENT',
+            idempotencyKey: 'confirmation',
+            payload: {},
+          });
+          const doc = await db.pharmacySupplierDocument.findFirstOrThrow({
+            where: { submission: { actionLinkId: linkId } },
+          });
+          const rows = await db.auditLog.findMany({
+            where: { organizationId: org, metadata: { path: ['actionLinkId'], equals: linkId } },
+            select: { action: true, targetId: true },
+          });
+          expect(rows).toEqual(
+            expect.arrayContaining([
+              { action: 'pharmacySupplierLinks.get', targetId: expect.any(String) },
+              { action: 'pharmacySupplierLinks.submit', targetId: evidence.id },
+              { action: 'pharmacySupplierLinks.uploadDocument', targetId: doc.id },
+            ])
+          );
+          await db.pharmacySupplierActionLink.update({
+            where: { id: linkId },
+            data: { revokedAt: new Date() },
+          });
+          await expect(supplierLinks.getSupplierActionPage(db, token)).rejects.toMatchObject({
+            reason: 'INVALID_LINK',
+          });
+          return doc;
+        });
+        const other = org + '_other';
+        const otherLink = await newLink();
+        await withTenantDb(other, async (db) => {
+          await expect(
+            supplierLinks.getSupplierActionPage(db, otherLink.token)
+          ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
+          expect(
+            await db.pharmacySupplierDocument.findFirst({ where: { id: document.id } })
+          ).toBeNull();
+        });
+        const { GET } = await import('@/app/api/pharmacy/supplier-documents/[id]/route');
+
+        const read = () =>
+          GET(
+            new Request(
+              'https://pharmacy.example.test/api/pharmacy/supplier-documents/' + document.id
+            ),
+            { params: Promise.resolve({ id: document.id }) }
+          );
+        actor.mockResolvedValue(null);
+        expect((await read()).status).toBe(401);
+        const userId = id('document-cashier');
+        await inOrg(async (db) => {
+          await db.user.create({
+            data: {
+              id: userId,
+              organizationId: org,
+              role: 'EMPLOYEE',
+              name: 'Cashier',
+              email: userId + '@test.invalid',
+              department: 'Pharmacy',
+              title: 'Cashier',
+            },
+          });
+          await db.pharmacyBranchAssignment.create({
+            data: { organizationId: org, userId, branchId: id('branch') },
+          });
+        });
+        actor.mockResolvedValue({
+          organization: { id: org },
+          session: { user: { id: userId, organizationId: org } },
+          support: null,
+        } as Awaited<ReturnType<typeof tenantActor.resolveTenantActor>>);
+        expect((await read()).status).toBe(404);
+        await inOrg((db) =>
+          db.userPermissionOverride.create({
+            data: {
+              userId,
+              organizationId: org,
+              capability: 'pharmacy:procurement',
+              effect: 'ALLOW',
+              reason: 'Test procurement appointment',
+            },
+          })
+        );
+        expect((await read()).status).toBe(200);
+        await inOrg((db) =>
+          db.pharmacyBranchAssignment.updateMany({
+            where: { userId, branchId: id('branch') },
+            data: { active: false },
+          })
+        );
+        expect((await read()).status).toBe(404);
+        expect(
+          await inOrg((db) =>
+            db.auditLog.findMany({
+              where: {
+                organizationId: org,
+                targetId: document.id,
+                action: 'pharmacySupplierLinks.downloadDocument',
+              },
+              select: { actorId: true, operation: true },
+            })
+          )
+        ).toEqual([{ actorId: userId, operation: 'READ' }]);
+      } finally {
+        actor.mockRestore();
+      }
+    });
+
     it('serializes per-link submission quotas across independent transactions and preserves idempotent replay', async () => {
       const { token } = await newLink();
       const linkId = supplierLinks.supplierLinkId(token)!;
@@ -860,6 +1048,44 @@ async function newLink() {
           })
         ).toMatchObject({ id: winner.value.id });
       });
+    });
+
+    it('holds the order document advisory lock through storage and releases it at commit', async () => {
+      const { token } = await newLink();
+      const linkId = supplierLinks.supplierLinkId(token)!;
+      const link = await inOrg((db) =>
+        db.pharmacySupplierActionLink.findUniqueOrThrow({
+          where: { id: linkId },
+          select: { purchaseOrderId: true },
+        })
+      );
+      const observer = new pg.Client({ connectionString: runtimeUrl });
+      await observer.connect();
+      const lockAvailable = async () =>
+        (
+          await observer.query<{ available: boolean }>(
+            'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS available',
+            ['supplier-document-cap:' + link.purchaseOrderId]
+          )
+        ).rows[0]!.available;
+      try {
+        vi.mocked(putUpload).mockImplementationOnce(async () => {
+          expect(await lockAvailable()).toBe(false);
+        });
+        await inOrg(async (db) => {
+          await supplierLinks.uploadSupplierDocument(db, {
+            token,
+            fileName: 'invoice.pdf',
+            declaredMimeType: 'application/pdf',
+            content: Buffer.from('%PDF-1.7'),
+            idempotencyKey: 'check-lock',
+          });
+          expect(await lockAvailable()).toBe(false);
+        });
+        expect(await lockAvailable()).toBe(true);
+      } finally {
+        await observer.end();
+      }
     });
 
     it('serializes document byte reservations across independent transactions before storage writes', async () => {

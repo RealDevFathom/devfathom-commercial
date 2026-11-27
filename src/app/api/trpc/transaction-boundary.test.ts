@@ -21,7 +21,7 @@
  * across the boundary, and concurrent behaviour.
  */
 import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   /** Rows the current transaction has written, restored on ROLLBACK. */
@@ -159,13 +159,16 @@ vi.mock('@/server/routers/_app', async () => {
         await ctx.db.ledger.create({ data: { label: 'action' } });
         throw new Error('event failed');
       }),
+      invitations: t.router({ get: t.procedure.query(() => true) }),
       passwordReset: t.router({
+        validate: t.procedure.query(() => true),
         request: t.procedure.mutation(async ({ ctx }) => {
           await ctx.db.ledger.create({ data: { label: 'anonymous-action' } });
           throw new Error('anonymous event failed');
         }),
       }),
       pharmacySupplierLinks: t.router({
+        get: t.procedure.query(() => true),
         submit: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
       }),
       trelloImport: t.router({
@@ -194,8 +197,6 @@ vi.mock('@/server/routers/_app', async () => {
     }),
   };
 });
-
-vi.mock('@/server/routers/anonymous-fallback', () => ({ anonymousFallbackRouter: {} }));
 
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: async (opts: { db: unknown }) => ({ db: opts.db }),
@@ -237,6 +238,13 @@ import type { AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
 import { TenantHostError } from '@/lib/tenancy/host';
 import { MAX_TRELLO_REQUEST_BYTES, TRELLO_LIMIT_MESSAGE } from '@/types/trello-import-limits';
+import { SUPPLIER_LINK_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import { issueSupplierActionLink } from '@/lib/pharmacy/supplier-action-links';
+import {
+  SUPPLIER_ACCESS_HEADER,
+  SUPPLIER_DOCUMENT_TOKEN_HEADER,
+} from '@/lib/pharmacy/supplier-document-contract';
+import { POST as uploadSupplierDocument } from '../pharmacy/supplier-documents/upload/route';
 import { GET, POST } from './[trpc]/route';
 
 const ORGANIZATION = { id: 'org_acme', slug: 'acme', status: 'ACTIVE' };
@@ -877,8 +885,94 @@ it('rejects an over-cap anonymous supplier submission declaration even with a sh
   expect(organizationForAnonymousToken).not.toHaveBeenCalled();
 });
 
+async function issuedSupplierToken() {
+  vi.stubEnv('AUTH_SECRET', 'only-for-in-process-tests');
+  const { token } = await issueSupplierActionLink(
+    {
+      pharmacySupplierRelationship: { findFirst: async () => ({ supplierId: 'supplier' }) },
+      pharmacyPurchaseOrder: {
+        findFirst: async () => ({ id: 'order', supplierId: 'supplier', status: 'SENT' }),
+      },
+      pharmacyGoodsReceiptLine: { findMany: async () => [] },
+      pharmacySupplierActionLink: { create: async () => ({}) },
+    } as never,
+    {
+      organizationId: ORGANIZATION.id,
+      branchId: 'branch',
+      relationshipId: 'relationship',
+      purchaseOrderId: 'order',
+      actorUserId: 'buyer',
+    }
+  );
+  return token;
+}
+
+afterEach(() => vi.unstubAllEnvs());
+
+it('preserves shared admission for a supplier, invitation and reset after 1,000 invalid supplier iterations', async () => {
+  const validSupplierToken = await issuedSupplierToken();
+  const origin = new URL(ENDPOINT).origin;
+  const limiter = vi.mocked(admitAnonymousRequest);
+  let remaining = 3;
+  limiter.mockImplementation(async () => {
+    if (remaining === 0) return { ok: false, retryAfter: 60 };
+    remaining--;
+    return { ok: true };
+  });
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const query = (path: string, token: string) => {
+    const endpoint = new URL(url(path));
+    endpoint.searchParams.set('input', JSON.stringify({ json: { token } }));
+    return GET(new Request(endpoint));
+  };
+
+  try {
+    for (let i = 0; i < 1_000; i++) {
+      const token = ['unsigned-fixture', 'invalid.fixture.signature', ''][i % 3]!;
+      const page = await query('pharmacySupplierLinks.get', token);
+      expect(page.status).toBe(404);
+      expect((await page.json()).error.json.message).toBe(SUPPLIER_LINK_GENERIC_MESSAGE);
+      const upload = await uploadSupplierDocument(
+        new Request(new URL('/api/pharmacy/supplier-documents/upload', origin), {
+          method: 'POST',
+          headers: {
+            origin,
+            [SUPPLIER_ACCESS_HEADER]: 'order-link',
+            [SUPPLIER_DOCUMENT_TOKEN_HEADER]: token,
+          },
+        })
+      );
+      expect(upload.status).toBe(404);
+      expect(await upload.text()).toBe(SUPPLIER_LINK_GENERIC_MESSAGE);
+    }
+    expect(limiter.mock.calls.length).toBe(0);
+    expect(remaining).toBe(3);
+    expect(organizationForAnonymousToken).not.toHaveBeenCalled();
+
+    for (const [path, token] of [
+      ['pharmacySupplierLinks.get', validSupplierToken],
+      ['invitations.get', 'invitation-fixture'],
+      ['passwordReset.validate', 'reset-fixture'],
+    ] as const) {
+      mocks.resolveOrganizationById.mockResolvedValueOnce(ORGANIZATION);
+      vi.mocked(organizationForAnonymousToken).mockResolvedValueOnce(ORGANIZATION.id);
+      const response = await query(path, token);
+      expect(response.status).toBe(200);
+      expect((await response.json()).result.data.json).toBe(true);
+    }
+    expect(limiter.mock.calls.map(([input]) => input.kind)).toEqual([
+      'supplier-link',
+      'token',
+      'token',
+    ]);
+    expect(remaining).toBe(0);
+  } finally {
+    limiter.mockReset().mockResolvedValue({ ok: true });
+  }
+}, 15_000);
+
 it('replays an anonymous supplier submission at exactly 256 KiB for tenant lookup and the tRPC parser', async () => {
-  const payload = { token: 'supplier-link', kind: 'ACKNOWLEDGEMENT' };
+  const payload = { token: await issuedSupplierToken(), kind: 'ACKNOWLEDGEMENT' };
   mocks.resolveTenantActor.mockResolvedValue(null);
   mocks.resolveOrganizationById.mockResolvedValueOnce(ORGANIZATION);
   vi.mocked(organizationForAnonymousToken).mockResolvedValueOnce(ORGANIZATION.id);
@@ -886,13 +980,16 @@ it('replays an anonymous supplier submission at exactly 256 KiB for tenant looku
   const response = await POST(
     new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', origin: new URL(ENDPOINT).origin },
       body: JSON.stringify({ '0': { json: payload } }).padEnd(256 * 1024),
     })
   );
 
   expect(response.status).toBe(200);
   expect(await response.json()).toEqual([{ result: { data: { json: payload } } }]);
+  expect(admitAnonymousRequest).toHaveBeenCalledWith(
+    expect.objectContaining({ kind: 'supplier-link', token: payload.token })
+  );
   expect(organizationForAnonymousToken).toHaveBeenCalledWith(payload.token);
   expect(harness.scopeTenants).toEqual([ORGANIZATION.id]);
 });
@@ -932,7 +1029,7 @@ it('retains the signed-in body capacity past the new shared proxy cap', async ()
   const response = await POST(
     new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', origin: new URL(ENDPOINT).origin },
       body: JSON.stringify({ '0': { json: { synthetic: true } } }).padEnd(8 * 1024 * 1024),
     })
   );
@@ -940,3 +1037,19 @@ it('retains the signed-in body capacity past the new shared proxy cap', async ()
   expect(await response.json()).toEqual([{ result: { data: { json: { synthetic: true } } } }]);
   expect(harness.outcomes).toEqual(['COMMIT']);
 });
+
+it.each([null, 'http://acme.example.com:3001', 'https://other.example'])(
+  'refuses an outside supplier response from origin %s',
+  async (origin) => {
+    mocks.resolveTenantActor.mockResolvedValue(null);
+    const response = await POST(
+      new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...(origin ? { origin } : {}) },
+        body: JSON.stringify({ '0': { json: { token: 'supplier-link' } } }),
+      })
+    );
+    expect(response.status).toBe(403);
+    expect(organizationForAnonymousToken).not.toHaveBeenCalled();
+  }
+);

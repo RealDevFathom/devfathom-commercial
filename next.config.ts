@@ -5,6 +5,15 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  logging: {
+    incomingRequests: {
+      ignore: [
+        /^\/supplier\/po\//,
+        /^\/receipt(?:\/|\?|$)/,
+        /^\/api\/trpc\/(?:[^?]*(?:,|%2c))?pharmacySupplierLinks(?:\.|%2e)/i,
+      ],
+    },
+  },
   // Dev-only (WHA-1623). The browser suites serve `next dev` on 127.0.0.1, and
   // Next 16 blocks its dev websocket for any origin not listed here. That
   // socket also carries the React debug channel, so without it the page never

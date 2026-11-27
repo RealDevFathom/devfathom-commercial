@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { fixtureTotp } from '../fixtures/restaurant-totp';
 import { FIXTURE } from './pharmacy-purchasing-fixture';
 
 /**
@@ -295,3 +296,136 @@ async function firstSupplierId(page: Page): Promise<string> {
   if (!id) throw new Error('The supplier register did not link to the fixture supplier.');
   return id;
 }
+
+test('an outside supplier confirms one order, proposes a date and attaches a PDF', async ({
+  page,
+  browser,
+  baseURL,
+}) => {
+  const fixture = JSON.parse(
+    readFileSync(
+      path.join('playwright-artifacts', 'pharmacy-purchasing-fixture', 'fixture-handle.json'),
+      'utf8'
+    )
+  );
+  const status = await page.request.get('/api/trpc/approvalAuthenticator.getStatus');
+  expect(status.status()).toBe(200);
+  if ((await status.json()).result.data.json.setupRequired) {
+    const begin = await page.request.post('/api/trpc/approvalAuthenticator.beginEnrollment', {
+      data: { json: { currentPassword: FIXTURE.receiver.password } },
+    });
+    expect(begin.status()).toBe(200);
+    const secret = (await begin.json()).result.data.json.secret;
+    const confirmed = await page.request.post('/api/trpc/approvalAuthenticator.confirmEnrollment', {
+      data: { json: { token: fixtureTotp(secret) } },
+    });
+    expect(confirmed.status()).toBe(200);
+  }
+  const issue = await page.request.post('/api/trpc/pharmacySupplierLinks.issue', {
+    data: {
+      json: { ...fixture.supplierOrder, expiresAt: new Date(Date.now() + 3_600_000).toISOString() },
+      meta: { values: { expiresAt: ['Date'] } },
+    },
+  });
+  expect(issue.status()).toBe(200);
+  const token = (await issue.json()).result.data.json.token;
+  const shortExpiry = new Date(Date.now() + 10_000);
+  const shortLink = await page.request.post('/api/trpc/pharmacySupplierLinks.issue', {
+    data: {
+      json: {
+        ...fixture.supplierOrder,
+        purchaseOrderId: fixture.expiryOrderId,
+        expiresAt: shortExpiry.toISOString(),
+      },
+      meta: { values: { expiresAt: ['Date'] } },
+    },
+  });
+  expect(shortLink.status()).toBe(200);
+  const expiringToken = (await shortLink.json()).result.data.json.token;
+  const guest = await browser.newContext({ baseURL, viewport: { width: 375, height: 812 } });
+  try {
+    const supplier = await guest.newPage();
+    const errors: string[] = [];
+    supplier.on('pageerror', (error) => errors.push(error.name));
+    supplier.on('console', (entry) => {
+      if (entry.type() === 'error') errors.push('console error');
+    });
+    await supplier.goto('/supplier/po/' + token);
+    await expect(supplier.getByRole('heading', { level: 1 })).toHaveText(
+      'Purchase order ' + fixture.purchaseOrderReference
+    );
+    await expect(supplier.getByText(FIXTURE.medicine.productName, { exact: false })).toBeVisible();
+    for (const theme of ['light', 'dark']) {
+      await supplier.evaluate((value) => {
+        localStorage.setItem('theme', value);
+        window.dispatchEvent(new Event('storage'));
+      }, theme);
+      await expect(supplier.locator('html')).toHaveAttribute('data-theme', theme);
+      for (const width of [375, 768, 1024, 1440]) {
+        await supplier.setViewportSize({ width, height: 812 });
+        for (const reducedMotion of ['reduce', 'no-preference'] as const) {
+          await supplier.emulateMedia({ reducedMotion });
+          expect(
+            await supplier.evaluate(() => document.documentElement.scrollWidth <= innerWidth)
+          ).toBe(true);
+        }
+      }
+    }
+    await supplier.setViewportSize({ width: 375, height: 812 });
+    const confirm = supplier.getByRole('button', { name: 'Confirm order', exact: true });
+    await supplier.getByRole('spinbutton').focus();
+    await supplier.keyboard.press('Tab');
+    await expect(confirm).toBeFocused();
+    await expect(supplier.getByRole('button', { name: 'Send delivery date' })).toBeDisabled();
+    await supplier.getByRole('button', { name: 'Decline order', exact: true }).click();
+    const cancel = supplier.getByRole('button', { name: 'Cancel', exact: true });
+    await cancel.focus();
+    await supplier.keyboard.press('Escape');
+    await expect(cancel).toHaveCount(0);
+    await confirm.click();
+    await expect(supplier.getByRole('status')).toHaveText(
+      'Response sent. The pharmacy will review it.'
+    );
+    await supplier.getByLabel('Estimated arrival').fill('2030-06-18T15:30');
+    const saved = supplier.waitForResponse(
+      (res) =>
+        res.url().includes('pharmacySupplierLinks.submit') && res.request().method() === 'POST'
+    );
+    await supplier.getByRole('button', { name: 'Send delivery date' }).click();
+    expect((await saved).status()).toBe(200);
+    await supplier.getByLabel('Supporting document').setInputFiles({
+      name: 'invoice.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.7\n%%EOF'),
+    });
+    await expect(supplier.getByRole('status')).toHaveText('Document sent to the pharmacy.');
+    await expect(supplier.getByRole('link', { name: /download/i })).toHaveCount(0);
+    expect(errors).toEqual([]);
+    const revoke = await page.request.post('/api/trpc/pharmacySupplierLinks.revoke', {
+      data: { json: { linkId: token.split('.')[0] } },
+    });
+    expect(revoke.status()).toBe(200);
+    await supplier.reload();
+    await expect(supplier.getByRole('heading', { level: 1 })).toHaveText('This link is not valid');
+    expect(await supplier.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+      true
+    );
+
+    await expect.poll(() => Date.now()).toBeGreaterThanOrEqual(shortExpiry.getTime());
+    const invalidPages: string[] = [];
+    for (const invalidToken of [expiringToken, 'synthetic-unknown-supplier-link']) {
+      const lookup = supplier.waitForResponse((res) =>
+        res.url().includes('/api/trpc/pharmacySupplierLinks.get')
+      );
+      await supplier.goto('/supplier/po/' + invalidToken);
+      expect((await lookup).status()).toBe(404);
+      await expect(supplier.getByRole('heading', { level: 1 })).toHaveText(
+        'This link is not valid'
+      );
+      invalidPages.push(await supplier.locator('main').innerText());
+    }
+    expect(invalidPages[0]).toBe(invalidPages[1]);
+  } finally {
+    await guest.close();
+  }
+});
