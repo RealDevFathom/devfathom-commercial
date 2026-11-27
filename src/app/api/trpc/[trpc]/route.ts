@@ -33,6 +33,7 @@ import { anonymousToken, classifyAnonymousRequest } from '@/lib/auth/anonymous-a
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
 import { trustedRequestOrigin } from '@/lib/http-origin';
+import { supplierLinkId } from '@/lib/pharmacy/supplier-action-links';
 import { clientIp } from '@/lib/rate-limit';
 import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { proxyRequestHeaders } from '@/lib/security/proxy-request-headers';
@@ -404,12 +405,12 @@ function runAnonymously(req: Request, organization: TenantOrganization) {
  * Returning 401 here instead would tell an unauthenticated caller whether a
  * token string exists somewhere in the system.
  */
-function runFallback(req: Request) {
+function runFallback(req: Request, context: { invalidSupplierToken?: boolean } = {}) {
   return fetchRequestHandler({
     endpoint: TRPC_ENDPOINT,
     req,
     router: anonymousFallbackRouter,
-    createContext: () => ({}),
+    createContext: () => context,
   });
 }
 
@@ -461,16 +462,20 @@ async function handleAnonymous(req: Request): Promise<Response> {
   const supplierOperation = routing.procedures.some(
     (path) => path === 'pharmacySupplierLinks.get' || path === 'pharmacySupplierLinks.submit'
   );
-  const admitted = await admitAnonymousRequest({
-    kind: supplierOperation && routing.procedures.length === 1 ? 'supplier-link' : routing.kind,
-    token,
-    ip: clientIp(req),
-  });
-  if (!admitted.ok) {
-    return Response.json(
-      { error: 'Too many requests. Please try again later.' },
-      { status: 429, headers: { 'retry-after': String(admitted.retryAfter) } }
-    );
+  const invalidSupplierToken =
+    supplierOperation && routing.procedures.length === 1 && (!token || !supplierLinkId(token));
+  if (!invalidSupplierToken) {
+    const admitted = await admitAnonymousRequest({
+      kind: supplierOperation && routing.procedures.length === 1 ? 'supplier-link' : routing.kind,
+      token,
+      ip: clientIp(req),
+    });
+    if (!admitted.ok) {
+      return Response.json(
+        { error: 'Too many requests. Please try again later.' },
+        { status: 429, headers: { 'retry-after': String(admitted.retryAfter) } }
+      );
+    }
   }
 
   const boundedRequest = tokenNeedsBody ? tokenRequest : await boundPost(req, ANONYMOUS_BODY_BYTES);
@@ -485,6 +490,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
       req.headers.get('origin') !== trustedRequestOrigin(req)
     )
       return Response.json({ error: 'Forbidden.' }, { status: 403 });
+    if (invalidSupplierToken) return runFallback(boundedRequest, { invalidSupplierToken: true });
   }
   if (routing.kind === 'token') {
     const organizationId = await organizationForAnonymousToken(token);

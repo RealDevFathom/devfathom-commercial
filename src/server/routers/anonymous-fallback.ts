@@ -50,7 +50,7 @@ import { formatValidationError } from '@/lib/validation-error';
  * against the production anonymous routers so their validation behavior cannot
  * drift apart.
  */
-const t = initTRPC.create({
+const t = initTRPC.context<{ invalidSupplierToken?: boolean }>().create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
@@ -77,6 +77,13 @@ const unroutableSupplierLink = () => {
   throw new TRPCError({ code: 'NOT_FOUND', message: SUPPLIER_LINK_GENERIC_MESSAGE });
 };
 
+// The transport has already rejected this credential. Return the same public
+// refusal even if its token field would also fail input validation.
+const supplierProcedure = t.procedure.use(({ ctx, next }) => {
+  if (ctx.invalidSupplierToken) unroutableSupplierLink();
+  return next();
+});
+
 export const anonymousFallbackRouter = t.router({
   invitations: t.router({
     get: t.procedure.input(anonymousTokenInput).query(unroutableInvitation),
@@ -92,7 +99,7 @@ export const anonymousFallbackRouter = t.router({
     reset: t.procedure.input(passwordResetInput).mutation(unroutableReset),
   }),
   pharmacySupplierLinks: t.router({
-    get: t.procedure.input(supplierLinkGetInput).query(unroutableSupplierLink),
-    submit: t.procedure.input(supplierLinkSubmitInput).mutation(unroutableSupplierLink),
+    get: supplierProcedure.input(supplierLinkGetInput).query(unroutableSupplierLink),
+    submit: supplierProcedure.input(supplierLinkSubmitInput).mutation(unroutableSupplierLink),
   }),
 });

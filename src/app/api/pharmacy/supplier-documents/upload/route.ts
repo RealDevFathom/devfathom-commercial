@@ -59,6 +59,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
     let organizationId = actor?.organization.id;
     const linkId = supplierLinkId(token);
     if (outside) {
+      if (!linkId) return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
       const gate = await admitAnonymousRequest({
         kind: 'supplier-upload',
         token,
@@ -69,7 +70,7 @@ export const POST = uploadPost(async (request, readUploadForm) => {
         response.headers.set('Retry-After', String(gate.retryAfter));
         return response;
       }
-      const id = linkId && (await organizationForAnonymousToken(token));
+      const id = await organizationForAnonymousToken(token);
       const org = id && (await resolveOrganizationById(id));
       if (!org || !isTenantLifecycleAccessible(org.status))
         return message(404, SUPPLIER_LINK_GENERIC_MESSAGE);
