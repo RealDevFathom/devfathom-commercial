@@ -199,6 +199,7 @@ export const REST_NOT_A_MEMBER_SESSION: Readonly<Record<string, readonly string[
     'wallet/apple/v1/devices/[deviceLibraryIdentifier]/registrations/[passTypeIdentifier]/[serialNumber]',
     'wallet/apple/v1/log',
     'wallet/apple/v1/passes/[passTypeIdentifier]/[serialNumber]',
+    'wallet/logo/[suffix]',
     'wallet/enroll/start',
     'wallet/enroll/verify',
     'workspace-requests',

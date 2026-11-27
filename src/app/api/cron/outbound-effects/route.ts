@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 
 import { NextResponse } from 'next/server';
 
+import { drainBusinessWallets } from '@/lib/wallet/drain';
 import { drainDueOrganizations } from '@/lib/side-effects/drain';
 
 export const maxDuration = 300;
@@ -26,5 +27,6 @@ export async function POST(request: Request) {
     return json({ error: 'Unauthorized.' }, 401);
   }
 
-  return json(await drainDueOrganizations());
+  const [summary] = await Promise.all([drainDueOrganizations(), drainBusinessWallets()]);
+  return json(summary);
 }

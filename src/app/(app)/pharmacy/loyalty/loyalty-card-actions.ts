@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache';
 import { unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
-import type { PharmacyWalletTestPasses } from '@/lib/pharmacy/loyalty-wallet-pass';
+import type { issuePharmacyWalletCardPreview } from '@/lib/pharmacy/loyalty-wallet-pass';
 import { createTRPCContext } from '@/server/trpc';
 import { pharmacyLoyaltyRouter } from './loyalty-router';
 
@@ -13,7 +13,7 @@ export type LoyaltyCardFormState = {
   /** Only on `issued`: the code to print, shown once. Never stored by the browser. */
   code?: string;
   /** DEV-747: only on `issued`: the same card as Apple and Google Wallet test passes. */
-  walletTestPasses?: PharmacyWalletTestPasses;
+  walletTestPasses?: Awaited<ReturnType<typeof issuePharmacyWalletCardPreview>>;
 };
 
 const text = (form: FormData, name: string) => String(form.get(name) ?? '').trim();

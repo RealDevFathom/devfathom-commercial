@@ -86,7 +86,10 @@ import { pharmacySupplierPriceListsRouter } from './pharmacy-supplier-price-list
 import { pharmacyAccessRouter } from './pharmacy-access';
 import { aiSettingsRouter } from './ai-settings';
 
+import { walletCardsRouter } from './wallet-cards';
+
 export const appRouter = router({
+  walletCards: walletCardsRouter,
   aiSettings: aiSettingsRouter,
   hotelProperty: hotelPropertyRouter,
   hotelRates: hotelRatesRouter,

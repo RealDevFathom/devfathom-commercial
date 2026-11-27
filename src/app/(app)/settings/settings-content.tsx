@@ -44,7 +44,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
@@ -121,6 +121,13 @@ export function SettingsContent({
   providerRefundSettings,
 }: { providerRefundSettings?: React.ReactNode } = {}) {
   const { data: session } = useSession();
+  const walletEntitlements = useEntitlements();
+  const walletModule =
+    walletEntitlements.vertical === 'PHARMACY'
+      ? 'pharmacy-crm'
+      : walletEntitlements.vertical === 'RESTAURANT'
+        ? 'restaurant-loyalty'
+        : null;
   const isAdmin = session?.user?.role === 'ADMIN';
 
   return (
@@ -132,6 +139,20 @@ export function SettingsContent({
       />
 
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+        {isAdmin &&
+          walletModule &&
+          walletEntitlements.modules.some((m) => m.key === walletModule && m.enabled) && (
+            <Card>
+              <CardHeader>
+                <CardTitle>Wallet loyalty card</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <Link className={buttonVariants({ variant: 'outline' })} href="/settings/wallet">
+                  Manage card and branch posters
+                </Link>
+              </CardContent>
+            </Card>
+          )}
         {providerRefundSettings}
         {/* Profile */}
         <ProfileSection />
