@@ -15,6 +15,11 @@ import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import {
+  isSupportSessionActor,
+  SUPPORT_SESSION_REFUSED_MESSAGE,
+  supportOperatorIdentity,
+} from '@/lib/tenancy/support-session-rule';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { alternativeModulesForProcedure, moduleForProcedure } from '@/lib/module-catalog';
 import { formatValidationError } from '@/lib/validation-error';
@@ -115,6 +120,13 @@ function isUnexpectedInternalError(error: TRPCError): boolean {
  */
 export type ProcedureMeta = {
   capabilities?: readonly Action[];
+  /**
+   * DEV-1053: `'refuse'` puts the procedure under the central support-session rule. Set it
+   * with `.meta(refuseSupportSession)` (from `@/lib/tenancy/support-session-rule`) on
+   * anything that creates or changes a credential, an identity or a privilege. `tests/support-session-mutation-policy.test.ts` makes every
+   * mutation declare a decision.
+   */
+  supportSession?: 'refuse';
 };
 
 const t = initTRPC
@@ -193,7 +205,79 @@ const mapDatabaseErrors = t.middleware(async ({ next }) => {
   return result;
 });
 
-const baseProcedure = t.procedure.use(mapDatabaseErrors);
+/**
+ * DEV-1053: the one rule for what a platform support session may never do. A procedure
+ * whose meta says `supportSession: 'refuse'` is refused for every support session before
+ * anything else runs: before the session, permission and module checks, before input
+ * validation, and whatever role the session acts as. It sits on the base procedure, so no
+ * builder (public ones included) can be without it. The refusal is written to the audit log
+ * here, with the operator's identity, because it happens outside the audit middleware.
+ */
+const refuseSupportSessions = t.middleware(async ({ ctx, next, meta, path, type }) => {
+  if (meta?.supportSession !== 'refuse' || !isSupportSessionActor(ctx)) return next();
+  const operator = supportOperatorIdentity(ctx);
+  const error = new TRPCError({ code: 'FORBIDDEN', message: SUPPORT_SESSION_REFUSED_MESSAGE });
+  const user = ctx.session?.user;
+  await recordTrpcAudit({
+    ctx: {
+      requestMeta: ctx.requestMeta,
+      // The recorder names the operator from these three fields. A context built with
+      // `support` alone still names them.
+      session: user
+        ? {
+            user: {
+              ...user,
+              isSupportSession: true,
+              supportSessionId: operator?.supportSessionId ?? undefined,
+              platformUserId: operator?.platformUserId ?? undefined,
+            },
+          }
+        : null,
+      audit: {
+        ...(ctx.audit.db ? { db: ctx.audit.db } : {}),
+        detail: {
+          description: 'Refused: a support session may not create or change access.',
+          metadata: { supportSessionRefused: true },
+          // These requests carry passwords, PINs and keys, and nothing has validated or
+          // redacted this one yet: the entry names the action and the operator only.
+          skipInput: true,
+        },
+      },
+    },
+    path,
+    type: type === 'query' ? 'query' : 'mutation',
+    input: undefined,
+    outcome: 'FAILURE',
+    error,
+    durationMs: 0,
+  });
+  throw error;
+});
+
+/** The middleware functions that enforce the support-session rule. */
+const SUPPORT_RULE_MIDDLEWARES: ReadonlySet<unknown> = new Set(refuseSupportSessions._middlewares);
+
+/**
+ * DEV-1053: is this procedure refused for a support session? True when it runs the central
+ * rule and its meta says `supportSession: 'refuse'`. The mutation policy test asks this of
+ * every mutation.
+ */
+export function procedureRefusesSupportSession(procedure: {
+  _def: { middlewares: readonly unknown[]; meta?: ProcedureMeta };
+}): boolean {
+  return (
+    procedure._def.meta?.supportSession === 'refuse' && procedureRunsSupportSessionRule(procedure)
+  );
+}
+
+/** DEV-1053: does this procedure run the central rule at all? Every procedure must. */
+export function procedureRunsSupportSessionRule(procedure: {
+  _def: { middlewares: readonly unknown[] };
+}): boolean {
+  return procedure._def.middlewares.some((middleware) => SUPPORT_RULE_MIDDLEWARES.has(middleware));
+}
+
+const baseProcedure = t.procedure.use(mapDatabaseErrors).use(refuseSupportSessions);
 
 export const publicProcedure = baseProcedure;
 

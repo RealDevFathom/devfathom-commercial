@@ -2,6 +2,7 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { acquireLargeUploadSlot } from './large-upload-slot';
 import { consumeBoundedBody } from '@/lib/http/read-bounded-body';
 import { proxyRequestHeaders } from '@/lib/security/proxy-request-headers';
+import { rateLimit } from '@/lib/rate-limit';
 
 export const UPLOAD_SIZE_MESSAGE = 'Choose a file of 25 MB or smaller.';
 
@@ -13,6 +14,38 @@ const LARGE_UPLOAD_BYTES = 8 * 1024 * 1024;
 // A 25 MiB file takes about 210 seconds at 1 Mbit/s. Allow another minute
 // for multipart overhead and normal variation in throughput.
 const UPLOAD_BODY_DEADLINE_MS = 270_000;
+// DEV-1056: how often an account may start an upload, whatever its size. The large-upload
+// slots bound how many large transfers run at once, not how many uploads are made, so a
+// signed-in account could otherwise post small files in a loop. A person attaching files
+// by hand stays far below 60 in ten minutes (one every ten seconds, sustained); a business
+// gets ten times that for its whole staff. Refused attempts count too. This limits
+// requests, not stored bytes.
+export const UPLOAD_RATE_WINDOW_MS = 10 * 60 * 1000;
+export const UPLOADS_PER_USER_PER_WINDOW = 60;
+export const UPLOADS_PER_BUSINESS_PER_WINDOW = 600;
+export const UPLOAD_RATE_MESSAGE = 'Too many uploads. Wait a few minutes and try again.';
+
+/**
+ * Count one upload against its user, then its business. Returns the refusal, or `null`.
+ * A user over their own limit is refused before the business is charged, so one account
+ * cannot spend the whole business's allowance with refused requests.
+ */
+async function uploadRateRefusal(userId: string, organizationId: string) {
+  for (const [key, limit] of [
+    [`upload:user:${userId}`, UPLOADS_PER_USER_PER_WINDOW],
+    [`upload:org:${organizationId}`, UPLOADS_PER_BUSINESS_PER_WINDOW],
+  ] as const) {
+    const result = await rateLimit(key, limit, UPLOAD_RATE_WINDOW_MS);
+    if (!result.ok) {
+      return new Response(UPLOAD_RATE_MESSAGE, {
+        status: 429,
+        headers: { 'Retry-After': String(Math.max(1, result.retryAfter)) },
+      });
+    }
+  }
+  return null;
+}
+
 type ReadUploadForm = (
   userId: string,
   organizationId: string,
@@ -69,6 +102,9 @@ export function uploadPost(
       errorFormat: 'json' | 'text' = 'json',
       maxFileBytes = MAX_ATTACHMENT_BYTES
     ) {
+      // The caller has resolved the session; nothing of the body has been read yet.
+      const rateRefusal = await uploadRateRefusal(userId, organizationId);
+      if (rateRefusal) return rateRefusal;
       const maxMultipartBytes = Math.min(MAX_MULTIPART_BYTES, maxFileBytes + 64 * 1024);
       const declared = Number(routed.headers.get('content-length'));
       if (declared > maxMultipartBytes) return null;

@@ -56,6 +56,7 @@ import {
   setManufacturingBatchState,
   writeOff,
 } from '@/lib/pharmacy/inventory-operations';
+import type { QuarantineReleaseRights } from '@/lib/pharmacy/quarantine-holds';
 import {
   postInterbranchTransferLossEntry,
   postWriteOffEntry,
@@ -137,6 +138,7 @@ import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
 import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { assertInOrganization } from '../org-refs';
 import type { TRPCContext } from '../trpc';
 
@@ -195,11 +197,13 @@ function domainError(error: unknown): never {
           ? 'CONFLICT'
           : error.reason === 'CROSS_TENANT_REFERENCE' ||
               error.reason === 'CROSS_BRANCH_REFERENCE' ||
+              error.reason === 'QUARANTINE_RELEASE_REFUSED' ||
               error.reason === 'BLOCKED_STOCK'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST';
     // DEV-957: HELD_FOR_COUNTER carries the sentence naming the counter that holds the units.
-    throw new TRPCError({ code, message: error.userMessage ?? error.reason });
+    // DEV-1052: the cause lets the Inventory screen repeat a release refusal word for word.
+    throw new TRPCError({ code, message: error.userMessage ?? error.reason, cause: error });
   }
   if (error instanceof PharmacyStockSignalError) {
     throw new TRPCError({
@@ -457,6 +461,54 @@ async function admittedScopeFor(ctx: TRPCContext, branch: string): Promise<Ledge
     return scope;
   }
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+}
+
+const quarantineReleaseInput = z
+  .object({
+    branchId,
+    inventoryLotId: z.string().min(1),
+    stockLocationId: z.string().min(1),
+    units: z.number().int().positive(),
+    reason: z.string().trim().min(1).max(500),
+    idempotencyKeyPrefix: z.string().trim().min(1).max(160),
+  })
+  .strict();
+
+/**
+ * DEV-1052: which quarantine holds the session actor may release, from `can()` (deny-wins)
+ * against the given client. Called with the transaction that moves the stock, so a
+ * permission withdrawn before the release commits is not honoured.
+ */
+export async function quarantineReleaseRights(
+  ctx: TRPCContext,
+  db: ScopedDb
+): Promise<QuarantineReleaseRights> {
+  const user = ctx.session?.user;
+  if (!user) return { safety: false, inventory: false };
+  const subject = subjectFromSession(user);
+  const options = { db, source: 'TRPC' as const, ip: ctx.requestMeta?.ip ?? null };
+  const [safety, inventory] = await Promise.all([
+    can(subject, 'pharmacy:safety', undefined, options),
+    can(subject, 'pharmacy:inventory', undefined, options),
+  ]);
+  return { safety, inventory };
+}
+
+/**
+ * DEV-1052: the one release path behind both procedures. The actor must be admitted to the
+ * branch, and each unit is checked against its own hold with the actor's live permissions,
+ * inside the transaction that moves the stock.
+ */
+async function releaseHeldStock(ctx: TRPCContext, input: z.infer<typeof quarantineReleaseInput>) {
+  try {
+    return await ctx.db.$transaction(async (tx) => {
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      const rights = await quarantineReleaseRights(ctx, txDb(tx));
+      return releaseQuarantinedPart(txDb(tx), scope, { ...input, rights });
+    });
+  } catch (error) {
+    domainError(error);
+  }
 }
 
 /**
@@ -1157,6 +1209,7 @@ export const pharmacyInventoryRouter = router({
     ),
 
   enrollColdChainSensor: inventoryControl
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1177,6 +1230,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   rotateColdChainSensorSecret: inventoryControl
+    .meta(refuseSupportSession)
     .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
@@ -1188,6 +1242,7 @@ export const pharmacyInventoryRouter = router({
     }),
 
   revokeColdChainSensor: inventoryControl
+    .meta(refuseSupportSession)
     .input(z.object({ branchId, sensorId: z.string().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = await admittedScopeFor(ctx, input.branchId);
@@ -1709,28 +1764,22 @@ export const pharmacyInventoryRouter = router({
       }
     }),
 
+  /**
+   * DEV-1052: release held stock with the inventory permission. Only units a stock workflow
+   * held are released on that permission alone; a safety hold also needs the safety permission,
+   * which `releaseHeldStock` reads live inside the transaction that moves the stock.
+   */
   releaseQuarantinedPart: inventoryControl
-    .input(
-      z
-        .object({
-          branchId,
-          inventoryLotId: z.string().min(1),
-          stockLocationId: z.string().min(1),
-          units: z.number().int().positive(),
-          reason: z.string().trim().min(1).max(500),
-          idempotencyKeyPrefix: z.string().trim().min(1).max(160),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) => {
-      try {
-        return await ctx.db.$transaction(async (tx) =>
-          releaseQuarantinedPart(txDb(tx), await admittedScopeFor(ctx, input.branchId), input)
-        );
-      } catch (error) {
-        domainError(error);
-      }
-    }),
+    .input(quarantineReleaseInput)
+    .mutation(({ ctx, input }) => releaseHeldStock(ctx, input)),
+
+  /**
+   * DEV-1052: the same release for someone who holds the safety permission and is admitted
+   * to the branch. Without the inventory permission it releases safety holds only.
+   */
+  releaseSafetyQuarantine: regulatory
+    .input(quarantineReleaseInput)
+    .mutation(({ ctx, input }) => releaseHeldStock(ctx, input)),
 
   allocateTransfer: inventoryControl
     .input(
@@ -3172,6 +3221,7 @@ export const pharmacyInventoryRouter = router({
             reason: input.reason,
             idempotencyKeyPrefix,
             cause: 'EXPIRY',
+            hold: 'EXPIRY',
           });
           return { replayed: false, held: moved.held };
         });

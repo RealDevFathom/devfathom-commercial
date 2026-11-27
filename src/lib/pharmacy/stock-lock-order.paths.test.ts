@@ -250,6 +250,14 @@ describe('count approval and quarantine release take stock locks in the global o
       pharmacyStockBalance: {
         findFirst: vi.fn(async () => ({ onHandUnits: 5, sealedPacks: 0, looseUnits: 5 })),
       },
+      // DEV-1052: the hold's owner is recorded after the movements, under the same locks.
+      pharmacyRecallQuarantineAction: {
+        aggregate: vi.fn(async () => ({ _sum: { quantityUnits: null } })),
+      },
+      pharmacyQuarantineHoldEntry: {
+        groupBy: vi.fn(async () => [{ authority: 'SAFETY', _sum: { quantityUnits: 5 } }]),
+        create: vi.fn(async () => ({})),
+      },
       pharmacyStockMovement: { create: movementCreate(trace) },
     };
     await quarantinePart(db as never, scope, {
@@ -274,8 +282,16 @@ describe('count approval and quarantine release take stock locks in the global o
       pharmacyStockBalance: {
         findFirst: vi.fn(async () => ({ onHandUnits: 5, sealedPacks: 0, looseUnits: 5 })),
       },
-      pharmacyRecallQuarantineAction: { findMany: vi.fn(async () => []) },
-      pharmacyStockMovement: { create: movementCreate(trace) },
+      pharmacyRecallQuarantineAction: {
+        findMany: vi.fn(async () => []),
+        aggregate: vi.fn(async () => ({ _sum: { quantityUnits: null } })),
+      },
+      // DEV-1052: five units held under safety authority, released by safety.
+      pharmacyQuarantineHoldEntry: {
+        groupBy: vi.fn(async () => [{ authority: 'SAFETY', _sum: { quantityUnits: 5 } }]),
+        create: vi.fn(async () => ({})),
+      },
+      pharmacyStockMovement: { findMany: vi.fn(async () => []), create: movementCreate(trace) },
     };
     await releaseQuarantinedPart(db as never, scope, {
       inventoryLotId: 'lot-a',
@@ -283,6 +299,7 @@ describe('count approval and quarantine release take stock locks in the global o
       units: 1,
       reason: 'Inspected',
       idempotencyKeyPrefix: 'release',
+      rights: { safety: true, inventory: false },
     });
     expect(trace.balanceKeys()).toEqual(['lot-a/shelf/AVAILABLE', 'lot-a/shelf/QUARANTINE']);
     expectLockedBeforeWrites(trace);

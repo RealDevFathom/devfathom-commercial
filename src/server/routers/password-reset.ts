@@ -2,6 +2,7 @@ import { hash } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, publicProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import {
   anonymousTokenInput,
   passwordResetInput,
@@ -61,7 +62,11 @@ async function loadUsableToken(db: PrismaClient, token: string) {
 export const passwordResetRouter = router({
   // Step 1 — request a reset link. ALWAYS returns success to prevent account
   // enumeration: the response is identical whether or not the email exists.
+  //
+  // DEV-1053: a platform support session may neither start nor complete a reset. The
+  // central rule refuses a request that carries one; an anonymous visitor carries none.
   request: publicProcedure
+    .meta(refuseSupportSession)
     // D10: lookup-only normalization. A malformed address must be indistinguish-
     // able from an unknown one here, so this deliberately does not validate the
     // format — it would turn the endpoint into an enumeration oracle.
@@ -100,58 +105,61 @@ export const passwordResetRouter = router({
 
   // Step 2 — consume the token and set a new password. Rejects missing / used /
   // expired tokens with one generic error.
-  reset: publicProcedure.input(passwordResetInput).mutation(async ({ ctx, input }) => {
-    const record = await loadUsableToken(ctx.db, input.token);
-    if (!record) throw invalidResetLink();
+  reset: publicProcedure
+    .meta(refuseSupportSession)
+    .input(passwordResetInput)
+    .mutation(async ({ ctx, input }) => {
+      const record = await loadUsableToken(ctx.db, input.token);
+      if (!record) throw invalidResetLink();
 
-    // Hash BEFORE opening the transaction.
-    //
-    // bcrypt at cost 12 takes on the order of a quarter of a second, and an
-    // interactive transaction pins one pooled connection for its whole
-    // lifetime. Hashing inside it meant every concurrent reset held a
-    // connection idle for that entire time, so a burst of resets could exhaust
-    // the pool and stall unrelated tenant traffic. `loadUsableToken` already
-    // rejects missing, used, and expired tokens without hashing, so the work
-    // moved here is only ever spent on a token that looked usable.
-    const hashed = await hash(input.newPassword, 12);
-
-    await ctx.db.$transaction(async (tx) => {
-      // Serialize sibling claims with every credential writer before touching a token.
-      await tx.$queryRaw`SELECT id FROM users WHERE id = ${record.userId} FOR UPDATE`;
-      // Fresh, and read once: the same instant decides whether the token is
-      // still live and stamps its consumption.
-      const now = new Date();
-
-      // ATOMIC CLAIM.
+      // Hash BEFORE opening the transaction.
       //
-      // `loadUsableToken` and this write are separate statements, so two
-      // requests presenting the same token could both pass the read and both
-      // set a password. A conditional update makes consumption atomic:
-      // PostgreSQL serialises the two writers on the row, and the loser matches
-      // zero rows and gets the same generic error as any other unusable link.
-      //
-      // `expiresAt` is re-checked here rather than trusted from the read.
-      // Between the two statements the link can lapse, and expiry that is only
-      // enforced on the read is enforced nowhere that the write can see.
-      const claimed = await tx.passwordResetToken.updateMany({
-        where: { id: record.id, usedAt: null, expiresAt: { gt: now } },
-        data: { usedAt: now },
-      });
-      if (claimed.count !== 1) throw invalidResetLink();
+      // bcrypt at cost 12 takes on the order of a quarter of a second, and an
+      // interactive transaction pins one pooled connection for its whole
+      // lifetime. Hashing inside it meant every concurrent reset held a
+      // connection idle for that entire time, so a burst of resets could exhaust
+      // the pool and stall unrelated tenant traffic. `loadUsableToken` already
+      // rejects missing, used, and expired tokens without hashing, so the work
+      // moved here is only ever spent on a token that looked usable.
+      const hashed = await hash(input.newPassword, 12);
 
-      // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
-      // JWT session for this user is revoked on its next revalidation.
-      await tx.user.update({
-        where: { id: record.userId },
-        data: {
-          password: hashed,
-          passwordChangedAt: new Date(),
-          mustChangePassword: false,
-          tokenVersion: { increment: 1 },
-        },
-      });
-    });
+      await ctx.db.$transaction(async (tx) => {
+        // Serialize sibling claims with every credential writer before touching a token.
+        await tx.$queryRaw`SELECT id FROM users WHERE id = ${record.userId} FOR UPDATE`;
+        // Fresh, and read once: the same instant decides whether the token is
+        // still live and stamps its consumption.
+        const now = new Date();
 
-    return { success: true };
-  }),
+        // ATOMIC CLAIM.
+        //
+        // `loadUsableToken` and this write are separate statements, so two
+        // requests presenting the same token could both pass the read and both
+        // set a password. A conditional update makes consumption atomic:
+        // PostgreSQL serialises the two writers on the row, and the loser matches
+        // zero rows and gets the same generic error as any other unusable link.
+        //
+        // `expiresAt` is re-checked here rather than trusted from the read.
+        // Between the two statements the link can lapse, and expiry that is only
+        // enforced on the read is enforced nowhere that the write can see.
+        const claimed = await tx.passwordResetToken.updateMany({
+          where: { id: record.id, usedAt: null, expiresAt: { gt: now } },
+          data: { usedAt: now },
+        });
+        if (claimed.count !== 1) throw invalidResetLink();
+
+        // AUTH-01: bump tokenVersion + stamp passwordChangedAt so every existing
+        // JWT session for this user is revoked on its next revalidation.
+        await tx.user.update({
+          where: { id: record.userId },
+          data: {
+            password: hashed,
+            passwordChangedAt: new Date(),
+            mustChangePassword: false,
+            tokenVersion: { increment: 1 },
+          },
+        });
+      });
+
+      return { success: true };
+    }),
 });

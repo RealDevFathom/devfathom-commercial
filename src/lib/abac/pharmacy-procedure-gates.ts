@@ -659,10 +659,18 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['manage-stock/run-stock-branches-locations'],
   },
   'pharmacyInventory.releaseQuarantinedPart': {
-    gate: 'inventoryControl -> pharmacy:inventory (assigned branch / admin exception)',
+    gate: 'inventoryControl -> pharmacy:inventory (assigned branch / admin exception); inside the stock transaction each unit is checked against its own hold: a workflow (inventory) hold is released on pharmacy:inventory, a safety hold only if the caller also holds pharmacy:safety; DRAP recall units never',
     lines: [
       'manage-stock/run-stock-branches-locations',
       'manage-stock/workspace-administrator-reach-stock',
+      'controlled-medicines/release-safety-quarantine-their-branches',
+    ],
+  },
+  'pharmacyInventory.releaseSafetyQuarantine': {
+    gate: 'regulatory -> pharmacy:safety (assigned branch / admin exception); inside the stock transaction each unit is checked against its own hold: a safety hold is released on pharmacy:safety, a workflow (inventory) hold only if the caller also holds pharmacy:inventory; DRAP recall units never',
+    lines: [
+      'controlled-medicines/release-safety-quarantine-their-branches',
+      'manage-stock/run-stock-branches-locations',
     ],
   },
   'pharmacyInventory.reserveSupplierClaim': {
@@ -1495,10 +1503,6 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
       'record-prescriptions/read-prescription-photo-draft-bill',
       'dispense-prescriptions/everything-record-prescriptions',
     ],
-  },
-  'pharmacyPrescriptions.fill': {
-    gate: "capabilityProcedure('pharmacy:dispense'); non-controlled lines only; + branch assignment (counterBranchAssignmentDenial) when a dispensing branchId is sent (DEV-962)",
-    lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.readPatient': {
     gate: "capabilityProcedure('pharmacy:prescriptions')",
@@ -2703,8 +2707,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['run-branches/see-demand-lostsales-restockrecovery'],
   },
   'pharmacySales.upsellSuggestions': {
-    gate: 'assignedBranchScope only; no capability checked',
-    none: 'any signed-in member assigned to the branch (or a workspace administrator); no permission action is checked',
+    gate: 'assignedBranchScope then requireCounterReceiptAccess default -> pharmacy:counter, pharmacy:dispense or legacy pharmacy:receipt (DEV-1056)',
+    lines: [
+      'take-payment/open-hold-resume-void',
+      'dispense-prescriptions/use-counter-without-counter',
+    ],
   },
   'pharmacySop.access': {
     gate: 'protectedProcedure; returns canManage/canComplete/canVerify flags',

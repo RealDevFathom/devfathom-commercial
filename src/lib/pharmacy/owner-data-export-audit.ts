@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { supportOperatorIdentity } from '@/lib/tenancy/support-session-rule';
 import { recordAudit } from '@/server/audit';
 import type { TRPCContext } from '@/server/trpc';
 
@@ -40,7 +41,12 @@ export async function auditOwnerDataExport(
       outcome: input.status < 400 ? 'SUCCESS' : 'FAILURE',
       ip: ctx.requestMeta.ip,
       userAgent: ctx.requestMeta.userAgent,
-      metadata: { ...input.metadata, attemptedAt: new Date().toISOString() },
+      metadata: {
+        ...input.metadata,
+        attemptedAt: new Date().toISOString(),
+        // DEV-1053: a support session's attempt (always refused) names the operator.
+        ...(supportOperatorIdentity({ session: ctx.session }) ?? {}),
+      },
     },
     ctx.db
   );

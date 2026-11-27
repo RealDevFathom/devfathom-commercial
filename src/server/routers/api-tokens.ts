@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, adminProcedure, entitlementIndependentAdminProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { generateApiToken } from '@/lib/api-auth';
 import { ACTIVE_STATUSES } from '@/lib/abac';
 import { annotateAudit } from '../audit';
@@ -81,6 +82,7 @@ export const apiTokensRouter = router({
   }),
 
   create: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         name: z.string().min(1),
@@ -157,6 +159,7 @@ export const apiTokensRouter = router({
     }),
 
   revoke: entitlementIndependentAdminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const deleted = await ctx.db.apiToken.delete({

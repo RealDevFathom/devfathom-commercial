@@ -10,6 +10,7 @@ import {
   type ProcedureMeta,
   type TRPCContext,
 } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import {
   SupplierLinkError,
   getSupplierActionPage,
@@ -94,6 +95,7 @@ export const pharmacySupplierLinksRouter = router({
       });
     }),
   issue: staff
+    .meta(refuseSupportSession)
     .meta(PROCUREMENT)
     .input(
       z
@@ -124,6 +126,7 @@ export const pharmacySupplierLinksRouter = router({
       }
     }),
   revoke: staff
+    .meta(refuseSupportSession)
     .meta(PROCUREMENT)
     .input(z.object({ linkId: id }).strict())
     .mutation(async ({ ctx, input }) => {

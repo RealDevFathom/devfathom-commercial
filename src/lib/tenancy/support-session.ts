@@ -11,6 +11,7 @@ import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { canPlatformRole, endSupportSessions } from '@/lib/platform/capabilities';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { SUPPORT_SESSION_STARTED_NOTIFICATION_TYPE } from '@/lib/tenancy/support-session-rule';
 
 export const SUPPORT_SESSION_COOKIE = 'df_support_session';
 
@@ -182,7 +183,7 @@ export async function createSupportSession(input: {
       data: administrators.map(({ id }) => ({
         organizationId: organization.id,
         userId: id,
-        type: 'support_session_started',
+        type: SUPPORT_SESSION_STARTED_NOTIFICATION_TYPE,
         title: 'Support access started',
         message: `${input.actor.name} opened support access until ${expiresAt.toISOString()}. Reason: ${reason}`,
         entityType: 'PlatformSupportSession',

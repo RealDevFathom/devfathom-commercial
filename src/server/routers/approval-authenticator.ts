@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import {
@@ -240,6 +241,7 @@ export const approvalAuthenticatorRouter = router({
   // Phase 1: mint a secret and return it (+ otpauth URI for the QR code) once. Inactive
   // until confirmEnrollment succeeds. Restarting replaces any unconfirmed secret.
   beginEnrollment: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.strictObject({ currentPassword: reauthentication.optional() }))
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
@@ -282,6 +284,7 @@ export const approvalAuthenticatorRouter = router({
   // Phase 2: one valid code activates the authenticator. From then on this member's
   // fixed PIN is no longer accepted for approvals.
   confirmEnrollment: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.strictObject({
         token: z
@@ -349,6 +352,7 @@ export const approvalAuthenticatorRouter = router({
   // working, so they must set up a new authenticator before approving (and, while the
   // organization requires one, before using their account).
   useRecoveryCode: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.strictObject({
         code: z.string().trim().min(1).max(32),
@@ -440,6 +444,7 @@ export const approvalAuthenticatorRouter = router({
 
   // Recovery: remove a member's approval authenticator so they can enrol a new phone.
   resetForMember: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.strictObject({ userId: z.string().min(1), currentPassword: reauthentication.optional() })
     )
@@ -486,6 +491,7 @@ export const approvalAuthenticatorRouter = router({
   // DEV-961). Turning it off is confirmed with the owner's own current authenticator code, or,
   // when they have not set one up, their password and an acknowledgement of what it means.
   setRequired: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.union([
         z.strictObject({ required: z.literal(true) }),

@@ -9,6 +9,7 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
 
 import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const PHARMACY_ASSIGNABLE_ROLE_KEYS = new Set(PHARMACY_ROLE_TEMPLATES.map((role) => role.key));
 
@@ -219,7 +220,13 @@ export const pharmacyBranchAssignmentsRouter = router({
     .input(z.object({ enabled: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);
-      if (!(await isOwner(ctx, organizationId))) {
+      // DEV-1053: owner only means the owner's own session. A support session acting as the
+      // owner is refused before anything is read or written, as `setCashMode` refuses it.
+      if (
+        ctx.support ||
+        ctx.session.user.isSupportSession ||
+        !(await isOwner(ctx, organizationId))
+      ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Only the owner can change this setting.',
@@ -297,6 +304,7 @@ export const pharmacyBranchAssignmentsRouter = router({
   }),
 
   assign: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -347,6 +355,7 @@ export const pharmacyBranchAssignmentsRouter = router({
     }),
 
   unassign: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ assignmentId: z.string().trim().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);

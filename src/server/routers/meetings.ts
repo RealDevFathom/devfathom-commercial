@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { entitlementIndependentHistoryProcedure, protectedProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
 import { isMeetingTimeRangeValid, MEETING_TIME_ORDER_ERROR } from '@/lib/meetings/time-range';
 import { isAdmin } from '@/lib/authz';
@@ -907,6 +908,7 @@ export const meetingsRouter = router({
    * invalidates the previous one in the same statement.
    */
   createGuestInvitation: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1000,6 +1002,7 @@ export const meetingsRouter = router({
    * stays visible in the server's own logs after the clock passes the expiry.
    */
   revokeGuestInvitation: protectedProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ occurrenceParticipantId: z.string() }).strict())
     .mutation(async ({ ctx, input }) => {
       const participant = await ctx.db.meetingOccurrenceParticipant.findUnique({

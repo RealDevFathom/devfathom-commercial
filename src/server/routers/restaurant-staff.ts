@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
@@ -321,7 +322,7 @@ export const restaurantStaffRouter = router({
    * operator seat the tenant chose to add — and refusing the repair at the
    * operator cap would strand the administrator in the very 403 loop this fixes.
    */
-  provisionMyProfile: staffProcedure.mutation(async ({ ctx }) => {
+  provisionMyProfile: staffProcedure.meta(refuseSupportSession).mutation(async ({ ctx }) => {
     const user = ctx.session!.user;
     const organizationId = workspaceOrganizationId(ctx);
     if (user.role !== 'ADMIN' || organizationId !== user.organizationId) {
@@ -502,6 +503,7 @@ export const restaurantStaffRouter = router({
     }),
 
   create: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -573,6 +575,7 @@ export const restaurantStaffRouter = router({
    * set their password. Same branch rules as `create`.
    */
   invite: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         displayName: z.string().trim().min(1).max(200),
@@ -699,6 +702,7 @@ export const restaurantStaffRouter = router({
     }),
 
   update: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -761,6 +765,7 @@ export const restaurantStaffRouter = router({
   // Deactivate / reactivate / archive. Status gates operator sign-in (C5,
   // enforced at the terminal in L3); it does not itself revoke credentials.
   setStatus: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string(), status: STAFF_STATUS }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -823,6 +828,7 @@ export const restaurantStaffRouter = router({
     }),
 
   issueCredential: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         staffProfileId: z.string(),
@@ -882,6 +888,7 @@ export const restaurantStaffRouter = router({
     }),
 
   rotateCredential: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ credentialId: z.string(), secret: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
@@ -926,6 +933,7 @@ export const restaurantStaffRouter = router({
     }),
 
   revokeCredential: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ credentialId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       // Uniform C4 treatment for credential-bearing mutations: skip raw-input
@@ -978,7 +986,7 @@ export const restaurantStaffRouter = router({
     .input(z.object({ activeOnly: z.boolean().default(false) }).strict())
     .query(({ ctx, input }) => listJobRoles(ctx.db, { activeOnly: input.activeOnly })),
 
-  seedDefaultJobRoles: staffProcedure.mutation(async ({ ctx }) => {
+  seedDefaultJobRoles: staffProcedure.meta(refuseSupportSession).mutation(async ({ ctx }) => {
     assertOrganizationWide(
       await resolveStaffBranchAuthorization(
         ctx.db,
@@ -1000,6 +1008,7 @@ export const restaurantStaffRouter = router({
   }),
 
   createJobRole: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1032,6 +1041,7 @@ export const restaurantStaffRouter = router({
     }),
 
   updateJobRole: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1067,6 +1077,7 @@ export const restaurantStaffRouter = router({
     }),
 
   setJobRoleCapabilities: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1121,6 +1132,7 @@ export const restaurantStaffRouter = router({
    * person's roles at another branch.
    */
   setStaffJobRoles: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1171,6 +1183,7 @@ export const restaurantStaffRouter = router({
    * failed override never leaves the role half of the operator's intent applied.
    */
   setStaffAccess: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1261,6 +1274,7 @@ export const restaurantStaffRouter = router({
    * itself is untouched and keeps granting it to everyone else who holds it.
    */
   setStaffCapabilityOverride: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1307,6 +1321,7 @@ export const restaurantStaffRouter = router({
 
   /** Remove an override so the person falls back to what their roles grant. */
   clearStaffCapabilityOverride: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
