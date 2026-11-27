@@ -207,27 +207,39 @@ describe('PH-RPT metric contract', () => {
 // Query-shape regressions follow the existing cash-tender test seam.
 // These inspect generated SQL; they do not execute PostgreSQL aggregates.
 describe('PH-RPT aggregate corrections', () => {
-  it('identifies the safety queue as organization-wide without branch attribution', async () => {
+  it('counts safety work only in the reader’s admitted branches and tenant', async () => {
     const queryRaw = vi.fn().mockResolvedValue([]);
     const count = vi.fn().mockResolvedValue(0);
-    const result = await readPharmacyOwnerCommandCentre(
-      {
-        $queryRaw: queryRaw,
-        pharmacyRecallNotice: { count },
-        pharmacySupplierClaim: { count },
-        pharmacyReceivingException: { count },
-        branchRegulatoryProfile: { count },
-      } as never,
-      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04' }
-    );
-    expect(result.metricScopes.safetyQueue).toBe('organization');
-    const safetyQuery = queryRaw.mock.calls.find(([query]) =>
-      (query as { strings: readonly string[] }).strings
-        .join('?')
-        .includes('pharmacy_pharmacist_review_items')
-    )?.[0] as { strings: readonly string[]; values: unknown[] };
-    expect(safetyQuery.strings.join('?')).not.toContain('branchId');
-    expect(safetyQuery.values).toEqual([]);
+    const db = {
+      $queryRaw: queryRaw,
+      pharmacyRecallNotice: { count },
+      pharmacySupplierClaim: { count },
+      pharmacyReceivingException: { count },
+      branchRegulatoryProfile: { count },
+      user: { findUnique: vi.fn().mockResolvedValue(null) },
+      pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyClinicalBranchAssignment: {
+        findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_1' }]),
+      },
+    };
+    const filters = { branchIds: ['branch_1', 'branch_2'], from: '2026-09-04', to: '2026-09-04' };
+    const safetyQueries = () =>
+      queryRaw.mock.calls
+        .map(([query]) => query as { strings: readonly string[]; values: unknown[] })
+        .filter((query) => query.strings.join('?').includes('pharmacy_pharmacist_review_items'));
+    const noReader = await readPharmacyOwnerCommandCentre(db as never, filters);
+    expect(noReader.metrics.safetyQueue).toBeNull();
+    expect(safetyQueries()).toEqual([]);
+    const result = await readPharmacyOwnerCommandCentre(db as never, filters, {
+      organizationId: 'org',
+      userId: 'reader',
+    });
+    expect(result.metricScopes.safetyQueue).toBe('admitted branches');
+    expect(safetyQueries()).toHaveLength(1);
+    const query = safetyQueries()[0]!;
+    expect(query.strings.join('?')).toContain('line."branchId" IN (?)');
+    expect(query.strings.join('?')).toContain('r."branchId" IN (?)');
+    expect(query.values).toEqual(['org', 'branch_1', 'org', 'branch_1']);
   });
 
   async function captureQueries() {

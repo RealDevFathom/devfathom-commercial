@@ -25,6 +25,26 @@ const view = {
 };
 
 describe('branch assignment panel', () => {
+  it('offers a separate removal for a clinical-only grant at the same branch', () => {
+    const onUnassign = vi.fn();
+    render(
+      <BranchAssignmentsPanel
+        {...view}
+        assignments={[
+          ...view.assignments,
+          { ...view.assignments[0], id: 'clinical', clinicalOnly: true },
+        ]}
+        notice={null}
+        pending={false}
+        onAssign={vi.fn()}
+        onUnassign={onUnassign}
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Remove clinical-only access' }));
+    expect(onUnassign).toHaveBeenCalledWith('clinical', true);
+    expect(screen.getByRole('button', { name: 'Unassign' })).toBeEnabled();
+  });
+
   it('assigns the selected member and unassigns an existing row', () => {
     const onAssign = vi.fn();
     const onUnassign = vi.fn();

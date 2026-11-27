@@ -573,7 +573,11 @@ export function buildPharmacyReportTools(h: AssistantHelpers): ToolSet {
               selected.map((row) => ({ id: row.id, dayEnd: row.businessDayEndsAtHistory }))
             ),
           };
-          const report = await readPharmacyOwnerCommandCentre(h.db, filters);
+          // Other metrics do not need a clinical read.
+          const clinicalReader = metricKeys.includes('safetyQueue')
+            ? { organizationId: h.ctx.organizationId, userId: h.ctx.userId }
+            : undefined;
+          const report = await readPharmacyOwnerCommandCentre(h.db, filters, clinicalReader);
           const values = report.metrics as Record<string, number | null>;
           return {
             kind: 'answer',

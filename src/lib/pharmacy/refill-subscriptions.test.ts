@@ -227,9 +227,14 @@ function fakeDb(
     },
     pharmacySale: { update: record('sale.update') },
     user: {
+      findUnique: vi.fn().mockResolvedValue(null),
       findFirst: async () => ({ id: 'pharmacist', organizationId: 'org', status: 'ACTIVE' }),
     },
     // DEV-941: the pharmacist works at this branch.
+    pharmacyClinicalBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     pharmacyBranchAssignment: {
       findFirst: vi.fn(async ({ where }: { where: { userId: string; branchId: string } }) =>
         where.userId === 'pharmacist' && where.branchId === 'branch' ? { branchId: 'branch' } : null
@@ -516,24 +521,34 @@ describe('DEV-73 Rx cycle pharmacist approval', () => {
     expect(writes.some(([name]) => name === 'cycle.update' || name === 'audit.create')).toBe(false);
   });
 
-  it('DEV-941: accepts an organisation admin’s PIN at a branch they hold no assignment to', async () => {
+  it('requires clinical admission for an administrator’s refill approval', async () => {
     vi.mocked(can).mockResolvedValue(true);
-    const { db } = fakeDb({ cycle: awaiting });
+    const { db, writes } = fakeDb({ cycle: awaiting });
     db.user.findFirst = async () => ({
       id: 'admin',
       organizationId: 'org',
       status: 'ACTIVE',
       role: 'ADMIN',
     });
-    await expect(
+    const approve = () =>
       approveRefillCycle(
         db as never,
         scope,
         'cycle-1',
         { approvedByUserId: 'admin', credentialId: 'cred-1' },
         COVERING
-      )
-    ).resolves.toMatchObject({ status: 'RESERVED', approvedByUserId: 'admin' });
+      );
+    await expect(approve()).rejects.toMatchObject({
+      reason: 'BRANCH',
+      message:
+        'This pharmacist is not assigned to this branch. Only a pharmacist assigned to this branch can approve its refills.',
+    });
+    expect(writes).toEqual([]);
+    db.pharmacyClinicalBranchAssignment.findFirst.mockResolvedValue({ branchId: scope.branchId });
+    await expect(approve()).resolves.toMatchObject({
+      status: 'RESERVED',
+      approvedByUserId: 'admin',
+    });
   });
 
   it("DEV-631: refuses checkout while today's business day is closed, before any hold is consumed", async () => {

@@ -100,6 +100,15 @@ async function isOwner(
   return Boolean(actor && hasAllCapabilityAccess(actor));
 }
 
+function requireDifferentMember(ctx: TRPCContext, memberId: string) {
+  if (ctx.session?.user.id === memberId) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Another administrator must change your branch access.',
+    });
+  }
+}
+
 export const pharmacyBranchAssignmentsRouter = router({
   cashModes: adminProcedure.query(async ({ ctx }) => {
     assertModuleLicensed(ctx, 'pharmacy-core');
@@ -249,7 +258,7 @@ export const pharmacyBranchAssignmentsRouter = router({
 
   list: adminProcedure.query(async ({ ctx }) => {
     const organizationId = pharmacyOrganizationId(ctx);
-    const [branches, people, rows] = await Promise.all([
+    const [branches, people, rows, clinicalRows] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         select: { id: true, code: true, name: true },
@@ -260,12 +269,17 @@ export const pharmacyBranchAssignmentsRouter = router({
           organizationId,
           status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
         },
-        select: memberSelect,
+        select: { ...memberSelect, role: true },
         orderBy: { name: 'asc' },
       }),
       ctx.db.pharmacyBranchAssignment.findMany({
         where: { organizationId, active: true },
         select: { id: true, branchId: true, userId: true },
+        orderBy: { createdAt: 'asc' },
+      }),
+      ctx.db.pharmacyClinicalBranchAssignment.findMany({
+        where: { organizationId, active: true, branch: { organizationId, active: true } },
+        select: { id: true, branchId: true, userId: true, user: { select: { name: true } } },
         orderBy: { createdAt: 'asc' },
       }),
     ]);
@@ -283,23 +297,36 @@ export const pharmacyBranchAssignmentsRouter = router({
     );
     const branchName = new Map(branches.map((branch) => [branch.id, branch.name]));
     const memberName = new Map(members.map((member) => [member.id, member.name]));
+    // A legacy administrator can hold grants without qualifying for a new full assignment.
+    for (const person of people) {
+      if (person.role === 'ADMIN' && !person.organizationRole)
+        memberName.set(person.id, person.name);
+    }
     return {
       branches,
       members,
-      assignments: rows.flatMap((row) => {
-        const userName = memberName.get(row.userId);
-        const assignedBranch = branchName.get(row.branchId);
-        if (!userName || !assignedBranch) return [];
-        return [
-          {
-            id: row.id,
-            branchId: row.branchId,
-            userId: row.userId,
-            branchName: assignedBranch,
-            userName,
-          },
-        ];
-      }),
+      assignments: [
+        ...rows.flatMap((row) => {
+          const userName = memberName.get(row.userId);
+          const assignedBranch = branchName.get(row.branchId);
+          if (!userName || !assignedBranch) return [];
+          return [
+            {
+              id: row.id,
+              branchId: row.branchId,
+              userId: row.userId,
+              branchName: assignedBranch,
+              userName,
+            },
+          ];
+        }),
+        ...clinicalRows.flatMap(({ user, ...row }) => {
+          const name = branchName.get(row.branchId);
+          return name
+            ? [{ ...row, branchName: name, userName: user.name, clinicalOnly: true as const }]
+            : [];
+        }),
+      ],
     };
   }),
 
@@ -315,6 +342,7 @@ export const pharmacyBranchAssignmentsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);
+      requireDifferentMember(ctx, input.userId);
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { id: input.branchId, organizationId, active: true },
         select: { id: true },
@@ -356,20 +384,32 @@ export const pharmacyBranchAssignmentsRouter = router({
 
   unassign: adminProcedure
     .meta(refuseSupportSession)
-    .input(z.object({ assignmentId: z.string().trim().min(1).max(128) }).strict())
+    .input(
+      z
+        .object({
+          assignmentId: z.string().trim().min(1).max(128),
+          clinicalOnly: z.boolean().optional(),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);
-      const row = await ctx.db.pharmacyBranchAssignment.findFirst({
+      const query = {
         where: { id: input.assignmentId, organizationId, active: true },
         select: { id: true, branchId: true, userId: true },
-      });
+      } as const;
+      const row = input.clinicalOnly
+        ? await ctx.db.pharmacyClinicalBranchAssignment.findFirst(query)
+        : await ctx.db.pharmacyBranchAssignment.findFirst(query);
       if (!row) throw new TRPCError({ code: 'NOT_FOUND', message: 'Assignment was not found.' });
-      await ctx.db.pharmacyBranchAssignment.update({
-        where: { id: row.id },
-        data: { active: false },
-      });
+      requireDifferentMember(ctx, row.userId);
+      const change = { where: { id: row.id }, data: { active: false } };
+      if (input.clinicalOnly) await ctx.db.pharmacyClinicalBranchAssignment.update(change);
+      else await ctx.db.pharmacyBranchAssignment.update(change);
       annotateAudit(ctx, {
-        targetType: 'PharmacyBranchAssignment',
+        targetType: input.clinicalOnly
+          ? 'PharmacyClinicalBranchAssignment'
+          : 'PharmacyBranchAssignment',
         targetId: row.id,
         metadata: { action: 'unassign', branchId: row.branchId, userId: row.userId },
       });

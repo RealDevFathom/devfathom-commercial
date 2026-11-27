@@ -3,7 +3,7 @@ import 'server-only';
 import { can, subjectFromSession } from '@/lib/abac';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { counterBranchAssignmentDenial } from './counter-capability';
+import { clinicalBranchAssignmentDenial } from './clinical-branch-access';
 import { RX_ON_DUTY_DECLARATION, type RxDeclaredSoloSignOff } from './rx-solo-shift';
 import { readRxSoloShiftPolicy } from './rx-solo-shift-policy';
 
@@ -17,7 +17,7 @@ import { readRxSoloShiftPolicy } from './rx-solo-shift-policy';
  * pharmacist still signs it from the pharmacist queue (`decideReview`), as before. The requester
  * may sign it only when all of this holds, checked again inside the write's transaction:
  *   - they may decide a review at the line's branch (`rxReviewSignerDenial`: ACTIVE, not on
- *     leave, `pharmacy:dispense`, an active assignment to it or a session ADMIN);
+ *     leave, `pharmacy:dispense`, an active assignment to it or a tenant owner);
  *   - nobody else could sign it there: no other member `rxReviewSignerDenial` accepts there.
  *     Whether they have a PIN does not matter: a second pharmacist signs the review from the
  *     pharmacist queue without one (`decideReview`), so anyone who could do that is someone else
@@ -58,8 +58,8 @@ export type RxSelfSignScope = { organizationId: string; branchId: string; actorI
  *     permission checks admit ON_LEAVE; this legally weighted signature does not, so a pharmacist
  *     on leave neither signs nor counts as someone else who could sign;
  *   - holds `pharmacy:dispense` (deny wins);
- *   - may act at the branch: an active assignment to it, or a session ADMIN of the organization
- *     (`counterBranchAssignmentDenial`, the counter's branch rule).
+ *   - may act at the branch: an active assignment to it, or a tenant owner of the organization
+ *     (`clinicalBranchAssignmentDenial`, the counter's branch rule).
  * A suspended staff profile does not change it: that profile carries the PIN, and a review is
  * decided from the pharmacist queue without one.
  */
@@ -112,7 +112,7 @@ export async function rxReviewSignerRowDenial(
     }))
   )
     return 'NO_RIGHT';
-  if (await counterBranchAssignmentDenial(db, row, scope.organizationId, scope.branchId))
+  if (await clinicalBranchAssignmentDenial(db, row, scope.organizationId, scope.branchId))
     return 'BRANCH';
   return null;
 }
@@ -141,7 +141,7 @@ export async function otherRxReviewSigners(
   scope: RxSelfSignScope,
   now = new Date()
 ): Promise<{ id: string; name: string | null }[]> {
-  // A narrowing only: everyone the rule accepts is ACTIVE and is an ADMIN or assigned here.
+  // A narrowing only: everyone the rule accepts is ACTIVE and either potentially an owner or assigned here.
   const members = await db.user.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -149,8 +149,19 @@ export async function otherRxReviewSigners(
       id: { not: scope.actorId },
       OR: [
         { role: 'ADMIN' },
+        { organizationRole: { isSystem: true, key: 'owner' } },
         {
           pharmacyBranchAssignments: {
+            some: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              active: true,
+              branch: { organizationId: scope.organizationId, active: true },
+            },
+          },
+        },
+        {
+          clinicalBranchAssignments: {
             some: {
               organizationId: scope.organizationId,
               branchId: scope.branchId,

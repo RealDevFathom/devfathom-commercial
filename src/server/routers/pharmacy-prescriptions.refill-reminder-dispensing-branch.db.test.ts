@@ -67,6 +67,7 @@ const X = {
   org: `org_dev962_${suffix}`,
   north: `br962_north_${suffix}`,
   south: `br962_south_${suffix}`,
+  admin: `admin_${suffix}`,
   owner: `u962_owner_${suffix}`,
   pharmacist: `u962_north_${suffix}`,
   southPharmacist: `u962_south_${suffix}`,
@@ -85,6 +86,7 @@ let prescriptionLineId = '';
 let yFill = '';
 
 type Actor = { userId: string; tenantRole: 'ADMIN' | 'EMPLOYEE' };
+const ADMIN: Actor = { userId: X.admin, tenantRole: 'ADMIN' };
 const OWNER: Actor = { userId: X.owner, tenantRole: 'ADMIN' };
 const PHARMACIST: Actor = { userId: X.pharmacist, tenantRole: 'EMPLOYEE' };
 const SOUTH: Actor = { userId: X.southPharmacist, tenantRole: 'EMPLOYEE' };
@@ -190,13 +192,15 @@ beforeAll(async () => {
       await seedDepartments(tx, [X.org], ['LEADERSHIP']);
       for (const [userId, tenantRole] of [
         [X.owner, 'ADMIN'],
+        [X.admin, 'ADMIN'],
         [X.pharmacist, 'EMPLOYEE'],
         [X.southPharmacist, 'EMPLOYEE'],
       ] as const) {
         await tx.organizationRole.create({
           data: {
             id: `role_${userId}`,
-            key: `role_${userId}`,
+            key: userId === X.owner ? 'owner' : `role_${userId}`,
+            isSystem: userId === X.owner,
             name: userId,
             permissions: {
               create: ['pharmacy:dispense', 'pharmacy:prescriptions'].map((capability) => ({
@@ -228,6 +232,7 @@ beforeAll(async () => {
         });
       }
       // One pharmacist per branch; the owner holds no assignment at all.
+      await tx.pharmacyBranchAssignment.create({ data: { userId: X.admin, branchId: X.north } });
       await tx.pharmacyBranchAssignment.create({
         data: { userId: X.pharmacist, branchId: X.north },
       });
@@ -299,13 +304,13 @@ beforeAll(async () => {
     },
     { userId: X.owner, timeout: 60_000 }
   );
-  // The north pharmacist dispenses four fills at north. DEV-1056 removed the standalone fill
+  // The north pharmacist dispenses five fills at north. DEV-1056 removed the standalone fill
   // route (it recorded a fill with no sale and no stock movement), so the rows are written
   // as the counter sale writes them: by the runtime role, inside the tenant.
   await withTenantDb(
     X.org,
     async (tx) => {
-      for (let sequence = 2; sequence <= 5; sequence += 1) {
+      for (let sequence = 2; sequence <= 6; sequence += 1) {
         const fill = await tx.prescriptionFill.create({
           data: {
             id: `fill962_${sequence}_${suffix}`,
@@ -447,8 +452,15 @@ describeIfDatabase(
       ]);
     });
 
-    it('accepts an organisation admin at another branch than the one that dispensed the fill', async () => {
+    it('refuses a non-admitted branch and permits the dispensing branch’s administrator or a cross-branch System Owner', async () => {
       const fillId = fills[2]!;
+      await expect(
+        settle(as(ADMIN, (api) => api.captureRefillReminder(reminder(X.south, fillId))))
+      ).resolves.toEqual(OUTSIDE_SCOPE);
+      expect(await remindersFor(fillId)).toEqual([]);
+      await expect(
+        as(ADMIN, (api) => api.captureRefillReminder(reminder(X.north, fills[3]!)))
+      ).resolves.toMatchObject({ branchId: X.north, capturedByUserId: X.admin });
       await expect(
         as(OWNER, (api) => api.captureRefillReminder(reminder(X.south, fillId)))
       ).resolves.toMatchObject({ branchId: X.south, capturedByUserId: X.owner });
@@ -457,7 +469,17 @@ describeIfDatabase(
       ]);
     });
 
-    it('leaves a fill with no recorded dispensing branch to an organisation admin', async () => {
+    it('reserves a legacy unattributed fill for the System Owner while an admitted administrator can record an attributed fill', async () => {
+      await expect(
+        settle(as(ADMIN, (api) => api.captureRefillReminder(reminder(X.south, legacyFill))))
+      ).resolves.toEqual(OUTSIDE_SCOPE);
+      await expect(
+        settle(as(ADMIN, (api) => api.captureRefillReminder(reminder(X.north, legacyFill))))
+      ).resolves.toEqual(BRANCH_UNKNOWN);
+      expect(await remindersFor(legacyFill)).toEqual([]);
+      await expect(
+        as(ADMIN, (api) => api.captureRefillReminder(reminder(X.north, fills[4]!)))
+      ).resolves.toMatchObject({ branchId: X.north, capturedByUserId: X.admin });
       await expect(
         settle(as(PHARMACIST, (api) => api.captureRefillReminder(reminder(X.north, legacyFill))))
       ).resolves.toEqual(BRANCH_UNKNOWN);

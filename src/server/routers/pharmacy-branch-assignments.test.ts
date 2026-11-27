@@ -17,6 +17,7 @@ vi.mock('@/server/audit', async () => {
   };
 });
 
+import { SUPPORT_SESSION_REFUSED_MESSAGE } from '@/lib/tenancy/support-session-rule';
 import { OPEN_ATTEMPT_STATUSES } from '@/lib/pharmacy/card-terminal/open-attempts';
 import type { TRPCContext } from '../trpc';
 import { pharmacyBranchAssignmentsRouter } from './pharmacy-branch-assignments';
@@ -45,6 +46,13 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
       })),
       findMany: vi.fn(async () => [
         {
+          id: 'legacy-admin',
+          name: 'Legacy admin',
+          email: 'legacy@example.test',
+          role: 'ADMIN',
+          organizationRole: null,
+        },
+        {
           id: 'cashier-1',
           name: 'Amina',
           email: 'amina@example.test',
@@ -66,6 +74,11 @@ function fixture(role: 'ADMIN' | 'EMPLOYEE' = 'ADMIN') {
           organizationRole: cashierRole,
         };
       }),
+    },
+    pharmacyClinicalBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([]),
+      findFirst: vi.fn().mockResolvedValue(null),
+      update: vi.fn(),
     },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => [{ id: 'pba-1', branchId: 'branch-a', userId: 'cashier-1' }]),
@@ -108,6 +121,77 @@ beforeEach(() => {
 });
 
 describe('pharmacy branch assignments', () => {
+  it('refuses support-session grants and revocations before looking up either kind of assignment', async () => {
+    const f = fixture();
+    Object.assign(f.context.session.user, { isSupportSession: true });
+    const refusal = { code: 'FORBIDDEN', message: SUPPORT_SESSION_REFUSED_MESSAGE };
+    await expect(
+      f.caller.assign({ branchId: 'branch-a', userId: 'cashier-1' })
+    ).rejects.toMatchObject(refusal);
+    await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject(refusal);
+    await expect(
+      f.caller.unassign({ assignmentId: 'clinical-1', clinicalOnly: true })
+    ).rejects.toMatchObject(refusal);
+    expect(f.db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyClinicalBranchAssignment.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.upsert).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+    expect(f.db.pharmacyClinicalBranchAssignment.update).not.toHaveBeenCalled();
+  });
+
+  it('lists and separately revokes the clinical admission of a legacy administrator', async () => {
+    const f = fixture();
+    const grant = { id: 'clinical-1', userId: 'legacy-admin', branchId: 'branch-a' };
+    f.db.pharmacyClinicalBranchAssignment.findMany.mockResolvedValue([
+      { ...grant, user: { name: 'Legacy admin' } },
+    ]);
+    f.db.pharmacyClinicalBranchAssignment.findFirst.mockResolvedValue(grant);
+    const full = { id: 'full-legacy', userId: grant.userId, branchId: grant.branchId };
+    f.db.pharmacyBranchAssignment.findMany.mockResolvedValue([full]);
+    const list = await f.caller.list();
+    expect(list.members.map((m) => m.id)).not.toContain('legacy-admin');
+    expect(list.assignments).toContainEqual({
+      ...grant,
+      branchName: 'Counter A',
+      userName: 'Legacy admin',
+      clinicalOnly: true,
+    });
+    const input = { assignmentId: grant.id, clinicalOnly: true };
+    f.context.session.user.id = grant.userId;
+    await expect(f.caller.unassign(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Another administrator must change your branch access.',
+    });
+    expect(f.db.pharmacyClinicalBranchAssignment.update).not.toHaveBeenCalled();
+    f.context.session.user.id = 'admin-1';
+    await expect(f.caller.unassign(input)).resolves.toEqual({ id: grant.id });
+    expect(f.db.pharmacyClinicalBranchAssignment.update).toHaveBeenCalledWith({
+      where: { id: grant.id },
+      data: { active: false },
+    });
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+    f.db.pharmacyClinicalBranchAssignment.findMany.mockResolvedValue([]);
+    expect((await f.caller.list()).assignments).toEqual([
+      { ...full, branchName: 'Counter A', userName: 'Legacy admin' },
+    ]);
+  });
+
+  it('requires another administrator to change the acting member’s own branch access', async () => {
+    const f = fixture();
+    f.context.session.user.id = 'cashier-1';
+    const refusal = {
+      code: 'FORBIDDEN',
+      message: 'Another administrator must change your branch access.',
+    };
+    await expect(
+      f.caller.assign({ branchId: 'branch-a', userId: 'cashier-1' })
+    ).rejects.toMatchObject(refusal);
+    await expect(f.caller.unassign({ assignmentId: 'pba-1' })).rejects.toMatchObject(refusal);
+    expect(f.db.pharmacyBranchAssignment.upsert).not.toHaveBeenCalled();
+    expect(f.db.pharmacyBranchAssignment.update).not.toHaveBeenCalled();
+  });
+
   it('lists active pharmacy members and their assignments', async () => {
     const f = fixture();
     await expect(f.caller.list()).resolves.toEqual({

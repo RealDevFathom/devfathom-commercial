@@ -1,5 +1,7 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+const queue = vi.hoisted(() => ({ items: [] as unknown[] }));
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -9,7 +11,7 @@ vi.mock('@/lib/trpc', () => ({
         useQuery: () => ({
           isLoading: false,
           error: null,
-          data: { items: [], currentUserId: 'user' },
+          data: { items: queue.items, currentUserId: 'user' },
         }),
       },
       decideReview: { useMutation: () => ({ mutateAsync: vi.fn() }) },
@@ -19,7 +21,10 @@ vi.mock('@/lib/trpc', () => ({
 
 import { PharmacistQueueConsole } from './pharmacist-queue-console';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  queue.items = [];
+});
 
 describe('pharmacist queue empty state', () => {
   it('explains what appears in the queue and links to the Counter', () => {
@@ -34,4 +39,27 @@ describe('pharmacist queue empty state', () => {
       '/pharmacy/counter'
     );
   });
+});
+
+it('labels a hidden patient name in both the waiting list and selected review', () => {
+  queue.items = [
+    {
+      id: 'review-1',
+      requestedByUserId: 'another-pharmacist',
+      decisions: [],
+      line: {
+        medicine: { productName: 'Synthetic tablet' },
+        directions: 'Take with water',
+        prescription: {
+          patient: { displayName: null },
+          prescriber: { name: 'Synthetic prescriber' },
+        },
+      },
+    },
+  ];
+  render(<PharmacistQueueConsole />);
+  expect(screen.getAllByText('Patient name hidden')).toHaveLength(2);
+  expect(within(screen.getByRole('listitem')).getByRole('button')).toHaveAccessibleName(
+    /Patient name hidden/
+  );
 });

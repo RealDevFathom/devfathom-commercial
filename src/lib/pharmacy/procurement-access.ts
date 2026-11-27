@@ -103,7 +103,12 @@ export function procurementGrantedForUser(user: {
 
 /** A real installed Owner, or an ADMIN explicitly granted all capabilities.
  * The `owner-operator` template alone does not make someone an owner. */
-export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string, userId: string) {
+export async function actorIsPharmacyOwner(
+  db: Pick<ScopedDb, 'user'>,
+  organizationId: string,
+  userId: string,
+  scope?: 'system-owner'
+) {
   const user = await db.user.findUnique({
     where: { id: userId, organizationId, status: 'ACTIVE' },
     select: {
@@ -117,6 +122,11 @@ export async function actorIsPharmacyOwner(db: ScopedDb, organizationId: string,
     },
   });
   if (!user) return false;
+  if (
+    scope === 'system-owner' &&
+    !(user.organizationRole?.isSystem && user.organizationRole.key === 'owner')
+  )
+    return false;
   if (
     matching([...user.permissionOverrides, ...(user.organizationRole?.permissions ?? [])]).some(
       (rule) => rule.effect === 'DENY'

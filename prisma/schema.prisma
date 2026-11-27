@@ -284,6 +284,7 @@ model PharmacyBranch {
   visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
+  clinicalBranchAssignments                  PharmacyClinicalBranchAssignment[]
   branchAssignments                        PharmacyBranchAssignment[]
   promotions                               PharmacyPromotion[]
   sopSite                                  PharmacySopSite?
@@ -316,6 +317,24 @@ model PharmacyBranchAssignment {
   @@unique([organizationId, branchId, userId], map: "pharmacy_branch_assignments_org_branch_user_key")
   @@index([organizationId, userId, active])
   @@map("pharmacy_branch_assignments")
+}
+
+/// Admission to clinical work only. Purchasing and SOP continue to use full branch assignments.
+model PharmacyClinicalBranchAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  userId         String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, map: "pharmacy_clinical_branch_fk")
+  user   User           @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: Cascade, map: "pharmacy_clinical_user_fk")
+
+  @@unique([organizationId, branchId, userId], map: "pharmacy_clinical_branch_user_key")
+  @@index([organizationId, userId, active], map: "pharmacy_clinical_user_active_idx")
+  @@map("pharmacy_clinical_branch_assignments")
 }
 
 /// DEV-751: binds one pharmacy branch to the shared SOP engine. The engine's
@@ -4212,6 +4231,7 @@ model User {
   pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
 
   hotelPropertyAssignments  HotelPropertyAssignment[]
+  clinicalBranchAssignments PharmacyClinicalBranchAssignment[]
   pharmacyBranchAssignments PharmacyBranchAssignment[]
 
   @@unique([organizationId, id])

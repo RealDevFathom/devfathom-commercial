@@ -108,27 +108,28 @@ export function PharmacistQueueConsole() {
       {queue.data && active ? (
         <div className="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)]">
           <SectionCard title="Waiting" titleLevel={2}>
-            <div className="grid gap-2" role="list">
+            <ul className="grid gap-2">
               {queue.data.items.map((item, index) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  ref={item.id === active.id ? activeButtonRef : undefined}
-                  disabled={pendingId !== null}
-                  onClick={(event) => select(item, event.currentTarget)}
-                  className="min-h-16 rounded-sm border border-border-subtle p-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-current={item.id === active.id}
-                >
-                  <span className="font-mono text-xs text-text-muted">#{index + 1}</span>
-                  <span className="block font-semibold text-text-strong">
-                    {item.line.medicine.productName}
-                  </span>
-                  <span className="block text-xs text-text-muted">
-                    {item.line.prescription.patient.displayName}
-                  </span>
-                </button>
+                <li key={item.id}>
+                  <button
+                    type="button"
+                    ref={item.id === active.id ? activeButtonRef : undefined}
+                    disabled={pendingId !== null}
+                    onClick={(event) => select(item, event.currentTarget)}
+                    className="min-h-16 w-full rounded-sm border border-border-subtle p-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    aria-current={item.id === active.id}
+                  >
+                    <span className="font-mono text-xs text-text-muted">#{index + 1}</span>
+                    <span className="block font-semibold text-text-strong">
+                      {item.line.medicine.productName}
+                    </span>
+                    <span className="block text-xs text-text-muted">
+                      {item.line.prescription.patient.displayName ?? 'Patient name hidden'}
+                    </span>
+                  </button>
+                </li>
               ))}
-            </div>
+            </ul>
           </SectionCard>
           <SectionCard
             title={active.line.medicine.productName}
@@ -142,7 +143,9 @@ export function PharmacistQueueConsole() {
             <dl className="mb-5 grid gap-4 border-b border-border-subtle pb-5 sm:grid-cols-3">
               <div>
                 <dt className="font-mono text-xs text-text-muted uppercase">Patient</dt>
-                <dd className="mt-1 font-medium">{active.line.prescription.patient.displayName}</dd>
+                <dd className="mt-1 font-medium">
+                  {active.line.prescription.patient.displayName ?? 'Patient name hidden'}
+                </dd>
               </div>
               <div>
                 <dt className="font-mono text-xs text-text-muted uppercase">Prescriber</dt>
@@ -212,8 +215,8 @@ export function PharmacistQueueConsole() {
             <DialogTitle>Discard this review draft?</DialogTitle>
             <DialogDescription>
               Switching items will discard the unsent review for{' '}
-              {active?.line.prescription.patient.displayName} ({active?.line.medicine.productName}),
-              including its reason and counselling checks.
+              {active?.line.prescription.patient.displayName ?? 'Patient name hidden'} (
+              {active?.line.medicine.productName}), including its reason and counselling checks.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -8,8 +8,10 @@ import { annotateAudit } from '@/server/audit';
 import { authenticateRefundPin } from '@/lib/pharmacy/refund-authorization';
 import { readOwnPinState } from '@/lib/pharmacy/own-pin';
 import { NO_PIN_SET_MESSAGE } from '@/lib/pharmacy/own-pin-policy';
-import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
-import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
+import {
+  clinicalBranchAssignmentDenial,
+  isClinicalOwner,
+} from '@/lib/pharmacy/clinical-branch-access';
 import {
   assertRxSelfSignAllowed,
   declaredSoloMetadata,
@@ -28,24 +30,19 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const dispense = capabilityProcedure('pharmacy:dispense');
 
 /**
- * DEV-913: a review or substitution is about one counter sale line, so its audit
- * entry carries that sale's branch. Read only for the entry; a line that does not
- * resolve leaves it workspace-wide and the write decides the outcome as before.
- * DEV-955: a line that does resolve is at a branch, and the caller must be allowed
- * to act there (the counter's branch rule: an active assignment, or an organization
- * ADMIN). A pharmacist of another branch of this organization is refused.
+ * Tag the audit entry with the sale line's branch and require admission before writing.
  */
 async function assertSaleLineBranch(ctx: TRPCContext, saleLineId: string) {
+  const organizationId = ctx.entitlements?.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   const line = await ctx.db.pharmacySaleLine.findFirst({
-    where: { id: saleLineId },
+    where: { id: saleLineId, organizationId },
     select: { branchId: true },
   });
   annotateAuditBranch(ctx, line?.branchId);
-  if (!line) return;
-  const organizationId = ctx.entitlements?.organizationId;
-  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (!line) throw new TRPCError({ code: 'NOT_FOUND', message: 'This sale line was not found.' });
   if (
-    await counterBranchAssignmentDenial(
+    await clinicalBranchAssignmentDenial(
       ctx.db as unknown as ScopedDb,
       ctx.session!.user,
       organizationId,
@@ -74,7 +71,7 @@ async function clinicalReviewScope(ctx: TRPCContext) {
   const organizationId = ctx.entitlements?.organizationId;
   if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   const userId = ctx.session!.user.id;
-  if (await actorIsPharmacyOwner(ctx.db, organizationId, userId)) return { organizationId };
+  if (await isClinicalOwner(ctx.db, organizationId, userId)) return { organizationId };
 
   const reviews = await ctx.db.$queryRaw<{ id: string }[]>`
     SELECT review.id
@@ -83,12 +80,16 @@ async function clinicalReviewScope(ctx: TRPCContext) {
       ON line."organizationId" = review."organizationId" AND line.id = review."saleLineId"
     JOIN pharmacy_branches branch
       ON branch."organizationId" = line."organizationId" AND branch.id = line."branchId"
-    JOIN pharmacy_branch_assignments assignment
+    JOIN (
+      SELECT "organizationId", "branchId", "userId" FROM pharmacy_branch_assignments WHERE active
+      UNION
+      SELECT "organizationId", "branchId", "userId" FROM pharmacy_clinical_branch_assignments WHERE active
+    ) assignment
       ON assignment."organizationId" = branch."organizationId" AND assignment."branchId" = branch.id
     JOIN users member
       ON member."organizationId" = assignment."organizationId" AND member.id = assignment."userId"
     WHERE member.status = 'ACTIVE' AND review."organizationId" = ${organizationId} AND assignment."userId" = ${userId}
-      AND branch.active AND assignment.active
+      AND branch.active
   `;
   return { organizationId, id: { in: reviews.map((review) => review.id) } };
 }
@@ -117,9 +118,7 @@ export const RX_SELF_SIGN_PIN_LOCKED =
 export const pharmacyDispensingRouter = router({
   // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
   // a verification task never grants permission to credit AVAILABLE inventory.
-  // DEV-897: the queue stays inside the caller's active branch assignment; only a
-  // session ADMIN of this organization may open any of its branches. A branch the
-  // caller may not open gets the same refusal as one that does not exist.
+  // A missing branch and one the caller cannot open have the same response.
   returnVerificationQueue: dispense
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
@@ -128,21 +127,13 @@ export const pharmacyDispensingRouter = router({
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { id: input.branchId, organizationId },
       });
-      if (!branch) throw new TRPCError({ code: 'NOT_FOUND' });
       const user = ctx.session!.user;
-      if (!(user.role === 'ADMIN' && user.organizationId === organizationId)) {
-        const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
-          where: {
-            organizationId,
-            userId: user.id,
-            branchId: input.branchId,
-            active: true,
-            branch: { organizationId, active: true },
-          },
-          select: { branchId: true },
-        });
-        if (assignment?.branchId !== input.branchId) throw new TRPCError({ code: 'NOT_FOUND' });
-      }
+      if (
+        !branch ||
+        user.organizationId !== organizationId ||
+        (await clinicalBranchAssignmentDenial(ctx.db, user, organizationId, input.branchId))
+      )
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'This branch is unavailable.' });
       return ctx.db.pharmacyReturnVerificationTask.findMany({
         where: { organizationId, branchId: input.branchId },
         orderBy: { requestedAt: 'asc' },
@@ -220,6 +211,7 @@ export const pharmacyDispensingRouter = router({
       orderBy: { requestedAt: 'desc' },
       include: {
         line: {
+          omit: { directions: !canRecord },
           include: {
             medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
             presentation: true,
@@ -283,7 +275,7 @@ export const pharmacyDispensingRouter = router({
         });
       // DEV-955: the decider must be allowed to sign at the sale's branch, by the same rule the
       // solo rule counts other signers with (`otherRxReviewSigners`): ACTIVE (not on leave), the
-      // dispensing right, and an active assignment to the branch or organization ADMIN.
+      // dispensing right, and an active assignment to the branch or live tenant ownership.
       const denial = await rxReviewSignerDenial(ctx.db as unknown as ScopedDb, {
         organizationId,
         branchId: line.branchId,
@@ -309,7 +301,7 @@ export const pharmacyDispensingRouter = router({
       if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const user = ctx.session!.user;
       const db = ctx.db as unknown as ScopedDb;
-      if (await counterBranchAssignmentDenial(db, user, organizationId, input.branchId))
+      if (await clinicalBranchAssignmentDenial(db, user, organizationId, input.branchId))
         return { lines: [], pin: null };
       const saleLines = await ctx.db.pharmacySaleLine.findMany({
         where: { organizationId, branchId: input.branchId, saleId: input.saleId },

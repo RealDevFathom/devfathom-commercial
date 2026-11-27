@@ -298,8 +298,8 @@ export const SHOP_SCREEN_COPY = {
       'Amounts are shown to two decimal places. — means unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the selected period. Stock signals, recommended orders and expiry exposure are current snapshots; expiry exposure is not realized loss. Gross margin is not cash flow. Gross margin uses the same exact posted journal as Finance, including returns and reversals, on postings from the start of the first selected date to the start of the day after the last, in ',
     financeAposSMarginComparisonSplitsDaysTheSameWay:
       ". Finance's margin comparison splits days the same way. It may differ from sales grouped by business date. Missing journal evidence is unavailable; posted totals do not establish complete source or cost coverage. Supplier, ingredient and batch filters narrow sales, gross margin, stock signals, recommended orders and expiry exposure to the matching stock lots and products. Cash, cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they show — while one is selected. The daily work pack and observed demand use branch/date scope only.",
-    theSelectedBranchDoesNotApplyToThis:
-      'The selected branch does not apply to this queue. Date, supplier, ingredient and batch filters do not apply either. Unsigned pharmacist review items plus open controlled-register incidents, from pharmacist review and controlled-register records at read time.',
+    safetyQueueScope:
+      'Counts unsigned pharmacist reviews and open controlled-register incidents at the selected branches you can access. Date, supplier, ingredient and batch filters do not apply.',
     advisoryOnly: 'Advisory only',
     expiryAndSupplierReturnAdvisor: 'Expiry and supplier-return advisor',
     rankedByProjectedStockValueLeftAtExpiry:
@@ -405,8 +405,8 @@ export const SHOP_SCREEN_COPY = {
       'Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried.',
     checkTheDateRangeAndBranchScopeThen:
       'Check the date range and branch scope, then apply the filters again. No data was changed.',
-    organizationWideSafetyQueue: 'Organization-wide safety queue',
-    allBranchesLatestRecords: 'All branches · latest records',
+    safetyQueue: 'Safety queue',
+    admittedBranchesLatestRecords: 'Branches you can access · latest records',
     packScansRecordTheMedicineAndBatchThey:
       'Pack scans record the medicine and batch they matched, not the supplier, so these flags cannot be filtered by supplier. Clear the supplier filter to review them.',
     anActivePharmacyBranchIsRequiredBeforeReports:

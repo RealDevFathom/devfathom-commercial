@@ -61,6 +61,7 @@ function context(
 ) {
   return {
     db: {
+      user: { findUnique: vi.fn().mockResolvedValue(null) },
       organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
       pharmacyPatient: {
         findFirst: mocks.patient,
@@ -554,6 +555,83 @@ describe('prescription capture and private delivery', () => {
         : ['pharmacy:counter', 'pharmacy:dispense', 'pharmacy:counter', 'pharmacy:dispense']
     );
   });
+
+  it.each([false, true])(
+    'returns only the permitted fill history and counts every fill on the counter panel (System Owner: %s)',
+    async (owner) => {
+      mocks.can.mockResolvedValue(true);
+      mocks.hasModule.mockReturnValue(true);
+      const ctx = context();
+      const at = new Date('2026-11-01T22:15:30Z');
+      const fill = (id: string, name: string, qty: number) => ({
+        branchId: id,
+        branch: { name },
+        quantityCanonicalUnits: qty,
+        dispensedAt: at,
+        id: 'private-fill-' + id,
+        dispensedByUserId: 'private-staff',
+        idempotencyKey: 'private-key',
+      });
+      mocks.patient.mockResolvedValue({
+        id: 'patient-a',
+        displayName: 'Synthetic patient',
+        cnic: null,
+        phone: null,
+        consents: [],
+        prescriptions: [
+          {
+            id: 'rx',
+            prescriber: { name: 'Test physician' },
+            validFrom: at,
+            validUntil: at,
+            authorizedRepeats: 0,
+            lines: [
+              {
+                id: 'line',
+                medicine: { productName: 'Medicine' },
+                presentation: { presentation: 'Tablet' },
+                authorizedCanonicalUnits: 12,
+                pharmacistReviewItems: [],
+                fills: [fill('a', 'North', 2), fill('b', 'South', 5)],
+              },
+            ],
+          },
+        ],
+      });
+      Object.assign(ctx.db, {
+        user: {
+          findUnique: vi.fn().mockResolvedValue(
+            owner
+              ? {
+                  role: 'ADMIN',
+                  status: 'ACTIVE',
+                  organizationRole: { isSystem: true, key: 'owner', permissions: [] },
+                  permissionOverrides: [],
+                }
+              : null
+          ),
+        },
+        pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+        pharmacyClinicalBranchAssignment: {
+          findMany: vi.fn().mockResolvedValue([{ branchId: 'a' }]),
+        },
+      });
+      const result = await caller(ctx).counterPatientPanel({ patientId: 'patient-a' });
+      const line = result.prescriptions[0]!.lines[0]!;
+      expect(line.remainingAuthorizedUnits).toBe(5);
+      expect(line.filledCanonicalUnits).toBe(7);
+      expect(line.fills).toEqual([
+        { date: '2026-11-02', quantity: 2, label: 'Dispensed at North' },
+        {
+          date: '2026-11-02',
+          quantity: 5,
+          label: owner ? 'Dispensed at South' : 'Dispensed at another branch',
+        },
+      ]);
+      expect(JSON.stringify(result)).not.toContain('private-');
+      if (!owner) expect(JSON.stringify(result)).not.toContain('South');
+    }
+  );
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
@@ -1322,9 +1400,20 @@ describe('DEV-938 refill reminder branch assignment', () => {
   function reminderContext(role: 'ADMIN' | 'EMPLOYEE', userId = 'pharmacist-a') {
     const ctx = context(userId);
     ctx.session!.user.role = role;
+    if (userId === 'owner-a')
+      vi.mocked(ctx.db.user.findUnique).mockResolvedValue({
+        role,
+        status: 'ACTIVE',
+        organizationRole: { key: 'owner', isSystem: true, permissions: [] },
+        permissionOverrides: [],
+      } as never);
     ctx.db = {
       ...ctx.db,
       pharmacyBranch: { findFirst: branchFind },
+      pharmacyClinicalBranchAssignment: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       pharmacyBranchAssignment: { findFirst: assignmentFind },
       prescriptionFill: { findFirst: fillFind },
       patientConsent: { findFirst: consentFind },
@@ -1339,7 +1428,7 @@ describe('DEV-938 refill reminder branch assignment', () => {
     mocks.hasModule.mockReturnValue(true);
     // Scoped to the session organization: another tenant's branch is not found.
     branchFind.mockImplementation(async ({ where }) =>
-      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active === true
+      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active !== false
         ? { id: 'branch-a' }
         : null
     );
@@ -1375,6 +1464,7 @@ describe('DEV-938 refill reminder branch assignment', () => {
         branchId: 'branch-a',
         active: true,
         branch: { organizationId: 'org-a', active: true },
+        user: { organizationId: 'org-a', status: 'ACTIVE' },
       },
       select: { branchId: true },
     });
@@ -1430,6 +1520,17 @@ describe('DEV-938 refill reminder branch assignment', () => {
     });
     expect(reminderCreate).toHaveBeenCalledOnce();
     expect(ctx.audit.detail.metadata).toMatchObject({ branchId: 'branch-a' });
+  });
+
+  it('requires the original dispensing branch for an assigned non-owner administrator', async () => {
+    const ctx = reminderContext('ADMIN', 'admin-a');
+    assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
+    fillFind.mockResolvedValue({ id: 'fill-a', branchId: 'branch-b' });
+    await expect(caller(ctx).captureRefillReminder(reminderInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'FILL_DISPENSED_AT_ANOTHER_BRANCH',
+    });
+    expect(reminderCreate).not.toHaveBeenCalled();
   });
 
   it('leaves the owner able to record at any branch of the organization', async () => {

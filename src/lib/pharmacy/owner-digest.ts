@@ -137,8 +137,9 @@ export async function composeOwnerDigest(
     to: input.businessDate,
     ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
   };
+  const reader = { organizationId: input.organizationId, userId: input.userId };
   const [report, anomalies, renewals] = await Promise.all([
-    readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }),
+    readPharmacyOwnerCommandCentre(db, { ...filters, timeZone: input.timeZone }, reader),
     // The same workspace-day window the scheduled refresh stored the signals under.
     readPharmacyAnomalySignals(db, { ...filters, timeZone: input.timeZone }),
     // Additive line: an unreadable reminder never blocks the digest itself.
@@ -166,13 +167,17 @@ export async function composeOwnerDigest(
     const [ledger, demand] = await Promise.all([
       cadence === 'DAILY'
         ? Promise.resolve(report)
-        : readPharmacyOwnerCommandCentre(db, {
-            branchIds: [input.branchId],
-            from: window.from,
-            to: window.to,
-            timeZone: input.timeZone,
-            ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
-          }),
+        : readPharmacyOwnerCommandCentre(
+            db,
+            {
+              branchIds: [input.branchId],
+              from: window.from,
+              to: window.to,
+              timeZone: input.timeZone,
+              ...pharmacyBranchDayEndsField([{ id: input.branchId, dayEnd: input.dayEnd }]),
+            },
+            reader
+          ),
       readOwnerBriefingDemand(db, input, window, config),
     ]);
     briefings.push(buildOwnerBriefing(window, ledger.metrics, demand, config));

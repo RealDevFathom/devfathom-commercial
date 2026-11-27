@@ -36,6 +36,7 @@ function fixture(
       }),
     },
     pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ id: 'b' }) },
+    pharmacyClinicalBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue({ branchId: 'b' }) },
     pharmacyReturnVerificationTask: {
       findMany: vi.fn().mockResolvedValue([{ id: 'task-1' }, { id: 'task-2' }]),
@@ -57,6 +58,24 @@ function fixture(
   };
 }
 describe('OTC return verification queue', () => {
+  it('admits a clinical-only member to return verification with the dispensing capability', async () => {
+    const f = fixture();
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    f.db.pharmacyClinicalBranchAssignment.findFirst.mockResolvedValue({ branchId: 'b' });
+    await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).resolves.toHaveLength(2);
+    expect(f.db.pharmacyClinicalBranchAssignment.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org',
+        userId: 'u',
+        branchId: 'b',
+        active: true,
+        user: { organizationId: 'org', status: 'ACTIVE' },
+        branch: { organizationId: 'org', active: true },
+      },
+      select: { branchId: true },
+    });
+  });
+
   it('requires pharmacist capability', async () => {
     const f = fixture(false);
     await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).rejects.toMatchObject({
@@ -103,6 +122,7 @@ describe('return verification queue branch assignment (DEV-897)', () => {
           branchId: 'b',
           active: true,
           branch: { organizationId: 'org', active: true },
+          user: { organizationId: 'org', status: 'ACTIVE' },
         },
       })
     );
@@ -132,11 +152,47 @@ describe('return verification queue branch assignment (DEV-897)', () => {
     expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
   });
 
-  it('lets a session ADMIN of this organization open any of its branches', async () => {
+  it('reads only the admitted branch for a dispensing administrator', async () => {
     const f = fixture(true, ['pharmacy:dispense'], { role: 'ADMIN' });
-    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
     await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).resolves.toHaveLength(2);
-    expect(f.db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+    f.db.pharmacyReturnVerificationTask.findMany.mockClear();
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(f.caller.returnVerificationQueue({ branchId: 'other' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'This branch is unavailable.',
+    });
+    expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
+  });
+
+  it('returns no queue to an unassigned administrator, admits their assigned branch and lets a System Owner cross branches', async () => {
+    const f = fixture(true, ['pharmacy:dispense'], { role: 'ADMIN' });
+    const rights = [
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: '*', effect: 'ALLOW' },
+    ];
+    function setRole(key: string, isSystem: boolean) {
+      f.db.user.findUnique.mockResolvedValue({
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        organizationRole: { key, isSystem, permissions: rights },
+        permissionOverrides: [],
+      });
+    }
+    setRole('administrator', false);
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'This branch is unavailable.',
+    });
+    expect(f.db.pharmacyReturnVerificationTask.findMany).not.toHaveBeenCalled();
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ branchId: 'b' });
+    await expect(f.caller.returnVerificationQueue({ branchId: 'b' })).resolves.toHaveLength(2);
+    setRole('owner', true);
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+    await expect(f.caller.returnVerificationQueue({ branchId: 'other' })).resolves.toHaveLength(2);
+    expect(f.db.pharmacyReturnVerificationTask.findMany).toHaveBeenLastCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org', branchId: 'other' } })
+    );
   });
 
   it('does not treat an ADMIN of another organization as an organization ADMIN', async () => {

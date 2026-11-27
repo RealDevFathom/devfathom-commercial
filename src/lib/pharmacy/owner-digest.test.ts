@@ -125,11 +125,15 @@ describe('RPT-03 owner digest', () => {
       businessDate: '2026-09-04',
     });
 
-    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
-      branchIds: ['branch_1'],
-      from: '2026-09-04',
-      to: '2026-09-04',
-    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-04',
+        to: '2026-09-04',
+      },
+      { organizationId: 'org_1', userId: 'user_1' }
+    );
     expect(digest.metrics.map(({ key }) => key)).toEqual([
       'salesMinor',
       'marginMinor',
@@ -213,12 +217,16 @@ describe('RPT-03 owner digest', () => {
       businessDate: '2026-09-04',
       timeZone: 'Asia/Karachi',
     });
-    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
-      branchIds: ['branch_1'],
-      from: '2026-09-04',
-      to: '2026-09-04',
-      timeZone: 'Asia/Karachi',
-    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-04',
+        to: '2026-09-04',
+        timeZone: 'Asia/Karachi',
+      },
+      { organizationId: 'org_1', userId: 'user_1' }
+    );
     expect(mocks.readPharmacyAnomalySignals).toHaveBeenCalledWith(expect.anything(), {
       branchIds: ['branch_1'],
       from: '2026-09-04',
@@ -348,11 +356,15 @@ describe('RPT-03 owner digest', () => {
       'DAILY',
       'WEEKLY',
     ]);
-    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
-      branchIds: ['branch_1'],
-      from: '2026-09-01',
-      to: '2026-09-07',
-    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-01',
+        to: '2026-09-07',
+      },
+      { organizationId: 'org_1', userId: 'user_1' }
+    );
     expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -373,12 +385,16 @@ describe('RPT-03 owner digest', () => {
       businessDate: '2026-09-07',
       timeZone: 'Asia/Karachi',
     });
-    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
-      branchIds: ['branch_1'],
-      from: '2026-09-01',
-      to: '2026-09-07',
-      timeZone: 'Asia/Karachi',
-    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-01',
+        to: '2026-09-07',
+        timeZone: 'Asia/Karachi',
+      },
+      { organizationId: 'org_1', userId: 'user_1' }
+    );
     expect(mocks.readOwnerBriefingDemand).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
@@ -410,12 +426,16 @@ describe('RPT-03 owner digest', () => {
       businessDate: '2026-09-07',
       timeZone: 'UTC',
     });
-    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(expect.anything(), {
-      branchIds: ['branch_1'],
-      from: '2026-09-01',
-      to: '2026-09-07',
-      timeZone: 'UTC',
-    });
+    expect(mocks.readPharmacyOwnerCommandCentre).toHaveBeenCalledWith(
+      expect.anything(),
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-01',
+        to: '2026-09-07',
+        timeZone: 'UTC',
+      },
+      { organizationId: 'org_1', userId: 'user_1' }
+    );
     for (const [cadence, from] of [
       ['DAILY', '2026-09-07'],
       ['WEEKLY', '2026-09-01'],

@@ -1,13 +1,13 @@
 /**
  * DEV-941 — refill reminders and refill cycles follow the branch rule prescription checks use
- * (DEV-955): a pharmacist sees and approves refills only at a branch they are assigned to, an
- * organisation admin at every branch of the organisation, and another organisation nowhere.
+ * (DEV-955, DEV-1021): pharmacists and administrators need branch admission; the installed
+ * System Owner can work across the organisation. Another organisation gets no records.
  *
  *   - Viewing: the prescriptions workspace offers only the caller's branches, refuses another
  *     branch plainly (and the refusal is logged), and never shows another branch's reminder
  *     record, not even inside the prescription list.
  *   - Approving: the PIN that approves a refill cycle must belong to a pharmacist assigned to
- *     the cycle's branch (or an organisation admin). Another branch's pharmacist is refused
+ *     the cycle's branch (or a System Owner with the dispensing right). Another branch's pharmacist is refused
  *     plainly, logged, and the cycle stays held. The screen offers only those pharmacists.
  *
  * Real routers, real ABAC and persisted roles, migrated PostgreSQL with FORCE row level
@@ -91,6 +91,22 @@ const P = {
     grants: PHARMACIST_GRANTS,
     branchId: null,
     pin: '690318',
+  },
+  admittedAdmin: {
+    id: `u941_admitted_${suffix}`,
+    org: X.org,
+    role: 'ADMIN',
+    grants: PHARMACIST_GRANTS,
+    branchId: null,
+    pin: '462951',
+  },
+  owner: {
+    id: `u941_owner_${suffix}`,
+    org: X.org,
+    role: 'ADMIN',
+    grants: PHARMACIST_GRANTS,
+    branchId: null,
+    pin: '648203',
   },
   /** A pharmacist of another organisation. */
   foreign: {
@@ -340,7 +356,8 @@ beforeAll(async () => {
           await tx.organizationRole.create({
             data: {
               id: `role_${entry.id}`,
-              key: `role_${entry.id}`,
+              key: entry.id === P.owner.id ? 'owner' : `role_${entry.id}`,
+              isSystem: entry.id === P.owner.id,
               name: entry.id,
               permissions: {
                 create: entry.grants.map((capability) => ({
@@ -366,6 +383,11 @@ beforeAll(async () => {
             await tx.pharmacyBranchAssignment.create({
               data: { userId: entry.id, branchId: entry.branchId, active: true },
             });
+          if (entry.id === P.admittedAdmin.id) {
+            await tx.pharmacyClinicalBranchAssignment.create({
+              data: { userId: entry.id, branchId: X.north },
+            });
+          }
           if (entry.pin) {
             const profile = await tx.restaurantStaffProfile.create({
               data: { userId: entry.id, displayName: entry.id },
@@ -580,10 +602,29 @@ describeIfDatabase('DEV-941 viewing refill reminders follows the branch rule', (
     expect(entry!.ctx.audit.detail).toMatchObject({ metadata: { branchId: X.south } });
   });
 
-  it('shows an organisation admin every branch and each branch’s records', async () => {
-    const all = await as(P.admin, (api) => api.pharmacyPrescriptions.workspace());
+  it('restricts administrators to admitted reminders and shows the System Owner both branches', async () => {
+    const unassigned = await as(P.admin, (api) => api.pharmacyPrescriptions.workspace());
+    expect(unassigned.branches).toEqual([]);
+    expect(unassigned.selectedBranchId).toBeNull();
+    expect(unassigned.reminderCaptures).toEqual([]);
+    expect(allFills(unassigned).filter((fill) => fill.reminderCapture !== null)).toEqual([]);
+    await expect(
+      settle(as(P.admin, (api) => api.pharmacyPrescriptions.workspace({ branchId: X.north })))
+    ).resolves.toEqual(VIEW_REFUSAL);
+    const admitted = await as(P.admittedAdmin, (api) =>
+      api.pharmacyPrescriptions.workspace({ branchId: X.north })
+    );
+    expect(admitted.branches.map((branch) => branch.id)).toEqual([X.north]);
+    expect(admitted.reminderCaptures.map((reminder) => reminder.id)).toEqual([northReminder]);
+    expect(JSON.stringify(admitted)).not.toContain(southReminder);
+    await expect(
+      settle(
+        as(P.admittedAdmin, (api) => api.pharmacyPrescriptions.workspace({ branchId: X.south }))
+      )
+    ).resolves.toEqual(VIEW_REFUSAL);
+    const all = await as(P.owner, (api) => api.pharmacyPrescriptions.workspace());
     expect(all.branches.map((branch) => branch.id).sort()).toEqual([X.north, X.south].sort());
-    const south = await as(P.admin, (api) =>
+    const south = await as(P.owner, (api) =>
       api.pharmacyPrescriptions.workspace({ branchId: X.south })
     );
     expect(south.selectedBranchId).toBe(X.south);
@@ -606,12 +647,12 @@ describeIfDatabase('DEV-941 viewing refill reminders follows the branch rule', (
 });
 
 describeIfDatabase('DEV-941 approving a refill cycle follows the branch rule', () => {
-  it('offers only pharmacists who may approve at the branch', async () => {
+  it('offers the branch pharmacist, clinically admitted administrator and System Owner as approvers', async () => {
     const approvers = await as(P.clerk, (api) =>
       api.pharmacyOrdering.subscriptionCycleApprovers({ branchId: X.north })
     );
     expect(approvers.map((approver) => approver.id).sort()).toEqual(
-      [profiles[P.north.id], profiles[P.admin.id]].sort()
+      [profiles[P.north.id], profiles[P.admittedAdmin.id], profiles[P.owner.id]].sort()
     );
   });
 
@@ -659,11 +700,21 @@ describeIfDatabase('DEV-941 approving a refill cycle follows the branch rule', (
     });
   });
 
-  it('accepts the PIN of an organisation admin assigned to no branch', async () => {
+  it('keeps the cycle held for an unassigned administrator and accepts an admitted administrator or System Owner', async () => {
     const cycleId = await openCycle();
-    await expect(approveWith(P.admin, cycleId)).resolves.toMatchObject({
+    await expect(settle(approveWith(P.admin, cycleId))).resolves.toEqual(APPROVE_REFUSAL);
+    await expect(cycleRow(cycleId)).resolves.toEqual({
+      status: 'AWAITING_PHARMACIST',
+      approvedByUserId: null,
+      approvedAt: null,
+    });
+    await expect(approveWith(P.admittedAdmin, cycleId)).resolves.toMatchObject({
       status: 'RESERVED',
-      approvedByUserId: P.admin.id,
+      approvedByUserId: P.admittedAdmin.id,
+    });
+    await expect(approveWith(P.owner, await openCycle())).resolves.toMatchObject({
+      status: 'RESERVED',
+      approvedByUserId: P.owner.id,
     });
   });
 });

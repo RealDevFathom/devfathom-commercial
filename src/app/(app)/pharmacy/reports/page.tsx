@@ -702,17 +702,15 @@ export default async function PharmacyReportsPage({
           </div>
           <div className="mt-6">
             <Stat
-              label={screenCopy.reports.organizationWideSafetyQueue}
+              label={screenCopy.reports.safetyQueue}
               value={metrics?.safetyQueue ?? '—'}
-              sub={screenCopy.reports.allBranchesLatestRecords}
+              sub={screenCopy.reports.admittedBranchesLatestRecords}
             />
             <details className="text-sm text-text-muted">
               <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
                 {copy.details}
               </summary>
-              <p className="mt-2 text-sm text-text-muted">
-                {screenCopy.reports.theSelectedBranchDoesNotApplyToThis}
-              </p>
+              <p className="mt-2 text-sm text-text-muted">{screenCopy.reports.safetyQueueScope}</p>
             </details>
           </div>
           <details className="mt-4 text-sm text-text-muted">
@@ -1285,9 +1283,7 @@ export default async function PharmacyReportsPage({
                           key={metricKey}
                         >
                           <h4 className="text-sm font-semibold text-text-strong">
-                            {metricKey === 'safetyQueue'
-                              ? 'Organization-wide safety queue'
-                              : contract.label.replace(/^Today's /, 'Selected-period ')}
+                            {contract.label.replace(/^Today's /, 'Selected-period ')}
                           </h4>
                           <p className="mt-1 text-xs leading-5 text-text-muted">
                             {contract.definition}
@@ -1303,11 +1299,7 @@ export default async function PharmacyReportsPage({
                             </div>
                             <div>
                               <dt className="inline font-semibold">{screenCopy.reports.scope2}</dt>
-                              <dd className="inline">
-                                {metricKey === 'safetyQueue'
-                                  ? 'Organization-wide at read time; selected branch does not apply'
-                                  : contract.scope}
-                              </dd>
+                              <dd className="inline">{contract.scope}</dd>
                             </div>
                             <div>
                               <dt className="inline font-semibold">{screenCopy.reports.access}</dt>

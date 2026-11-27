@@ -16,7 +16,10 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
-import { counterBranchAssignmentDenial } from '@/lib/pharmacy/counter-capability';
+import {
+  clinicalBranchAssignmentDenial,
+  isClinicalOwner,
+} from '@/lib/pharmacy/clinical-branch-access';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
   configuredRxOcrAdapterName,
@@ -223,12 +226,12 @@ export const pharmacyPrescriptionsRouter = router({
         select: { id: true, name: true },
       });
       // DEV-941: refill reminders belong to a branch. A pharmacist sees only the branches
-      // they are assigned to, an organisation admin every branch: the counter's branch rule,
+      // they are assigned to, a tenant owner every branch: the counter's branch rule,
       // as `captureRefillReminder` writes them and `decideReview` signs at a branch.
       const visible = await Promise.all(
         activeBranches.map(
           async (branch) =>
-            !(await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
+            !(await clinicalBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
         )
       );
       const branches = activeBranches.filter((_, index) => visible[index]);
@@ -625,7 +628,7 @@ export const pharmacyPrescriptionsRouter = router({
       // DEV-938: a reminder is recorded only at a branch the caller works at, as
       // every other branch-scoped dispensing action. A branch of another
       // organization, an inactive one and a missing one get the same refusal;
-      // only a session ADMIN of this organization may use any of its branches.
+      // only a tenant owner of this organization may use any of its branches.
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { id: input.branchId, organizationId, active: true },
         select: { id: true },
@@ -633,14 +636,13 @@ export const pharmacyPrescriptionsRouter = router({
       if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
       // Tag the entry now, so a refused attempt is visible at the branch it targeted.
       annotateAuditBranch(ctx, branch.id);
-      if (await counterBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
+      if (await clinicalBranchAssignmentDenial(ctx.db, user, organizationId, branch.id))
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       // DEV-962: a fill has one reminder slot, and only the branch that dispensed the fill may
       // take it, so another branch cannot use it up. A fill whose dispensing branch is not
-      // recorded (older than this rule, branch not provable) is left to an organisation admin.
-      // The session ADMIN exception is the same as the branch rule above. A missing fill is
-      // reported by `captureRefillReminder` as before.
-      if (user.role !== 'ADMIN') {
+      // recorded (older than this rule, branch not provable) is left to an organisation owner.
+      // A missing fill is reported by `captureRefillReminder` as before.
+      if (user.role !== 'ADMIN' || !(await isClinicalOwner(ctx.db, organizationId, user.id))) {
         const fill = await ctx.db.prescriptionFill.findFirst({
           where: { id: input.fillId, organizationId },
           select: { branchId: true },
@@ -712,7 +714,8 @@ export const pharmacyPrescriptionsRouter = router({
         const panel = await readCounterPatientPanel(
           ctx.db,
           ctx.entitlements.organizationId,
-          input.patientId
+          input.patientId,
+          ctx.session.user.id
         );
         auditPatientRead({
           organizationId: ctx.entitlements.organizationId,

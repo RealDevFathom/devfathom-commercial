@@ -110,7 +110,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyBranchAssignments.assign': {
-    gate: 'adminProcedure (admin:access)',
+    gate: 'adminProcedure (admin:access), another member only',
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyBranchAssignments.cashModes': {
@@ -134,7 +134,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyBranchAssignments.unassign': {
-    gate: 'adminProcedure (admin:access)',
+    gate: 'adminProcedure (admin:access), another member only',
     none: 'workspace administrators only (admin:access)',
   },
   'pharmacyCameras.capturePending': {
@@ -234,7 +234,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/sign-own-line-alone'],
   },
   'pharmacyDispensing.decideReview': {
-    gate: "capabilityProcedure('pharmacy:dispense') + rxReviewSignerDenial (active, assigned to the sale's branch or org ADMIN)",
+    gate: "capabilityProcedure('pharmacy:dispense') + rxReviewSignerDenial (active, assigned to the sale's branch or tenant owner)",
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.enqueueReview': {
@@ -246,11 +246,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.returnVerificationQueue': {
-    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (or session ADMIN)",
+    gate: "capabilityProcedure('pharmacy:dispense') + active branch assignment or live tenant ownership",
     lines: ['dispense-prescriptions/see-returns-awaiting-verification'],
   },
   'pharmacyDispensing.reviewQueue': {
-    gate: "capabilityProcedure('pharmacy:dispense')",
+    gate: "capabilityProcedure('pharmacy:dispense') + clinicalReviewScope (active full or clinical-only assignments, or System Owner); patient names require pharmacy:prescriptions",
     lines: ['dispense-prescriptions/check-query-refuse-sign'],
   },
   'pharmacyDispensing.selfSignReview': {
@@ -258,7 +258,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['dispense-prescriptions/sign-own-line-alone'],
   },
   'pharmacyDispensing.substitutionWorkspace': {
-    gate: 'auditedProtectedProcedure + pharmacy:dispense OR pharmacy:safety; patient names only with pharmacy:prescriptions',
+    gate: 'auditedProtectedProcedure + pharmacy:dispense OR pharmacy:safety; clinicalReviewScope; directions only with pharmacy:dispense; patient names only with pharmacy:prescriptions',
     lines: [
       'dispense-prescriptions/open-substitution-workspace',
       'controlled-medicines/open-substitution-workspace-review',
@@ -1452,11 +1452,11 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyPrescriptions.captureRefillReminder': {
-    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (counterBranchAssignmentDenial) + the fill's dispensing branch (DEV-962; ADMIN excepted)",
+    gate: "capabilityProcedure('pharmacy:dispense') + branch assignment (clinicalBranchAssignmentDenial) + the fill's dispensing branch (DEV-962; only a tenant-owner ADMIN is excepted)",
     lines: ['dispense-prescriptions/record-fills-noncontrolled-prescriptions'],
   },
   'pharmacyPrescriptions.counterPatientPanel': {
-    gate: 'auditedProtectedProcedure + requireCounterPatientAccess: pharmacy:counter OR pharmacy:dispense',
+    gate: 'auditedProtectedProcedure + requireCounterPatientAccess: pharmacy:counter OR pharmacy:dispense; fill branch names require clinical admission or System Owner',
     lines: [
       'take-payment/search-patients-open-patients',
       'dispense-prescriptions/search-counter-patients-open',
@@ -1890,7 +1890,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacyReports.commandCentre': {
-    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue hidden for branch-scoped Managers',
+    gate: 'branchReports (reports:operational OR pharmacy:manage on assigned branches); money figures only with reports:financial; safety queue limited to admitted branches and hidden for branch-scoped Managers',
     lines: [
       'operational-reports/open-reports-centre-replenishment',
       'operational-reports/see-stock-alert-lost',
@@ -2061,7 +2061,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySafety.branches': {
-    gate: "capabilityProcedure('pharmacy:safety'); their assigned register branches",
+    gate: "capabilityProcedure('pharmacy:safety'); active register branches admitted to the reader, all active tenant branches for the System Owner; platform support retains its assigned register branches",
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySafety.controlledPharmacists': {
@@ -2072,7 +2072,7 @@ export const PHARMACY_PROCEDURE_GATES: Readonly<Record<string, PharmacyProcedure
     ],
   },
   'pharmacySafety.controlledRegister': {
-    gate: "capabilityProcedure('pharmacy:safety') + branch scope (organizationBranch)",
+    gate: "capabilityProcedure('pharmacy:safety') + register view branch scope (organizationBranch); System Owner can view all tenant branches, support requires assignment",
     lines: ['controlled-medicines/view-controlled-medicines-register'],
   },
   'pharmacySafety.createInspectionPack': {

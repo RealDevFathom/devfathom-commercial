@@ -135,6 +135,7 @@ function makeDb() {
       ),
     },
     userPermissionOverride: { findMany: vi.fn(async () => []) },
+    pharmacyClinicalBranchAssignment: { findFirst: vi.fn(async () => null) },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async ({ where }: { where: { userId: string } }) =>
         (PEOPLE[where.userId]?.branches ?? []).map((branchId) => ({ branchId }))
@@ -164,6 +165,10 @@ function makeDb() {
     },
     pharmacyPharmacistReviewDecision: { create: vi.fn(async () => ({ id: 'decision_1' })) },
     pharmacySubstitutionRecord: { create: vi.fn(async () => ({ id: 'substitution_1' })) },
+    pharmacyRetentionClass: {
+      aggregate: vi.fn(async () => ({ _max: { retentionDays: null } })),
+      create: vi.fn(async () => ({ id: 'retention_1' })),
+    },
     pharmacyRegisterIncident: {
       findFirst: vi.fn(async ({ where }: { where: { id: string } }) =>
         INCIDENTS[where.id] ? { branchId: INCIDENTS[where.id] } : null
@@ -295,11 +300,33 @@ describe('DEV-913 newly branch-tagged pharmacy entries', () => {
     ]);
   });
 
-  it('leaves the entry workspace-wide when the record has no branch', async () => {
-    await caller('pharmacist').pharmacyDispensing.enqueueReview({
-      prescriptionLineId: 'rx_line_x',
-      saleLineId: 'line_unknown',
+  it('refuses a nonexistent sale line without creating a review', async () => {
+    await expect(
+      caller('pharmacist').pharmacyDispensing.enqueueReview({
+        prescriptionLineId: 'rx_line_x',
+        saleLineId: 'line_unknown',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'This sale line was not found.' });
+    expect(db.pharmacyPharmacistReviewItem.create).not.toHaveBeenCalled();
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      outcome: 'FAILURE',
+      action: 'pharmacyDispensing.enqueueReview',
     });
+  });
+
+  it('keeps a legitimate tenant-wide retention change visible only in the workspace audit', async () => {
+    await caller('owner').pharmacySafety.setRetentionClass({
+      id: 'retention_1',
+      recordClass: 'AUDIT',
+      retentionDays: 365,
+      effectiveFrom: new Date('2026-11-27T00:00:00Z'),
+      reason: 'Synthetic retention policy',
+    });
+    expect(rows[0]).toMatchObject({ outcome: 'SUCCESS', action: 'pharmacy.retentionClass.set' });
+    expect((await caller('owner').audit.list({})).items.map((item) => item.id)).toEqual([
+      rows[0]!.id,
+    ]);
     expect(rows).toHaveLength(1);
     expect((rows[0]!.metadata as Record<string, unknown>).branchId).toBeUndefined();
     expect((await caller('northAdmin').audit.list({})).items).toEqual([]);

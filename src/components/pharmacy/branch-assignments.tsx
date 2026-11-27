@@ -21,6 +21,7 @@ export type BranchAssignmentView = {
     userId: string;
     branchName: string;
     userName: string;
+    clinicalOnly?: boolean;
   }[];
 };
 
@@ -36,7 +37,7 @@ export function BranchAssignmentsPanel({
   pending: boolean;
   notice: string | null;
   onAssign: (input: { branchId: string; userId: string }) => void;
-  onUnassign: (assignmentId: string) => void;
+  onUnassign: (assignmentId: string, clinicalOnly?: boolean) => void;
 }) {
   const [branchId, setBranchId] = useState(branches[0]?.id ?? '');
   const [userId, setUserId] = useState(members[0]?.id ?? '');
@@ -115,10 +116,13 @@ export function BranchAssignmentsPanel({
           assignments.map((assignment) => (
             <li
               className="flex flex-wrap items-center justify-between gap-3 py-3"
-              key={assignment.id}
+              key={`${assignment.clinicalOnly ? 'clinical' : 'full'}-${assignment.id}`}
             >
               <p className="text-sm text-text-body">
                 {assignment.userName} at {assignment.branchName}
+                {assignment.clinicalOnly && (
+                  <span className="block text-text-muted">Clinical-only access</span>
+                )}
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 {/* DEV-913: this person's actions at this branch, in the audit log. */}
@@ -143,9 +147,13 @@ export function BranchAssignmentsPanel({
                   type="button"
                   variant="outline"
                   disabled={pending}
-                  onClick={() => onUnassign(assignment.id)}
+                  onClick={() =>
+                    assignment.clinicalOnly
+                      ? onUnassign(assignment.id, true)
+                      : onUnassign(assignment.id)
+                  }
                 >
-                  Unassign
+                  {assignment.clinicalOnly ? 'Remove clinical-only access' : 'Unassign'}
                 </Button>
               </div>
             </li>
@@ -182,7 +190,7 @@ export function BranchAssignmentsConsole({ initial }: { initial: BranchAssignmen
       notice={notice}
       pending={assign.isPending || unassign.isPending}
       onAssign={(input) => assign.mutate(input)}
-      onUnassign={(assignmentId) => unassign.mutate({ assignmentId })}
+      onUnassign={(assignmentId, clinicalOnly) => unassign.mutate({ assignmentId, clinicalOnly })}
     />
   );
 }

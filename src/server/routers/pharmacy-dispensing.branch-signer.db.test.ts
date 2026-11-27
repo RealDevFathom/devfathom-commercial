@@ -42,6 +42,8 @@ const ids = {
   /** A pharmacist assigned only to another branch of the same organisation. */
   elsewhere: `user_d955_elsewhere_${suffix}`,
   /** An organisation admin holding the dispensing right, assigned to no branch. */
+  owner: `user_d955_owner_${suffix}`,
+  admittedAdmin: `user_d955_admitted_${suffix}`,
   admin: `user_d955_admin_${suffix}`,
   /** A pharmacist assigned here, marked on leave. */
   onLeave: `user_d955_leave_${suffix}`,
@@ -89,6 +91,12 @@ const PEOPLE: Person[] = [
   person(ids.here),
   person(ids.elsewhere, { branchId: ids.otherBranch }),
   person(ids.admin, { role: 'ADMIN', grants: [['pharmacy:dispense', 'ALLOW']], branchId: null }),
+  person(ids.owner, {
+    role: 'ADMIN',
+    grants: [...template('pharmacist'), ['*', 'ALLOW']],
+    branchId: null,
+  }),
+  person(ids.admittedAdmin, { role: 'ADMIN', grants: [['pharmacy:dispense', 'ALLOW']] }),
   person(ids.onLeave, { status: 'ON_LEAVE' }),
   person(ids.inactive, { status: 'INACTIVE' }),
   person(ids.customAllow, { grants: [['pharmacy:dispense', 'ALLOW']] }),
@@ -107,7 +115,13 @@ const byId = (id: string) => PEOPLE.find((entry) => entry.id === id)!;
 /** Everyone the decision rule and the solo rule are compared over: all but the requester. */
 const CANDIDATES = PEOPLE.filter((entry) => entry.id !== ids.seller);
 /** Who may decide this branch's checks (and so who the solo rule counts). */
-const ACCEPTED = [ids.here, ids.admin, ids.customAllow, ids.suspendedProfile].sort();
+const ACCEPTED = [
+  ids.here,
+  ids.owner,
+  ids.admittedAdmin,
+  ids.customAllow,
+  ids.suspendedProfile,
+].sort();
 
 const rulesId = pharmacyRegulatoryFixture(ids.branch).rules.id;
 const businessDate = new Date(`${workspaceToday('UTC')}T00:00:00.000Z`);
@@ -291,7 +305,8 @@ beforeAll(async () => {
         await tx.organizationRole.create({
           data: {
             id: `role_${entry.id}`,
-            key: `role_${entry.id}`,
+            key: entry.id === ids.owner ? 'owner' : `role_${entry.id}`,
+            isSystem: entry.id === ids.owner,
             name: entry.id,
             permissions: {
               create: entry.grants.map(([capability, effect]) => ({ capability, effect })),
@@ -439,6 +454,46 @@ afterAll(async () => {
 });
 
 describeIfDatabase('prescription checks are decided only at the signer’s branch (DEV-955)', () => {
+  it('requires an active branch assignment for a non-owner administrator to decide a review', async () => {
+    const sale = await ringUp();
+    const decision = { reviewItemId: sale.reviewItemId, kind: 'VERIFY' };
+    await expect(decide(ids.admin, decision)).rejects.toMatchObject(BRANCH_REFUSAL);
+    expect(await decisions(sale.reviewItemId)).toEqual([]);
+    const assignment = await tenant((db) =>
+      db.pharmacyBranchAssignment.create({
+        data: { userId: ids.admin, branchId: ids.branch, active: true },
+      })
+    );
+    try {
+      await expect(decide(ids.admin, decision)).resolves.toMatchObject({ id: expect.any(String) });
+    } finally {
+      await tenant((db) => db.pharmacyBranchAssignment.delete({ where: { id: assignment.id } }));
+    }
+  });
+
+  it('refuses both sale-line writes when the sale belongs to another business', async () => {
+    const sale = await ringUp();
+    const api = (run: (dispense: DispensingWrites) => Promise<unknown>) =>
+      dispensing(ids.foreign, (dispense) => run(dispense as unknown as DispensingWrites));
+    const missing = { code: 'NOT_FOUND', message: 'This sale line was not found.' };
+    await expect(
+      api((caller) => caller.enqueueReview({ prescriptionLineId, saleLineId: sale.saleLineId }))
+    ).rejects.toMatchObject(missing);
+    await expect(
+      api((caller) =>
+        caller.recordSubstitution({
+          prescriptionLineId,
+          saleLineId: sale.saleLineId,
+          prescribedPresentationId: rx.presentationId,
+          suppliedPresentationId: rx.presentationId,
+          equivalenceBasis: 'Same presentation',
+          patientCommunication: 'Discussed with patient',
+          jurisdictionRuleRef: 'RX-04',
+        })
+      )
+    ).rejects.toMatchObject(missing);
+  });
+
   it('refuses a pharmacist of another branch to sign, override or verify, and writes nothing', async () => {
     const sale = await ringUp();
     for (const decision of [
@@ -496,12 +551,18 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     ]);
   });
 
-  it('accepts an organisation admin with the dispensing right at any of its branches', async () => {
+  it('allows an admitted administrator and a System Owner to sign, and refuses an unassigned administrator', async () => {
     const sale = await ringUp();
-    await decide(ids.admin, { reviewItemId: sale.reviewItemId, kind: 'SIGN' });
-    expect(await decisions(sale.reviewItemId)).toEqual([
-      { actorUserId: ids.admin, kind: 'SIGN', signedAt: expect.any(Date) },
-    ]);
+    const decision = { reviewItemId: sale.reviewItemId, kind: 'SIGN' };
+    await expect(decide(ids.admin, decision)).rejects.toMatchObject(BRANCH_REFUSAL);
+    expect(await decisions(sale.reviewItemId)).toEqual([]);
+    for (const userId of [ids.admittedAdmin, ids.owner]) {
+      const check = await ringUp();
+      await decide(userId, { reviewItemId: check.reviewItemId, kind: 'SIGN' });
+      expect(await decisions(check.reviewItemId)).toEqual([
+        { actorUserId: userId, kind: 'SIGN', signedAt: expect.any(Date) },
+      ]);
+    }
   });
 
   it('refuses a pharmacist on leave, although assigned here', async () => {
@@ -546,7 +607,7 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     expect(await decisions(sale.reviewItemId)).toEqual([]);
   });
 
-  it('counts for the solo rule exactly the people who may decide the check', async () => {
+  it('counts admitted administrators and System Owners as signers and excludes an unassigned administrator', async () => {
     const sale = await ringUp();
     const counted = (
       await tenant((db) =>
@@ -565,6 +626,7 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
         await decide(candidate.id, { reviewItemId: sale.reviewItemId, kind: 'COUNSEL' });
         accepted.push(candidate.id);
       } catch (error) {
+        if (candidate.id === ids.admin) expect(error).toMatchObject(BRANCH_REFUSAL);
         expect(error).toMatchObject({
           code: expect.stringMatching(/^(FORBIDDEN|NOT_FOUND|UNAUTHORIZED)$/),
         });
@@ -572,7 +634,7 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     }
     accepted.sort();
     expect(counted).toEqual(accepted);
-    // Own branch, admin, a custom role granting the right and a suspended staff profile (which
+    // Own branch, admitted administrator, system Owner, a custom role granting the right and a suspended staff profile (which
     // governs only the PIN) are in; another branch, on leave, inactive, a custom role or a personal
     // override denying the right, a cashier and another organisation are out.
     expect(accepted).toEqual(ACCEPTED);
@@ -583,6 +645,120 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
 });
 
 describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
+  it('uses a clinical-only grant at the counter without giving the member a purchasing branch', async () => {
+    const { procurementBranchIds } = await import('@/lib/pharmacy/procurement-access');
+    await tenant(async (db) => {
+      const api = pharmacyDispensingRouter.createCaller({
+        db,
+        ...context(byId(ids.admin)),
+      } as never);
+      const key = { userId: ids.admin, branchId: ids.branch };
+      const clinical = await db.pharmacyClinicalBranchAssignment.create({ data: key });
+      await expect(api.returnVerificationQueue({ branchId: ids.branch })).resolves.toEqual([]);
+      for (const branchId of [ids.otherBranch, ids.foreignBranch]) {
+        await expect(api.returnVerificationQueue({ branchId })).rejects.toMatchObject({
+          code: 'NOT_FOUND',
+          message: 'This branch is unavailable.',
+        });
+      }
+      expect(await procurementBranchIds(db, ids.org, ids.admin)).toEqual([]);
+      const full = await db.pharmacyBranchAssignment.create({ data: key });
+      await db.pharmacyClinicalBranchAssignment.update({
+        where: { id: clinical.id },
+        data: { active: false },
+      });
+      await expect(api.returnVerificationQueue({ branchId: ids.branch })).resolves.toEqual([]);
+      expect(await procurementBranchIds(db, ids.org, ids.admin)).toEqual([ids.branch]);
+      await db.pharmacyBranchAssignment.update({ where: { id: full.id }, data: { active: false } });
+      await expect(api.returnVerificationQueue({ branchId: ids.branch })).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: 'This branch is unavailable.',
+      });
+    });
+  });
+
+  it('checks admission and tenant ownership before opening a return queue', async () => {
+    await tenant(async (db) => {
+      const queue = (who: string, branchId: string) =>
+        pharmacyDispensingRouter
+          .createCaller({ db, ...context(byId(who)) } as never)
+          .returnVerificationQueue({ branchId });
+      const missing = { code: 'NOT_FOUND', message: 'This branch is unavailable.' };
+      await expect(queue(ids.here, ids.branch)).resolves.toEqual([]);
+      await expect(queue(ids.here, ids.otherBranch)).rejects.toMatchObject(missing);
+      await expect(queue(ids.admin, ids.branch)).rejects.toMatchObject(missing);
+      await db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.owner}` },
+      });
+      try {
+        await expect(queue(ids.admin, ids.otherBranch)).resolves.toEqual([]);
+        await expect(queue(ids.admin, ids.foreignBranch)).rejects.toMatchObject(missing);
+      } finally {
+        await db.user.update({
+          where: { id: ids.admin },
+          data: { organizationRoleId: `role_${ids.admin}` },
+        });
+      }
+    });
+  });
+
+  it('counts an unsigned review only for report readers admitted to its branch', async () => {
+    const { pharmacyReportsRouter } = await import('./pharmacy-reports');
+    const report = (userId: string, branchId?: string) => {
+      const entry = byId(userId);
+      return withTenantDb(
+        entry.org,
+        async (db) => {
+          const ctx = context(entry);
+          ctx.entitlements.enabledModules.push('pharmacy-reports');
+          const api = pharmacyReportsRouter.createCaller({ ...ctx, db } as never);
+          return (await api.commandCentre({ branchId, from: '2026-11-01', to: '2026-11-01' }))
+            .metrics.safetyQueue;
+        },
+        { userId }
+      );
+    };
+    for (const id of [ids.here, ids.elsewhere, ids.admin, ids.foreign]) {
+      await withTenantDb(byId(id).org, (db) =>
+        db.userPermissionOverride.create({
+          data: {
+            userId: id,
+            capability: 'reports:operational',
+            effect: 'ALLOW',
+            reason: 'Synthetic report reader',
+          },
+        })
+      );
+    }
+    await ringUp();
+    const count = await report(ids.here);
+    expect(count).toBeGreaterThan(0);
+    expect(await report(ids.elsewhere)).toBe(0);
+    expect(await report(ids.admin)).toBeNull();
+    await expect(report(ids.foreign, ids.branch)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'One or more branches are outside your report scope.',
+    });
+    await tenant((db) =>
+      db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.owner}` },
+      })
+    );
+    try {
+      expect(await report(ids.admin, ids.branch)).toBe(count);
+      expect(await report(ids.admin, ids.otherBranch)).toBe(0);
+    } finally {
+      await tenant((db) =>
+        db.user.update({
+          where: { id: ids.admin },
+          data: { organizationRoleId: `role_${ids.admin}` },
+        })
+      );
+    }
+  });
+
   it('filters both reads by the reviewed sale line and protects the safety-only projection', async () => {
     const first = await ringUp();
     await tenant(async (db) => {
@@ -656,8 +832,9 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
 
       // A role change is visible to the same caller. Keep the fixture's
       // dispensing-only admin for the separate decision tests.
-      const ownerGrant = await db.organizationRolePermission.create({
-        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+      await db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.owner}` },
       });
       for (const rows of [
         (await admin.reviewQueue()).items,
@@ -666,7 +843,10 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
         expect(rows.map((row) => row.id)).toEqual(
           expect.arrayContaining([first.reviewItemId, other.id])
         );
-      await db.organizationRolePermission.delete({ where: { id: ownerGrant.id } });
+      await db.user.update({
+        where: { id: ids.admin },
+        data: { organizationRoleId: `role_${ids.admin}` },
+      });
 
       const safety = await db.userPermissionOverride.create({
         data: {
@@ -680,6 +860,8 @@ describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
       expect(workspace.canRecord).toBe(false);
       expect(workspace.canViewPatients).toBe(false);
       const item = workspace.lines.find((row) => row.id === first.reviewItemId);
+      expect(item?.line).not.toHaveProperty('directions');
+      expect(JSON.stringify(workspace)).not.toContain('One capsule three times a day');
       expect(item?.line.prescription).toEqual({ id: expect.any(String), patient: null });
       expect(JSON.stringify(workspace)).not.toContain(patientId);
       expect(JSON.stringify(workspace)).not.toContain(`paper:${suffix}`);
