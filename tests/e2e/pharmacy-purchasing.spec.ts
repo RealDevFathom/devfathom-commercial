@@ -2,6 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { chooseSelectField } from './fixtures/select-field';
 import { FIXTURE } from './pharmacy-purchasing-fixture';
 
 /**
@@ -91,10 +92,12 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
   await expect(shellText(page, `Receiving into ${FIXTURE.branch.name}`)).toBeVisible();
 
   // ── 2. pick the sent purchase order ─────────────────────────────────────
-  await page
-    .getByLabel('Purchase order')
-    .first()
-    .selectOption({ label: `${purchaseOrderReference} — ${FIXTURE.supplier.name} (1 lines)` });
+  await chooseSelectField(
+    page.getByRole('combobox', { name: 'Purchase order', exact: true }).first(),
+    {
+      label: `${purchaseOrderReference} — ${FIXTURE.supplier.name} (1 lines)`,
+    }
+  );
   await page.getByRole('button', { name: 'Open order', exact: true }).first().click();
 
   const capture = page
@@ -115,11 +118,13 @@ test('PO → receive → exception → resolve → stock visible', async ({ page
 
   await capture.getByLabel('Batch number').fill(batchNumber);
   await capture.getByLabel('Printed expiry').fill('2028-06-30');
-  await capture.getByLabel('Expiry precision').selectOption('MONTH');
+  await chooseSelectField(capture.getByRole('combobox', { name: 'Expiry precision' }), 'MONTH');
   await capture.getByLabel('Printed MRP (PKR)').fill('320.00');
   await capture.getByLabel('Packs received').fill(String(FIXTURE.delivery.receivedPacks));
   await capture.getByLabel('Invoiced price / pack (PKR)').fill('250.00');
-  await capture.getByLabel('Receive into').selectOption({ label: `${FIXTURE.shelf.name} (STORE)` });
+  await chooseSelectField(capture.getByRole('combobox', { name: 'Receive into' }), {
+    label: `${FIXTURE.shelf.name} (STORE)`,
+  });
 
   await page.getByRole('button', { name: 'File receipt (draft)' }).first().click();
 
@@ -216,25 +221,36 @@ test('PUR-01 offers an unauthorized supplier as an explained, unselectable optio
   await expect(shellText(page, 'Trade with this supplier is not authorized')).toBeVisible();
 
   await page.goto(`${ROUTE}/orders`);
-  const option = page.getByRole('option', { name: `${name} — not authorized` }).first();
+  await page
+    .getByRole('combobox', { name: 'Supplier', exact: true })
+    .and(page.locator('[data-select-field-trigger]'))
+    .first()
+    .click();
+  const listbox = page.getByRole('listbox');
+  const option = listbox.getByRole('option', { name: `${name} — not authorized`, exact: true });
   await expect(option).toHaveCount(1);
   await expect(option).toBeDisabled();
   // The licensed fixture supplier is still selectable beside it, so this is the
   // eligibility rule and not an empty picker.
-  await expect(page.getByRole('option', { name: FIXTURE.supplier.name }).first()).toBeEnabled();
+  await expect(
+    listbox.getByRole('option', { name: FIXTURE.supplier.name, exact: true })
+  ).toBeEnabled();
 });
 
 test('PUR-05 never offers the receiver as their own bypass approver', async ({ page }) => {
   await page.goto(`${ROUTE}/receiving`);
 
-  const approver = page.getByLabel('Approved by').first();
+  const approver = page.getByRole('combobox', { name: 'Approved by', exact: true }).first();
   await expect(approver).toBeVisible();
+  await approver.and(page.locator('[data-select-field-trigger]')).click();
+  const listbox = page.getByRole('listbox');
   await expect(
-    approver.getByRole('option', { name: new RegExp(FIXTURE.approver.email) })
+    listbox.getByRole('option', { name: new RegExp(FIXTURE.approver.email) })
   ).toHaveCount(1);
   await expect(
-    approver.getByRole('option', { name: new RegExp(FIXTURE.receiver.email) })
+    listbox.getByRole('option', { name: new RegExp(FIXTURE.receiver.email) })
   ).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await expect(
     shellText(
       page,
