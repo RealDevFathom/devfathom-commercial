@@ -1599,6 +1599,7 @@ model PharmacyLoyaltyCard {
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
+  walletPasses WalletPass[]
   customer PharmacyCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
@@ -17310,8 +17311,9 @@ enum WalletPassUpdateStatus {
 model WalletPass {
   id                 String             @id @default(cuid())
   organizationId     String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  customerId         String
-  loyaltyAccountId   String
+  customerId         String?
+  loyaltyAccountId   String?
+  pharmacyCardId     String?
   platform           WalletPassPlatform
   serialNumber       String             @unique
   status             WalletPassStatus   @default(ACTIVE)
@@ -17324,12 +17326,14 @@ model WalletPass {
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
-  customer       RestaurantCustomer       @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  loyaltyAccount LoyaltyAccount           @relation(fields: [organizationId, loyaltyAccountId], references: [organizationId, id], onDelete: Restrict)
+  customer       RestaurantCustomer?      @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  loyaltyAccount LoyaltyAccount?          @relation(fields: [organizationId, loyaltyAccountId], references: [organizationId, id], onDelete: Restrict)
+  pharmacyCard   PharmacyLoyaltyCard? @relation(fields: [organizationId, pharmacyCardId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "wallet_pass_pharmacy_card_fk")
   registrations  WalletPassRegistration[]
   updates        WalletPassUpdate[]
 
   @@unique([organizationId, id])
+  @@unique([pharmacyCardId, platform], map: "wallet_pass_pharmacy_platform")
   @@index([organizationId])
   @@index([customerId])
   @@index([loyaltyAccountId])
