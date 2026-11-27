@@ -198,4 +198,32 @@ describeIfDatabase('pharmacy counter reads and branch assignment, against Postgr
       as(OWNER, 'ADMIN', (c) => c.drawerStatus({ branchId: DHA, deviceId: DEVICE }))
     ).resolves.toEqual({ openDrawer: null, operatingCashier: null });
   });
+
+  // DEV-1056: upsell suggestions read the branch's stock and prices, so a member assigned to
+  // the branch needs the counter grant the receipt procedures need. Kept last: it grants one.
+  it('refuses upsell suggestions to a branch member without counter access, then serves the grant', async () => {
+    const upsell = (c: Caller) =>
+      c.upsellSuggestions({ branchId: MAIN, medicineIds: ['medicine-1'] });
+    await expect(as(CASHIER, 'EMPLOYEE', upsell)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    await withTenantDb(ORG, (db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: CASHIER,
+          capability: 'pharmacy:counter',
+          effect: 'ALLOW',
+          reason: 'DEV-1056 upsell test',
+        },
+      })
+    );
+    await expect(as(CASHIER, 'EMPLOYEE', upsell)).resolves.toEqual([]);
+    // The grant does not widen the branch: DHA is still outside the cashier's scope.
+    await expect(
+      as(CASHIER, 'EMPLOYEE', (c) =>
+        c.upsellSuggestions({ branchId: DHA, medicineIds: ['medicine-1'] })
+      )
+    ).rejects.toMatchObject(OUTSIDE);
+  });
 });

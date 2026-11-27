@@ -178,3 +178,49 @@ test('returns a plain retry response if the upload slot check fails', async () =
   expect(request.bodyUsed).toBe(false);
   expect(mocks.put).not.toHaveBeenCalled();
 });
+
+// DEV-1056: uploads are counted per user and per business after the session check and
+// before the body is read.
+test('refuses a user over the upload rate limit before reading the body, and nobody else', async () => {
+  const { UPLOADS_PER_USER_PER_WINDOW, UPLOAD_RATE_MESSAGE } =
+    await import('@/lib/uploads/multipart-request');
+  const as = (user: string, org: string) =>
+    mocks.actor.mockResolvedValue({ organization: { id: org }, session: { user: { id: user } } });
+
+  // A signed-out caller is refused by the session check and is never counted.
+  mocks.actor.mockResolvedValue(null);
+  for (let n = 0; n < UPLOADS_PER_USER_PER_WINDOW + 5; n += 1)
+    expect((await POST(request())).status).toBe(401);
+
+  as('user-rate', 'org-rate');
+  for (let n = 0; n < UPLOADS_PER_USER_PER_WINDOW; n += 1)
+    expect((await POST(request())).status).toBe(200);
+  expect(mocks.put).toHaveBeenCalledTimes(UPLOADS_PER_USER_PER_WINDOW);
+
+  const pull = vi.fn((controller: ReadableStreamDefaultController<Uint8Array>) =>
+    controller.close()
+  );
+  const over = new Request('https://example.test/api/upload', {
+    method: 'POST',
+    headers: { 'content-type': 'multipart/form-data; boundary=x' },
+    body: new ReadableStream<Uint8Array>({ pull }, { highWaterMark: 0 }),
+    duplex: 'half',
+  } as RequestInit);
+  const refused = await POST(over);
+  expect(refused.status).toBe(429);
+  expect(refused.headers.get('Content-Type')).toMatch(/^text\/plain\b/);
+  expect(await refused.text()).toBe(UPLOAD_RATE_MESSAGE);
+  expect(refused.headers.get('Retry-After')).toMatch(/^[1-9]\d*$/);
+  expect(refused.headers.get('Content-Security-Policy')).toContain("'nonce-");
+  expect(pull).not.toHaveBeenCalled();
+  expect(over.bodyUsed).toBe(false);
+  expect(mocks.put).toHaveBeenCalledTimes(UPLOADS_PER_USER_PER_WINDOW);
+
+  // A colleague in the same business, and a user of another business, still upload.
+  as('user-rate-colleague', 'org-rate');
+  expect((await POST(request())).status).toBe(200);
+  as('user-rate-elsewhere', 'org-rate-elsewhere');
+  expect((await POST(request())).status).toBe(200);
+  as('user-rate', 'org-rate');
+  expect((await POST(request())).status).toBe(429);
+});
