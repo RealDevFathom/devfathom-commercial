@@ -82,7 +82,9 @@ it('keeps personal fields out of TEST JSON, signed Google objects, balance patch
   expect(JSON.parse(transport.mock.calls.at(-1)![1].body as string)).toEqual({
     loyaltyPoints: { balance: { int: -2 } },
   });
-  const appleTransport = vi.fn(async (_request: { body: string }) => ({ status: 200 }));
+  const appleTransport = vi
+    .fn<(request: { body: string }) => Promise<{ status: number }>>()
+    .mockResolvedValue({ status: 200 });
   await sendApplePassPush({
     credentials: {
       privateKeyPem: generateKeyPairSync('ec', { namedCurve: 'P-256' })

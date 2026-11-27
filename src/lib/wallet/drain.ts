@@ -39,13 +39,13 @@ export async function drainBusinessWallets() {
         >`SELECT pg_try_advisory_xact_lock(hashtextextended(${'wallet-delivery:' + organizationId},0)) AS held`;
         if (!lock?.held) return;
         const ent = await resolveOrganizationEntitlements(organizationId, db);
-        const module =
+        const requiredModule =
           ent.vertical === 'PHARMACY'
             ? 'pharmacy-crm'
             : ent.vertical === 'RESTAURANT'
               ? 'restaurant-loyalty'
               : null;
-        if (!module || !hasModule(ent, module)) return;
+        if (!requiredModule || !hasModule(ent, requiredModule)) return;
         const deliveryDb = createTenantDb(organizationId);
         async function refreshGoogleDesign() {
           const design = await deliveryDb.walletTenantConfig.findUniqueOrThrow({

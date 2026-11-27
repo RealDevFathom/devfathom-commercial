@@ -115,9 +115,15 @@ export async function buildWalletFiles({
       ).toString('base64');
       appleHash = hashAppleAuthenticationToken(token);
     } else {
-      const { authenticationToken: _token, webServiceURL: _service, ...unsigned } = pass;
       files.apple = {
-        ...unsigned,
+        formatVersion: pass.formatVersion,
+        organizationName: pass.organizationName,
+        passTypeIdentifier: pass.passTypeIdentifier,
+        teamIdentifier: pass.teamIdentifier,
+        serialNumber: pass.serialNumber,
+        backgroundColor: pass.backgroundColor,
+        foregroundColor: pass.foregroundColor,
+        barcodes: pass.barcodes,
         logoText: design.programDisplayName,
         description: design.programDisplayName + ' (TEST)',
         storeCard: {

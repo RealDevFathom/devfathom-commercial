@@ -1,4 +1,5 @@
 'use client';
+import Image from 'next/image';
 import { useState, type FormEvent } from 'react';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -192,10 +193,13 @@ export function WalletEditor({ design, mode, branches, onSave, onPoster }: Props
             style={{ backgroundColor: draft.backgroundColor, color: draft.foregroundColor }}
           >
             {draft.logo && (
-              <img
+              <Image
+                unoptimized
+                width={240}
+                height={48}
                 alt=""
                 src={'data:image/png;base64,' + draft.logo}
-                className="h-12 max-w-full object-contain"
+                className="h-12 max-w-full object-contain object-left"
               />
             )}
             <h3 className="break-words text-2xl font-semibold">{draft.programDisplayName}</h3>

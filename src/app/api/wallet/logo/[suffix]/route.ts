@@ -12,13 +12,13 @@ export async function GET(request: Request, context: { params: Promise<{ suffix:
   if (!org || !isTenantLifecycleAccessible(org.status)) return new Response(null, { status: 404 });
   const config = await withTenantDb(org.id, async (db) => {
     const grant = await resolveOrganizationEntitlements(org.id, db);
-    const module =
+    const requiredModule =
       org.vertical === 'PHARMACY'
         ? 'pharmacy-crm'
         : org.vertical === 'RESTAURANT'
           ? 'restaurant-loyalty'
           : null;
-    if (!module || !hasModule(grant, module)) return null;
+    if (!requiredModule || !hasModule(grant, requiredModule)) return null;
     return db.walletTenantConfig.findFirst({
       where: { organizationId: org.id, googleClassSuffix: suffix, enabled: true },
       select: { logoPng: true },

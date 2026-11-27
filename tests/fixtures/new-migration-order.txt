@@ -73,3 +73,4 @@
 20261127060300_pharmacy_wallet_updates
 20261127060400_wallet_issuer_mode
 20261127060500_wallet_design_refresh
+20261127060600_wallet_projection_permissions

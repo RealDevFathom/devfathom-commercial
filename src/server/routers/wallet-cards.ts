@@ -10,7 +10,7 @@ import { branchPoster } from '@/lib/wallet/poster';
 
 function business(ctx: TRPCContext) {
   const org = ctx.organization;
-  const module =
+  const requiredModule =
     org?.vertical === 'PHARMACY'
       ? 'pharmacy-crm'
       : org?.vertical === 'RESTAURANT'
@@ -19,8 +19,8 @@ function business(ctx: TRPCContext) {
   if (
     !org ||
     ctx.entitlements.organizationId !== org.id ||
-    !module ||
-    !hasModule(ctx.entitlements, module)
+    !requiredModule ||
+    !hasModule(ctx.entitlements, requiredModule)
   )
     throw new TRPCError({ code: 'FORBIDDEN' });
   return org;
