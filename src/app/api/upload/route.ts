@@ -1,3 +1,4 @@
+import { uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
@@ -7,7 +8,7 @@ import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage'
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { registerUpload } from '@/lib/uploads/registry';
 
-export async function POST(request: Request) {
+export const POST = uploadPost(async (request, readUploadForm) => {
   try {
     const actor = await resolveTenantActor({ request });
     if (!actor?.session.user?.id) {
@@ -15,7 +16,9 @@ export async function POST(request: Request) {
     }
     const uploadedById = actor.session.user.id;
 
-    const formData = await request.formData();
+    const formData = await readUploadForm(uploadedById, actor.organization.id);
+    if (formData instanceof Response) return formData;
+    if (!formData) return NextResponse.json({ error: UPLOAD_SIZE_MESSAGE }, { status: 413 });
     const file = formData.get('file') as File | null;
 
     if (!file) {
@@ -23,10 +26,7 @@ export async function POST(request: Request) {
     }
 
     if (file.size > MAX_ATTACHMENT_BYTES) {
-      return NextResponse.json(
-        { error: `File exceeds maximum allowed size of ${MAX_ATTACHMENT_BYTES} bytes` },
-        { status: 413 }
-      );
+      return NextResponse.json({ error: UPLOAD_SIZE_MESSAGE }, { status: 413 });
     }
 
     // Allowlist safe, non-executable types by BOTH declared MIME and extension.
@@ -112,4 +112,13 @@ export async function POST(request: Request) {
     console.error('[upload] failed');
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
-}
+});
+
+export {
+  uploadMethodResponse as GET,
+  uploadMethodResponse as HEAD,
+  uploadMethodResponse as PUT,
+  uploadMethodResponse as PATCH,
+  uploadMethodResponse as DELETE,
+  uploadMethodResponse as OPTIONS,
+} from '@/lib/uploads/multipart-request';

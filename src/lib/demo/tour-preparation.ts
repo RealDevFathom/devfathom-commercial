@@ -148,27 +148,59 @@ async function preparePos(document: Document, step: DemoTourStep, signal?: Abort
 async function selectFirstEnabledBranch(document: Document, error: string, signal?: AbortSignal) {
   const branch = await waitFor(
     () => {
-      const select = Array.from(document.querySelectorAll('select')).find(
-        (select) =>
-          accessibleName(select) === 'branch' && isEnabled(select) && isVisibleDemoElement(select)
+      const control = Array.from(
+        document.querySelectorAll('select, [data-select-field-trigger]')
+      ).find(
+        (element) =>
+          accessibleName(element) === 'branch' &&
+          isEnabled(element) &&
+          isVisibleDemoElement(element)
       );
+      const select =
+        control instanceof HTMLSelectElement
+          ? control
+          : document.getElementById(control?.getAttribute('data-native-control') ?? '');
+      if (!(select instanceof HTMLSelectElement) || !control) return null;
       const option = select
         ? Array.from(select.options).find(
             (option) => !option.disabled && option.value.trim().length > 0
           )
         : null;
-      return select && option ? { select, option } : null;
+      return option ? { control, select, option } : null;
     },
     error,
     signal
   );
 
   if (!branch.select.value) {
-    Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(
-      branch.select,
-      branch.option.value
-    );
-    branch.select.dispatchEvent(new Event('change', { bubbles: true }));
+    if (branch.control === branch.select) {
+      // Keep the server-rendered native fallback usable before enhancement.
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(
+        branch.select,
+        branch.option.value
+      );
+      branch.select.dispatchEvent(new Event('change', { bubbles: true }));
+    } else {
+      // Use the visible shared control so its selection/focus lifecycle runs too.
+      (branch.control as HTMLElement).click();
+      const option = await waitFor(
+        () => {
+          const popup = document.getElementById(branch.control.getAttribute('aria-controls') ?? '');
+          return popup
+            ? Array.from(popup.querySelectorAll<HTMLElement>('[role="option"]')).find(
+                (candidate) =>
+                  candidate.dataset.value === branch.option.value &&
+                  isEnabled(candidate) &&
+                  isVisibleDemoElement(candidate)
+              )
+            : null;
+        },
+        error,
+        signal
+      );
+      option.click();
+      await waitFor(() => branch.select.value === branch.option.value, error, signal);
+    }
   }
 }
 

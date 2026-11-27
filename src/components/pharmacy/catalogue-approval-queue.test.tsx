@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const m = vi.hoisted(() => ({
@@ -16,7 +17,15 @@ const m = vi.hoisted(() => ({
       | undefined
       | { canEdit: boolean; canDecide: boolean; ownerPinApproval: boolean; isOwner: boolean },
   },
-  decide: { mutate: vi.fn(), isPending: false, error: null },
+  selfApproval: {
+    data: { canSelfApprove: false, reviewers: [] as string[] } as
+      undefined | { canSelfApprove: boolean; reviewers: string[] },
+    error: null as null | { message: string },
+  },
+  selfApprovalOptions: undefined as undefined | { enabled?: boolean },
+  approvalMode: { data: { required: false } as undefined | { required: boolean } },
+  invalidateSelfApproval: vi.fn(),
+  decide: { mutate: vi.fn(), isPending: false, error: null as null | { message: string } },
   propose: { mutate: vi.fn(), isPending: false, error: null, isSuccess: false },
   onSuccess: undefined as
     undefined | ((result?: { id: string; status: string; staleEdits: number }) => Promise<void>),
@@ -25,12 +34,22 @@ const m = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => m.approvalMode } },
     useUtils: () => ({
-      pharmacyMedicine: { catalogueEdits: { invalidate: m.invalidate } },
+      pharmacyMedicine: {
+        catalogueEdits: { invalidate: m.invalidate },
+        catalogueSelfApproval: { invalidate: m.invalidateSelfApproval },
+      },
     }),
     pharmacyMedicine: {
       catalogueEdits: { useQuery: () => m.queue },
       catalogueQueueAccess: { useQuery: () => m.access },
+      catalogueSelfApproval: {
+        useQuery: (_input: undefined, options: { enabled?: boolean }) => {
+          m.selfApprovalOptions = options;
+          return m.selfApproval;
+        },
+      },
       search: { useQuery: () => m.search },
       decideCatalogueEdit: {
         useMutation: (options: {
@@ -50,9 +69,16 @@ import { CatalogueApprovalQueue } from './catalogue-approval-queue';
 afterEach(cleanup);
 beforeEach(() => {
   vi.clearAllMocks();
+  // DEV-961: these cases word the owner's own approval as a PIN, which applies while the owner has
+  // the authenticator for approvals turned off; the code wording is covered on its own below.
+  m.approvalMode.data = { required: false };
   m.queue.isPending = false;
   m.queue.error = null;
   m.decide.isPending = false;
+  m.decide.error = null;
+  m.selfApproval.data = { canSelfApprove: false, reviewers: [] };
+  m.selfApproval.error = null;
+  m.selfApprovalOptions = undefined;
   m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: false };
   m.queue.data = [
     {
@@ -111,9 +137,16 @@ describe('DEV-766 catalogue approval queue', () => {
   it('submits a selected item name for review without publishing it', () => {
     render(<CatalogueApprovalQueue />);
     expect(screen.getByRole('button', { name: 'Submit edit for review' })).toBeDisabled();
-    fireEvent.change(screen.getByLabelText('Catalogue item'), {
-      target: { value: 'medicine' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Catalogue item', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'medicine' },
+      }
+    );
     fireEvent.change(screen.getByLabelText('Proposed product name'), {
       target: { value: 'New name' },
     });
@@ -125,6 +158,7 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(m.decide.mutate).not.toHaveBeenCalled();
   });
   it('uses the freshly entered PIN for one decision and clears it after success', async () => {
+    m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
     render(<CatalogueApprovalQueue />);
     const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
     fireEvent.change(pin, { target: { value: '2468' } });
@@ -141,6 +175,7 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(m.invalidate).toHaveBeenCalledOnce();
   });
   it('clears a refused PIN and disables duplicate decisions while pending', () => {
+    m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
     const view = render(<CatalogueApprovalQueue />);
     const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
     fireEvent.change(pin, { target: { value: '9999' } });
@@ -290,6 +325,7 @@ describe('DEV-766 catalogue approval queue', () => {
     expect(screen.getByText('Create medicines from an imported file')).toBeVisible();
     expect(screen.getByText('abuzar-products.csv')).toBeVisible();
     expect(screen.getByText('18999')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Review proposed medicines' })).toBeVisible();
     expect(screen.getByText('Uploaded')).toBeVisible();
     expect(screen.queryByText('a'.repeat(64))).not.toBeInTheDocument();
     expect(screen.queryByText(/SHA/)).not.toBeInTheDocument();
@@ -334,5 +370,246 @@ describe('DEV-766 catalogue approval queue', () => {
       'Catalogue administration permission required.'
     );
     expect(screen.queryByText('No catalogue edits are awaiting review.')).not.toBeInTheDocument();
+  });
+});
+
+describe('DEV-976 who can approve an edit the approver submitted', () => {
+  const ownEdits = [
+    {
+      id: 'own-edit',
+      operation: 'UPDATE_MEDICINE',
+      medicine: { productName: 'Fixture lotion' },
+      editor: { name: 'Saad Owner' },
+      changes: { productName: 'Reviewed lotion' },
+      stale: false,
+      ownEdit: true,
+      targets: [],
+    },
+    {
+      id: 'own-file',
+      operation: 'createStagedMedicines',
+      medicine: { productName: 'New medicines from an imported file' },
+      editor: { name: 'Saad Owner' },
+      changes: { json: { fileName: 'products.csv', medicines: 18933 } },
+      stale: false,
+      ownEdit: true,
+      targets: [],
+    },
+    {
+      id: 'own-controlled',
+      operation: 'UPDATE_MEDICINE',
+      medicine: { productName: 'Fixture tablets' },
+      editor: { name: 'Saad Owner' },
+      changes: { controlled: true },
+      stale: false,
+      ownEdit: true,
+      targets: [],
+    },
+  ];
+  const owner = { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: true };
+
+  it.each(ownEdits)(
+    'names who can approve $operation and offers no PIN box when another reviewer exists',
+    (edit) => {
+      m.access.data = owner;
+      m.queue.data = [edit];
+      m.selfApproval.data = { canSelfApprove: false, reviewers: ['Ayesha Khan', 'Bilal Ahmed'] };
+      render(<CatalogueApprovalQueue />);
+      expect(screen.getByRole('note')).toHaveTextContent(
+        'You submitted this edit, so another reviewer must approve it. Ask Ayesha Khan or Bilal Ahmed to approve this.'
+      );
+      expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'Reject edit' }));
+      expect(m.decide.mutate).toHaveBeenCalledWith({ editId: edit.id, decision: 'REJECT' });
+    }
+  );
+
+  it.each(ownEdits)(
+    'offers the PIN box with its reason for $operation when the owner is the only reviewer',
+    (edit) => {
+      m.access.data = owner;
+      m.queue.data = [edit];
+      m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+      render(<CatalogueApprovalQueue />);
+      const pin = screen.getByLabelText('Solo owner PIN (for self-approval)');
+      expect(pin).toHaveAccessibleDescription(
+        'Nobody else can review, so you approve with your own PIN.'
+      );
+      expect(screen.queryByRole('note')).toBeNull();
+      const approve = screen.getByRole('button', { name: 'Approve edit' });
+      expect(approve).toBeDisabled();
+      fireEvent.change(pin, { target: { value: '2468' } });
+      fireEvent.click(approve);
+      expect(m.decide.mutate).toHaveBeenCalledWith({
+        editId: edit.id,
+        decision: 'APPROVE',
+        soloPin: '2468',
+      });
+    }
+  );
+
+  it('says nobody else can approve yet when no other member can', () => {
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: false, reviewers: [] };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Nobody else can approve it yet. Give another member the catalogue review permission'
+    );
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+  });
+
+  it('names at most five reviewers and counts the rest', () => {
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = {
+      canSelfApprove: false,
+      reviewers: ['A One', 'B Two', 'C Three', 'D Four', 'E Five', 'F Six', 'G Seven'],
+    };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('note')).toHaveTextContent(
+      'Ask A One, B Two, C Three, D Four, E Five, or 2 other reviewers to approve this.'
+    );
+    expect(screen.getByRole('note')).not.toHaveTextContent('F Six');
+  });
+
+  it('lets a reviewer approve someone else’s edit without a PIN beside a blocked own edit', () => {
+    m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: false, isOwner: false };
+    m.queue.data = [
+      { ...ownEdits[0], id: 'other-edit', editor: { name: 'Editor' }, ownEdit: false },
+      ownEdits[1],
+    ];
+    m.selfApproval.data = { canSelfApprove: false, reviewers: ['Ayesha Khan'] };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Approve edit' })).toHaveLength(1);
+    expect(screen.getByRole('note')).toHaveTextContent('Ask Ayesha Khan to approve this.');
+    fireEvent.click(screen.getByRole('button', { name: 'Approve edit' }));
+    expect(m.decide.mutate).toHaveBeenCalledWith({
+      editId: 'other-edit',
+      decision: 'APPROVE',
+      soloPin: undefined,
+    });
+  });
+
+  it('explains the owner PIN when nobody holds the review permission', () => {
+    m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByLabelText('Solo owner PIN (for self-approval)')).toHaveAccessibleDescription(
+      'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.'
+    );
+  });
+
+  it('offers no approval on an own edit until the server says who can approve', () => {
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = undefined;
+    const view = render(<CatalogueApprovalQueue />);
+    expect(screen.getByText('Checking who can approve this edit…')).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+    m.selfApproval.error = {
+      message: 'Approving catalogue edits needs the catalogue review permission.',
+    };
+    view.rerender(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Approving catalogue edits needs the catalogue review permission.'
+    );
+    expect(screen.queryByRole('button', { name: 'Approve edit' })).toBeNull();
+  });
+
+  it('asks who can approve only for a member who decides the queue', () => {
+    m.access.data = { canEdit: true, canDecide: false, ownerPinApproval: false, isOwner: false };
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: false, reviewers: ['Ayesha Khan'] };
+    render(<CatalogueApprovalQueue />);
+    expect(m.selfApprovalOptions).toMatchObject({ enabled: false });
+    expect(screen.queryByText(/Ayesha Khan/)).toBeNull();
+  });
+
+  it('re-asks who can approve after a refused decision', () => {
+    m.access.data = owner;
+    render(<CatalogueApprovalQueue />);
+    act(() => {
+      m.onError?.();
+    });
+    expect(m.invalidateSelfApproval).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ['a wrong PIN', 'Fresh owner PIN verification failed.'],
+    ['a locked PIN', 'Your PIN is locked after too many wrong tries. Wait and try again.'],
+    [
+      'no PIN yet',
+      'You have not set up your PIN yet. Create it in Settings, Your PIN, then try again.',
+    ],
+  ])('keeps the message for %s', (_case, message) => {
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+    m.decide.error = { message };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('alert')).toHaveTextContent(message);
+  });
+  it('links a refusal for a missing PIN to Your PIN', () => {
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+    m.decide.error = {
+      message: 'You have not set up your PIN yet. Create it in Settings, Your PIN, then try again.',
+    };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByRole('link', { name: 'Set up your PIN' })).toHaveAttribute(
+      'href',
+      '/pharmacy/settings/pin'
+    );
+  });
+
+  it('asks for the current app code while the authenticator for approvals is on (DEV-961)', () => {
+    m.approvalMode.data = { required: true };
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+    render(<CatalogueApprovalQueue />);
+    expect(
+      screen.getByText(
+        'Edits stay pending until a catalogue reviewer approves them. A solo owner may approve with the current code from their authenticator app. Every approval is audited.'
+      )
+    ).toBeVisible();
+    const code = screen.getByLabelText('Your approval code (for self-approval)');
+    expect(code).toHaveAccessibleDescription(
+      'Nobody else can review, so you approve with the current 6-digit code from your authenticator app.'
+    );
+    expect(screen.queryByLabelText('Solo owner PIN (for self-approval)')).toBeNull();
+    fireEvent.change(code, { target: { value: '482913' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Approve edit' }));
+    // The same field carries the code: the server's shared verifier decides what it accepts.
+    expect(m.decide.mutate).toHaveBeenCalledWith({
+      editId: 'own-edit',
+      decision: 'APPROVE',
+      soloPin: '482913',
+    });
+  });
+
+  it('words the owner fallback with the app code while the setting is on (DEV-961)', () => {
+    m.approvalMode.data = { required: true };
+    m.access.data = { canEdit: true, canDecide: true, ownerPinApproval: true, isOwner: true };
+    render(<CatalogueApprovalQueue />);
+    expect(
+      screen.getByLabelText('Your approval code (for self-approval)')
+    ).toHaveAccessibleDescription(
+      'Nobody holds the catalogue review permission, so you approve as the owner with the current 6-digit code from your authenticator app.'
+    );
+  });
+
+  it('asks for the code until the setting is read, since it is on by default (DEV-961)', () => {
+    m.approvalMode.data = undefined;
+    m.access.data = owner;
+    m.queue.data = [ownEdits[0]];
+    m.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+    render(<CatalogueApprovalQueue />);
+    expect(screen.getByLabelText('Your approval code (for self-approval)')).toBeInTheDocument();
   });
 });

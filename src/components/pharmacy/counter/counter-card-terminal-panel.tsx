@@ -231,6 +231,7 @@ function CardTerminalPanelForSale({
           <CounterCardTerminalReview
             branchId={branchId}
             view={view}
+            mayPostRefund={reviewAccess.mayPostRefund}
             selfResolve={reviewAccess.selfResolve}
             onResolved={settle}
           />

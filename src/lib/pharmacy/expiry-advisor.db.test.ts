@@ -85,7 +85,12 @@ type BranchFixture = {
  * POSTED direct-purchase goods receipt, and one completed sale of the lot
  * inside the trailing 30-day window.
  */
-async function seedBranch(organizationId: string, label: string): Promise<BranchFixture> {
+async function seedBranch(
+  organizationId: string,
+  label: string,
+  completedAt = SOLD_AT,
+  businessDate = SOLD_AT
+): Promise<BranchFixture> {
   const branchId = `branch_${label}_${suffix}`;
   const medicineName = `Amoxicillin 250mg ${label} ${suffix}`;
   const batchNumber = `B-${label}-${suffix}`;
@@ -209,8 +214,8 @@ async function seedBranch(organizationId: string, label: string): Promise<Branch
         branchId,
         status: 'COMPLETED',
         createdByUserId: ACTOR,
-        completedAt: SOLD_AT,
-        businessDate: SOLD_AT,
+        completedAt,
+        businessDate,
       },
     });
     const saleLine = await db.pharmacySaleLine.create({
@@ -296,6 +301,22 @@ beforeAll(async () => {
 }, 120_000);
 
 describeIfDatabase('#1042 — the expiry advisor reads the real schema', () => {
+  it('includes a 00:30 Karachi sale booked on its local date in the observation window', async () => {
+    const lot = await seedBranch(
+      ORG_A,
+      'boundary',
+      new Date('2026-09-02T00:30:00+05:00'),
+      new Date('2026-09-02')
+    );
+    const rows = await inOrg(ORG_A, (db) =>
+      deps.advisor.readExpiryAdvice(
+        db,
+        { organizationId: ORG_A, branchIds: [lot.branchId], timeZone: 'Asia/Karachi' },
+        new Date('2026-09-02T00:31:00+05:00')
+      )
+    );
+    expect(rows[0]).toMatchObject({ soldUnits: SOLD_UNITS, historyDays: 1 });
+  });
   it('returns the branch lot with its medicine, sales history and supplier window', async () => {
     const advice = await inOrg(ORG_A, (db) =>
       deps.advisor.readExpiryAdvice(db, { organizationId: ORG_A, branchIds: [A1.branchId] }, AT)

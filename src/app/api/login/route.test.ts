@@ -5,6 +5,7 @@
  * organization information may be emitted before the password is proven, and
  * every failure must be byte-identical.
  */
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -283,6 +284,24 @@ describe('POST /api/login', () => {
     const body = await (await POST(request({ ...CREDENTIALS, callbackUrl: submitted }))).json();
 
     expect(body.callbackUrl).toBe(expected);
+  });
+  it('stops reading at the shared login body cap before credential discovery', async () => {
+    const limit = 32 * 1024;
+    const input = oversizedRequest(limit, {
+      url: 'https://www.devfathom.com/api/login',
+      headers: {
+        host: 'www.devfathom.com',
+        origin: 'https://www.devfathom.com',
+        'content-type': 'application/json',
+        'x-forwarded-proto': 'https',
+      },
+      chunkSize: 1024,
+    });
+
+    expect((await POST(input.request)).status).toBe(413);
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 1024);
+    expect(mocks.resolveSharedLogin).not.toHaveBeenCalled();
   });
 });
 

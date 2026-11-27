@@ -58,10 +58,7 @@ export const RETRY_CAP_MS = 30 * 60_000;
 export const DEFAULT_LEASE_MS = 15 * 60_000;
 
 export type SchedulerErrorReason =
-  | 'INVALID'
-  | 'JOB_NOT_FOUND'
-  | 'INVALID_STATE'
-  | 'DUPLICATE_ENQUEUE';
+  'INVALID' | 'JOB_NOT_FOUND' | 'INVALID_STATE' | 'DUPLICATE_ENQUEUE' | 'WEBHOOK_CAPACITY';
 
 export class SchedulerError extends Error {
   constructor(
@@ -144,6 +141,16 @@ export async function enqueue(
       });
       return { job, deduplicated: false };
     } catch (error) {
+      // RW429 is the queue trigger's refusal, including operator requeues.
+      const failure = error as {
+        cause?: { originalCode?: string };
+        meta?: { driverAdapterError?: { cause?: { originalCode?: string } } };
+      } | null;
+      const state =
+        failure?.cause?.originalCode ?? failure?.meta?.driverAdapterError?.cause?.originalCode;
+      if (state === 'RW429') {
+        throw new SchedulerError('Too many pending webhook jobs.', 'WEBHOOK_CAPACITY');
+      }
       if (key && isUniqueViolation(error)) {
         throw new SchedulerError(
           `A job with idempotency key "${key}" already exists.`,

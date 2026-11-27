@@ -17,7 +17,7 @@ async function readable<T>(run: () => Promise<T>) {
         ['BAD_REQUEST', 'FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)
           ? error.code === 'BAD_REQUEST'
             ? 'Check the file, column mapping, and quantity choice. ' + error.message
-            : 'An active workspace administrator with pharmacy access is required.'
+            : 'Only a workspace administrator with catalogue edit permission can upload or stage this file. Ask a catalogue editor to submit it for review.'
           : 'The file could not be staged. Try again.',
     };
   }

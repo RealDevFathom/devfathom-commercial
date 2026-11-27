@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { lockStockBalances } from './stock-lock-order';
 
 /**
  * PH-OFF / OFF-03 — multi-counter stock ownership by per-device lot quotas.
@@ -104,6 +105,32 @@ export async function grantDeviceLotQuota(
       AND "branchId" = ${scope.branchId} AND status = 'ACTIVE' AND "revokedAt" IS NULL
     FOR SHARE`);
   if (!usable[0]) throw new PharmacyQuotaError('DEVICE_NOT_USABLE');
+
+  // Orders, refills and supplier claims lock this same balance before reserving.
+  // Read reservations in a fresh statement after any concurrent writer commits.
+  await lockStockBalances(db, scope, [
+    {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      disposition: 'AVAILABLE',
+    },
+  ]);
+  const bucket = Prisma.sql`"organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+    AND "inventoryLotId" = ${input.inventoryLotId} AND "stockLocationId" = ${input.stockLocationId}`;
+  const [balance] = await db.$queryRaw<
+    Array<{ onHandUnits: number; reservedUnits: bigint }>
+  >(Prisma.sql`
+    SELECT "onHandUnits",
+      COALESCE((SELECT SUM("reservedUnits") FROM pharmacy_supplier_claims
+        WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+          AND "inventoryLotId" = ${input.inventoryLotId} AND status = 'RESERVED'), 0)
+      + COALESCE((SELECT SUM("reservedUnits") FROM pharmacy_restock_reservations
+        WHERE ${bucket} AND status = 'RESERVED'), 0)
+      + COALESCE((SELECT SUM("quotaUnits" - "consumedUnits") FROM pharmacy_device_lot_quotas
+        WHERE ${bucket} AND "releasedAt" IS NULL), 0) AS "reservedUnits"
+    FROM pharmacy_stock_balances WHERE ${bucket} AND disposition = 'AVAILABLE'`);
+  if (balance && Number(balance.reservedUnits) + input.units > balance.onHandUnits)
+    throw new PharmacyQuotaError('QUOTA_EXCEEDS_ON_HAND');
 
   try {
     return await db.pharmacyDeviceLotQuota.create({

@@ -50,6 +50,19 @@ vi.mock('@/lib/abac', async () => {
   return { ...actual, can: mocks.can };
 });
 
+// DEV-961: the terminal-only approver guard has its own suite; here it only runs the change.
+vi.mock('@/lib/restaurant/terminal-only-approvers', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/restaurant/terminal-only-approvers')>(
+    '@/lib/restaurant/terminal-only-approvers'
+  )),
+  assertMayRemoveLogin: vi.fn(),
+  guardTerminalOnlyApprovers: vi.fn(
+    async (db: unknown, _input: unknown, work: (db: unknown) => Promise<unknown>) => ({
+      result: await work(db),
+      added: [],
+    })
+  ),
+}));
 vi.mock('@/lib/restaurant/job-roles', async () => ({
   ...(await vi.importActual<typeof import('@/lib/restaurant/job-roles')>(
     '@/lib/restaurant/job-roles'

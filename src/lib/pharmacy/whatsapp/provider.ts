@@ -72,7 +72,7 @@ export interface WhatsAppProvider {
   }): Promise<WhatsAppSendResult>;
   sendText(input: { to: string; body: string }): Promise<WhatsAppSendResult>;
   /** Verifies Meta's `X-Hub-Signature-256` HMAC over the raw request body. Fails closed. */
-  verifyWebhook(rawBody: string, signatureHeader: string | null): boolean;
+  verifyWebhook(rawBody: string | Uint8Array, signatureHeader: string | null): boolean;
   parseInbound(payload: unknown): WhatsAppInboundMessage[];
 }
 
@@ -177,12 +177,12 @@ export function readWhatsAppConfig(env: Env = process.env): WhatsAppConfig {
 
 export function verifyMetaSignature(
   appSecret: string | null,
-  rawBody: string,
+  rawBody: string | Uint8Array,
   signatureHeader: string | null
 ): boolean {
   if (!appSecret || !signatureHeader?.startsWith('sha256=')) return false;
   const expected = Buffer.from(
-    createHmac('sha256', appSecret).update(rawBody, 'utf8').digest('hex'),
+    createHmac('sha256', appSecret).update(rawBody).digest('hex'),
     'utf8'
   );
   const received = Buffer.from(signatureHeader.slice('sha256='.length).toLowerCase(), 'utf8');
@@ -323,7 +323,7 @@ export class MetaWhatsAppProvider implements WhatsAppProvider {
     });
   }
 
-  verifyWebhook(rawBody: string, signatureHeader: string | null) {
+  verifyWebhook(rawBody: string | Uint8Array, signatureHeader: string | null) {
     return verifyMetaSignature(this.config.appSecret, rawBody, signatureHeader);
   }
 
@@ -383,7 +383,7 @@ export class MockWhatsAppProvider implements WhatsAppProvider {
     return this.nextId();
   }
 
-  verifyWebhook(rawBody: string, signatureHeader: string | null) {
+  verifyWebhook(rawBody: string | Uint8Array, signatureHeader: string | null) {
     return verifyMetaSignature(this.config.appSecret, rawBody, signatureHeader);
   }
 

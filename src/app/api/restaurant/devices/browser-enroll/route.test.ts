@@ -71,6 +71,7 @@ vi.mock('@/server/audit', () => ({
   recordAudit: mocks.recordAudit,
 }));
 
+import { SUPPORT_SESSION_REFUSED_MESSAGE } from '@/lib/tenancy/support-session-rule';
 import { POST } from './route';
 
 const rawSecret = `rdk_${'a'.repeat(43)}`;
@@ -176,11 +177,27 @@ describe('POST browser enrollment', () => {
 
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toEqual({
-      error: 'Support sessions cannot enroll restaurant terminals.',
+      error: SUPPORT_SESSION_REFUSED_MESSAGE,
     });
     expect(mocks.can).not.toHaveBeenCalled();
     expect(mocks.enrollDevice).not.toHaveBeenCalled();
-    expect(mocks.recordAudit).not.toHaveBeenCalled();
+    // DEV-1053: no success entry; the refusal itself is recorded, naming the operator.
+    expect(mocks.recordAudit).toHaveBeenCalledTimes(1);
+    expect(mocks.recordAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        organizationId: 'org_1',
+        actorId: 'user_admin',
+        source: 'REST_API',
+        action: 'restaurant.devices.browserEnroll',
+        outcome: 'FAILURE',
+        statusCode: 403,
+        metadata: expect.objectContaining({
+          supportSessionRefused: true,
+          platformUserId: 'platform_support_1',
+          actingAsTenantUserId: 'user_admin',
+        }),
+      })
+    );
     expect(response.headers.getSetCookie()).toEqual([]);
   });
 
@@ -263,12 +280,12 @@ describe('POST browser enrollment', () => {
       expect(deletion).toContain('Expires=Thu, 01 Jan 1970 00:00:00 GMT');
       expect(deletion?.includes('Secure')).toBe(name.startsWith('__Secure-'));
     }
-    expect(
-      cookies.filter((cookie) => cookie.startsWith('authjs.session-token.1='))
-    ).toHaveLength(1);
-    expect(
-      cookies.some((cookie) => cookie.startsWith('authjs.session-token.invalid='))
-    ).toBe(false);
+    expect(cookies.filter((cookie) => cookie.startsWith('authjs.session-token.1='))).toHaveLength(
+      1
+    );
+    expect(cookies.some((cookie) => cookie.startsWith('authjs.session-token.invalid='))).toBe(
+      false
+    );
     expect(cookies.some((cookie) => cookie.startsWith('authjs.session-token.2='))).toBe(false);
     expect(cookies.some((cookie) => cookie.startsWith('unrelated-cookie='))).toBe(false);
   });

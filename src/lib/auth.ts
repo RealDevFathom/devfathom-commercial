@@ -17,7 +17,7 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb, withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
-import { SSO_TICKET_COOKIE } from '@/lib/sso';
+import { SSO_TICKET_COOKIE } from '@/lib/sso-ticket-cookie';
 import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/session-state';
 import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { SESSION_UPDATE_AGE_SECONDS } from '@/lib/auth/session-cookie-throttle';
@@ -92,6 +92,51 @@ class TwoFactorInvalidError extends CredentialsSignin {
 // How long a JWT's cached role/status is trusted before being re-read from the DB.
 // Revocation (tokenVersion) is checked on every read regardless (#1252).
 const REVALIDATE_AFTER_MS = 60_000;
+
+/**
+ * DEV-961: whether the member holds an approver right of the shared approval path, decided
+ * by the same permission engine the approval routes use. Refreshed at sign-in and with the
+ * role at every revalidation. Fails closed (true) when it cannot be decided, so an approver
+ * is never let through on a database error; the next revalidation corrects it.
+ */
+async function approvalApproverOf(
+  tenantDb: ScopedDb,
+  organizationId: string,
+  userId: string
+): Promise<boolean> {
+  try {
+    const { holdsAnyApprovalRight } = await import('@/lib/approval-authenticator-gate');
+    return await holdsAnyApprovalRight(tenantDb, { organizationId, userId });
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * DEV-961: the live part of the approval-authenticator gate, read on every request for an
+ * approver: the organization still requires an authenticator and the member has none
+ * enrolled. A missing value (an unreadable row) counts as required.
+ */
+function approvalAuthenticatorSetupRequiredOf(
+  approver: boolean,
+  row: {
+    organization?: { requireApprovalAuthenticator?: boolean | null } | null;
+    approvalAuthenticators?: readonly unknown[] | null;
+  }
+): boolean {
+  if (!approver) return false;
+  const required = row.organization?.requireApprovalAuthenticator !== false;
+  return required && (row.approvalAuthenticators?.length ?? 0) === 0;
+}
+
+const APPROVAL_AUTHENTICATOR_GATE_SELECT = {
+  organization: { select: { requireApprovalAuthenticator: true } },
+  approvalAuthenticators: {
+    where: { enabledAt: { not: null } },
+    select: { id: true },
+    take: 1,
+  },
+} as const;
 
 // #1252: the cookie's expiry slides on every re-issue, so a session kept busy
 // (a shared counter PC, or a copied cookie replayed periodically) would never
@@ -733,7 +778,36 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Never infer password entry from session refresh or non-password sign-in.
         token.passwordAuthenticatedAt = user.passwordAuthenticatedAt;
         token.signedInAt = Date.now();
+        // DEV-961: set only here, at a real sign-in, and never backfilled, so it can prove a
+        // fresh sign-in where no password exists to re-enter (single sign-on).
+        token.signInVerifiedAt = token.signedInAt;
         token.lastValidatedAt = Date.now();
+        // DEV-961: decide at sign-in whether this member must set up an approval
+        // authenticator before the account works. Fails closed to the set-up screen.
+        try {
+          const gate = await withTenantDb(token.organizationId as string, async (tenantDb) => {
+            const approver = await approvalApproverOf(
+              tenantDb,
+              token.organizationId as string,
+              token.id as string
+            );
+            const row = approver
+              ? await tenantDb.user.findUnique({
+                  where: { id: token.id as string },
+                  select: APPROVAL_AUTHENTICATOR_GATE_SELECT,
+                })
+              : null;
+            return {
+              approver,
+              setupRequired: approvalAuthenticatorSetupRequiredOf(approver, row ?? {}),
+            };
+          });
+          token.approvalApprover = gate?.approver ?? true;
+          token.approvalAuthenticatorSetupRequired = gate?.setupRequired ?? true;
+        } catch {
+          token.approvalApprover = true;
+          token.approvalAuthenticatorSetupRequired = true;
+        }
         return token;
       }
 
@@ -785,10 +859,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // rather than up to REVALIDATE_AFTER_MS later. Claims are left untouched
         // on success, so the session cookie is not re-issued for this check.
         try {
+          // DEV-961: for an approver the same read carries the live set-up gate, so
+          // enrolling (or a reset, or the owner's switch) takes effect on the next request.
+          const approver = token.approvalApprover === true;
           const current = await withTenantDb(token.organizationId as string, (tenantDb) =>
             tenantDb.user.findUnique({
               where: { id: token.id as string },
-              select: { tokenVersion: true },
+              select: approver
+                ? { tokenVersion: true, ...APPROVAL_AUTHENTICATOR_GATE_SELECT }
+                : { tokenVersion: true },
             })
           );
           if (!current) {
@@ -797,6 +876,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           } else if (current.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
             token.sessionRevoked = true;
             token.sessionInvalidReason = 'REVOKED';
+          } else if (approver) {
+            const setupRequired = approvalAuthenticatorSetupRequiredOf(
+              true,
+              current as Parameters<typeof approvalAuthenticatorSetupRequiredOf>[1]
+            );
+            if (token.approvalAuthenticatorSetupRequired !== setupRequired)
+              token.approvalAuthenticatorSetupRequired = setupRequired;
           }
         } catch {
           // Fail closed, as below. lastValidatedAt is left alone so the next
@@ -806,8 +892,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
       } else if (token.id && token.organizationId && stale) {
         try {
-          const fresh = await withTenantDb(token.organizationId as string, (tenantDb) =>
-            tenantDb.user.findUnique({
+          const fresh = await withTenantDb(token.organizationId as string, async (tenantDb) => {
+            const row = await tenantDb.user.findUnique({
               where: { id: token.id as string },
               select: {
                 role: true,
@@ -816,10 +902,29 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 title: true,
                 tokenVersion: true,
                 mustChangePassword: true,
-                organization: { select: { slug: true, status: true, isDemo: true } },
+                organization: {
+                  select: {
+                    slug: true,
+                    status: true,
+                    isDemo: true,
+                    requireApprovalAuthenticator: true,
+                  },
+                },
+                approvalAuthenticators: APPROVAL_AUTHENTICATOR_GATE_SELECT.approvalAuthenticators,
               },
-            })
-          );
+            });
+            // DEV-961: re-derive the approver right with the role.
+            return row
+              ? {
+                  ...row,
+                  approvalApprover: await approvalApproverOf(
+                    tenantDb,
+                    token.organizationId as string,
+                    token.id as string
+                  ),
+                }
+              : row;
+          });
           if (!fresh) {
             token.sessionRevoked = true;
             token.sessionInvalidReason = 'DELETED';
@@ -839,6 +944,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           } else {
             token.role = fresh.role;
             token.mustChangePassword = fresh.mustChangePassword === true;
+            token.approvalApprover = fresh.approvalApprover;
+            token.approvalAuthenticatorSetupRequired = approvalAuthenticatorSetupRequiredOf(
+              fresh.approvalApprover,
+              fresh
+            );
             token.status = fresh.status;
             token.department = fresh.department;
             token.title = fresh.title;
@@ -874,6 +984,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.title = token.title as string;
         session.user.status = token.status as string;
         session.user.mustChangePassword = token.mustChangePassword === true;
+        session.user.approvalApprover = token.approvalApprover === true;
+        session.user.approvalAuthenticatorSetupRequired =
+          token.approvalAuthenticatorSetupRequired === true;
         // #16: every consumer of the session must be able to see that the
         // session itself was invalidated, independently of account status.
         session.user.sessionRevoked = Boolean(token.sessionRevoked);
@@ -882,6 +995,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           typeof token.passwordAuthenticatedAt === 'number' &&
           Number.isFinite(token.passwordAuthenticatedAt)
             ? token.passwordAuthenticatedAt
+            : undefined;
+        // DEV-961: when this session signed in (server-issued), so a member with no password
+        // (single sign-on) can prove a fresh sign-in when setting up an approval authenticator.
+        session.user.signedInAt =
+          !token.sessionRevoked &&
+          typeof token.signInVerifiedAt === 'number' &&
+          Number.isFinite(token.signInVerifiedAt)
+            ? token.signInVerifiedAt
             : undefined;
         session.user.sessionInvalidReason =
           (token.sessionInvalidReason as SessionInvalidReason | null) ?? null;

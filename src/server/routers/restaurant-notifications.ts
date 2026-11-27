@@ -17,6 +17,7 @@ import {
 import { enqueue, type RestaurantJobStatus } from '@/lib/restaurant/scheduler';
 import { assertInOrganization } from '../org-refs';
 import { capabilityProcedure, protectedProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 
 const identifier = z.string().trim().min(1).max(200);
@@ -283,6 +284,7 @@ export const restaurantNotificationsRouter = router({
     }),
 
   configureWebhook: webhookProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -340,6 +342,7 @@ export const restaurantNotificationsRouter = router({
     }),
 
   deleteWebhook: webhookProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ confirmation: z.literal('DELETE') }).strict())
     .mutation(async ({ ctx }) => {
       const existing = await ctx.db.restaurantNotificationWebhook.findFirst({

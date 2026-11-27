@@ -32,6 +32,7 @@ vi.mock('@/lib/tenancy/host', () => {
     resolveOrganizationByHost: vi.fn(),
     TenantHostError,
     TENANT_HOST_HEADER: 'x-devfathom-host',
+    REQUEST_METHOD_HEADER: 'x-devfathom-request-method',
   };
 });
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
@@ -73,6 +74,20 @@ describe('resolveTenantActor', () => {
     );
 
     await expect(resolveTenantActor({ request: request(), session })).resolves.toBeNull();
+  });
+
+  it('preserves a host denial for the supplier document upload route', async () => {
+    const denial = new TenantHostError('This session belongs to a different workspace.', 409);
+    mocks.requireOrganizationForRequest.mockRejectedValue(denial);
+
+    await expect(
+      resolveTenantActor({
+        request: new Request(
+          'http://devfathom.localhost:3000/api/pharmacy/supplier-documents/upload'
+        ),
+        session,
+      })
+    ).rejects.toBe(denial);
   });
 
   it('does not hide unexpected resolution failures', async () => {
@@ -134,6 +149,153 @@ describe('resolveTenantActor', () => {
         session: blocked,
       })
     ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
+  it('DEV-961: refuses every route handler until a gated approver sets up the authenticator', async () => {
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+    const gated = sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: true });
+    const call = (path: string, method = 'POST') =>
+      resolveTenantActor({
+        request: new Request(`http://devfathom.localhost:3000${path}`, { method }),
+        session: gated,
+      });
+    for (const path of [
+      '/api/upload',
+      '/api/pharmacy/counter/sales',
+      '/api/pharmacy/data-export',
+      '/api/assistant',
+      '/api/ably-token',
+      '/api/trpc/pharmacySales.refund',
+      // A batch cannot carry a blocked call alongside the set-up calls.
+      '/api/trpc/approvalAuthenticator.getStatus,pharmacySales.refund?batch=1',
+      '/api/trpc/approvalAuthenticator.getStatus%2CpharmacySales.refund?batch=1',
+      // Route handlers outside /api: exports and downloads are refused the same way.
+      '/pharmacy/accounts/fiscal-exceptions/csv',
+      '/pharmacy/accounts/tax-profile-review/export',
+      '/dashboard',
+    ])
+      await expect(call(path, 'GET')).rejects.toMatchObject({
+        code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+        status: 403,
+      });
+    for (const path of ['/api/upload', '/pharmacy/accounts/fiscal-exceptions/csv'])
+      await expect(call(path)).rejects.toMatchObject({
+        code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+        status: 403,
+      });
+    expect(mocks.requireOrganizationForRequest).not.toHaveBeenCalled();
+
+    for (const path of [
+      '/api/trpc/approvalAuthenticator.getStatus,approvalAuthenticator.beginEnrollment?batch=1',
+      '/api/trpc/approvalAuthenticator.confirmEnrollment',
+      '/api/auth/signout',
+    ])
+      await expect(call(path)).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
+  it('DEV-961: refuses a server action, but lets a page render reach the set-up redirect', async () => {
+    // A page render or server action carries no Request; the workspace comes from the host.
+    mocks.isSharedHost.mockReturnValue(true);
+    mocks.resolveOrganizationById.mockResolvedValue({ id: 'org_other', status: 'ACTIVE' });
+    const gated = sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: true });
+    // A server action carries no Request; Next names the action in the Next-Action header.
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000', 'next-action': '7f00ab' }) as never
+    );
+    await expect(resolveTenantActor({ session: gated })).rejects.toMatchObject({
+      code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED',
+      status: 403,
+    });
+    // A page render builds the actor; the workspace layout then sends them to the set-up screen.
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000' }) as never
+    );
+    await expect(resolveTenantActor({ session: gated })).resolves.toMatchObject({
+      organization: { id: 'org_other' },
+    });
+    // A member who is not asked is never refused, in a server action either.
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000', 'next-action': '7f00ab' }) as never
+    );
+    await expect(
+      resolveTenantActor({ session: sessionFor({ status: 'ACTIVE' }) })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
+  describe('DEV-961: a server action is refused however Next receives it', () => {
+    const gated = () => sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: true });
+    const setUp = () => sessionFor({ status: 'ACTIVE', approvalAuthenticatorSetupRequired: false });
+    // What the proxy forwards: the host and the request method (always overwritten there).
+    const withRequest = (method: string | null, extra: Record<string, string> = {}) =>
+      vi.mocked(headers).mockResolvedValue(
+        new Headers({
+          host: 'devfathom.localhost:3000',
+          ...(method ? { 'x-devfathom-request-method': method } : {}),
+          ...extra,
+        }) as never
+      );
+    const refused = { code: 'APPROVAL_AUTHENTICATOR_SETUP_REQUIRED', status: 403 };
+    beforeEach(() => {
+      mocks.isSharedHost.mockReturnValue(true);
+      mocks.resolveOrganizationById.mockResolvedValue({ id: 'org_other', status: 'ACTIVE' });
+    });
+
+    it.each([
+      // A plain form submission: Next runs the action named by its $ACTION_ID_ field, no header.
+      [
+        'a multipart form POST with no Next-Action header',
+        'POST',
+        {
+          'content-type': 'multipart/form-data; boundary=----devfathom',
+        },
+      ],
+      ['a URL-encoded form POST', 'POST', { 'content-type': 'application/x-www-form-urlencoded' }],
+      [
+        'a fetch action (Next-Action header)',
+        'POST',
+        { 'next-action': '7f00ab', 'content-type': 'text/plain;charset=UTF-8' },
+      ],
+      ['a POST with any other body', 'POST', { 'content-type': 'application/json' }],
+      ['a PUT', 'PUT', {}],
+      ['a DELETE', 'DELETE', {}],
+      // Without the proxy's method header the request is checked as a POST.
+      [
+        'a multipart body when the method is unknown',
+        null,
+        {
+          'content-type': 'multipart/form-data; boundary=----devfathom',
+        },
+      ],
+      ['a Next-Action header when the method is unknown', null, { 'next-action': '7f00ab' }],
+    ] as const)(
+      'refuses %s for a member who must set up the app',
+      async (_label, method, extra) => {
+        withRequest(method, extra);
+        await expect(resolveTenantActor({ session: gated() })).rejects.toMatchObject(refused);
+        // A member who has set up the app (or is not asked) is resolved as usual.
+        await expect(resolveTenantActor({ session: setUp() })).resolves.toMatchObject({
+          organization: { id: 'org_other' },
+        });
+      }
+    );
+
+    it.each([
+      ['a GET page render', 'GET', {}],
+      ['a HEAD request', 'HEAD', {}],
+      ['a client navigation (RSC GET)', 'GET', { rsc: '1' }],
+      // Next never runs an action for a GET, whatever the headers say.
+      [
+        'a GET carrying a form content type',
+        'GET',
+        { 'content-type': 'multipart/form-data; boundary=x' },
+      ],
+      ['a render with no method header and no action', null, {}],
+    ] as const)('lets %s reach the set-up redirect', async (_label, method, extra) => {
+      withRequest(method, extra);
+      await expect(resolveTenantActor({ session: gated() })).resolves.toMatchObject({
+        organization: { id: 'org_other' },
+      });
+    });
   });
 
   it('still builds an actor for an ON_LEAVE session', async () => {

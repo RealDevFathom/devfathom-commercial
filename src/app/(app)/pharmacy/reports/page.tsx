@@ -1,3 +1,4 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { SHOP_SCREEN_COPY as screenCopy } from '@/lib/pharmacy/plain-language';
 import type { Metadata } from 'next';
 import {
@@ -28,7 +29,7 @@ import {
   pharmacyBusinessDayRange,
   sharedPharmacyDayEnd,
 } from '@/lib/pharmacy/business-day';
-import { workspaceZoneLabel } from '@/lib/timezone';
+import { workspaceTimezone, workspaceZoneLabel } from '@/lib/timezone';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { pharmacySalesRouter } from '@/server/routers/pharmacy-sales';
 import { createTRPCContext } from '@/server/trpc';
@@ -180,7 +181,7 @@ export default async function PharmacyReportsPage({
     return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
   };
   // The owner's business day: the workspace zone, not UTC (00:00–04:59 PKT is still "today").
-  const timeZone = ctx.organization?.timezone;
+  const timeZone = workspaceTimezone(ctx.organization?.timezone);
   const branch =
     value(query.branch) ??
     (query.branch === undefined && branchResult.branches.length === 1
@@ -557,7 +558,7 @@ export default async function PharmacyReportsPage({
         <form data-report-filters className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             {screenCopy.reports.branch}
-            <select
+            <StudioSelect
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               defaultValue={branch ?? ''}
               name="branch"
@@ -568,13 +569,13 @@ export default async function PharmacyReportsPage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           <div className="text-sm text-text-body">
             <label htmlFor="report-supplier" className="block">
               {screenCopy.reports.supplier}
             </label>
-            <select
+            <StudioSelect
               id="report-supplier"
               className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               defaultValue={supplier ?? ''}
@@ -590,7 +591,7 @@ export default async function PharmacyReportsPage({
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
             {suppliers === null ? (
               <span id="supplier-load-error" className="block text-sm text-text-muted">
                 {screenCopy.reports.supplierNamesCouldNotLoadApplyFiltersAgain}
@@ -801,7 +802,7 @@ export default async function PharmacyReportsPage({
         <>
           <p className="text-sm text-text-muted">
             {screenCopy.reports.updated}
-            {formatShopTime(result.freshness.asOf, timeZone ?? 'Asia/Karachi')}
+            {formatShopTime(result.freshness.asOf, workspaceTimezone(timeZone))}
           </p>
           <details className="text-sm text-text-muted">
             <summary className="min-h-11 cursor-pointer py-3 focus-visible:outline-2 focus-visible:outline-ring">
@@ -1038,10 +1039,10 @@ export default async function PharmacyReportsPage({
                           <ReportDetails>
                             <p className="text-xs leading-5 text-text-muted">
                               {screenCopy.reports.window}
-                              {formatShopTime(signal.dataWindowStart, timeZone ?? 'Asia/Karachi')}–
-                              {formatShopTime(signal.dataWindowEnd, timeZone ?? 'Asia/Karachi')}
+                              {formatShopTime(signal.dataWindowStart, workspaceTimezone(timeZone))}–
+                              {formatShopTime(signal.dataWindowEnd, workspaceTimezone(timeZone))}
                               {screenCopy.reports.sourceObserved}{' '}
-                              {formatShopTime(signal.sourceObservedAt, timeZone ?? 'Asia/Karachi')}
+                              {formatShopTime(signal.sourceObservedAt, workspaceTimezone(timeZone))}
                               {screenCopy.reports.policy} {signal.policyVersion}
                             </p>
                           </ReportDetails>

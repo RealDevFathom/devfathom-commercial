@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
     formats: ['image/avif', 'image/webp'],
   },
   experimental: {
+    // The largest remaining proxied input is the legacy catalogue staging
+    // action. Its ~3.4 MiB encoded file and mapping fit its 4 MiB action cap.
+    proxyClientMaxBodySize: '4mb',
     // Coupled to Dockerfile's per-process NODE_OPTIONS heap ceiling. Raising this
     // multiplies concurrently available heaps and must be evaluated against the
     // image builder's total memory before changing the worker count.

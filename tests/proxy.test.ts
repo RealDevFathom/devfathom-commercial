@@ -151,3 +151,36 @@ describe('private upload paths', () => {
     }
   );
 });
+
+it('bounds the Next proxy body clone before requests reach route-specific readers', async () => {
+  const { default: config } = await import('../next.config');
+  expect(config.experimental?.proxyClientMaxBodySize).toBe('4mb');
+});
+
+it('excludes exactly the three multipart routes from body cloning', async () => {
+  const { unstable_doesMiddlewareMatch } = await import('next/experimental/testing/server');
+  const { config } = await import('@/proxy');
+  const matches = (url: string) => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
+  for (const path of [
+    '/api/upload',
+    '/api/pharmacy/sop/evidence',
+    '/api/restaurant/sop/evidence',
+  ]) {
+    expect(matches(path)).toBe(false);
+    expect(matches(path + '/')).toBe(false);
+    expect(matches(path + '-other')).toBe(true);
+    expect(matches(path + '/child')).toBe(true);
+  }
+  for (const path of [
+    '/',
+    '/uploads/file.jpg',
+    '/api/platform/jobs',
+    '/platform',
+    '/login',
+    '/api/restaurant/webhooks/provider',
+    '/api/pharmacy/portal/login',
+    '/api/meetings/webhooks/livekit',
+  ]) {
+    expect(matches(path)).toBe(true);
+  }
+});

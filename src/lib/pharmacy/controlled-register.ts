@@ -1,3 +1,4 @@
+import { PharmacySupplierReturnError } from './supplier-returns';
 import { Prisma } from '@/generated/prisma/client';
 import { z } from 'zod';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -94,7 +95,10 @@ export async function lockRegister(db: ScopedDb, organizationId: string, branchI
   await lockControlledRegister(db, organizationId, branchId);
 }
 
-/** On-hand units that can still be sold. Quarantine is not part of the register balance. */
+/** Reconciliation retains the old balance for unwitnessed historical dispatches.
+ * The stock projection moves units between two non-quarantine buckets. Each
+ * witnessed outgoing entry removes its units exactly once from this total.
+ */
 export async function sellableOnHand(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string; inventoryLotId: string }
@@ -108,7 +112,16 @@ export async function sellableOnHand(
     },
     _sum: { onHandUnits: true },
   });
-  return balance._sum.onHandUnits ?? 0;
+  const outgoing = await db.pharmacyControlledRegisterEntry.aggregate({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId: scope.inventoryLotId,
+      entryKind: 'RETURN_TO_SUPPLIER',
+    },
+    _sum: { quantityCanonicalUnits: true },
+  });
+  return (balance._sum.onHandUnits ?? 0) - (outgoing._sum.quantityCanonicalUnits ?? 0);
 }
 
 async function runningFromLot(
@@ -381,6 +394,107 @@ export async function appendControlledPurchaseReversals(
   }
 }
 
+// Depending on the adapter path, PostgreSQL's check_violation is structured
+// or embedded in Prisma's database-error diagnostic.
+function isRegisterCheckViolation(error: unknown): boolean {
+  const driver = error as {
+    code?: string;
+    cause?: { originalCode?: string };
+    meta?: { code?: string; driverAdapterError?: { cause?: { originalCode?: string } } };
+  } | null;
+  return (
+    driver?.code === '23514' ||
+    driver?.cause?.originalCode === '23514' ||
+    driver?.meta?.code === '23514' ||
+    driver?.meta?.driverAdapterError?.cause?.originalCode === '23514' ||
+    (error instanceof Error && /Database error\. Code: `23514`/.test(error.message))
+  );
+}
+
+/** The return document and its stock movement are written in the caller's transaction. */
+export async function appendControlledSupplierReturn(
+  db: ScopedDb,
+  scope: { organizationId: string; branchId: string; actorId: string },
+  input: {
+    supplierId: string;
+    supplierName: string;
+    lineId: string;
+    inventoryLotId: string;
+    movementId: string;
+    lateDispatchAt?: Date;
+    approvalReason?: string;
+    quantity: number;
+    witness: import('./controlled-restoration-authorization').ControlledRestorationWitness;
+  }
+) {
+  const { organizationId, branchId } = scope;
+  // A lot can contain several lines of the same invoice. Never guess which
+  // original register entry a physical return belongs to.
+  const sources = await db.$queryRaw<
+    { id: string; medicineId: string; manufacturer: string | null; batchNumber: string | null }[]
+  >`
+    SELECT p.id, p."medicineId", p.manufacturer, p."batchNumber"
+    FROM pharmacy_controlled_register_entries p
+    JOIN pharmacy_stock_movements m ON m."organizationId" = p."organizationId" AND m.id = p."stockMovementId"
+    JOIN pharmacy_goods_receipt_lines l ON l."organizationId" = p."organizationId"
+      AND l."inventoryLotId" = p."inventoryLotId" AND m."idempotencyKey" = 'pharmacy-receipt:' || l.id || ':accepted'
+    JOIN pharmacy_goods_receipts r ON r."organizationId" = l."organizationId" AND r.id = l."goodsReceiptId"
+    WHERE p."organizationId" = ${organizationId} AND p."branchId" = ${branchId}
+      AND (${input.lateDispatchAt ?? null}::timestamp IS NULL OR m."occurredAt" <= ${input.lateDispatchAt ?? null}::timestamp)
+      AND p."inventoryLotId" = ${input.inventoryLotId} AND p."entryKind" = 'PURCHASE'
+      AND r.status = 'POSTED' AND r."supplierId" = ${input.supplierId}
+      AND p."quantityCanonicalUnits" - COALESCE((SELECT sum(sent."quantityCanonicalUnits")
+        FROM pharmacy_controlled_register_entries sent WHERE sent."organizationId" = p."organizationId"
+        AND sent."sourcePurchaseEntryId" = p.id), 0) >= ${input.quantity}
+    LIMIT 2`;
+  if (sources.length !== 1) {
+    throw new PharmacySupplierReturnError('PURCHASE_UNCLEAR');
+  }
+  const purchase = sources[0]!;
+  const lot = {
+    organizationId,
+    branchId,
+    medicineId: purchase.medicineId,
+    inventoryLotId: input.inventoryLotId,
+  };
+  const balanceDelta = -input.quantity;
+  const runningBalance = await runningFromLot(db, lot, balanceDelta);
+  if (runningBalance !== (await sellableOnHand(db, lot)) - input.quantity) {
+    throw new PharmacySupplierReturnError('REGISTER_DISAGREES');
+  }
+  try {
+    await createRegisterRow(db, {
+      ...lot,
+      serial: await nextSerial(db, organizationId, branchId),
+      entryKind: 'RETURN_TO_SUPPLIER',
+      sourcePurchaseEntryId: purchase.id,
+      supplierReturnLineId: input.lineId,
+      lateDispatchAt: input.lateDispatchAt,
+      stockMovementId: input.movementId,
+      manufacturer: purchase.manufacturer,
+      batchNumber: purchase.batchNumber,
+      counterpartyName: input.supplierName,
+      quantityCanonicalUnits: input.quantity,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: scope.actorId,
+      witnessedByUserId: input.lateDispatchAt ? null : input.witness.witnessedByUserId,
+      supplierReturnReason: input.approvalReason?.trim(),
+      signatureRef: input.witness.signatureRef,
+    });
+  } catch (error) {
+    if (
+      isRegisterCheckViolation(error) ||
+      (error instanceof Prisma.PrismaClientKnownRequestError &&
+        ['P2003', 'P2004', 'P2010'].includes(error.code))
+    )
+      throw new PharmacySupplierReturnError('REGISTER_REFUSED');
+    if (error instanceof Error && error.message === 'CONFLICT')
+      throw new PharmacySupplierReturnError('REGISTER_REFUSED');
+    throw error;
+  }
+}
+
 export async function earlierRegisterEntry(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },
@@ -419,7 +533,10 @@ export async function appendControlledCorrection(db: ScopedDb, input: Correction
     },
   });
   if (!original) throw new Error('NOT_FOUND');
-  if (original.entryKind === 'CORRECTION' || !original.medicineId) {
+  if (
+    (original.entryKind !== 'PURCHASE' && original.entryKind !== 'SALE') ||
+    !original.medicineId
+  ) {
     throw new Error('ALREADY_CORRECTED');
   }
   const existing = await db.pharmacyControlledRegisterEntry.findFirst({

@@ -20,6 +20,7 @@
  * acceptance run: that ROLLBACK actually discards the rows, that RLS holds
  * across the boundary, and concurrent behaviour.
  */
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
@@ -164,6 +165,12 @@ vi.mock('@/server/routers/_app', async () => {
           throw new Error('anonymous event failed');
         }),
       }),
+      pharmacySupplierLinks: t.router({
+        submit: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
+      }),
+      trelloImport: t.router({
+        importBoard: t.procedure.input((value: unknown) => value).mutation(({ input }) => input),
+      }),
       read: t.procedure.query(() => ({ read: true })),
       // A deliberate refusal: the caller is told exactly this, and nothing failed.
       refuse: t.procedure.mutation(() => {
@@ -196,17 +203,22 @@ vi.mock('@/server/trpc', () => ({
 
 const mocks = vi.hoisted(() => ({
   resolveTenantActor: vi.fn(),
+  rateLimit: vi.fn(),
   requireOrganizationForRequest: vi.fn(),
   resolveOrganizationById: vi.fn(),
   resolveExplicitOrganizationByHost: vi.fn(),
 }));
 
+vi.mock('@/lib/rate-limit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/rate-limit')>()),
+  rateLimit: mocks.rateLimit,
+}));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
 vi.mock('@/lib/auth/anonymous-tenant', () => ({
   organizationForAnonymousToken: vi.fn(async () => null),
 }));
 vi.mock('@/lib/auth/anonymous-rate-limit', () => ({
-  admitAnonymousRequest: () => ({ ok: true }),
+  admitAnonymousRequest: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('@/lib/tenancy/host', async () => {
   const actual = await vi.importActual<typeof import('@/lib/tenancy/host')>('@/lib/tenancy/host');
@@ -219,9 +231,12 @@ vi.mock('@/lib/tenancy/host', async () => {
 });
 
 import { createTRPCUntypedClient, httpBatchLink, TRPCClientError } from '@trpc/client';
+import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
+import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
 import type { AnyTRPCRouter } from '@trpc/server';
 import superjson from 'superjson';
 import { TenantHostError } from '@/lib/tenancy/host';
+import { MAX_TRELLO_REQUEST_BYTES, TRELLO_LIMIT_MESSAGE } from '@/types/trello-import-limits';
 import { GET, POST } from './[trpc]/route';
 
 const ORGANIZATION = { id: 'org_acme', slug: 'acme', status: 'ACTIVE' };
@@ -656,4 +671,272 @@ describe('tenant scope across aborts', () => {
     expect(harness.outcomes).toEqual(['ROLLBACK']);
     expect(harness.writes).toEqual([]);
   });
+});
+
+describe('Trello import HTTP preflight', () => {
+  const path = 'trelloImport.importBoard';
+  const board = { name: 'Trello board', lists: [], cards: [] };
+  const input = { trelloJson: board, newProjectName: 'Imported', memberMapping: {} };
+
+  beforeEach(() => {
+    mocks.rateLimit.mockReset().mockResolvedValue({ ok: true });
+  });
+
+  function post(body: string, procedure = path) {
+    return POST(
+      new Request(url(procedure, '?batch=1'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      })
+    );
+  }
+
+  it.each([
+    ['unsigned', 401, () => mocks.resolveTenantActor.mockResolvedValueOnce(null)],
+    [
+      'rate-limited',
+      429,
+      () => mocks.rateLimit.mockResolvedValueOnce({ ok: false, retryAfter: 42 }),
+    ],
+  ] as const)(
+    'refuses an %s Trello import without opening its body',
+    async (_label, status, reject) => {
+      reject();
+      const request = new Request(url(path, '?batch=1'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ '0': { json: input } }),
+      });
+      const reader = vi.spyOn(request.body!, 'getReader');
+      const response = await POST(request);
+      expect(response.status).toBe(status);
+      expect(reader).not.toHaveBeenCalled();
+      expect(request.bodyUsed).toBe(false);
+      expect(harness.outcomes).toEqual([]);
+      if (status === 401) {
+        expect(mocks.rateLimit).not.toHaveBeenCalled();
+      } else {
+        expect(response.headers.get('retry-after')).toBe('42');
+        expect(await response.json()).toMatchObject({
+          error: { json: { data: { code: 'TOO_MANY_REQUESTS' } } },
+        });
+        expect(mocks.rateLimit).toHaveBeenCalledExactlyOnceWith(
+          'trello-import:user:user_1',
+          5,
+          600_000
+        );
+        expect(mocks.resolveTenantActor.mock.invocationCallOrder[0]).toBeLessThan(
+          mocks.rateLimit.mock.invocationCallOrder[0]!
+        );
+      }
+    }
+  );
+
+  it.each([
+    ['wrong media type', 400, { 'content-type': 'text/plain' }],
+    [
+      'oversized declaration',
+      413,
+      {
+        'content-type': 'application/json',
+        'content-length': String(MAX_TRELLO_REQUEST_BYTES + 1),
+      },
+    ],
+  ] as const)(
+    'refuses %s before auth, throttle or body access',
+    async (_label, status, headers) => {
+      const request = new Request(url(path, '?batch=1'), {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ '0': { json: input } }),
+      });
+      expect((await POST(request)).status).toBe(status);
+      expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+      expect(mocks.rateLimit).not.toHaveBeenCalled();
+      expect(request.bodyUsed).toBe(false);
+      expect(harness.outcomes).toEqual([]);
+    }
+  );
+
+  it('hands an exact-byte-limit request to the real tRPC adapter and transaction', async () => {
+    const json = JSON.stringify({ '0': { json: input } });
+    const response = await post(json.padEnd(MAX_TRELLO_REQUEST_BYTES));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([{ result: { data: { json: input } } }]);
+    expect(harness.outcomes).toEqual(['COMMIT']);
+  });
+
+  it('serves an import when Next binds methods through a request proxy', async () => {
+    const request = new Request(url(path, '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ '0': { json: input } }),
+    });
+    const proxied = new Proxy(request, {
+      get(target, key) {
+        const value = Reflect.get(target, key, target);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const response = await POST(proxied);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual([{ result: { data: { json: input } } }]);
+    expect(harness.outcomes).toEqual(['COMMIT']);
+  });
+
+  it('rejects actual bytes beyond the limit even without Content-Length before opening a tenant transaction', async () => {
+    const json = JSON.stringify({ '0': { json: input } });
+    const response = await post(json.padEnd(MAX_TRELLO_REQUEST_BYTES + 1));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({
+      error: { json: { message: TRELLO_LIMIT_MESSAGE } },
+    });
+    expect(mocks.resolveTenantActor).toHaveBeenCalledOnce();
+    expect(mocks.rateLimit).toHaveBeenCalledOnce();
+    expect(harness.outcomes).toEqual([]);
+  });
+
+  it.each(['', '/', '//'])(
+    'rejects a nested limit across a batch with suffix %j before opening a tenant transaction',
+    async (suffix) => {
+      const over = {
+        ...input,
+        trelloJson: { ...board, cards: [{ attachments: Array(101).fill(null) }] },
+      };
+      const response = await post(
+        JSON.stringify({ '0': { json: null }, '1': { json: over } }),
+        `write,${path}${suffix}`
+      );
+      expect(response.status).toBe(413);
+      expect(mocks.resolveTenantActor).toHaveBeenCalledOnce();
+      expect(mocks.rateLimit).toHaveBeenCalledOnce();
+      expect(harness.outcomes).toEqual([]);
+      expect(harness.writes).toEqual([]);
+    }
+  );
+
+  it('names the imported list limit before opening a tenant transaction', async () => {
+    const trelloJson = {
+      ...board,
+      lists: Array.from({ length: 501 }, (_, id) => ({ id: String(id) })),
+    };
+    const response = await post(JSON.stringify({ '0': { json: { ...input, trelloJson } } }));
+    expect(response.status).toBe(413);
+    expect(await response.json()).toMatchObject({
+      error: { json: { message: expect.stringContaining('500 lists') } },
+    });
+    expect(mocks.resolveTenantActor).toHaveBeenCalledOnce();
+    expect(mocks.rateLimit).toHaveBeenCalledOnce();
+    expect(harness.outcomes).toEqual([]);
+  });
+
+  it('rejects a repeated import path in a single transaction', async () => {
+    const response = await post(
+      JSON.stringify({ '0': { json: input }, '1': { json: input } }),
+      `${path},${path}`
+    );
+    expect(response.status).toBe(400);
+    expect(mocks.resolveTenantActor).not.toHaveBeenCalled();
+    expect(harness.outcomes).toEqual([]);
+  });
+});
+
+it.each([
+  ['passwordReset.request', 256 * 1024],
+  ['pharmacySupplierLinks.submit', 256 * 1024],
+] as const)('stops reading at the anonymous tRPC cap for %s', async (procedure, limit) => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const input = oversizedRequest(limit, {
+    url: url(procedure, '?batch=1'),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 16_384);
+  expect(harness.scopeTenants).toEqual([]);
+});
+
+it('rejects an over-cap anonymous supplier submission declaration even with a short delivered body', async () => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const limit = 256 * 1024;
+  const request = new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'content-length': String(limit + 1),
+    },
+    body: '{}',
+  });
+  const reader = vi.spyOn(request.body!, 'getReader');
+
+  expect((await POST(request)).status).toBe(413);
+  expect(reader).not.toHaveBeenCalled();
+  expect(request.bodyUsed).toBe(false);
+  expect(organizationForAnonymousToken).not.toHaveBeenCalled();
+});
+
+it('replays an anonymous supplier submission at exactly 256 KiB for tenant lookup and the tRPC parser', async () => {
+  const payload = { token: 'supplier-link', kind: 'ACKNOWLEDGEMENT' };
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  mocks.resolveOrganizationById.mockResolvedValueOnce(ORGANIZATION);
+  vi.mocked(organizationForAnonymousToken).mockResolvedValueOnce(ORGANIZATION.id);
+
+  const response = await POST(
+    new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ '0': { json: payload } }).padEnd(256 * 1024),
+    })
+  );
+
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([{ result: { data: { json: payload } } }]);
+  expect(organizationForAnonymousToken).toHaveBeenCalledWith(payload.token);
+  expect(harness.scopeTenants).toEqual([ORGANIZATION.id]);
+});
+
+it('checks the host-routed anonymous throttle before reading the body', async () => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  vi.mocked(admitAnonymousRequest).mockResolvedValueOnce({ ok: false, retryAfter: 60 });
+  const input = oversizedRequest(256 * 1024, {
+    url: url('passwordReset.request', '?batch=1'),
+    headers: { 'content-type': 'application/json' },
+  });
+
+  const response = await POST(input.request);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('retry-after')).toBe('60');
+  expect(input.bytesRead()).toBe(0);
+  expect(mocks.resolveExplicitOrganizationByHost).not.toHaveBeenCalled();
+});
+
+it('refuses an oversized anonymous POST before a 4 MiB proxy clone could fill', async () => {
+  mocks.resolveTenantActor.mockResolvedValue(null);
+  const input = oversizedRequest(4 * 1024 * 1024, {
+    url: url('pharmacySupplierLinks.submit', '?batch=1'),
+    headers: { 'content-type': 'application/json', 'x-devfathom-request-method': 'GET' },
+  });
+  const response = await POST(input.request);
+  expect(response.status).toBe(413);
+  expect(response.headers.get('content-security-policy')).toContain("'nonce-");
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(256 * 1024 + 16_384);
+  const actorRequest = mocks.resolveTenantActor.mock.calls[0]![0].request as Request;
+  expect(actorRequest.headers.get('x-devfathom-request-method')).toBe('POST');
+  expect(harness.outcomes).toEqual([]);
+});
+
+it('retains the signed-in body capacity past the new shared proxy cap', async () => {
+  const response = await POST(
+    new Request(url('pharmacySupplierLinks.submit', '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ '0': { json: { synthetic: true } } }).padEnd(8 * 1024 * 1024),
+    })
+  );
+  expect(response.status).toBe(200);
+  expect(await response.json()).toEqual([{ result: { data: { json: { synthetic: true } } } }]);
+  expect(harness.outcomes).toEqual(['COMMIT']);
 });

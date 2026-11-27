@@ -1,3 +1,6 @@
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { resolveBusinessDate } from '@/lib/restaurant/business-date';
+import { workspaceTimezone } from '@/lib/timezone';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { Suspense } from 'react';
@@ -199,17 +202,22 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
     );
   }
 
-  const today = isoDate(new Date());
-  const weekAgo = new Date(`${today}T00:00:00.000Z`);
-  weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
-  const from = queryValue(query.from) ?? isoDate(weekAgo);
-  const to = queryValue(query.to) ?? today;
   const requestedBranch = queryValue(query.branch);
   const canAllBranches = branchResult.data?.canAllBranches ?? false;
   const branch =
     requestedBranch === 'all' && canAllBranches
       ? 'all'
       : (branches.find((item) => item.id === requestedBranch)?.id ?? branches[0]!.id);
+  const selectedBranch = branches.find((item) => item.id === branch);
+  const today = resolveBusinessDate(
+    new Date(),
+    workspaceTimezone(selectedBranch?.timezone ?? ctx.organization?.timezone),
+    selectedBranch?.businessDayCutoff
+  );
+  const weekAgo = new Date(`${today}T00:00:00.000Z`);
+  weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
+  const from = queryValue(query.from) ?? isoDate(weekAgo);
+  const to = queryValue(query.to) ?? today;
   const rangeInput = { ...(branch === 'all' ? {} : { branchId: branch }), from, to };
   let rangeError: string | undefined;
   try {
@@ -365,19 +373,19 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" method="get">
           <label className="text-sm text-text-body">
             Branch
-            <select className={selectClass} defaultValue={branch} name="branch">
+            <StudioSelect className={selectClass} defaultValue={branch} name="branch">
               {canAllBranches ? <option value="all">All active branches</option> : null}
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
           {canOperational && inventoryEnabled ? (
             <label className="text-sm text-text-body">
               Stock location
-              <select
+              <StudioSelect
                 className={selectClass}
                 defaultValue={stockLocationId ?? 'all'}
                 name="stockLocation"
@@ -390,7 +398,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                     {location.isActive ? '' : ' (inactive)'}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
           ) : null}
           <label className="text-sm text-text-body">

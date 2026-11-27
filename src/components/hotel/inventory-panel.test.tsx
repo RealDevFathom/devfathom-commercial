@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HotelInventoryPanel, type HotelInventoryView } from './inventory-panel';
@@ -270,7 +271,14 @@ describe('HotelInventoryPanel', () => {
       maxChildren: 1,
       bedConfig: undefined,
     });
-    fireEvent.change(screen.getByLabelText('Sold as'), { target: { value: 'BED' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Sold as', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'BED' } }
+    );
     fireEvent.change(screen.getByLabelText('Beds per room'), { target: { value: '6' } });
     fireEvent.submit(typeForm());
     expect(h.mutate.createType).toHaveBeenLastCalledWith(
@@ -280,7 +288,13 @@ describe('HotelInventoryPanel', () => {
 
   it('disables kinds the property does not sell and replaces the form when it sells none', () => {
     mount(view({ enabled: ['ROOM'] }));
-    const unit = within(screen.getByLabelText('Sold as')).getByRole('option', { name: /Unit/ });
+    const unit = within(
+      selectFieldControl(
+        screen.getByLabelText('Sold as', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      )
+    ).getByRole('option', { hidden: true, name: /Unit/ });
     expect(unit).toBeDisabled();
     expect(unit).toHaveTextContent('not available for this property');
     cleanup();
@@ -316,7 +330,14 @@ describe('HotelInventoryPanel', () => {
     mount();
     expect(screen.queryByLabelText('Dorm policy')).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Room number'), { target: { value: '102' } });
-    fireEvent.change(screen.getByLabelText('Connecting room'), { target: { value: 'room_101' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Connecting room', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'room_101' } }
+    );
     fireEvent.submit(roomForm());
     expect(h.mutate.createRoom).toHaveBeenCalledWith({
       branchId: 'branch',
@@ -327,8 +348,22 @@ describe('HotelInventoryPanel', () => {
       genderPolicy: 'ANY',
       reason: 'Commissioned',
     });
-    fireEvent.change(screen.getByLabelText('Room type'), { target: { value: 'type_dorm' } });
-    fireEvent.change(screen.getByLabelText('Dorm policy'), { target: { value: 'FEMALE' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Room type', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'type_dorm' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Dorm policy', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'FEMALE' } }
+    );
     fireEvent.change(screen.getByLabelText('Room number'), { target: { value: '202' } });
     fireEvent.submit(roomForm());
     expect(h.mutate.createRoom).toHaveBeenLastCalledWith(
@@ -350,7 +385,7 @@ describe('HotelInventoryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Status of room 101' }));
     const editor = screen.getByRole('form', { name: 'Change status of room 101' });
     const options = within(editor)
-      .getAllByRole('option')
+      .getAllByRole('option', { hidden: true })
       .map((option) => option.textContent);
     expect(options).toEqual(['Vacant, clean', 'Out of order', 'Out of service']);
     fireEvent.change(within(editor).getByLabelText('Reason'), {
@@ -383,7 +418,11 @@ describe('HotelInventoryPanel', () => {
     fireEvent.click(trigger);
     const editor = screen.getByRole('form', { name: 'Change status of room 101' });
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
-    expect(within(editor).getByLabelText('New status')).toHaveFocus();
+    expect(
+      within(editor).getByLabelText('New status', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toHaveFocus();
     fireEvent.keyDown(within(editor).getByLabelText('Reason'), { key: 'Escape' });
     expect(
       screen.queryByRole('form', { name: 'Change status of room 101' })
@@ -395,13 +434,18 @@ describe('HotelInventoryPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Status of room 201' }));
     expect(
       within(screen.getByRole('form', { name: 'Change status of room 201' })).getByLabelText(
-        'Change'
+        'Change',
+        { selector: ':not([data-select-field-native][aria-hidden="true"])' }
       )
     ).toHaveFocus();
     const block = screen.getByRole('button', { name: 'Block room 101' });
     fireEvent.click(block);
     const blockEditor = screen.getByRole('form', { name: 'Withhold room 101' });
-    expect(within(blockEditor).getByLabelText('Why it is withheld')).toHaveFocus();
+    expect(
+      within(blockEditor).getByLabelText('Why it is withheld', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toHaveFocus();
     // Opening one editor closes the other without stealing focus from the new one.
     expect(
       screen.queryByRole('form', { name: 'Change status of room 201' })
@@ -436,10 +480,24 @@ describe('HotelInventoryPanel', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Status of room 201' }));
     const editor = screen.getByRole('form', { name: 'Change status of room 201' });
-    fireEvent.change(within(editor).getByLabelText('Change'), { target: { value: 'bed_2' } });
-    fireEvent.change(within(editor).getByLabelText('New status'), {
-      target: { value: 'VACANT_CLEAN' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(editor).getByLabelText('Change', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'bed_2' } }
+    );
+    fireEvent.change(
+      selectFieldControl(
+        within(editor).getByLabelText('New status', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'VACANT_CLEAN' },
+      }
+    );
     fireEvent.change(within(editor).getByLabelText('Reason'), {
       target: { value: 'Linen changed' },
     });
@@ -464,9 +522,16 @@ describe('HotelInventoryPanel', () => {
     mount();
     fireEvent.click(screen.getByRole('button', { name: 'Block room 101' }));
     const block = screen.getByRole('form', { name: 'Withhold room 101' });
-    fireEvent.change(within(block).getByLabelText('Why it is withheld'), {
-      target: { value: 'OUT_OF_SERVICE' },
-    });
+    fireEvent.change(
+      selectFieldControl(
+        within(block).getByLabelText('Why it is withheld', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      {
+        target: { value: 'OUT_OF_SERVICE' },
+      }
+    );
     fireEvent.change(within(block).getByLabelText('From'), { target: { value: '2026-11-01' } });
     fireEvent.change(within(block).getByLabelText('Back on sale from'), {
       target: { value: '2026-11-03' },

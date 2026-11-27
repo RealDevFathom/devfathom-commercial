@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
@@ -29,6 +30,13 @@ import {
   rotateOperatorCredential,
 } from '@/lib/restaurant/credential-lifecycle';
 import { CredentialPolicyError } from '@/lib/restaurant/operator-credentials';
+import { approvalAuthenticatorPartySelect } from '@/lib/approval-authenticator';
+import { pinResetDenial } from '@/lib/pharmacy/own-pin';
+import {
+  assertMayRemoveLogin,
+  guardTerminalOnlyApprovers,
+  TerminalOnlyApproverError,
+} from '@/lib/restaurant/terminal-only-approvers';
 import {
   JobRoleError,
   clearStaffCapabilityOverride,
@@ -78,6 +86,7 @@ const CREDENTIAL_TYPE = z.enum(['PIN', 'BADGE']);
 
 /** Translate a staff-domain error into the right tRPC status; rethrow anything else. */
 function mapStaffError(err: unknown): never {
+  ownerOnly(err);
   if (err instanceof CommercialLimitError) {
     throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
   }
@@ -110,8 +119,15 @@ function mapCredentialError(err: unknown): never {
   throw err;
 }
 
+/** DEV-961: only the owner may leave a staff member who can approve without a login. */
+function ownerOnly(err: unknown): void {
+  if (err instanceof TerminalOnlyApproverError)
+    throw new TRPCError({ code: 'FORBIDDEN', message: err.message });
+}
+
 /** Translate a job-role domain error into the right tRPC status. */
 function mapJobRoleError(err: unknown): never {
+  ownerOnly(err);
   if (err instanceof JobRoleError) {
     const code =
       err.reason === 'KEY_TAKEN' || err.reason === 'ROLE_INACTIVE'
@@ -151,6 +167,39 @@ async function resolveStaffUserEmail(
     throw new StaffProfileError('The selected organization user is unavailable.', 'USER_NOT_FOUND');
   }
   return user.id;
+}
+
+/**
+ * DEV-974: an operator PIN or badge on a staff profile linked to a web account signs in
+ * (and approves) as that account. Setting one, or linking a profile to an account, is a
+ * sign-in identity change: it follows the PIN-reset hierarchy (`pinResetDenial`), so a
+ * manager never sets the credential of an administrator or the owner. A person's own
+ * profile, and profiles with no linked account, are unchanged.
+ */
+async function assertMaySetLinkedCredential(
+  db: ScopedDb,
+  actorId: string,
+  linkedUserId: string | null | undefined
+): Promise<void> {
+  if (!linkedUserId || linkedUserId === actorId) return;
+  const select = approvalAuthenticatorPartySelect();
+  const [actor, target] = await Promise.all([
+    db.user.findUnique({ where: { id: actorId }, select }),
+    db.user.findUnique({ where: { id: linkedUserId }, select }),
+  ]);
+  const denial =
+    actor && target
+      ? await pinResetDenial(db, actor, target)
+      : "Only the owner can change this person's PIN.";
+  if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
+}
+
+async function linkedUserOf(db: ScopedDb, staffProfileId: string): Promise<string | null> {
+  const profile = await db.restaurantStaffProfile.findUnique({
+    where: { id: staffProfileId },
+    select: { userId: true },
+  });
+  return profile?.userId ?? null;
 }
 
 type InviteActor = Parameters<typeof subjectFromSession>[0];
@@ -218,6 +267,33 @@ function workspaceOrganizationId(ctx: {
   return organizationId;
 }
 
+type GuardContext = Parameters<typeof workspaceOrganizationId>[0] & {
+  db: ScopedDb;
+  session: { user: { id: string; organizationId?: string } } | null;
+};
+
+/**
+ * DEV-961: a staff or role change in one transaction under the terminal-only approver guard:
+ * a change that leaves a staff profile able to approve without a login is the owner's alone,
+ * audited, and every owner is notified (`terminal-only-approvers.ts`).
+ */
+async function guarded<T>(
+  ctx: GuardContext,
+  action: string,
+  work: (db: ScopedDb) => Promise<T>
+): Promise<T> {
+  const { result } = await guardTerminalOnlyApprovers(
+    ctx.db,
+    {
+      organizationId: workspaceOrganizationId(ctx),
+      actorUserId: ctx.session!.user.id,
+      action,
+    },
+    work
+  );
+  return result;
+}
+
 export const restaurantStaffRouter = router({
   /**
    * WHA-1181 — does the signed-in user own the staff profile every restaurant
@@ -246,7 +322,7 @@ export const restaurantStaffRouter = router({
    * operator seat the tenant chose to add — and refusing the repair at the
    * operator cap would strand the administrator in the very 403 loop this fixes.
    */
-  provisionMyProfile: staffProcedure.mutation(async ({ ctx }) => {
+  provisionMyProfile: staffProcedure.meta(refuseSupportSession).mutation(async ({ ctx }) => {
     const user = ctx.session!.user;
     const organizationId = workspaceOrganizationId(ctx);
     if (user.role !== 'ADMIN' || organizationId !== user.organizationId) {
@@ -307,6 +383,7 @@ export const restaurantStaffRouter = router({
         name: true,
         code: true,
         timezone: true,
+        businessDayCutoff: true,
         active: true,
         isDefault: true,
       },
@@ -426,6 +503,7 @@ export const restaurantStaffRouter = router({
     }),
 
   create: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -460,10 +538,9 @@ export const restaurantStaffRouter = router({
             userEmail
           );
         }
-        const staff = await createStaffProfileWithinCommercialLimit(
-          ctx.db,
-          ctx.entitlements.limits,
-          profileInput
+        await assertMaySetLinkedCredential(ctx.db, ctx.session!.user.id, profileInput.userId);
+        const staff = await guarded(ctx, 'restaurantStaff.create', (db) =>
+          createStaffProfileWithinCommercialLimit(db, ctx.entitlements.limits, profileInput)
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -498,6 +575,7 @@ export const restaurantStaffRouter = router({
    * set their password. Same branch rules as `create`.
    */
   invite: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         displayName: z.string().trim().min(1).max(200),
@@ -624,6 +702,7 @@ export const restaurantStaffRouter = router({
     }),
 
   update: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -659,11 +738,17 @@ export const restaurantStaffRouter = router({
             id
           );
         }
-        const staff = await updateStaffProfileWithinCommercialLimit(
-          ctx.db,
-          ctx.entitlements.limits,
-          id,
-          patch
+        await assertMaySetLinkedCredential(ctx.db, ctx.session!.user.id, patch.userId);
+        // DEV-961: removing the login from a staff member who can approve is the owner's alone
+        // (a manager cannot unlink a login, their own included).
+        if (patch.userId === null)
+          await assertMayRemoveLogin(ctx.db, {
+            organizationId: workspaceOrganizationId(ctx),
+            actorUserId: ctx.session!.user.id,
+            staffProfileId: id,
+          });
+        const staff = await guarded(ctx, 'restaurantStaff.update', (db) =>
+          updateStaffProfileWithinCommercialLimit(db, ctx.entitlements.limits, id, patch)
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -680,6 +765,7 @@ export const restaurantStaffRouter = router({
   // Deactivate / reactivate / archive. Status gates operator sign-in (C5,
   // enforced at the terminal in L3); it does not itself revoke credentials.
   setStatus: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string(), status: STAFF_STATUS }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -689,11 +775,13 @@ export const restaurantStaffRouter = router({
           ctx.entitlements.organizationId
         );
         await assertAuthorizedStaffProfile(ctx.db, authorization, input.id);
-        const staff = await setStaffProfileStatusWithinCommercialLimit(
-          ctx.db,
-          ctx.entitlements.limits,
-          input.id,
-          input.status
+        const staff = await guarded(ctx, 'restaurantStaff.setStatus', (db) =>
+          setStaffProfileStatusWithinCommercialLimit(
+            db,
+            ctx.entitlements.limits,
+            input.id,
+            input.status
+          )
         );
         annotateAudit(ctx, {
           targetType: 'RestaurantStaffProfile',
@@ -740,6 +828,7 @@ export const restaurantStaffRouter = router({
     }),
 
   issueCredential: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         staffProfileId: z.string(),
@@ -768,6 +857,11 @@ export const restaurantStaffRouter = router({
           if (!device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, device.branchId);
         }
+        await assertMaySetLinkedCredential(
+          ctx.db,
+          ctx.session!.user.id,
+          await linkedUserOf(ctx.db, input.staffProfileId)
+        );
         const credential = await issueOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
@@ -794,6 +888,7 @@ export const restaurantStaffRouter = router({
     }),
 
   rotateCredential: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ credentialId: z.string(), secret: z.string().min(1) }))
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
@@ -814,6 +909,11 @@ export const restaurantStaffRouter = router({
           if (!existing.device) denyStaffBranchAccess();
           assertAuthorizedBranch(authorization, existing.device.branchId);
         }
+        await assertMaySetLinkedCredential(
+          ctx.db,
+          ctx.session!.user.id,
+          await linkedUserOf(ctx.db, existing.staffProfileId)
+        );
         const credential = await rotateOperatorCredential(ctx.db, input);
         annotateAudit(ctx, {
           skipInput: true,
@@ -833,6 +933,7 @@ export const restaurantStaffRouter = router({
     }),
 
   revokeCredential: staffProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ credentialId: z.string() }))
     .mutation(async ({ ctx, input }) => {
       // Uniform C4 treatment for credential-bearing mutations: skip raw-input
@@ -885,7 +986,7 @@ export const restaurantStaffRouter = router({
     .input(z.object({ activeOnly: z.boolean().default(false) }).strict())
     .query(({ ctx, input }) => listJobRoles(ctx.db, { activeOnly: input.activeOnly })),
 
-  seedDefaultJobRoles: staffProcedure.mutation(async ({ ctx }) => {
+  seedDefaultJobRoles: staffProcedure.meta(refuseSupportSession).mutation(async ({ ctx }) => {
     assertOrganizationWide(
       await resolveStaffBranchAuthorization(
         ctx.db,
@@ -893,7 +994,9 @@ export const restaurantStaffRouter = router({
         ctx.entitlements.organizationId
       )
     );
-    const result = await ensureDefaultJobRoles(ctx.db);
+    const result = await guarded(ctx, 'restaurantStaff.seedDefaultJobRoles', (db) =>
+      ensureDefaultJobRoles(db)
+    ).catch(mapJobRoleError);
     if (result.created.length > 0) {
       annotateAudit(ctx, {
         targetType: 'RestaurantJobRole',
@@ -905,6 +1008,7 @@ export const restaurantStaffRouter = router({
   }),
 
   createJobRole: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -937,6 +1041,7 @@ export const restaurantStaffRouter = router({
     }),
 
   updateJobRole: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -957,7 +1062,9 @@ export const restaurantStaffRouter = router({
             ctx.entitlements.organizationId
           )
         );
-        const role = await updateJobRole(ctx.db, id, patch);
+        const role = await guarded(ctx, 'restaurantStaff.updateJobRole', (db) =>
+          updateJobRole(db, id, patch)
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
           targetId: role.id,
@@ -970,6 +1077,7 @@ export const restaurantStaffRouter = router({
     }),
 
   setJobRoleCapabilities: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -987,7 +1095,9 @@ export const restaurantStaffRouter = router({
             ctx.entitlements.organizationId
           )
         );
-        const result = await setJobRoleCapabilities(ctx.db, input.jobRoleId, input.capabilities);
+        const result = await guarded(ctx, 'restaurantStaff.setJobRoleCapabilities', (db) =>
+          setJobRoleCapabilities(db, input.jobRoleId, input.capabilities)
+        );
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
           targetId: input.jobRoleId,
@@ -1022,6 +1132,7 @@ export const restaurantStaffRouter = router({
    * person's roles at another branch.
    */
   setStaffJobRoles: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1042,12 +1153,14 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await setStaffJobRoles(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          jobRoleIds: input.jobRoleIds,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.setStaffJobRoles', (db) =>
+          setStaffJobRoles(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            jobRoleIds: input.jobRoleIds,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.granted.length > 0 || result.revoked.length > 0) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',
@@ -1070,6 +1183,7 @@ export const restaurantStaffRouter = router({
    * failed override never leaves the role half of the operator's intent applied.
    */
   setStaffAccess: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1102,13 +1216,15 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await setStaffAccess(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          jobRoleIds: input.jobRoleIds,
-          overrides: input.overrides,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.setStaffAccess', (db) =>
+          setStaffAccess(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            jobRoleIds: input.jobRoleIds,
+            overrides: input.overrides,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.granted.length || result.revoked.length || result.overrides.length) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',
@@ -1158,6 +1274,7 @@ export const restaurantStaffRouter = router({
    * itself is untouched and keeps granting it to everyone else who holds it.
    */
   setStaffCapabilityOverride: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1179,13 +1296,15 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await setStaffCapabilityOverride(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          capability: input.capability,
-          effect: input.effect,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.setStaffCapabilityOverride', (db) =>
+          setStaffCapabilityOverride(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            capability: input.capability,
+            effect: input.effect,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.changed) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',
@@ -1202,6 +1321,7 @@ export const restaurantStaffRouter = router({
 
   /** Remove an override so the person falls back to what their roles grant. */
   clearStaffCapabilityOverride: staffProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -1222,12 +1342,14 @@ export const restaurantStaffRouter = router({
         assertOrganizationWide(authorization);
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
-        const result = await clearStaffCapabilityOverride(ctx.db, {
-          staffProfileId: input.staffProfileId,
-          branchId: input.branchId,
-          capability: input.capability,
-          actorStaffProfileId: authorization.actorStaffProfileId,
-        });
+        const result = await guarded(ctx, 'restaurantStaff.clearStaffCapabilityOverride', (db) =>
+          clearStaffCapabilityOverride(db, {
+            staffProfileId: input.staffProfileId,
+            branchId: input.branchId,
+            capability: input.capability,
+            actorStaffProfileId: authorization.actorStaffProfileId,
+          })
+        );
         if (result.changed) {
           annotateAudit(ctx, {
             targetType: 'RestaurantStaffProfile',

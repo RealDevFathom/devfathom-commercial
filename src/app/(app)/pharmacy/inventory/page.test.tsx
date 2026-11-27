@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -11,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   form: vi.fn(),
   writeOff: vi.fn(),
   release: vi.fn(),
+  releaseSafety: vi.fn(),
+  holds: vi.fn(),
   createLocation: vi.fn(),
   acknowledgeRecall: vi.fn(),
   can: vi.fn(),
@@ -42,6 +45,11 @@ vi.mock('@/lib/pharmacy/write-off-witness', async (importOriginal) => {
   mocks.witnessOptions.mockImplementation(actual.writeOffWitnessOptions);
   return { ...actual, writeOffWitnessOptions: mocks.witnessOptions };
 });
+// DEV-1052: hold ownership is read from the database; each test says who holds what.
+vi.mock('@/lib/pharmacy/quarantine-holds', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/quarantine-holds')>()),
+  listQuarantineHolds: mocks.holds,
+}));
 // Async server-component verification belongs to the migrated DB/browser lane.
 vi.mock('@/components/camera/cold-chain-camera-section', () => ({
   ColdChainCameraSection: () => null,
@@ -123,6 +131,7 @@ beforeEach(() => {
     temperatureZoneStatuses: vi.fn().mockResolvedValue([]),
     writeOff: mocks.writeOff,
     releaseQuarantinedPart: mocks.release,
+    releaseSafetyQuarantine: mocks.releaseSafety,
     createLocation: mocks.createLocation,
     acknowledgeRecall: mocks.acknowledgeRecall,
     dailyCycleCountList: mocks.cycleList,
@@ -136,6 +145,9 @@ beforeEach(() => {
   mocks.createLocation.mockResolvedValue({});
   mocks.writeOff.mockResolvedValue({});
   mocks.release.mockResolvedValue({});
+  mocks.releaseSafety.mockResolvedValue({});
+  // No recorded owner: the screen treats every held unit as a safety hold.
+  mocks.holds.mockResolvedValue(new Map());
   nearExpiry.mockResolvedValue([]);
   lots.mockResolvedValue([lot]);
 });
@@ -192,7 +204,8 @@ describe('DEV-862 salt and strength under the product name', () => {
     lots.mockResolvedValue([withParacetamol()]);
     await show();
     expect(
-      screen.getAllByRole('option', { name: /Medicine A \(paracetamol 500 mg\) · /i }).length
+      screen.getAllByRole('option', { hidden: true, name: /Medicine A \(paracetamol 500 mg\) · /i })
+        .length
     ).toBeGreaterThan(0);
   });
 
@@ -307,9 +320,9 @@ describe('physical count prerequisites', () => {
     await show();
     const card = countCard();
     expect(card.getByRole('button', { name: 'Freeze count scope' })).toBeVisible();
-    expect(card.getByRole('option', { name: 'Medicine A · batch B-100 · Rack' })).toHaveValue(
-      `${lot.id}:${location.id}`
-    );
+    expect(
+      card.getByRole('option', { hidden: true, name: 'Medicine A · batch B-100 · Rack' })
+    ).toHaveValue(`${lot.id}:${location.id}`);
     expect(card.queryByRole('link', { name: 'Receive stock' })).not.toBeInTheDocument();
   });
 });
@@ -536,7 +549,7 @@ describe('Quarantine resolution forms', () => {
       ]);
       await show();
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-      expect(within(form).getByRole('combobox', { name: 'Lot' })).toHaveValue(
+      expect(selectFieldControl(within(form).getByRole('combobox', { name: 'Lot' }))).toHaveValue(
         `${lot.id}:${location.id}:${disposition}`
       );
       fireEvent.change(within(form).getByLabelText('Units'), { target: { value: '10' } });
@@ -594,9 +607,9 @@ describe('Quarantine resolution forms', () => {
     mocks.witnessOptions.mockResolvedValueOnce({ witnesses: [], soloSelfWitness: true });
     await show();
     const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
-    expect(within(form).getByRole('combobox', { name: 'Co-authorizing witness' })).toHaveValue(
-      'user'
-    );
+    expect(
+      selectFieldControl(within(form).getByRole('combobox', { name: 'Co-authorizing witness' }))
+    ).toHaveValue('user');
     expect(within(form).getByText(/Confirm with your own PIN/)).toBeInTheDocument();
   });
 
@@ -628,6 +641,140 @@ describe('Quarantine resolution forms', () => {
       })
     );
     await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+  });
+
+  describe('DEV-1052 hold ownership', () => {
+    const held = { ...lot, balances: [{ ...available, disposition: 'QUARANTINE' }] };
+    const at = `${lot.id}:${location.id}`;
+    const placedAt = new Date('2026-11-20T09:00:00.000Z');
+    const safetyHold = {
+      safetyUnits: 34,
+      inventoryUnits: 0,
+      recallUnits: 0,
+      placed: [{ authority: 'SAFETY', origin: 'MANUAL', actorName: 'Dr Ayesha', at: placedAt }],
+    };
+    const REFUSAL =
+      'This stock is held by pharmacy safety. Only someone with the safety permission can release it.';
+    /** The viewer holds exactly these pharmacy permissions. */
+    function viewerHolds(...actions: string[]) {
+      mocks.can.mockImplementation(async (_subject: unknown, action: string) =>
+        actions.includes(action)
+      );
+    }
+    function fillRelease(units: string) {
+      const form = screen.getByRole('button', { name: 'Release manual hold' }).closest('form')!;
+      fireEvent.change(within(form).getByLabelText('Units'), { target: { value: units } });
+      fireEvent.change(within(form).getByLabelText('Clearance reason'), {
+        target: { value: 'Lab cleared' },
+      });
+      fireEvent.submit(form);
+    }
+
+    it('shows who placed each hold and under which authority', async () => {
+      lots.mockResolvedValue([held]);
+      mocks.holds.mockResolvedValue(
+        new Map([
+          [
+            at,
+            {
+              safetyUnits: 20,
+              inventoryUnits: 10,
+              recallUnits: 4,
+              placed: [
+                ...safetyHold.placed,
+                { authority: 'INVENTORY', origin: 'EXPIRY', actorName: 'Bilal', at: placedAt },
+              ],
+            },
+          ],
+        ])
+      );
+      await show();
+      expect(mocks.holds).toHaveBeenCalledWith(ctx.db, {
+        organizationId: 'org',
+        branchId: branch.id,
+      });
+      expect(
+        screen.getByText('Safety hold · 20 units · Dr Ayesha, 2026-11-20 (placed by hand)')
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText('Inventory hold · 10 units · Bilal, 2026-11-20 (expiry check)')
+      ).toBeInTheDocument();
+      expect(screen.getByText(/Recall hold · 4 units/)).toBeInTheDocument();
+      // Both permissions: everything but the recall units is offered.
+      expect(screen.getByRole('option', { name: /up to 30 units/, hidden: true })).toBeTruthy();
+    });
+
+    it('offers no release of a safety hold to someone with only the inventory permission', async () => {
+      viewerHolds('pharmacy:inventory');
+      lots.mockResolvedValue([held]);
+      mocks.holds.mockResolvedValue(new Map([[at, safetyHold]]));
+      await show();
+      expect(screen.getByText(/Safety hold · 34 units · Dr Ayesha/)).toBeInTheDocument();
+      expect(screen.getByText(REFUSAL)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Release manual hold' })).not.toBeInTheDocument();
+    });
+
+    it('treats a hold with no recorded owner as a safety hold', async () => {
+      viewerHolds('pharmacy:inventory');
+      lots.mockResolvedValue([held]);
+      await show();
+      expect(screen.getByText('Safety hold · 34 units · no recorded owner')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Release manual hold' })).not.toBeInTheDocument();
+    });
+
+    it('offers an inventory-only viewer just the inventory-owned units of a mixed lot', async () => {
+      viewerHolds('pharmacy:inventory');
+      lots.mockResolvedValue([held]);
+      mocks.holds.mockResolvedValue(
+        new Map([[at, { ...safetyHold, safetyUnits: 24, inventoryUnits: 10 }]])
+      );
+      await show();
+      expect(screen.getByRole('option', { name: /up to 10 units/, hidden: true })).toBeTruthy();
+      expect(
+        screen.getByText(
+          'You can release 10 units. The safety hold can be released only by someone with the safety permission.'
+        )
+      ).toBeInTheDocument();
+    });
+
+    it('sends a safety-only viewer through the safety release procedure', async () => {
+      viewerHolds('pharmacy:safety');
+      lots.mockResolvedValue([held]);
+      mocks.holds.mockResolvedValue(new Map([[at, safetyHold]]));
+      await show();
+      fillRelease('34');
+      await waitFor(() =>
+        expect(mocks.releaseSafety).toHaveBeenCalledExactlyOnceWith({
+          branchId: branch.id,
+          inventoryLotId: lot.id,
+          stockLocationId: location.id,
+          units: 34,
+          reason: 'Lab cleared',
+          idempotencyKeyPrefix: expect.stringMatching(/^ui-quarantine-release:/),
+        })
+      );
+      expect(mocks.release).not.toHaveBeenCalled();
+    });
+
+    it("repeats the server's plain refusal when a release is refused", async () => {
+      const { TRPCError } = await import('@trpc/server');
+      const { PharmacyInventoryError } = await import('@/lib/pharmacy/inventory');
+      lots.mockResolvedValue([held]);
+      mocks.holds.mockResolvedValue(new Map([[at, safetyHold]]));
+      mocks.release.mockRejectedValue(
+        new TRPCError({
+          code: 'FORBIDDEN',
+          message: REFUSAL,
+          cause: new PharmacyInventoryError('QUARANTINE_RELEASE_REFUSED', REFUSAL),
+        })
+      );
+      await show();
+      fillRelease('34');
+      await waitFor(() => expect(mocks.redirect).toHaveBeenCalled());
+      const target = new URL(mocks.redirect.mock.calls[0]![0] as string, 'https://x.test');
+      expect(target.searchParams.get('kind')).toBe('error');
+      expect(target.searchParams.get('notice')).toBe(REFUSAL);
+    });
   });
 
   it('never offers a damaged hold for release back to sale', async () => {
@@ -664,7 +811,7 @@ describe('Quarantine resolution forms', () => {
       const form = screen.getByRole('button', { name: 'Record write-off' }).closest('form')!;
       expect(
         within(form)
-          .getAllByRole('option')
+          .getAllByRole('option', { hidden: true })
           .map((option) => (option as HTMLOptionElement).value)
       ).toEqual([
         `${lot.id}:${location.id}:AVAILABLE`,
@@ -970,8 +1117,15 @@ describe('DEV-660 — only assigned branches are offered', () => {
     render(await PharmacyInventoryPage({ searchParams: Promise.resolve({ branch: other.id }) }));
     expect(nearExpiry).toHaveBeenCalledExactlyOnceWith({ branchId: branch.id });
     const branchSelect = screen.getByRole('combobox', { name: 'Branch' });
-    expect(within(branchSelect).queryByRole('option', { name: /Other/ })).toBeNull();
-    expect(within(branchSelect).getByRole('option', { name: /Main/ })).toBeInTheDocument();
+    expect(
+      within(selectFieldControl(branchSelect)).queryByRole('option', {
+        hidden: true,
+        name: /Other/,
+      })
+    ).toBeNull();
+    expect(
+      within(selectFieldControl(branchSelect)).getByRole('option', { hidden: true, name: /Main/ })
+    ).toBeInTheDocument();
   });
 });
 

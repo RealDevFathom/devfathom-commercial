@@ -321,6 +321,47 @@ describe('readPharmacyCashCloseCheck (#728)', () => {
     expect(check.narrative).toContain('1 voids (USD 10.01)');
   });
 
+  it('DEV-977B: counts only the value a bill-line change took off, never the whole old line', async () => {
+    const { db, scoped } = fixture();
+    const oldLine = { quantity: 10, unitPriceMinor: 1_000, grossMinor: 10_000, discountMinor: 0 };
+    db.pharmacySaleEvent.findMany.mockResolvedValue([
+      {
+        id: 'event_change',
+        saleId: 'record_change',
+        actorId: 'user_1',
+        occurredAt: new Date('2026-10-30T05:00:00Z'),
+        // Ten units changed to nine: the record holds the old line, one unit's value came off.
+        payload: { cause: 'LINE_CHANGED', voidedMinor: 1_000 },
+        sale: { lines: [oldLine] },
+      },
+      {
+        id: 'event_remove',
+        saleId: 'record_remove',
+        actorId: 'user_1',
+        occurredAt: new Date('2026-10-30T05:01:00Z'),
+        payload: { cause: 'LINE_REMOVED', voidedMinor: 10_000 },
+        sale: { lines: [oldLine] },
+      },
+      {
+        // A whole-bill void, and a forged amount on one: both count the lines.
+        id: 'event_void',
+        saleId: 'void_1',
+        actorId: 'user_1',
+        occurredAt: new Date('2026-10-30T05:02:00Z'),
+        payload: { voidReasonCode: 'WRONG_ITEMS', voidedMinor: 1 },
+        sale: { lines: [oldLine] },
+      },
+    ]);
+
+    const check = await readPharmacyCashCloseCheck(scoped, scope, businessDate);
+
+    expect(db.pharmacySaleEvent.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: expect.objectContaining({ payload: true }) })
+    );
+    expect(check.totals.voidCount).toBe(3);
+    expect(check.totals.voidValueMinor).toBe(1_000 + 10_000 + 10_000);
+  });
+
   it('skips the return lookup when nothing was refunded', async () => {
     const { db, scoped } = fixture();
     db.pharmacyRefund.findMany.mockResolvedValue([]);

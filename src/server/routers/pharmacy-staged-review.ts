@@ -1,3 +1,4 @@
+import { catalogueEditProcedure } from './pharmacy-medicine';
 import { annotateAudit } from '../audit';
 import {
   stagingInput,
@@ -87,19 +88,21 @@ async function readUpload(input: {
 /** Server-page/action caller only. Nesting preserves the existing pharmacy-core entitlement path. */
 export const pharmacyStagedReviewRouter = router({
   pharmacyMedicine: router({
-    stagingUpload: adminProcedure.input(stagingUploadInput).mutation(async ({ ctx, input }) => {
-      annotateAudit(ctx, { skipInput: true });
-      await assertReviewBranch(ctx.db, organizationId(ctx), input.branchId);
-      const { table } = await readUpload(input);
-      const suggested = excelCsvProfiler.resolveColumns(table) ?? {};
-      const mapping = Object.fromEntries(
-        STAGING_FIELDS.flatMap(([field]) =>
-          suggested[field] === undefined ? [] : [[field, suggested[field]]]
-        )
-      );
-      return { headers: [...table.headers], rowCount: table.rows.length, mapping };
-    }),
-    stageBatch: adminProcedure.input(stagingInput).mutation(async ({ ctx, input }) => {
+    stagingUpload: catalogueEditProcedure
+      .input(stagingUploadInput)
+      .mutation(async ({ ctx, input }) => {
+        annotateAudit(ctx, { skipInput: true });
+        await assertReviewBranch(ctx.db, organizationId(ctx), input.branchId);
+        const { table } = await readUpload(input);
+        const suggested = excelCsvProfiler.resolveColumns(table) ?? {};
+        const mapping = Object.fromEntries(
+          STAGING_FIELDS.flatMap(([field]) =>
+            suggested[field] === undefined ? [] : [[field, suggested[field]]]
+          )
+        );
+        return { headers: [...table.headers], rowCount: table.rows.length, mapping };
+      }),
+    stageBatch: catalogueEditProcedure.input(stagingInput).mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       const org = organizationId(ctx);
       await assertReviewBranch(ctx.db, org, input.branchId);

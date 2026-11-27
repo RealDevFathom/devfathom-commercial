@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -268,7 +270,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
               </div>
               <div>
                 <label className="mb-1 block text-xs font-medium text-foreground">Status</label>
-                <select
+                <StudioSelect
                   value={editStatus}
                   onChange={(e) => setEditStatus(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -278,7 +280,7 @@ export function ProjectDetailContent({ projectId }: { projectId: string }) {
                   <option value="ON_HOLD">On Hold</option>
                   <option value="COMPLETED">Completed</option>
                   <option value="CANCELLED">Cancelled</option>
-                </select>
+                </StudioSelect>
               </div>
             </div>
             <div>

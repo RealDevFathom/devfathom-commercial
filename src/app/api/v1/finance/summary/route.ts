@@ -1,3 +1,4 @@
+import { workspaceDateRange, workspaceMonthRange } from '@/lib/timezone';
 import { NextResponse } from 'next/server';
 import { withApiAuth } from '@/lib/api-auth';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
@@ -8,11 +9,22 @@ export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const endDateParam = url.searchParams.get('endDate');
 
   const now = new Date();
+  const org = await ctx.db.organization.findUnique({
+    where: { id: ctx.organizationId },
+    select: { timezone: true },
+  });
+  const zone = org?.timezone;
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/;
   const startDate = startDateParam
-    ? new Date(startDateParam)
-    : new Date(now.getFullYear(), now.getMonth(), 1);
-  const endDate = endDateParam ? new Date(endDateParam) : now;
-
+    ? dateOnly.test(startDateParam)
+      ? workspaceDateRange(startDateParam, startDateParam, zone).from
+      : new Date(startDateParam)
+    : workspaceMonthRange(zone, now).from;
+  const endDate = endDateParam
+    ? dateOnly.test(endDateParam)
+      ? new Date(workspaceDateRange(endDateParam, endDateParam, zone).to.getTime() - 1)
+      : new Date(endDateParam)
+    : now;
   // FIN-02: every monetary aggregate is grouped BY currency so the JSON never
   // reports a USD + PKR sum as a single figure. Each total is an array of
   // { currency, amount } pairs.

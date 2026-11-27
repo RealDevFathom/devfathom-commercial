@@ -1,10 +1,13 @@
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 import { createHash } from 'node:crypto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { POST as registerRoute } from '@/app/api/wallet/apple/v1/devices/[deviceLibraryIdentifier]/registrations/[passTypeIdentifier]/[serialNumber]/route';
 
 const state = vi.hoisted(() => ({
   pass: null as null | Record<string, unknown>,
   registrations: [] as { pass: { serialNumber: string; contentRevision: number } }[],
   existingRegistration: false,
+  rateLimit: vi.fn(() => ({ ok: true, retryAfter: 0, remaining: 1 })),
 }));
 
 const tenantDb = vi.hoisted(() => ({
@@ -30,7 +33,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 
 vi.mock('@/lib/rate-limit', () => ({
   clientIp: () => '127.0.0.1',
-  rateLimit: () => ({ ok: true, retryAfter: 0, remaining: 1 }),
+  rateLimit: state.rateLimit,
 }));
 
 import {
@@ -119,6 +122,28 @@ describe('Apple web-service authentication', () => {
     expect(tenantDb.walletPassRegistration.upsert).toHaveBeenCalledTimes(2);
   });
 
+  it('stops reading at the registration cap after pass authentication', async () => {
+    const token = 'wpa_00000000000000000000000000';
+    state.pass = {
+      id: 'pass-1',
+      organizationId: 'org-1',
+      appleAuthTokenHash: createHash('sha256').update(token).digest('hex'),
+      status: 'ACTIVE',
+    };
+    const limit = 2 * 1024;
+    const input = oversizedRequest(limit, {
+      headers: { authorization: `ApplePass ${token}`, 'content-type': 'application/json' },
+      chunkSize: 1024,
+    });
+
+    expect((await registerRoute(input.request, { params: Promise.resolve(params) })).status).toBe(
+      413
+    );
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 1024);
+    expect(tenantDb.walletPassRegistration.upsert).not.toHaveBeenCalled();
+  });
+
   it('lists only revisions newer than passesUpdatedSince and returns 204 when none remain', async () => {
     state.registrations = [
       { pass: { serialNumber: params.serialNumber, contentRevision: 4 } },
@@ -128,6 +153,7 @@ describe('Apple web-service authentication', () => {
       new Request('https://wallet.devfathom.com/api/wallet/apple?passesUpdatedSince=3'),
       params
     );
+    expect(state.rateLimit).toHaveBeenCalledWith('wallet-apple:ip:127.0.0.1', 120, 60_000);
     expect(updated.status).toBe(200);
     expect(await updated.json()).toEqual({
       serialNumbers: [params.serialNumber, 'wps_11111111111111111111111111'],
@@ -160,4 +186,39 @@ describe('Apple web-service authentication', () => {
     expect(malformed.status).toBe(200);
     expect(await malformed.text()).toBe('');
   });
+});
+
+it('stops reading a chunked body at the limit', async () => {
+  const limit = 64_000;
+  const { request, cancelled, bytesRead } = oversizedRequest(limit);
+  expect((await acceptAppleLogs(request)).status).toBe(413);
+  expect(cancelled()).toBe(true);
+  expect(bytesRead()).toBeLessThanOrEqual(limit + 16_384);
+});
+
+it('keeps the empty acknowledgement for an interrupted Apple log', async () => {
+  const body = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.error(new Error('stream interrupted'));
+    },
+  });
+  const request = new Request('https://wallet.example.test', {
+    method: 'POST',
+    body,
+    duplex: 'half',
+  } as RequestInit);
+  const response = await acceptAppleLogs(request);
+  expect(response.status).toBe(200);
+  expect(await response.text()).toBe('');
+});
+
+it('uses the Apple IP limit before consuming a log', async () => {
+  state.rateLimit.mockReturnValueOnce({ ok: false, retryAfter: 19, remaining: 0 });
+  const { request, bytesRead } = oversizedRequest(64_000);
+  const response = await acceptAppleLogs(request);
+  expect(state.rateLimit).toHaveBeenCalledWith('wallet-apple:log:ip:127.0.0.1', 600, 60_000);
+  expect(response.status).toBe(429);
+  expect(response.headers.get('Retry-After')).toBe('19');
+  expect(bytesRead()).toBe(0);
+  expect(await response.text()).toBe('');
 });

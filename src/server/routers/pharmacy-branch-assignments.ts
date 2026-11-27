@@ -2,11 +2,14 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
+import { Prisma } from '@/generated/prisma/client';
+import { OPEN_ATTEMPT_STATUSES } from '@/lib/pharmacy/card-terminal/open-attempts';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { annotateAudit } from '@/server/audit';
 
-import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { adminProcedure, assertModuleLicensed, router, type TRPCContext } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const PHARMACY_ASSIGNABLE_ROLE_KEYS = new Set(PHARMACY_ROLE_TEMPLATES.map((role) => role.key));
 
@@ -71,8 +74,12 @@ async function assignableMember(ctx: TRPCContext, organizationId: string, userId
 }
 
 /** DEV-907: owner authority comes from the live member row, never the session role. */
-async function isOwner(ctx: TRPCContext, organizationId: string): Promise<boolean> {
-  const actor = await ctx.db.user.findFirst({
+async function isOwner(
+  ctx: TRPCContext,
+  organizationId: string,
+  db: Pick<TRPCContext['db'], 'user'> = ctx.db
+): Promise<boolean> {
+  const actor = await db.user.findFirst({
     where: { id: ctx.session!.user.id, organizationId },
     select: {
       status: true,
@@ -94,6 +101,104 @@ async function isOwner(ctx: TRPCContext, organizationId: string): Promise<boolea
 }
 
 export const pharmacyBranchAssignmentsRouter = router({
+  cashModes: adminProcedure.query(async ({ ctx }) => {
+    assertModuleLicensed(ctx, 'pharmacy-core');
+    const organizationId = pharmacyOrganizationId(ctx);
+    if (ctx.support || ctx.session.user.isSupportSession || !(await isOwner(ctx, organizationId)))
+      return null;
+    return ctx.db.pharmacyBranch.findMany({
+      where: { organizationId, active: true },
+      select: { id: true, name: true, code: true, cashShiftsEnabled: true },
+      orderBy: [{ name: 'asc' }, { code: 'asc' }],
+    });
+  }),
+
+  setCashMode: adminProcedure
+    .input(z.strictObject({ branchId: z.string().trim().min(1).max(128), enabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      assertModuleLicensed(ctx, 'pharmacy-core');
+      const organizationId = pharmacyOrganizationId(ctx);
+      const actorId = ctx.session.user.id;
+      const forbidden = () =>
+        new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Only the pharmacy owner can change how a branch closes.',
+        });
+      if (ctx.support || ctx.session.user.isSupportSession) throw forbidden();
+      return ctx.db.$transaction(async (tx) => {
+        await tx.$queryRaw(
+          Prisma.sql`SELECT id FROM users WHERE id = ${actorId} AND "organizationId" = ${organizationId} FOR SHARE`
+        );
+        if (!(await isOwner(ctx, organizationId, tx))) throw forbidden();
+        const where = { organizationId, id: input.branchId, active: true };
+        const branch = await tx.pharmacyBranch.findFirst({
+          where,
+          select: { cashShiftsEnabled: true },
+        });
+        if (!branch)
+          throw new TRPCError({
+            code: 'NOT_FOUND',
+            message: 'Choose an active branch in this pharmacy.',
+          });
+        if (branch.cashShiftsEnabled !== input.enabled) {
+          // Drawer opening and terminal preflight hold the shared side through commit.
+          await tx.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_branches
+            WHERE id = ${input.branchId} AND "organizationId" = ${organizationId} FOR UPDATE`);
+          const scope = { organizationId, branchId: input.branchId };
+          if (
+            await tx.pharmacyCardTerminalAttempt.count({
+              where: { ...scope, status: { in: [...OPEN_ATTEMPT_STATUSES] } },
+            })
+          )
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'A card payment at this branch is still being finished. Settle or resolve it, then change how the branch closes.',
+            });
+          const open = { ...scope, status: 'OPEN' as const };
+          if (await tx.pharmacyCashShift.count({ where: open }))
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message:
+                'Close the open cash shifts and drawers at this branch before changing how it closes.',
+            });
+          if (await tx.pharmacyDrawerSession.count({ where: open }))
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'Close the open drawers at this branch before changing how it closes.',
+            });
+
+          const updated = await tx.pharmacyBranch.updateMany({
+            where: { ...where, cashShiftsEnabled: branch.cashShiftsEnabled },
+            data: { cashShiftsEnabled: input.enabled },
+          });
+          if (!updated.count)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'The branch changed while you were editing. Reload and try again.',
+            });
+          await tx.auditLog.create({
+            data: {
+              organizationId,
+              actorId,
+              actorType: 'USER',
+              source: 'TRPC',
+              category: 'PHARMACY',
+              operation: 'UPDATE',
+              action: 'pharmacy.branch.cashMode',
+              targetType: 'PharmacyBranch',
+              targetId: input.branchId,
+              outcome: 'SUCCESS',
+              changes: {
+                cashShiftsEnabled: { before: branch.cashShiftsEnabled, after: input.enabled },
+              },
+            },
+          });
+        }
+        return { enabled: input.enabled };
+      });
+    }),
+
   /** DEV-907: the owner's "also in stock at another branch" counter switch. */
   otherBranchAvailability: adminProcedure.query(async ({ ctx }) => {
     const organizationId = pharmacyOrganizationId(ctx);
@@ -115,7 +220,13 @@ export const pharmacyBranchAssignmentsRouter = router({
     .input(z.object({ enabled: z.boolean() }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);
-      if (!(await isOwner(ctx, organizationId))) {
+      // DEV-1053: owner only means the owner's own session. A support session acting as the
+      // owner is refused before anything is read or written, as `setCashMode` refuses it.
+      if (
+        ctx.support ||
+        ctx.session.user.isSupportSession ||
+        !(await isOwner(ctx, organizationId))
+      ) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Only the owner can change this setting.',
@@ -193,6 +304,7 @@ export const pharmacyBranchAssignmentsRouter = router({
   }),
 
   assign: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -243,6 +355,7 @@ export const pharmacyBranchAssignmentsRouter = router({
     }),
 
   unassign: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ assignmentId: z.string().trim().min(1).max(128) }).strict())
     .mutation(async ({ ctx, input }) => {
       const organizationId = pharmacyOrganizationId(ctx);

@@ -10,19 +10,15 @@ import {
   type ProcedureMeta,
   type TRPCContext,
 } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import {
   SupplierLinkError,
   getSupplierActionPage,
   issueSupplierActionLink,
   recordManualSupplierEvidence,
   submitSupplierEvidence,
-  uploadSupplierDocument,
 } from '@/lib/pharmacy/supplier-action-links';
-import {
-  supplierLinkGetInput,
-  supplierLinkSubmitInput,
-  supplierLinkUploadInput,
-} from '@/lib/auth/anonymous-inputs';
+import { supplierLinkGetInput, supplierLinkSubmitInput } from '@/lib/auth/anonymous-inputs';
 
 const id = z.string().trim().min(1).max(200);
 const kind = z.enum([
@@ -79,18 +75,6 @@ export const pharmacySupplierLinksRouter = router({
       mapError(error);
     }
   }),
-  uploadDocument: publicProcedure
-    .input(supplierLinkUploadInput)
-    .mutation(async ({ ctx, input }) => {
-      try {
-        return await uploadSupplierDocument(ctx.db, {
-          ...input,
-          content: Buffer.from(input.contentBase64, 'base64'),
-        });
-      } catch (error) {
-        mapError(error);
-      }
-    }),
   createRelationship: staff
     .meta(PROCUREMENT)
     .input(z.object({ branchId: id, supplierId: id }).strict())
@@ -104,6 +88,7 @@ export const pharmacySupplierLinksRouter = router({
       });
     }),
   issue: staff
+    .meta(refuseSupportSession)
     .meta(PROCUREMENT)
     .input(
       z
@@ -125,6 +110,7 @@ export const pharmacySupplierLinksRouter = router({
       }
     }),
   revoke: staff
+    .meta(refuseSupportSession)
     .meta(PROCUREMENT)
     .input(z.object({ linkId: id }).strict())
     .mutation(async ({ ctx, input }) => {

@@ -42,14 +42,6 @@ vi.mock('@/server/audit', async () => {
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 type PrescriptionsApi = {
-  fill: (input: {
-    id: string;
-    prescriptionLineId: string;
-    fillSequence: number;
-    quantityCanonicalUnits: number;
-    idempotencyKey: string;
-    branchId?: string;
-  }) => Promise<{ id: string; branchId: string | null }>;
   captureRefillReminder: (input: {
     branchId: string;
     fillId: string;
@@ -307,20 +299,29 @@ beforeAll(async () => {
     },
     { userId: X.owner, timeout: 60_000 }
   );
-  // The north pharmacist dispenses four fills at north, through the router.
-  for (let sequence = 2; sequence <= 5; sequence += 1) {
-    const fill = await as(PHARMACIST, (api) =>
-      api.fill({
-        id: `fill962_${sequence}_${suffix}`,
-        prescriptionLineId,
-        fillSequence: sequence,
-        quantityCanonicalUnits: 20,
-        idempotencyKey: `fill-962-${sequence}-${suffix}`,
-        branchId: X.north,
-      })
-    );
-    fills.push(fill.id);
-  }
+  // The north pharmacist dispenses four fills at north. DEV-1056 removed the standalone fill
+  // route (it recorded a fill with no sale and no stock movement), so the rows are written
+  // as the counter sale writes them: by the runtime role, inside the tenant.
+  await withTenantDb(
+    X.org,
+    async (tx) => {
+      for (let sequence = 2; sequence <= 5; sequence += 1) {
+        const fill = await tx.prescriptionFill.create({
+          data: {
+            id: `fill962_${sequence}_${suffix}`,
+            prescriptionLineId,
+            fillSequence: sequence,
+            quantityCanonicalUnits: 20,
+            dispensedByUserId: X.pharmacist,
+            idempotencyKey: `fill-962-${sequence}-${suffix}`,
+            branchId: X.north,
+          },
+        });
+        fills.push(fill.id);
+      }
+    },
+    { userId: X.pharmacist, timeout: 60_000 }
+  );
   // The one-branch tenant's older fill, recorded with no branch.
   await withTenantDb(
     Y.org,
@@ -397,7 +398,7 @@ afterAll(async () => {
 describeIfDatabase(
   'DEV-962 refill reminder slot of the dispensing branch (runtime role, RLS on)',
   () => {
-    it('records the branch a fill was dispensed at, and only at a branch the caller works at', async () => {
+    it('records the branch a fill was dispensed at, and has no standalone fill route', async () => {
       const stored = await withTenantDb(
         X.org,
         (db) =>
@@ -411,20 +412,9 @@ describeIfDatabase(
         ...Object.fromEntries(fills.map((id) => [id, X.north])),
         [legacyFill]: null,
       });
-      await expect(
-        settle(
-          as(SOUTH, (api) =>
-            api.fill({
-              id: `fill962_south_${suffix}`,
-              prescriptionLineId,
-              fillSequence: 6,
-              quantityCanonicalUnits: 20,
-              idempotencyKey: `fill-962-south-${suffix}`,
-              branchId: X.north,
-            })
-          )
-        )
-      ).resolves.toEqual(OUTSIDE_SCOPE);
+      // DEV-1056: no route records a fill outside a counter sale any more.
+      const { pharmacyPrescriptionsRouter } = await import('./pharmacy-prescriptions');
+      expect(Object.keys(pharmacyPrescriptionsRouter._def.procedures)).not.toContain('fill');
     });
 
     it('refuses a pharmacist of another branch the reminder of a fill north dispensed, leaving the slot free', async () => {

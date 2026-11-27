@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
   findUnique: vi.fn(),
+  // DEV-974: live hierarchy reads (their select carries permissionOverrides).
+  partyFindUnique: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   count: vi.fn(),
@@ -19,6 +21,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('server-only', () => ({}));
+// DEV-959B: the pharmacy access guard runs on a real database in
+// tests/pharmacy-member-sub-roles.db.test.ts; here it only has to wrap the write.
+vi.mock('@/lib/team/pharmacy-access-guard', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/team/pharmacy-access-guard')>()),
+  guardPharmacyAccessChange: async (
+    _tx: unknown,
+    _input: unknown,
+    write: () => Promise<{ value: unknown }>
+  ) => ({ value: (await write()).value }),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -44,6 +56,19 @@ vi.mock('@/lib/abac', async () => {
 });
 
 import { teamRouter } from './team';
+
+const OWNER_ROLE = {
+  key: 'owner',
+  isSystem: true,
+  permissions: [{ capability: '*', effect: 'ALLOW' }],
+};
+/** The acting admin is the owner unless a test says otherwise; pending members are staff. */
+function party(id: string, role = 'EMPLOYEE', organizationRole: unknown = null) {
+  return { id, role, status: 'ACTIVE', organizationRole, permissionOverrides: [] };
+}
+function partiesWithOwnerActor({ where }: { where: { id: string } }) {
+  return where.id === 'user_admin' ? party(where.id, 'ADMIN', OWNER_ROLE) : party(where.id);
+}
 import { INVITE_ROLE_MISMATCH, INVITE_ROLE_NOT_OFFERED } from '@/lib/vertical-catalog';
 import { router, type TRPCContext } from '../trpc';
 
@@ -61,12 +86,19 @@ const db = {
     run({
       user: {
         findFirst: mocks.findFirst,
-        findUnique: mocks.findUnique,
+        findUnique: (args: { select?: Record<string, unknown> }) =>
+          args.select && 'permissionOverrides' in args.select
+            ? mocks.partyFindUnique(args)
+            : mocks.findUnique(args),
         create: mocks.create,
         update: mocks.update,
         count: mocks.count,
       },
-      invitation: { upsert: mocks.invitationUpsert },
+      invitation: {
+        upsert: mocks.invitationUpsert,
+        // DEV-959B: a pharmacy invite reads back when this issue of the invitation was made.
+        findUnique: async () => ({ updatedAt: new Date('2026-11-20T00:00:00.000Z') }),
+      },
       $queryRaw: mocks.queryRaw,
     }),
 };
@@ -96,6 +128,7 @@ const invite = {
 describe('team.inviteMember duplicate guard', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.partyFindUnique.mockImplementation(partiesWithOwnerActor);
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
     mocks.count.mockResolvedValue(1);
@@ -280,6 +313,7 @@ describe('team.inviteMember duplicate guard', () => {
 describe('team.inviteMember team:setRole gate', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.partyFindUnique.mockImplementation(partiesWithOwnerActor);
     mocks.can.mockImplementation(
       async (_subject: unknown, action: unknown) => action !== 'team:setRole'
     );
@@ -359,6 +393,7 @@ describe('team.inviteMember pharmacy role labels', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.partyFindUnique.mockImplementation(partiesWithOwnerActor);
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
     mocks.findFirst.mockResolvedValue(null);
@@ -438,5 +473,39 @@ describe('team.inviteMember pharmacy role labels', () => {
       organizationRoleId: 'role_owner',
     });
     expect(mocks.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DEV-974: re-sending a pending invitation follows the identity-change hierarchy', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.roleFindFirst.mockResolvedValue(null);
+    mocks.count.mockResolvedValue(1);
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.findUnique.mockResolvedValue({ role: 'ADMIN', organizationRoleId: null });
+    mocks.update.mockResolvedValue({ id: 'user_pending', name: 'Alex Carter' });
+  });
+
+  it('refuses a non-owner administrator refreshing a pending administrator, and hands back no link', async () => {
+    mocks.partyFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+      party(where.id, 'ADMIN')
+    );
+    await expect(
+      caller().inviteMember({ ...invite, role: 'ADMIN', email: 'pending@company.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('lets a non-owner administrator refresh a pending member below them', async () => {
+    mocks.partyFindUnique.mockImplementation(({ where }: { where: { id: string } }) =>
+      where.id === 'user_admin' ? party(where.id, 'ADMIN') : party(where.id, 'EMPLOYEE')
+    );
+    mocks.findUnique.mockResolvedValue({ role: 'EMPLOYEE', organizationRoleId: null });
+    await expect(
+      caller().inviteMember({ ...invite, email: 'pending@company.com' })
+    ).resolves.toMatchObject({ inviteUrl: expect.stringContaining('/invite/') });
   });
 });

@@ -1,4 +1,6 @@
 'use client';
+
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -102,7 +104,7 @@ export function DeliveryEvidenceForm({
       >
         <Label className="grid gap-1">
           Evidence action
-          <select
+          <StudioSelect
             className="min-h-11 rounded-sm border border-border-default bg-surface-raised px-3"
             value={action}
             onChange={(event) => setAction(event.target.value as Action)}
@@ -114,7 +116,7 @@ export function DeliveryEvidenceForm({
             <option value="FAILED">Delivery failed</option>
             <option value="CASH_RETURN">Runner returned cash to customer</option>
             <option value="PHYSICAL_RETURN">Branch received physical goods</option>
-          </select>
+          </StudioSelect>
         </Label>
         {moneyAction ? (
           <div className="grid gap-1">

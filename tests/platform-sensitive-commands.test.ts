@@ -8,12 +8,16 @@ const state = vi.hoisted(() => ({
   placeholderActive: false,
   latestProfile: null as any,
   lifecycleEvents: [] as any[],
+  // DEV-961: one sole owner's approval authenticator and recovery codes.
+  approvalAuthenticators: [] as any[],
+  recoveryCodes: [] as any[],
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: async () => 'hashed' }));
 vi.mock('@/lib/secret-crypto', () => ({ decryptSecret: () => 'totp-secret' }));
 vi.mock('@/lib/totp', () => ({ verifyTotp: (_secret: string, code: string) => code === '123456' }));
 const db = {
+  organizationIdentityConnection: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
   $queryRawUnsafe: vi.fn(async (sql: string) =>
     sql.startsWith('SELECT id FROM organizations') ? [{ id: state.organization.id }] : []
   ),
@@ -24,6 +28,7 @@ const db = {
     create: vi.fn(async ({ data }: any) => ({ id: 'new_1', ...data })),
   },
   platformSession: { updateMany: vi.fn() },
+  platformSupportSession: { updateManyAndReturn: vi.fn(async () => []) },
   user: {
     update: vi.fn(async () => ({
       id: 'user_1',
@@ -32,6 +37,35 @@ const db = {
       role: 'ADMIN',
     })),
     findMany: vi.fn(async () => [{ id: 'user_1' }, { id: 'admin_2' }]),
+    findUnique: vi.fn(async ({ where }: any) =>
+      where.id === 'user_1'
+        ? { id: 'user_1', organizationId: 'org_1', email: 'owner@tenant.test', role: 'ADMIN' }
+        : null
+    ),
+  },
+  approvalAuthenticator: {
+    deleteMany: vi.fn(async ({ where }: any) => {
+      const before = state.approvalAuthenticators.length;
+      state.approvalAuthenticators = state.approvalAuthenticators.filter(
+        (row) => !(row.organizationId === where.organizationId && row.userId === where.userId)
+      );
+      return { count: before - state.approvalAuthenticators.length };
+    }),
+    findFirst: vi.fn(
+      async ({ where }: any) =>
+        state.approvalAuthenticators.find(
+          (row) => row.organizationId === where.organizationId && row.userId === where.userId
+        ) ?? null
+    ),
+  },
+  approvalAuthenticatorRecoveryCode: {
+    deleteMany: vi.fn(async ({ where }: any) => {
+      const before = state.recoveryCodes.length;
+      state.recoveryCodes = state.recoveryCodes.filter(
+        (row) => !(row.organizationId === where.organizationId && row.userId === where.userId)
+      );
+      return { count: before - state.recoveryCodes.length };
+    }),
   },
   notification: { createMany: vi.fn(async ({ data }: any) => ({ count: data.length })) },
   organization: {
@@ -89,11 +123,14 @@ const db = {
 };
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: (fn: any) => fn(db) }));
 import { executePlatformCommand } from '@/lib/platform/commands';
+import { approvalAuthenticatorGate } from '@/lib/approval-authenticator-gate';
 const req = new Request('http://admin.localhost/api/platform/control');
 const execute = (action: string, payload: unknown, role = 'SUPER_ADMIN', id = 'actor_1') =>
   executePlatformCommand({ id, role } as any, action, payload, req);
 const actions = [
   'organization.user.password',
+  // DEV-961: resetting a member's approval authenticator.
+  'organization.user.approvalauthenticator.reset',
   'organization.scim.token',
   'organization.scim.revoke',
   'organization.identity',
@@ -119,6 +156,74 @@ beforeEach(() => {
   state.placeholderActive = false;
   state.latestProfile = null;
   state.lifecycleEvents = [];
+  state.approvalAuthenticators = [];
+  state.recoveryCodes = [];
+});
+
+describe('OIDC connection saves', () => {
+  const payload = {
+    organizationId: 'org_1',
+    name: 'Synthetic identity',
+    protocol: 'OIDC',
+    reason: 'Validate identity settings',
+    authenticationCode: '123456',
+  };
+
+  it('saves a syntactically valid public destination without fetching a document', async () => {
+    db.organizationIdentityConnection.create.mockResolvedValueOnce({
+      id: 'fixture',
+      organizationId: 'org_1',
+    });
+    await execute('organization.identity', { ...payload, issuer: 'https://8.8.8.8/tenant' });
+    expect(db.organizationIdentityConnection.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ issuer: 'https://8.8.8.8/tenant' }),
+    });
+  });
+
+  it.each(['issuer', 'discoveryUrl'] as const)(
+    'requires port 443 before saving the %s',
+    async (field) => {
+      await expect(
+        execute('organization.identity', { ...payload, [field]: 'https://idp.example:8443/tenant' })
+      ).rejects.toMatchObject({
+        status: 400,
+        message: 'OIDC settings require a public HTTPS address on port 443.',
+      });
+      expect(db.organizationIdentityConnection.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('accepts explicitly configured HTTPS port 443', async () => {
+    db.organizationIdentityConnection.create.mockResolvedValueOnce({
+      id: 'fixture',
+      organizationId: 'org_1',
+    });
+    await execute('organization.identity', {
+      ...payload,
+      discoveryUrl: 'https://8.8.8.8:443/document',
+    });
+    expect(db.organizationIdentityConnection.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ discoveryUrl: 'https://8.8.8.8:443/document' }),
+    });
+  });
+
+  it('refuses a forbidden discovery address before creating a connection', async () => {
+    await expect(
+      execute('organization.identity', { ...payload, discoveryUrl: 'https://192.0.2.1/document' })
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('public HTTPS') });
+    expect(db.organizationIdentityConnection.create).not.toHaveBeenCalled();
+  });
+
+  it('validates the effective stored issuer on a partial update', async () => {
+    db.organizationIdentityConnection.findUnique.mockResolvedValue({
+      issuer: 'http://idp.example',
+      discoveryUrl: null,
+    });
+    await expect(
+      execute('organization.identity', { ...payload, id: 'connection' })
+    ).rejects.toMatchObject({ status: 400, message: expect.stringContaining('public HTTPS') });
+    expect(db.organizationIdentityConnection.update).not.toHaveBeenCalled();
+  });
 });
 
 describe('pharmacy placeholder commands', () => {
@@ -655,5 +760,79 @@ describe('operator safety', () => {
       mfaRequired: true,
     });
     expect(db.platformUser.create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('DEV-961 platform reset of an approval authenticator', () => {
+  const reason = 'Sole owner lost phone and recovery codes; identity verified by call-back';
+
+  it('lets a sole owner who lost his phone and his recovery codes set up again, audited', async () => {
+    state.approvalAuthenticators = [
+      { id: 'auth_owner', organizationId: 'org_1', userId: 'user_1', enabledAt: new Date() },
+    ];
+    state.recoveryCodes = [
+      { organizationId: 'org_1', userId: 'user_1', codeHash: 'a'.repeat(64), usedAt: null },
+    ];
+    const gate = () =>
+      approvalAuthenticatorGate(
+        {
+          organization: { findFirst: async () => ({ requireApprovalAuthenticator: true }) },
+          approvalAuthenticator: db.approvalAuthenticator,
+        } as never,
+        { organizationId: 'org_1', userId: 'user_1', approver: true }
+      );
+    // Enrolled: his account works, but the phone is gone and nobody else in the
+    // organization can reset it.
+    await expect(gate()).resolves.toMatchObject({ setupRequired: false });
+
+    await executePlatformCommand(
+      { id: 'actor_1', role: 'SUPER_ADMIN', name: 'Platform Operator' } as any,
+      'organization.user.approvalauthenticator.reset',
+      { id: 'user_1', reason },
+      req
+    );
+    expect(state.approvalAuthenticators).toEqual([]);
+    expect(state.recoveryCodes).toEqual([]);
+    // The next request takes him to the set-up screen, where he enrols a new phone.
+    await expect(gate()).resolves.toMatchObject({ setupRequired: true });
+    expect(state.audits.at(-1)).toMatchObject({
+      action: 'organization.user.approvalauthenticator.reset',
+      actorPlatformUserId: 'actor_1',
+      targetId: 'user_1',
+      organizationId: 'org_1',
+      success: true,
+      after: {
+        approvalAuthenticatorReset: true,
+        recoveryCodesRemoved: 1,
+        notifiedUserIds: ['user_1', 'admin_2'],
+        reason,
+      },
+    });
+    const rows = db.notification.createMany.mock.calls.at(-1)![0].data;
+    expect(rows.map((row: any) => row.userId)).toEqual(['user_1', 'admin_2']);
+    for (const row of rows) {
+      expect(row.type).toBe('platform_approval_authenticator_reset');
+      expect(row.message).toContain('Platform Operator');
+      expect(row.message).toContain(reason);
+    }
+  });
+
+  it('needs the security permission and a reason, and never touches a secret', async () => {
+    state.approvalAuthenticators = [
+      { id: 'auth_owner', organizationId: 'org_1', userId: 'user_1', enabledAt: new Date() },
+    ];
+    for (const role of ['OPERATIONS', 'SUPPORT', 'SALES', 'FINANCE', 'AUDITOR'])
+      await expect(
+        execute('organization.user.approvalauthenticator.reset', { id: 'user_1', reason }, role)
+      ).rejects.toMatchObject({ status: 403 });
+    await expect(
+      execute('organization.user.approvalauthenticator.reset', {
+        id: 'user_1',
+        reason,
+        encryptedSecret: 'v1.attacker.chosen',
+      })
+    ).rejects.toThrow();
+    expect(state.approvalAuthenticators).toHaveLength(1);
+    expect(db.approvalAuthenticator.deleteMany).not.toHaveBeenCalled();
   });
 });

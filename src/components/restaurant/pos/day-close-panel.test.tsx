@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -46,9 +47,16 @@ describe('DayClosePanel', () => {
     expect(within(dialog).getByText('Delivery fee sales')).toBeVisible();
     expect(within(dialog).getByText('Delivery fee refunds')).toBeVisible();
 
-    const manager = within(dialog).getByLabelText('Approving manager');
-    expect(within(manager).queryByRole('option', { name: /Ari Cashier/ })).not.toBeInTheDocument();
-    fireEvent.change(manager, { target: { value: 'manager-1' } });
+    const manager = within(dialog).getByLabelText('Approving manager', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    expect(
+      within(selectFieldControl(manager)).queryByRole('option', {
+        hidden: true,
+        name: /Ari Cashier/,
+      })
+    ).not.toBeInTheDocument();
+    fireEvent.change(selectFieldControl(manager), { target: { value: 'manager-1' } });
     fireEvent.change(within(dialog).getByLabelText('Correction reason'), {
       target: { value: 'Count verified' },
     });

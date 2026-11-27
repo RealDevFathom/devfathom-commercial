@@ -1,19 +1,42 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PHARMACY_SUB_ROLES, pharmacySubRoleGroups } from '@/lib/abac/pharmacy-sub-roles';
+import { selectFieldControl } from '@/lib/testing/select-field';
 
 const state = vi.hoisted(() => ({
   query: vi.fn(),
+  approvalMode: vi.fn(() => ({ data: { required: false } })),
   refetch: vi.fn(),
+  setSubRole: vi.fn(),
+  applyRole: vi.fn(),
+  invalidate: vi.fn(async () => undefined),
 }));
 vi.mock('@/lib/trpc', () => ({
-  trpc: { organizationAdmin: { memberAccess: { useQuery: state.query } } },
+  trpc: {
+    approvalAuthenticator: { mode: { useQuery: state.approvalMode } },
+    useUtils: () => ({ organizationAdmin: { memberAccess: { invalidate: state.invalidate } } }),
+    organizationAdmin: {
+      memberAccess: { useQuery: state.query },
+      setMemberSubRole: {
+        useMutation: () => ({ mutateAsync: state.setSubRole, isPending: false }),
+      },
+      applyMemberRoleTemplate: {
+        useMutation: () => ({ mutateAsync: state.applyRole, isPending: false }),
+      },
+    },
+  },
 }));
 import {
   MEMBER_ACCESS_ADMIN_NOTES,
+  MEMBER_ACCESS_EDIT_NOTE,
+  MEMBER_ACCESS_NOT_HELD_NOTE,
+  MEMBER_ACCESS_OWNER_ONLY_NOTE,
   MEMBER_ACCESS_READ_ONLY_NOTE,
   MemberAccessPanel,
+  SubRoleGroups,
 } from './member-access-panel';
+import { PHARMACY_WEIGHTY_SUB_ROLES } from '@/lib/abac/pharmacy-sub-role-weight';
+import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 const member = {
   id: 'u_1',
@@ -60,6 +83,34 @@ describe('what this person can do', () => {
     expect(screen.getByRole('region', { name: 'Pharmacist' })).toBeVisible();
     expect(screen.getByText(MEMBER_ACCESS_READ_ONLY_NOTE)).toBeVisible();
     expect(screen.getByText('Cashier', { selector: 'p' })).toBeVisible();
+  });
+
+  it('shows an inherited role tick as checked and locked and explains wildcard refusals beside their tick', () => {
+    const reason = 'Included with Dispense prescriptions. Untick that first.';
+    const note =
+      'People on this role cannot receive this ability individually while it is unticked.';
+    render(
+      <SubRoleGroups
+        groups={pharmacySubRoleGroups(new Set(['pharmacy:prescriptions', 'pharmacy:dispense']))}
+        lockedNoteFor={(item) => (item.key === 'record-prescriptions' ? reason : null)}
+        roleNotes={{ 'manage-stock': note }}
+        editor={{ pending: false, setSubRole: state.setSubRole }}
+        onChanged={vi.fn()}
+      />
+    );
+    const inherited = screen.getByRole('checkbox', { name: /Record prescriptions/ });
+    expect(inherited).toHaveAttribute('aria-checked', 'true');
+    expect(inherited).toHaveAttribute('aria-disabled', 'true');
+    expect(inherited).toHaveAccessibleDescription(expect.stringContaining(reason));
+    expect(screen.getByRole('checkbox', { name: /Manage stock/ })).toHaveAccessibleDescription(
+      expect.stringContaining(note)
+    );
+    expect(screen.getByText(reason).previousElementSibling).toHaveTextContent(
+      'Record prescriptions'
+    );
+    expect(screen.getByText(note).previousElementSibling).toHaveTextContent('Manage stock');
+    fireEvent.click(inherited);
+    expect(state.setSubRole).not.toHaveBeenCalled();
   });
 
   it('shows a partly held sub-role as a mixed tick', () => {
@@ -162,5 +213,328 @@ describe('what this person can do', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Nothing about their access has changed');
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(state.refetch).toHaveBeenCalled();
+  });
+});
+
+describe('DEV-959B: ticking for one person', () => {
+  const ALL_KEYS = PHARMACY_SUB_ROLES.map((subRole) => subRole.key);
+  function editable(
+    allowed: string[],
+    ticking: Partial<{
+      editing: { allowed: boolean; reason: string | null };
+      viewerIsOwner: boolean;
+      viewerHolds: string[];
+      personal: Record<string, 'ALLOW' | 'DENY'>;
+    }> = {}
+  ) {
+    state.query.mockReturnValue({
+      data: {
+        member,
+        groups: pharmacySubRoleGroups(new Set(allowed)),
+        ticking: {
+          editing: { allowed: true, reason: null },
+          viewerIsOwner: true,
+          viewerHolds: ALL_KEYS,
+          personal: {},
+          roleKey: 'cashier',
+          startingRoles: PHARMACY_ROLE_TEMPLATES.map(({ key, name }) => ({
+            key,
+            name,
+            weighty: key === 'pharmacist' ? ['dispense-prescriptions', 'record-prescriptions'] : [],
+          })),
+          weighty: PHARMACY_WEIGHTY_SUB_ROLES,
+          ...ticking,
+        },
+      },
+      isLoading: false,
+      isError: false,
+      refetch: state.refetch,
+    });
+  }
+  const cashier = ['pharmacy:counter', 'pharmacy:orders', 'sop:complete'];
+
+  it('asks for the authenticator approval code before granting the finance tick in code mode', () => {
+    state.approvalMode.mockReturnValue({ data: { required: true } });
+    try {
+      editable(cashier);
+      render(<MemberAccessPanel userId="u_1" />);
+      fireEvent.click(screen.getByRole('checkbox', { name: /See accounts/ }));
+      const confirm = screen.getByRole('form', { name: 'Give See accounts?' });
+      expect(within(confirm).getByLabelText('Your approval code')).toBeRequired();
+      expect(within(confirm).getByLabelText('Your approval code')).toHaveAttribute(
+        'autocomplete',
+        'one-time-code'
+      );
+      expect(within(confirm).getByLabelText('Your approval code')).toHaveAttribute(
+        'maxlength',
+        '6'
+      );
+    } finally {
+      state.approvalMode.mockReturnValue({ data: { required: false } });
+    }
+  });
+
+  it('ticks another role’s sub-role on the server and reloads what the server decided', async () => {
+    editable(cashier);
+    state.setSubRole.mockResolvedValue({ changed: ['operational-reports'] });
+    render(<MemberAccessPanel userId="u_1" />);
+    expect(screen.getByText(MEMBER_ACCESS_EDIT_NOTE)).toBeVisible();
+    const box = screen.getByRole('checkbox', { name: /Use operational reports/ });
+    expect(box).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(box);
+    await waitFor(() =>
+      expect(state.setSubRole).toHaveBeenCalledWith({
+        userId: 'u_1',
+        subRoleKey: 'operational-reports',
+        ticked: true,
+      })
+    );
+    await waitFor(() => expect(state.invalidate).toHaveBeenCalledWith({ userId: 'u_1' }));
+  });
+
+  it('unticks one of the role’s own sub-roles without a PIN', async () => {
+    editable(cashier);
+    state.setSubRole.mockResolvedValue({ changed: ['take-payment'] });
+    render(<MemberAccessPanel userId="u_1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Take payment/ }));
+    await waitFor(() =>
+      expect(state.setSubRole).toHaveBeenCalledWith({
+        userId: 'u_1',
+        subRoleKey: 'take-payment',
+        ticked: false,
+      })
+    );
+  });
+
+  it('asks for the PIN and says in one line what a weighty sub-role allows', async () => {
+    editable(cashier);
+    state.setSubRole
+      .mockRejectedValueOnce(new Error('That PIN is not right.'))
+      .mockResolvedValueOnce({ changed: ['dispense-prescriptions', 'record-prescriptions'] });
+    render(<MemberAccessPanel userId="u_1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Dispense prescriptions/ }));
+    expect(state.setSubRole).not.toHaveBeenCalled();
+    const confirm = screen.getByRole('form', { name: 'Give Dispense prescriptions?' });
+    expect(
+      within(confirm).getByText(PHARMACY_WEIGHTY_SUB_ROLES['dispense-prescriptions'])
+    ).toBeVisible();
+    fireEvent.change(within(confirm).getByLabelText('Your PIN'), { target: { value: '0000' } });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Give it' }));
+    expect(await within(confirm).findByRole('alert')).toHaveTextContent('That PIN is not right.');
+    fireEvent.change(within(confirm).getByLabelText('Your PIN'), { target: { value: '2468' } });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Give it' }));
+    await waitFor(() =>
+      expect(state.setSubRole).toHaveBeenLastCalledWith({
+        userId: 'u_1',
+        subRoleKey: 'dispense-prescriptions',
+        ticked: true,
+        pin: '2468',
+      })
+    );
+    expect(
+      await screen.findByText('Saved. This also changed: Record prescriptions.')
+    ).toBeVisible();
+    expect(screen.queryByRole('form', { name: 'Give Dispense prescriptions?' })).toBeNull();
+  });
+
+  it('lets an administrator who is not the owner change only non-weighty sub-roles they hold', () => {
+    editable(cashier, {
+      viewerIsOwner: false,
+      viewerHolds: [
+        'take-payment',
+        'customer-orders',
+        'do-procedures',
+        'operational-reports',
+        'manage-stock',
+      ],
+    });
+    render(<MemberAccessPanel userId="u_1" />);
+    expect(screen.getByRole('checkbox', { name: /Use financial reports/ })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    expect(screen.getByRole('checkbox', { name: /Use operational reports/ })).not.toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    // Held, but weighty: only the owner changes it.
+    expect(screen.getByRole('checkbox', { name: /Manage stock/ })).toHaveAttribute(
+      'aria-disabled',
+      'true'
+    );
+    const weighty = Object.keys(PHARMACY_WEIGHTY_SUB_ROLES).length;
+    expect(screen.getAllByText(MEMBER_ACCESS_OWNER_ONLY_NOTE).length).toBe(weighty);
+    expect(screen.getAllByText(MEMBER_ACCESS_NOT_HELD_NOTE).length).toBe(
+      ALL_KEYS.length - weighty - 4
+    );
+  });
+
+  it('locks no box for the owner, held or not', () => {
+    editable(cashier, { viewerHolds: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    for (const box of screen.getAllByRole('checkbox'))
+      expect(box).not.toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByText(MEMBER_ACCESS_NOT_HELD_NOTE)).toBeNull();
+    expect(screen.queryByText(MEMBER_ACCESS_OWNER_ONLY_NOTE)).toBeNull();
+  });
+
+  it('asks the owner for the PIN before taking a weighty sub-role away', async () => {
+    editable([...cashier, 'pharmacy:dispense']);
+    state.setSubRole.mockResolvedValue({ changed: ['dispense-prescriptions'] });
+    render(<MemberAccessPanel userId="u_1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Dispense prescriptions/ }));
+    expect(state.setSubRole).not.toHaveBeenCalled();
+    const confirm = screen.getByRole('form', { name: 'Take away Dispense prescriptions?' });
+    expect(
+      within(confirm).getByText(PHARMACY_WEIGHTY_SUB_ROLES['dispense-prescriptions'])
+    ).toBeVisible();
+    fireEvent.change(within(confirm).getByLabelText('Your PIN'), { target: { value: '2468' } });
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Take it away' }));
+    await waitFor(() =>
+      expect(state.setSubRole).toHaveBeenCalledWith({
+        userId: 'u_1',
+        subRoleKey: 'dispense-prescriptions',
+        ticked: false,
+        pin: '2468',
+      })
+    );
+  });
+
+  it('shows the server’s reason and keeps every tick locked when the viewer may not edit', () => {
+    editable(cashier, {
+      editing: { allowed: false, reason: 'Only the owner can change what this person may do.' },
+    });
+    render(<MemberAccessPanel userId="u_1" />);
+    expect(screen.getByText('Only the owner can change what this person may do.')).toBeVisible();
+    for (const box of screen.getAllByRole('checkbox'))
+      expect(box).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByRole('form', { name: 'Start from a ready-made role' })).toBeNull();
+  });
+
+  it('marks a personal exception in words', () => {
+    editable([...cashier, 'pharmacy:procurement'], {
+      personal: { 'receive-stock': 'ALLOW', 'give-discounts': 'DENY' },
+    });
+    render(<MemberAccessPanel userId="u_1" />);
+    expect(screen.getByText('Added for this person')).toBeVisible();
+    expect(screen.getByText('Removed for this person')).toBeVisible();
+  });
+
+  it('starts the person from a ready-made role, with the PIN when given', async () => {
+    editable(cashier);
+    state.applyRole.mockResolvedValue({ changed: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    const form = screen.getByRole('form', { name: 'Start from a ready-made role' });
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByRole('combobox', { name: 'Start from a ready-made role' })
+      ),
+      {
+        target: { value: 'pharmacist' },
+      }
+    );
+    // Before confirming, the role's weighty sub-roles are listed with their one-line texts.
+    expect(within(form).getByText(/gives these sub-roles that carry extra weight/)).toBeVisible();
+    expect(
+      within(form).getByText(PHARMACY_WEIGHTY_SUB_ROLES['dispense-prescriptions'])
+    ).toBeVisible();
+    expect(
+      within(form).getByText(PHARMACY_WEIGHTY_SUB_ROLES['record-prescriptions'])
+    ).toBeVisible();
+    expect(within(form).getByLabelText('Your PIN')).toBeRequired();
+    fireEvent.change(within(form).getByLabelText('Your PIN'), { target: { value: '2468' } });
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    await waitFor(() =>
+      expect(state.applyRole).toHaveBeenCalledWith({
+        userId: 'u_1',
+        roleKey: 'pharmacist',
+        pin: '2468',
+      })
+    );
+  });
+
+  it('preserves keyboard role selection, PIN validation, refused values and successful native reset', async () => {
+    editable(cashier);
+    state.applyRole
+      .mockRejectedValueOnce(new Error('That PIN is not right.'))
+      .mockResolvedValueOnce({ changed: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    const form = screen.getByRole('form', {
+      name: 'Start from a ready-made role',
+    }) as HTMLFormElement;
+    const role = within(form).getByRole('combobox', { name: 'Start from a ready-made role' });
+    const native = selectFieldControl(role);
+    const pin = within(form).getByLabelText('Your PIN');
+    expect(role).toHaveTextContent('Cashier');
+    expect(native).toHaveValue('cashier');
+    // The upstream selector has no name: roleKey comes from controlled state,
+    // while only the PIN is a successful form control.
+    expect(Array.from(new FormData(form))).toEqual([['pin', '']]);
+    expect(pin).not.toBeRequired();
+    act(() => role.focus());
+    fireEvent.keyDown(role, { key: 'ArrowDown' });
+    const listbox = await screen.findByRole('listbox');
+    const option = within(listbox).getByRole('option', { name: 'Pharmacist' });
+    await waitFor(() => expect(listbox).toContainElement(document.activeElement as HTMLElement));
+    fireEvent.keyDown(document.activeElement!, { key: 'Home' });
+    const position = within(listbox).getAllByRole('option').indexOf(option);
+    for (let index = 0; index < position; index++)
+      fireEvent.keyDown(document.activeElement!, { key: 'ArrowDown' });
+    await waitFor(() => expect(option).toHaveFocus());
+    fireEvent.keyDown(option, { key: 'Enter' });
+    // jsdom needs the keyboard activation default action supplied explicitly.
+    // Actual browser Enter is verified separately without this click fallback.
+    fireEvent.click(option, { detail: 0 });
+    expect(role).toHaveTextContent('Pharmacist');
+    expect(native).toHaveValue('pharmacist');
+    expect(pin).toBeRequired();
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    expect(state.applyRole).not.toHaveBeenCalled();
+    fireEvent.change(pin, { target: { value: '2468' } });
+    expect(Array.from(new FormData(form))).toEqual([['pin', '2468']]);
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That PIN is not right.');
+    expect(native).toHaveValue('pharmacist');
+    expect(pin).toHaveValue('2468');
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    await waitFor(() =>
+      expect(state.applyRole).toHaveBeenLastCalledWith({
+        userId: 'u_1',
+        roleKey: 'pharmacist',
+        pin: '2468',
+      })
+    );
+    await waitFor(() => {
+      expect(pin).toHaveValue('');
+      // Clearing the prior error renders the controlled selection again.
+      expect(native).toHaveValue('pharmacist');
+      expect(role).toHaveTextContent('Pharmacist');
+    });
+    expect(Array.from(new FormData(form))).toEqual([['pin', '']]);
+  });
+
+  it('omits an empty PIN when applying a ready-made role without weighty sub-roles', async () => {
+    editable(cashier);
+    state.applyRole.mockResolvedValue({ changed: [] });
+    render(<MemberAccessPanel userId="u_1" />);
+    const form = screen.getByRole('form', { name: 'Start from a ready-made role' });
+    fireEvent.click(within(form).getByRole('button', { name: 'Use this role' }));
+    await waitFor(() =>
+      expect(state.applyRole).toHaveBeenCalledWith({ userId: 'u_1', roleKey: 'cashier' })
+    );
+  });
+
+  it('shows a refusal from the server as an alert, changing nothing on screen', async () => {
+    editable(cashier);
+    state.setSubRole.mockRejectedValue(new Error('At least one active owner must remain.'));
+    render(<MemberAccessPanel userId="u_1" />);
+    fireEvent.click(screen.getByRole('checkbox', { name: /Take payment/ }));
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'At least one active owner must remain.'
+    );
+    expect(screen.getByRole('checkbox', { name: /Take payment/ })).toHaveAttribute(
+      'aria-checked',
+      'true'
+    );
   });
 });

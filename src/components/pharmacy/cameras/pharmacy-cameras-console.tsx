@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -13,7 +15,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { CAMERA_PRESET_LABELS } from '@/lib/cameras/camera-preset';
-import { CAMERA_DIAGNOSTIC_MESSAGES } from '@/lib/cameras/diagnostic-messages';
+import { CAMERA_DIAGNOSTIC_MESSAGES, CAMERA_H265_NOTE } from '@/lib/cameras/diagnostic-messages';
 import { isModuleGranted } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import { PharmacyCameraWizard, type PharmacyCameraWizardValues } from './pharmacy-camera-wizard';
@@ -80,6 +82,9 @@ function ConfiguredConnectionCheck({ cameraId }: { cameraId: string }) {
               ? CAMERA_DIAGNOSTIC_MESSAGES[check.data.outcome]
               : 'Connection not checked.'}
       </p>
+      {check.data && 'videoCodec' in check.data && check.data.videoCodec === 'h265' ? (
+        <p className="text-sm text-text-muted">{CAMERA_H265_NOTE}</p>
+      ) : null}
     </div>
   );
 }
@@ -120,7 +125,7 @@ function CameraSettingsForm({
     <form aria-label={`Settings for ${camera.name}`} className="mt-3 grid gap-3" onSubmit={submit}>
       <label className="text-sm font-medium text-text-strong">
         Preset
-        <select
+        <StudioSelect
           name="preset"
           className={field}
           value={preset}
@@ -131,13 +136,13 @@ function CameraSettingsForm({
             {CAMERA_PRESET_LABELS.COUNTER} (tender, refund, daily close)
           </option>
           <option value="COLD_CHAIN">{CAMERA_PRESET_LABELS.COLD_CHAIN}</option>
-        </select>
+        </StudioSelect>
       </label>
       {preset === 'COLD_CHAIN' &&
         (branchZones.length ? (
           <label className="text-sm font-medium text-text-strong">
             Cold-chain zone
-            <select
+            <StudioSelect
               name="temperatureZoneId"
               required
               className={field}
@@ -151,7 +156,7 @@ function CameraSettingsForm({
                   {zone.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </label>
         ) : (
           <p role="status" className="text-sm text-text-muted">
@@ -384,7 +389,7 @@ export function PharmacyCamerasConsole() {
               {branches.length > 1 ? (
                 <label className="text-sm font-medium text-text-strong">
                   Branch
-                  <select
+                  <StudioSelect
                     className={field}
                     value={enrollBranchId}
                     required
@@ -398,7 +403,7 @@ export function PharmacyCamerasConsole() {
                         {branch.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
               ) : null}
               <label className="text-sm font-medium text-text-strong">

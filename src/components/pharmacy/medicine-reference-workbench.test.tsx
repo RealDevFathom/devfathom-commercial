@@ -22,12 +22,18 @@ const mocks = vi.hoisted(() => ({
   runNow: vi.fn(),
   toastSuccess: vi.fn(),
   toastError: vi.fn(),
+  approvalMode: { data: { required: true } as undefined | { required: boolean } },
+  queueAccess: { data: undefined as undefined | { canDecide: boolean; ownerPinApproval: boolean } },
+  selfApproval: {
+    data: undefined as undefined | { canSelfApprove: boolean; reviewers: string[] },
+  },
 }));
 vi.mock('./medicine-pack-setup', () => ({ MedicinePackSetup: () => null }));
 vi.mock('@/lib/browser-uuid', () => ({ browserUuid: () => 'file-batch' }));
 vi.mock('sonner', () => ({ toast: { success: mocks.toastSuccess, error: mocks.toastError } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: { mode: { useQuery: () => mocks.approvalMode } },
     useUtils: () => ({
       pharmacyMedicine: {
         referenceConnectorProposals: { invalidate: mocks.invalidateProposals },
@@ -37,6 +43,11 @@ vi.mock('@/lib/trpc', () => ({
     pharmacyMedicine: {
       referenceCandidates: { useQuery: () => mocks.candidates },
       referenceConnectorProposals: { useQuery: () => mocks.proposals },
+      catalogueQueueAccess: { useQuery: () => mocks.queueAccess },
+      catalogueSelfApproval: {
+        useQuery: (_input: undefined, options: { enabled: boolean }) =>
+          options.enabled ? mocks.selfApproval : { data: undefined },
+      },
       decideReferenceConnectorProposal: {
         useMutation: (options: { onSuccess: () => Promise<void> }) => {
           mocks.onConfirmed = options.onSuccess;
@@ -62,6 +73,9 @@ import { MedicineReferenceWorkbench } from './medicine-reference-workbench';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // DEV-961: these cases word the owner's own approval as a PIN, which applies while the owner has
+  // the authenticator for approvals turned off; the code wording is covered on its own below.
+  mocks.approvalMode.data = { required: false };
   mocks.proposals.data = [];
   mocks.proposals.isPending = false;
   mocks.proposals.error = null;
@@ -71,6 +85,8 @@ beforeEach(() => {
   mocks.confirm.mockReset();
   mocks.review.mockReset();
   mocks.publish.mockReset();
+  mocks.queueAccess.data = undefined;
+  mocks.selfApproval.data = undefined;
 });
 afterEach(cleanup);
 const proposal = {
@@ -485,4 +501,68 @@ it('DEV-852: names an imported candidate’s missing strength and registration i
   expect(within(legacyCard!).queryByRole('alert')).not.toBeInTheDocument();
   expect(within(legacyCard!).getByRole('button', { name: 'Publish assertions' })).toBeEnabled();
   expect(regulatorCard).not.toHaveTextContent('not recorded');
+});
+
+const SOLO_PIN = 'Solo owner PIN for reference self-approval';
+
+it('shows no PIN box to a member who cannot approve with their own PIN (DEV-1004)', () => {
+  mocks.queueAccess.data = { canDecide: false, ownerPinApproval: false };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.queryByLabelText(SOLO_PIN)).toBeNull();
+});
+
+it('names who else can approve instead of a PIN box while another reviewer exists (DEV-1004)', () => {
+  mocks.queueAccess.data = { canDecide: true, ownerPinApproval: false };
+  mocks.selfApproval.data = { canSelfApprove: false, reviewers: ['Ayesha Khan', 'Bilal Ahmed'] };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.queryByLabelText(SOLO_PIN)).toBeNull();
+  expect(screen.getByRole('note')).toHaveTextContent(
+    'Rows you imported or edited yourself need another reviewer. Ask Ayesha Khan or Bilal Ahmed to approve this.'
+  );
+});
+
+it('says when nobody else can approve yet (DEV-1004)', () => {
+  mocks.queueAccess.data = { canDecide: true, ownerPinApproval: false };
+  mocks.selfApproval.data = { canSelfApprove: false, reviewers: [] };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.queryByLabelText(SOLO_PIN)).toBeNull();
+  expect(screen.getByRole('note')).toHaveTextContent(/Nobody else can approve it yet/);
+});
+
+it('shows the PIN box, with its reason, only when the owner may approve alone (DEV-1004)', () => {
+  mocks.queueAccess.data = { canDecide: true, ownerPinApproval: false };
+  mocks.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByLabelText(SOLO_PIN)).toHaveAccessibleDescription(
+    'Nobody else can review, so you approve the rows you imported or edited yourself with your own PIN.'
+  );
+  cleanup();
+  mocks.queueAccess.data = { canDecide: true, ownerPinApproval: true };
+  mocks.selfApproval.data = { canSelfApprove: false, reviewers: [] };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByLabelText(SOLO_PIN)).toHaveAccessibleDescription(
+    'Nobody holds the catalogue review permission, so you approve as the owner with your own PIN.'
+  );
+});
+
+it('asks the solo owner for what their own approval takes in this organization (DEV-961)', () => {
+  mocks.queueAccess.data = { canDecide: true, ownerPinApproval: false };
+  mocks.selfApproval.data = { canSelfApprove: true, reviewers: [] };
+  // On (the default for organizations): the current code from the owner's authenticator app.
+  mocks.approvalMode.data = { required: true };
+  const { unmount } = render(<MedicineReferenceWorkbench health={[]} />);
+  const code = screen.getByLabelText('Your approval code for reference self-approval');
+  expect(code).toHaveAttribute('type', 'password');
+  expect(code).toHaveAccessibleDescription(
+    'Nobody else can review, so you approve the rows you imported or edited yourself with the current 6-digit code from your authenticator app.'
+  );
+  expect(screen.queryByLabelText(SOLO_PIN)).toBeNull();
+  unmount();
+  // Off: the owner's permanent PIN.
+  mocks.approvalMode.data = { required: false };
+  render(<MedicineReferenceWorkbench health={[]} />);
+  expect(screen.getByLabelText(SOLO_PIN)).toHaveAccessibleDescription(
+    'Nobody else can review, so you approve the rows you imported or edited yourself with your own PIN.'
+  );
+  expect(screen.queryByLabelText('Your approval code for reference self-approval')).toBeNull();
 });

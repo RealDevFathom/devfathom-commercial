@@ -40,6 +40,8 @@ SELECT s.id||'-line',s."organizationId",s."branchId",s.id,
 FROM pharmacy_sales s;
 INSERT INTO pharmacy_sale_lines(id,"organizationId","branchId","saleId","medicineId","presentationId","packLevelId","saleUnit",quantity,"canonicalUnitsPerSaleUnit","canonicalUnits","unitPriceMinor","grossMinor","proRataCeilingMinor","unitCostMinor","idempotencyKey","createdAt")
 SELECT 'extra-'||i,'org_a','b1','a','m','p','pack','PACK',2,1,2,100,200,100,50,'extra-'||i,'2026-01-01' FROM generate_series(1,1200) i;
+-- Both tender batches belong to org_a; their pack check reads sale lines under tenant RLS.
+SET LOCAL app.current_organization_id = 'org_a';
 INSERT INTO pharmacy_tenders(id,"organizationId","branchId","saleId",type,"amountMinor","businessDate","actorId","deviceId","createdAt")
 VALUES ('t','org_a','b1','a','CARD',480200,'2026-01-01','synthetic','synthetic','2026-01-01');
 INSERT INTO pharmacy_refunds(id,"organizationId","branchId","saleId","originalTenderId","amountMinor","businessDate",reason,"actorId","createdAt")

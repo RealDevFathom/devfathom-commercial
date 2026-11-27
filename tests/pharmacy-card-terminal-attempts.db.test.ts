@@ -139,6 +139,10 @@ describeIfDatabase('pharmacy card-terminal attempts PostgreSQL RLS and guards (D
   });
 
   it('starts CREATED, keeps one open operation per sale and refuses reserved or card-like data', async () => {
+    const access = await client.query(
+      "SELECT has_table_privilege(current_user, 'public.pharmacy_sale_lines', 'SELECT') AS can_read_lines"
+    );
+    expect(access.rows).toEqual([{ can_read_lines: false }]);
     await insertAttempt(`attempt_a_${suffix}`, 'org-a-attempt-1');
     await expectPgCode('23505', () => insertAttempt('second_open', 'org-a-attempt-2'));
     await expectPgCode('23505', () => insertAttempt('same_key', 'org-a-attempt-1', saleA2));

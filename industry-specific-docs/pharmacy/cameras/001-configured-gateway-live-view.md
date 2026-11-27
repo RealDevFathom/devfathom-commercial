@@ -28,9 +28,9 @@ Before any hardware test, collect these details **without asking for passwords i
 - Channel numbers to view, and whether each is the main or sub stream.
 - Video codec per channel (H.264 or H.265/HEVC) and resolution/frame rate.
 
-H.265/HEVC playback in browsers is limited, and the gateway does not transcode. A channel set to
-H.265 may fail with the codec-unsupported message. Changing the DVR codec (for example to H.264
-on a sub stream) is a device setting change and needs separate authorization from the owner.
+H.265/HEVC playback depends on the browser, and neither the relay nor the app transcodes. The
+owner decided on 20 Nov 2026 not to change anything on the DVR, so an H.265 channel stays H.265.
+See "H.265 cameras" below for what the camera screen says and which browsers play it.
 
 ### Interim test without the DVR (optional, needs authorization)
 
@@ -154,6 +154,156 @@ Bindings load at startup, so changes need the normal reviewed restart. Unknown f
 verticals, duplicate camera or upstream-path mappings, malformed URLs and non-RFC1918 addresses
 reject startup without echoing values.
 
+## Supported relay versions and reference configuration (DEV-1003)
+
+### Supported MediaMTX versions
+
+| MediaMTX release            | How the app reads it                                                                                        | Tested against the real release binary |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| v1.17.1                     | No relay sessions: the reader login is sent and checked on every request.                                   | v1.17.1, 20 Nov 2026                   |
+| v1.18.0 to v1.21.4          | Relay sessions: the app follows the relay's own session step and renews the session when the relay ends it. | v1.18.0 and v1.21.4, 20 Nov 2026       |
+| Anything newer than v1.21.4 | Not yet checked. Test it before upgrading the relay.                                                        | —                                      |
+
+The owner's relay is MediaMTX v1.21.4 (Homebrew). The app was first built against the relay's
+documented HLS behaviour without a real relay test; no earlier version was recorded, so the
+table above is the supported range: **MediaMTX v1.17.1 to v1.21.4**.
+
+If **Check configured connection** reports "The camera relay answered in a way this app does not
+support", the relay is outside this range or does not match the reference configuration below.
+
+### How the app reads a v1.18+ relay
+
+MediaMTX v1.18.0 and later manage HLS sessions (`internal/servers/hls/http_server.go`,
+`session.go` and `muxer_instance.go` in the MediaMTX source):
+
+1. `GET /<path>/index.m3u8` answers `302` to `/<path>/index.m3u8?cookieCheck=1`.
+2. That request checks the reader login and opens a session. The session secret comes back as
+   the `hlsSession` cookie, or as a `session` query parameter for clients without cookies.
+3. Every later playlist and segment request must carry the secret from the same client address.
+   A missing or unknown secret gets `401 {"error":"session not found"}`. The relay ends a session
+   after 30 seconds without requests.
+
+What the app does (`src/lib/cameras/mediamtx.ts`):
+
+- It follows exactly one redirect: the relay's own `/<path>/index.m3u8?cookieCheck=1` step,
+  compared as an exact string. A redirect to any other host, address, scheme, port, path or file
+  is never followed and the check reports the relay as unsupported.
+- The connection still goes only to the binding's private address, with TLS verification and the
+  certificate's host name check on.
+- It sends `cookieCheck=1` and `hlsSession` cookies, so the relay's playlists name segments
+  without the secret. If a relay still puts `?session=…` on playlist lines, the app removes it and
+  refuses any playlist that still contains the secret afterwards.
+- The session secret and the viewer login stay on the app server. They are never logged, never
+  returned to the browser and never sent anywhere but that relay. The browser only talks to
+  `/api/pharmacy/cameras/…` or `/api/restaurant/cameras/…`.
+- When the relay ends a session, the next request gets `401`. The app opens a new session once
+  and retries. Concurrent requests share one renewal. If a fresh session is still refused, the
+  check reports the relay as unsupported.
+- The app does **not** use `hlsCDNSecret`. That setting turns the relay's login check off.
+- Limits are unchanged: at most one session per binding in memory, sixteen concurrent reads per
+  app server, ten seconds per read (shared by every request of the read, the session step and a
+  renewal included: DEV-1004), 256 KiB per playlist and 16 MiB per segment.
+
+**Check configured connection** now reads the master playlist and the first media playlist, so
+`ok` also proves the session step works. It still does not prove that frames decode in a browser.
+
+Failure meanings are unchanged: `not-configured`, `credentials-missing`, `auth-failed` (wrong
+viewer login), `gateway-unreachable` (relay stopped, routing or TLS) and `unsupported-stream`.
+`relay-unsupported` is new: the relay answered with a redirect or session flow outside the
+supported range.
+
+### Reference relay configuration
+
+Checked key by key against the `mediamtx.yml` shipped with MediaMTX v1.21.4. Every key also
+exists in v1.17.1 and v1.18.0 except `moq`, which arrived in v1.19.0: **on v1.17.1 or v1.18.0
+delete the `moq` line**, or the relay refuses to start. The integration test
+(`src/lib/cameras/mediamtx.relay.integration.test.ts`) starts the real relay from this exact
+block, with only the placeholders replaced.
+
+Replace the placeholders: reader password, the app server's address in the reader's `ips`
+(the address the relay sees the app server connect from, as a `/32`), private address and
+port, certificate files, path name and the DVR source. The DVR login lives only in this protected file. Restrict the file to
+the relay's service account.
+
+<!-- mediamtx-reference-config -->
+
+```yaml
+logLevel: info
+
+authMethod: internal
+authInternalUsers:
+  # The app's dedicated reader. No anonymous "any" user, no publish, API, metrics or pprof.
+  - user: devfathom-hls-reader
+    pass: REPLACE_WITH_READER_PASSWORD
+    # Only the app server may use this login: its address as the relay sees it, as a /32.
+    # An empty list lets any address that reaches the relay try the password.
+    ips: ['10.20.30.50/32']
+    permissions:
+      - action: read
+        path: pharmacy-counter-1
+
+api: false
+metrics: false
+pprof: false
+playback: false
+
+# The relay pulls the DVR itself (paths below), so it needs no RTSP, RTMP, WebRTC, SRT or MoQ
+# server. MoQ is on by default from v1.19.0 and opens extra ports.
+rtsp: false
+rtmp: false
+webrtc: false
+srt: false
+moq: false
+
+hls: true
+hlsAddress: 10.20.30.40:8888
+hlsEncryption: true
+hlsServerKey: /etc/mediamtx/camera-gateway.key
+hlsServerCert: /etc/mediamtx/camera-gateway.crt
+# Only the app server reads the relay; browsers never contact it.
+hlsAllowOrigins: []
+hlsTrustedProxies: []
+hlsAlwaysRemux: false
+# fmp4 carries H.264 and H.265. mpegts carries H.264 only. lowLatency is not supported by the app.
+hlsVariant: fmp4
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsSegmentMaxSize: 50M
+hlsDirectory: ''
+hlsMuxerCloseAfter: 60s
+
+paths:
+  pharmacy-counter-1:
+    source: rtsp://DVR_VIEWER:DVR_VIEWER_PASSWORD@192.168.1.108:554/cam/realmonitor?channel=6&subtype=1
+    rtspTransport: tcp
+```
+
+Notes on the keys:
+
+- `hlsCDNSecret` is left out on purpose (its default is empty). Never set it: a request carrying
+  it skips the reader login.
+- `hlsVariant: fmp4` is required for H.265. With `mpegts`, MediaMTX refuses an H.265 source
+  ("the MPEG-TS variant of HLS supports H264 video only") and the check reports the gateway as
+  unreachable.
+- `hlsEncryption: true` with a certificate valid for the binding's host name. A certificate from
+  a private CA (for example mkcert) is fine; give the app server that CA through
+  `NODE_EXTRA_CA_CERTS`. TLS verification is never turned off.
+- The DVR source URL format shown is Dahua's documented RTSP form (`subtype=1` is the sub
+  stream). Confirm it on the device; nothing on the DVR is changed.
+
+### H.265 cameras
+
+Neither the relay nor the app converts video, and the DVR stays as the owner set it. The app reads
+the codec from the relay's playlist (`CODECS="hvc1…"` or `"hev1…"`):
+
+- **Check configured connection** adds: "This camera sends H.265 (HEVC) video, which the app does
+  not convert. Safari on Mac, iPhone and iPad plays it. Chrome and Edge play it only on computers
+  with H.265 hardware decoding. Other browsers may show no picture."
+- Live view stops with a plain H.265 message, instead of a black picture, when the browser cannot
+  decode it.
+
+Record the browser, version and computer for every H.265 playback result.
+
 ## Hardware acceptance checklist (pending; needs separate authorization)
 
 Run only after the exact device is confirmed and the owner explicitly authorizes a test in a
@@ -181,7 +331,9 @@ non-production environment. Record evidence (screenshots and timestamps), never 
 - [ ] A user from another branch or tenant cannot obtain a grant or stream.
 - [ ] Restaurant cameras on the same deployment still play, and their legacy bindings are
       unchanged.
-- [ ] H.265 channels: playback outcome recorded honestly (supported or unsupported message).
+- [ ] H.265 channels: **Check configured connection** shows the H.265 line; playback outcome
+      recorded per browser (plays, or the plain H.265 message).
+- [ ] Relay version recorded (`mediamtx --version`) and inside the supported range above.
 - [ ] Evidence stills: without a DEV-745 snapshot binding, new events show the still
       unavailable; with one, follow the DEV-745 acceptance checks.
 

@@ -1,3 +1,4 @@
+import { uploadPost, UPLOAD_SIZE_MESSAGE } from '@/lib/uploads/multipart-request';
 import crypto from 'node:crypto';
 
 import { TRPCError } from '@trpc/server';
@@ -118,7 +119,7 @@ async function readEvidenceFile(value: FormDataEntryValue | null) {
     typeof value.type !== 'string' ||
     typeof value.arrayBuffer !== 'function'
   ) {
-    throw new EvidenceInputError(`Choose a file between 1 byte and ${MAX_ATTACHMENT_BYTES} bytes.`);
+    throw new EvidenceInputError('Choose a file between 1 byte and 25 MB.');
   }
   const baseType = value.type.split(';')[0]!.trim().toLowerCase();
   const extension = EVIDENCE_TYPES[baseType as keyof typeof EVIDENCE_TYPES];
@@ -157,20 +158,25 @@ function isSameOrigin(request: Request): boolean {
   }
 }
 
-export async function POST(request: Request) {
+export const POST = uploadPost(async (request, readUploadForm) => {
   if (!isSameOrigin(request)) return new Response('Forbidden', { status: 403 });
 
-  let form: FormData;
-  try {
-    form = await request.formData();
-  } catch {
-    return json(400, { error: 'The upload was incomplete or not a multipart form.' });
-  }
-
-  let stage: Stage = 'file_validation';
+  let stage: Stage = 'authorization';
   let storedFilename: string | null = null;
   let organizationId: string | null = null;
   try {
+    const actor = await resolveTenantActor({ request });
+    if (!actor?.session.user?.id) return json(401, { error: 'Sign in to capture proof.' });
+    stage = 'file_validation';
+    let form: FormData;
+    try {
+      const result = await readUploadForm(actor.session.user.id, actor.organization.id);
+      if (result instanceof Response) return result;
+      if (!result) return json(413, { error: UPLOAD_SIZE_MESSAGE });
+      form = result;
+    } catch {
+      return json(400, { error: 'The upload was incomplete or not a multipart form.' });
+    }
     const pharmacyBranchId = field(form, 'pharmacyBranchId');
     const occurrenceId = field(form, 'occurrenceId');
     const occurrenceStepId = field(form, 'occurrenceStepId') || null;
@@ -184,8 +190,6 @@ export async function POST(request: Request) {
     const { baseType, bytes, extension } = await readEvidenceFile(form.get('file'));
 
     stage = 'authorization';
-    const actor = await resolveTenantActor({ request });
-    if (!actor?.session.user?.id) return json(401, { error: 'Sign in to capture proof.' });
     const ctx = await createTRPCContext({
       req: request,
       session: actor.session,
@@ -354,4 +358,13 @@ export async function POST(request: Request) {
     }
     return json(500, { error: 'Proof capture failed. Check the file and try again.' });
   }
-}
+});
+
+export {
+  uploadMethodResponse as GET,
+  uploadMethodResponse as HEAD,
+  uploadMethodResponse as PUT,
+  uploadMethodResponse as PATCH,
+  uploadMethodResponse as DELETE,
+  uploadMethodResponse as OPTIONS,
+} from '@/lib/uploads/multipart-request';

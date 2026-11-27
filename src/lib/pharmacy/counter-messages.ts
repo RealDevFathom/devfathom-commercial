@@ -122,6 +122,20 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // DEV-966: a cash-on-delivery bill priced by the prepaid tier when the rider collected.
   BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER:
     "The customer's prepaid discount has already been priced on top of this bill's whole-bill discount, so the bill can no longer change. Finish this bill as it is, then start a new bill for any other item.",
+  // DEV-977B: changing or removing a line on the bill.
+  LINE_LOCKED_BY_PAYMENT:
+    'Payment has already been started or taken on this bill, so its lines can no longer be changed or removed.',
+  LINE_HAS_DISPENSING_RECORD:
+    'This line carries dispensing records (controlled register, prescription, pharmacist review, substitution or a scanned pack), so it cannot be changed here. Void the bill to take it off.',
+  PACK_CHECK_REQUIRED: 'Scan a matching pack for the blocked bill line, or remove the line.',
+  LINE_CHANGE_NEEDS_READD:
+    'This line has a discount, voucher or batch override approved for its quantity. Remove the line and add it again with the new quantity.',
+  LINE_ON_ORDER_BILL:
+    "This bill is a customer order or refill. Its lines are the order's, so they are changed through the order, not here.",
+  LINE_ON_OFFLINE_SALE:
+    'This sale was made offline and sealed on the counter computer, so its lines cannot be changed.',
+  LINE_ON_CLOSED_SHIFT:
+    'This bill was started in a cash shift that has closed, and a closed shift never changes. Void this bill and ring the items up again in the open shift.',
   VOUCHER_CATEGORY_REFUSED:
     'Vouchers apply to non-medicine items only. Remove the voucher from this line.',
   VOUCHER_INVALID: 'That voucher is not valid at this branch. Check the voucher and try again.',
@@ -184,9 +198,9 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'A card terminal payment on this day is still open. Check its status on the counter, or have a manager review it, before closing the day.',
   // DEV-743: a terminal charge goes back through the card provider, never as cash.
   CARD_TERMINAL_REFUND_VIA_PROVIDER:
-    'This payment was taken on the card terminal, so it cannot be refunded here. Do not give cash. Refund it through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+    'Do not give cash. Record the amount owed without a cash fallback, refund it through the card provider’s own refund process, and keep the refund slip with this bill.',
   BILL_HAS_CARD_TERMINAL_PAYMENT:
-    'This bill was paid on the card terminal, so it cannot be voided or refunded here. Do not give cash. Refund the card payment through the card provider’s own refund process, and keep the provider’s refund slip with this bill.',
+    'Do not give cash. Record the outstanding card refund before voiding this bill. Return the money through the card provider’s own refund process.',
   // DEV-743: resolving a card terminal payment under review.
   REVIEW_NOT_OPEN:
     'This card terminal payment is no longer waiting for review. It may already have been resolved. Refresh the bill to see where it stands.',
@@ -198,6 +212,36 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
     'Another manager or owner must resolve a payment you took. Ask another manager or owner at this branch to resolve it.',
   SLIP_REFERENCE_IN_USE:
     'That slip reference is already recorded on another card terminal payment. Check the slip and enter its reference again.',
+  // DEV-958B: cash shifts on a drawer (shift close, then day close).
+  SHIFTS_NOT_ENABLED: 'This branch does not run cash shifts. The day close counts the drawer.',
+  SHIFT_NOT_FOUND: 'That shift is not on this branch. Refresh the counter and try again.',
+  SHIFT_NOT_OPEN:
+    'No shift is open on this counter. Open your shift with the cash you count in the drawer, then take the payment.',
+  SHIFT_OTHER_DAY:
+    'The shift open on this counter belongs to an earlier business day. Close that shift and its day first.',
+  SHIFT_OPEN:
+    'A shift is still open. Close every shift of the day on the counter first; a manager or owner can close anyone’s shift.',
+  SHIFT_ALREADY_OPEN:
+    'A shift is already open on this drawer. Close it before the next cashier opens theirs.',
+  SHIFT_ALREADY_CLOSED:
+    'This shift is already closed with a different count. A closed shift never changes; record any correction in the open shift.',
+  SHIFT_NOTE_REQUIRED: 'The count differs from the cash expected. Add a note that explains it.',
+  SHIFT_APPROVAL_REQUIRED:
+    'The over or short is above the owner’s limit. A manager or owner must approve it with their PIN.',
+  SHIFT_APPROVAL_REFUSED:
+    'That approval was refused. The PIN was not accepted; the shift is still open. Check it and try again.',
+  SHIFT_APPROVAL_LOCKED:
+    'That approval was refused: this approver’s PIN is locked after too many attempts. Wait for it to unlock, or ask another manager or owner.',
+  SHIFT_APPROVAL_NEEDS_ANOTHER:
+    'You cannot approve your own shift’s over or short while another manager or owner works at this branch. Ask them to approve it with their PIN.',
+  SHIFT_APPROVAL_NOT_ELIGIBLE:
+    'That person cannot approve this over or short. Choose a manager or owner at this branch who has an approval PIN, other than the shift’s cashier and the person closing it.',
+  SHIFT_COUNT_MISMATCH:
+    'A drawer that runs shifts closes on its last shift’s count. Refresh the day close and try again.',
+  SHIFT_CHANGED:
+    'A payment reached this shift while you were counting. Check the expected cash again, then close.',
+  SHIFT_HANDOVER_BY_CLOSE:
+    'This drawer runs cash shifts. Close the current shift with a count, then the next cashier opens theirs.',
   // DEV-821: cash goes only into a till the signed-in user runs.
   DRAWER_NOT_YOURS:
     'Another cashier runs the cash drawer on this counter. Ask a manager or owner to hand it over to you, then take the cash.',

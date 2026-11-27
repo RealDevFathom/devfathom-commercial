@@ -241,6 +241,8 @@ beforeAll(async () => {
         legalName: 'WHA-143 Rollback Co',
         displayName: 'WHA-143 Rollback',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await tx.organization.create({
@@ -250,6 +252,8 @@ beforeAll(async () => {
         legalName: 'WHA-143 Foreign Co',
         displayName: 'WHA-143 Foreign',
         status: 'ACTIVE',
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       },
     });
     await seedDepartments(tx, [orgId], ['LEADERSHIP']);
@@ -269,7 +273,12 @@ beforeAll(async () => {
         id: ids.operatorRole,
         key: `operator_${suffix}`,
         name: 'Operator',
-        permissions: { create: [{ capability: 'orders:take', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
+            { capability: 'orders:take', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     await tx.organizationRole.create({
@@ -285,7 +294,12 @@ beforeAll(async () => {
         id: ids.unauthorizedRole,
         key: `unauthorized_${suffix}`,
         name: 'Unauthorized',
-        permissions: { create: [{ capability: 'menu:read', effect: 'ALLOW' }] },
+        permissions: {
+          create: [
+            { capability: 'pos:operate', effect: 'ALLOW' },
+            { capability: 'menu:read', effect: 'ALLOW' },
+          ],
+        },
       },
     });
     for (const [id, roleId, label] of [

@@ -60,6 +60,9 @@ function makeDb() {
         ...data,
       })),
     },
+    pharmacyBranchAssignment: { findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]) },
+    pharmacyMigrationBatch: model(),
+    pharmacyMigrationRow: { findMany: vi.fn().mockResolvedValue([]) },
     medicineProvenance: {
       ...model(),
       findMany: vi.fn(),
@@ -79,7 +82,12 @@ function makeDb() {
 }
 
 let db = makeDb();
-function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'user_a') {
+function caller(
+  enabledModules = ['pharmacy-core'],
+  role = 'ADMIN',
+  actorId = 'user_a',
+  organizationId?: string
+) {
   return pharmacyMedicineRouter.createCaller({
     db,
     entitlements: {
@@ -92,7 +100,7 @@ function caller(enabledModules = ['pharmacy-core'], role = 'ADMIN', actorId = 'u
     },
     session: {
       expires: 'later',
-      user: { id: actorId, role, status: 'ACTIVE' },
+      user: { id: actorId, role, status: 'ACTIVE', organizationId },
     },
     organization: null,
     support: null,
@@ -115,6 +123,168 @@ beforeEach(() => {
   db = makeDb();
   mocks.verifyPin.mockReset().mockResolvedValue('OK');
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
+});
+
+describe('staged import proposal read', () => {
+  const read = () =>
+    caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a').proposedImport({ editId: 'edit' });
+  beforeEach(() => {
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue({
+      changes: { json: { batchId: 'batch_a', sourceSha256: 'hash', reorderBranchId: 'branch_a' } },
+    });
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValue({
+      id: 'batch_a',
+      source: { fileName: 'proposal.csv' },
+    });
+    db.pharmacyMigrationRow.findMany.mockResolvedValue([
+      {
+        rowNumber: 1,
+        productName: 'Tablet',
+        packLabel: '10',
+        packFactor: BigInt(10),
+        mrpMinor: BigInt(3000),
+        costMinor: BigInt(2100),
+        rawPayload: { secret: 'hidden', Supplier: 'private' },
+      },
+    ]);
+  });
+  it('reads only proposed product fields from the pending request in the assigned branch', async () => {
+    grantCatalogueReview('user_a');
+    const result = await read();
+    expect(result.rows[0]).toMatchObject({
+      rowNumber: 1,
+      productName: 'Tablet',
+      unitsPerPack: 10,
+      mrpMinor: 3000,
+    });
+    expect(JSON.stringify(result)).not.toMatch(
+      /hash|private|secret|costMinor|purchasePrice|supplier|sourceKey/i
+    );
+    expect(db.pharmacyCatalogueEdit.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          id: 'edit',
+          status: 'PENDING',
+          operation: 'createStagedMedicines',
+        },
+      })
+    );
+    expect(db.pharmacyMigrationBatch.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          id: 'batch_a',
+          source: { organizationId: 'org_a', contentHash: 'hash' },
+        },
+      })
+    );
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org_a', batchId: 'batch_a', targetModelKey: 'med.product' },
+        orderBy: [{ rowNumber: 'asc' }, { id: 'asc' }],
+        skip: 0,
+        take: 26,
+      })
+    );
+  });
+  it('reopens only a request approved by this reviewer, without loading staged rows', async () => {
+    grantCatalogueReview('user_a');
+    const result = await caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a').proposedImport({
+      editId: 'edit',
+      approvedByMe: true,
+    });
+    expect(db.pharmacyCatalogueEdit.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org_a',
+          id: 'edit',
+          status: 'APPROVED',
+          reviewerId: 'user_a',
+          operation: 'createStagedMedicines',
+        },
+      })
+    );
+    expect(result).toEqual({
+      approved: { batchId: 'batch_a', fileName: 'proposal.csv' },
+      rows: [],
+      hasMore: false,
+    });
+    expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
+  it('refuses a non-reviewer before it looks up any request', async () => {
+    await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyCatalogueEdit.findFirst).not.toHaveBeenCalled();
+  });
+  it('refuses an unassigned branch before reading batch data', async () => {
+    grantCatalogueReview('user_a');
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+    await expect(read()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
+  it('requires admission to the proposed reorder branch for reading and deciding', async () => {
+    grantCatalogueReview('user_a');
+    db.pharmacyBranchAssignment.findMany.mockResolvedValue([{ branchId: 'branch_b' }]);
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValue({
+      id: 'edit',
+      editorId: 'editor',
+      medicineId: null,
+      status: 'PENDING',
+      operation: 'createStagedMedicines',
+      changes: { json: { batchId: 'batch_a', sourceSha256: 'hash', reorderBranchId: 'branch_a' } },
+    });
+    const reviewer = caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a');
+    const refusal = {
+      code: 'FORBIDDEN',
+      message:
+        'This import needs a catalogue reviewer assigned to an active branch covered by the request. Ask the pharmacy owner to check the branch assignment.',
+    };
+    await expect(reviewer.proposedImport({ editId: 'edit' })).rejects.toMatchObject(refusal);
+    await expect(
+      reviewer.decideCatalogueEdit({ editId: 'edit', decision: 'APPROVE' })
+    ).rejects.toMatchObject(refusal);
+    await expect(
+      reviewer.decideCatalogueEdit({ editId: 'edit', decision: 'REJECT' })
+    ).rejects.toMatchObject(refusal);
+    expect(db.pharmacyCatalogueEdit.updateMany).not.toHaveBeenCalled();
+    expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
+    expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+  it('explains who can grant access to a proposed file and staged creation', async () => {
+    const cashier = caller(['pharmacy-core'], 'EMPLOYEE', 'user_a', 'org_a');
+    await expect(cashier.proposedImport({ editId: 'edit' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'Only a catalogue reviewer can inspect the proposed medicines. Ask the pharmacy owner to assign a reviewer.',
+    });
+    await expect(cashier.createStagedMedicines({ batchId: 'batch_a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'An administrator with catalogue edit access can submit this import. Ask the pharmacy owner to assign an editor to submit it or a reviewer to approve it.',
+    });
+    const refusal = {
+      code: 'FORBIDDEN',
+      message:
+        'Only a catalogue editor or reviewer can check or create medicines from this file. Ask the pharmacy owner for catalogue edit or review access.',
+    };
+    await expect(cashier.stagedMedicineCreation({ batchId: 'batch_a' })).rejects.toMatchObject(
+      refusal
+    );
+    await expect(cashier.runStagedMedicineCreation({ batchId: 'batch_a' })).rejects.toMatchObject(
+      refusal
+    );
+    expect(db.pharmacyCatalogueEdit.findMany).not.toHaveBeenCalled();
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+  it('refuses a missing proposal or mismatched file before reading rows', async () => {
+    grantCatalogueReview('user_a');
+    db.pharmacyCatalogueEdit.findFirst.mockResolvedValueOnce(null);
+    await expect(read()).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    db.pharmacyMigrationBatch.findFirst.mockResolvedValueOnce(null);
+    await expect(read()).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
 });
 
 const catalogueEdits = [
@@ -804,6 +974,163 @@ describe('catalogue-edit capability, queue access and solo owner (DEV-19)', () =
       ).rejects.toMatchObject({ code: 'FORBIDDEN' });
       expect(db.$transaction).not.toHaveBeenCalled();
       expect(mocks.verifyPin).not.toHaveBeenCalled();
+    });
+
+    describe('DEV-976: who can approve the caller’s own edits, for the screen', () => {
+      const names: Record<string, string> = {
+        owner_a: 'Saad Owner',
+        owner_b: 'Bilal Ahmed',
+        pharmacist_c: 'Ayesha Khan',
+        cashier_b: 'Cashier Fixture',
+        pharmacist_d: 'Former Pharmacist',
+      };
+      beforeEach(() => {
+        db.user.findMany.mockImplementation(
+          async ({
+            where,
+          }: {
+            where: { organizationId?: string; id?: { not?: string }; status?: { in?: string[] } };
+          }) =>
+            members
+              .filter(() => !where.organizationId || where.organizationId === 'org_a')
+              .filter((item) => item.id !== where.id?.not)
+              .filter((item) => !where.status?.in || where.status.in.includes(item.status))
+              .map((item) => ({
+                id: item.id,
+                name: names[item.id] ?? item.id,
+                role: item.record.role,
+                status: item.status,
+                department: null,
+                organizationId: 'org_a',
+              }))
+        );
+      });
+
+      it('Owner alone: may approve their own edit with a PIN, and names nobody', async () => {
+        addMember('cashier_b', cashier);
+        await expect(soloCaller().catalogueSelfApproval()).resolves.toEqual({
+          canSelfApprove: true,
+          reviewers: [],
+        });
+      });
+
+      it('Owner + Owner: may not self-approve and names the other owner, as the decision refuses', async () => {
+        addMember('owner_b', owner);
+        addMember('cashier_b', cashier);
+        await expect(soloCaller().catalogueSelfApproval()).resolves.toEqual({
+          canSelfApprove: false,
+          reviewers: ['Bilal Ahmed'],
+        });
+        const proposal = await queueOwnerAlias();
+        await expect(
+          soloCaller().decideCatalogueEdit({
+            editId: proposal.id,
+            decision: 'APPROVE',
+            soloPin: '2468',
+          })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mocks.verifyPin).not.toHaveBeenCalled();
+      });
+
+      it('Owner holding the review grant + Pharmacist: names only the active pharmacist', async () => {
+        members[0]!.record = {
+          ...owner,
+          permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+        };
+        addMember('pharmacist_c', pharmacist);
+        addMember('pharmacist_d', pharmacist, 'DEACTIVATED');
+        addMember('cashier_b', cashier);
+        const result = await soloCaller().catalogueSelfApproval();
+        expect(result).toEqual({ canSelfApprove: false, reviewers: ['Ayesha Khan'] });
+        expect(JSON.stringify(result)).not.toMatch(/pharmacist_c|@|Former Pharmacist/);
+      });
+
+      it('names a reviewer listed after the first 500 members (DEV-1004)', async () => {
+        members[0]!.record = {
+          ...owner,
+          permissionOverrides: [{ capability: 'pharmacy:catalogue-review', effect: 'ALLOW' }],
+        };
+        for (let n = 0; n < 600; n += 1)
+          addMember(`cashier_${String(n).padStart(3, '0')}`, cashier);
+        addMember('pharmacist_c', pharmacist);
+        // The database pages the members as asked; the reviewer is on the second page.
+        const listed = db.user.findMany.getMockImplementation()!;
+        db.user.findMany.mockImplementation(
+          async (args: { skip?: number; take?: number; where: never }) => {
+            const all = (await listed(args)) as unknown[];
+            const from = args.skip ?? 0;
+            return args.take === undefined ? all.slice(from) : all.slice(from, from + args.take);
+          }
+        );
+        await expect(soloCaller().catalogueSelfApproval()).resolves.toEqual({
+          canSelfApprove: false,
+          reviewers: ['Ayesha Khan'],
+        });
+      });
+
+      it('gives a member without the review right nothing', async () => {
+        addMember('cashier_b', cashier);
+        addMember('pharmacist_c', pharmacist);
+        await expect(
+          soloCaller('cashier_b', 'EMPLOYEE').catalogueSelfApproval()
+        ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(db.user.findMany).not.toHaveBeenCalled();
+      });
+
+      it('gives a caller from another organization nothing', async () => {
+        addMember('pharmacist_c', pharmacist);
+        const foreign = pharmacyMedicineRouter.createCaller({
+          db,
+          entitlements: {
+            organizationId: 'org_a',
+            enabledModules: ['pharmacy-core'],
+            activeSeats: 1,
+            seatLimit: 10,
+            modules: [],
+            limits: {},
+          },
+          session: {
+            expires: 'later',
+            user: { id: 'owner_a', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_b' },
+          },
+          organization: null,
+          support: null,
+          requestMeta: { ip: null, userAgent: null },
+          audit: { detail: {} },
+        } as unknown as TRPCContext);
+        await expect(foreign.catalogueSelfApproval()).rejects.toMatchObject({
+          code: 'FORBIDDEN',
+        });
+        expect(db.user.findMany).not.toHaveBeenCalledWith(
+          expect.objectContaining({ select: expect.objectContaining({ name: true }) })
+        );
+      });
+
+      it('marks the edits the caller submitted in the queue', async () => {
+        db.pharmacyCatalogueEdit.findMany.mockResolvedValue([
+          {
+            id: 'mine',
+            editorId: 'owner_a',
+            expectedUpdatedAt: new Date(0),
+            medicine: null,
+            operation: 'createStagedMedicines',
+            changes: {},
+          },
+          {
+            id: 'theirs',
+            editorId: 'pharmacist_c',
+            expectedUpdatedAt: new Date(0),
+            medicine: null,
+            operation: 'createIngredient',
+            changes: {},
+          },
+        ]);
+        const edits = await soloCaller().catalogueEdits();
+        expect(edits.map((edit) => [edit.id, edit.ownEdit])).toEqual([
+          ['mine', true],
+          ['theirs', false],
+        ]);
+      });
     });
   });
 });

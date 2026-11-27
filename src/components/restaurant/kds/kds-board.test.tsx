@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,10 +8,10 @@ import { KdsBoard } from './kds-board';
 type TicketDisplayStatus = 'NEW' | 'COOKING' | 'READY' | 'RECALLED';
 type ItemDisplayStatus = TicketDisplayStatus | 'HELD' | 'SERVED';
 
-function json(body: unknown, status = 200) {
+function json(body: unknown, status = 200, extraHeaders: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...extraHeaders },
   });
 }
 
@@ -123,9 +124,16 @@ async function connect(enrolled = true) {
   }
   await flush();
   if (!enrolled) return;
-  fireEvent.change(screen.getByLabelText('Acting operator'), {
-    target: { value: 'staff-1' },
-  });
+  fireEvent.change(
+    selectFieldControl(
+      screen.getByLabelText('Acting operator', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ),
+    {
+      target: { value: 'staff-1' },
+    }
+  );
   fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '1234' } });
   fireEvent.click(screen.getByRole('button', { name: 'Verify PIN and unlock' }));
   await flush();
@@ -211,6 +219,23 @@ describe('KdsBoard transport', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ kind: 'KDS' }),
     });
+  });
+
+  it('shows the server reason when a session-bearing kitchen poll is refused', async () => {
+    vi.useFakeTimers();
+    const reason = 'This operator no longer has kitchen access at this branch.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith('/operators')) return json(operatorDirectory());
+        if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+        return json({ error: reason }, 403, { 'X-Terminal-Access': 'denied' });
+      })
+    );
+    render(<KdsBoard />);
+    await connect();
+    expect(screen.getByText(reason)).toBeVisible();
   });
 
   it('fully resyncs once after a cursor gap and replaces stale level state', async () => {
@@ -445,6 +470,27 @@ describe('KdsBoard transport', () => {
     expect(screen.getByText('KOT 2 reprint queued.')).toBeVisible();
   });
 
+  it('keeps the station connected and shows the plain reason when only reprint is forbidden', async () => {
+    vi.useFakeTimers();
+    const reason = 'This operator lacks the "orders:take" capability.';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const path = String(input);
+        if (path.endsWith('/operators')) return json(operatorDirectory());
+        if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+        if (path.endsWith('/orders/reprint-kot')) return json({ error: reason }, 403);
+        return json(queue([ticket(2, 'Burger', 'NEW')]));
+      })
+    );
+    render(<KdsBoard />);
+    await connect();
+    fireEvent.click(screen.getByRole('button', { name: 'Reprint KOT 2 for order 42' }));
+    await flush();
+    expect(screen.getByText(reason)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Reprint KOT 2 for order 42' })).toBeVisible();
+  });
+
   it('rejects a denied device before exposing operators or the secret', async () => {
     vi.useFakeTimers();
     vi.stubGlobal(
@@ -457,7 +503,10 @@ describe('KdsBoard transport', () => {
 
     expect(screen.getByRole('heading', { name: 'Checking enrollment' })).toBeVisible();
     expect(
-      screen.getByRole('option', { name: 'Operators unavailable — verify the device secret' })
+      screen.getByRole('option', {
+        hidden: true,
+        name: 'Operators unavailable — verify the device secret',
+      })
     ).toBeVisible();
     expect(document.body.textContent).not.toContain('rdk_');
   });

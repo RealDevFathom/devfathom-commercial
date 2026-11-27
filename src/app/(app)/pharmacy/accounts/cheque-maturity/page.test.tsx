@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -150,4 +151,13 @@ describe('cheque maturity accounts page', () => {
     expect(pill.className).toContain('text-destructive');
     expect(pill.className).not.toContain('text-warning');
   });
+});
+
+it('explains a finance refusal and who can grant access', async () => {
+  mocks.workspace.mockRejectedValueOnce(
+    new TRPCError({ code: 'FORBIDDEN', message: 'private detail' })
+  );
+  await show();
+  expect(screen.getByText(/Ask your workspace owner for finance access/)).toBeVisible();
+  expect(screen.queryByText(/private detail/)).toBeNull();
 });

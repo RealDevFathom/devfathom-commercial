@@ -27,13 +27,16 @@ import {
   renamePrinterInventory,
   retirePrinterInventory,
 } from '@/lib/restaurant/printer-inventory';
+import { withCommittedApproverCheck } from '@/lib/restaurant/approver-authentication';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import {
   CommercialLimitError,
   enrollDeviceWithinCommercialLimits,
   enrollPrintBridgeWithinCommercialLimits,
 } from '@/lib/restaurant/commercial-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import {
   assertActorEligibleForBranch,
   assertAuthorizedBranch,
@@ -42,9 +45,10 @@ import {
 } from '@/lib/restaurant/staff-branch-authorization';
 import { annotateAudit } from '../audit';
 import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
-const coAuthorizationApprovalCapability = 'coauth:approve';
+const coAuthorizationApprovalCapability = 'coauth:approve' satisfies RestaurantApproverRight;
 
 async function assertApproverCanCoAuthorize(
   db: ScopedDb,
@@ -52,12 +56,7 @@ async function assertApproverCanCoAuthorize(
   branchId: string
 ) {
   if (
-    !(await staffHasCapability(
-      db,
-      staffProfileId,
-      branchId,
-      coAuthorizationApprovalCapability
-    ))
+    !(await staffHasCapability(db, staffProfileId, branchId, coAuthorizationApprovalCapability))
   ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -131,6 +130,7 @@ async function revocableBranchIds(ctx: RevokeAuthorizationContext): Promise<Set<
 export const restaurantDevicesRouter = router({
   /** Issue a one-use enrollment code only while creating a new bridge. */
   initiatePrintBridgeEnrollment: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -408,6 +408,7 @@ export const restaurantDevicesRouter = router({
 
   /** Enroll a device to a branch; returns the one-time enrollment secret. */
   initiateEnrollment: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         branchId: z.string().min(1),
@@ -490,6 +491,7 @@ export const restaurantDevicesRouter = router({
    * REVOKED. `skipInput` keeps the approving secret out of the audit log (C4).
    */
   revoke: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         deviceId: z.string().min(1),
@@ -553,22 +555,35 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
-      await assertApproverCanCoAuthorize(
-        ctx.db,
-        input.approvingStaffProfileId,
-        device.branchId
-      );
+      await assertApproverCanCoAuthorize(ctx.db, input.approvingStaffProfileId, device.branchId);
       const now = new Date();
-      const auth = await authenticateOperator(ctx.db, {
-        staffProfileId: input.approvingStaffProfileId,
-        type: input.approvingType,
-        secret: input.approvingSecret,
-        now,
-        approval: {
-          action: 'restaurantDevices.revoke',
-          requestedByStaffProfileId: actingStaffProfileId,
-        },
-      });
+      // DEV-1055: a wrong credential fails this request and rolls its transaction
+      // back. The credential check therefore commits in its own tenant
+      // transaction, so its strike lands on the same durable counter the terminal
+      // routes use; the per-approver budget stays as a second, outer limit.
+      const approverOrganizationId =
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId;
+      const auth = await authenticateApproverWithinBudget(
+        approverOrganizationId,
+        input.approvingStaffProfileId,
+        () =>
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now,
+                approval: {
+                  action: 'restaurantDevices.revoke',
+                  approverRight: coAuthorizationApprovalCapability,
+                  requestedByStaffProfileId: actingStaffProfileId,
+                },
+              })
+          )
+      );
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
           throw new TRPCError({
@@ -606,6 +621,7 @@ export const restaurantDevicesRouter = router({
 
   /** Rotate an active device secret with the same two-person approval as revoke. */
   rotate: manageDevicesProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -667,21 +683,34 @@ export const restaurantDevicesRouter = router({
         throw err;
       }
 
-      await assertApproverCanCoAuthorize(
-        ctx.db,
+      await assertApproverCanCoAuthorize(ctx.db, input.approvingStaffProfileId, device.branchId);
+      // DEV-1055: a wrong credential fails this request and rolls its transaction
+      // back. The credential check therefore commits in its own tenant
+      // transaction, so its strike lands on the same durable counter the terminal
+      // routes use; the per-approver budget stays as a second, outer limit.
+      const approverOrganizationId =
+        ctx.entitlements.organizationId ?? ctx.session!.user.organizationId;
+      const auth = await authenticateApproverWithinBudget(
+        approverOrganizationId,
         input.approvingStaffProfileId,
-        device.branchId
+        () =>
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now: new Date(),
+                approval: {
+                  action: 'restaurantDevices.rotate',
+                  approverRight: coAuthorizationApprovalCapability,
+                  requestedByStaffProfileId: actingStaffProfileId,
+                },
+              })
+          )
       );
-      const auth = await authenticateOperator(ctx.db, {
-        staffProfileId: input.approvingStaffProfileId,
-        type: input.approvingType,
-        secret: input.approvingSecret,
-        now: new Date(),
-        approval: {
-          action: 'restaurantDevices.rotate',
-          requestedByStaffProfileId: actingStaffProfileId,
-        },
-      });
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
           throw new TRPCError({

@@ -63,6 +63,11 @@ const ACTOR = 'user_pharmacist';
 // key, so the witness is suffixed per run like the branches above.
 const WITNESS = `user_witness_${suffix}`;
 const ruleSetIds: string[] = [];
+/**
+ * DEV-1052: these cases call the release as someone holding both permissions, so a refusal
+ * here is the stock rule under test (recall reserve, scope, arrangement), never hold ownership.
+ */
+const FULL_RELEASE_RIGHTS = { safety: true, inventory: true };
 
 /** Fixed instants, so no case depends on the wall clock. */
 const NOW = new Date('2026-09-02T09:00:00.000Z');
@@ -767,6 +772,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         units: 10,
         reason: 'Inspection passed',
         idempotencyKeyPrefix: tag('quarantine-release-clear'),
+        rights: FULL_RELEASE_RIGHTS,
       });
       return db.pharmacyStockBalance.findMany({ where: { inventoryLotId: lot.id } });
     });
@@ -794,7 +800,10 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         };
         const refusal = await (
           operation === 'release'
-            ? deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), input)
+            ? deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), {
+                ...input,
+                rights: FULL_RELEASE_RIGHTS,
+              })
             : deps.operations.writeOff(db, scopeOf(fixture), {
                 ...input,
                 disposition: 'QUARANTINE',
@@ -897,6 +906,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             ? await deps.operations.releaseQuarantinedPart(db, scope, {
                 ...input,
                 idempotencyKeyPrefix: tag('manual-arrangement-release'),
+                rights: FULL_RELEASE_RIGHTS,
               })
             : await deps.operations.writeOff(db, scope, {
                 ...input,
@@ -966,6 +976,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
         await deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), {
           ...input,
           idempotencyKeyPrefix: tag('mixed-release-first'),
+          rights: FULL_RELEASE_RIGHTS,
         });
         firstPosted();
         await held;
@@ -987,6 +998,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
           ? deps.operations.releaseQuarantinedPart(db, scopeOf(fixture), {
               ...input,
               idempotencyKeyPrefix: tag('mixed-release-second'),
+              rights: FULL_RELEASE_RIGHTS,
             })
           : deps.operations.writeOff(db, scopeOf(fixture), {
               ...input,
@@ -1085,6 +1097,7 @@ describeIfDatabase('PH-INV operations — INV-06/07/08/09', () => {
             units: 10,
             reason: 'Substituted reference',
             idempotencyKeyPrefix: tag('release-scope-attempt'),
+            rights: FULL_RELEASE_RIGHTS,
           })
         )
       ).rejects.toMatchObject({

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
 import { useId, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -10,6 +12,7 @@ import { useHydrated } from './transfer-action-form';
 
 /** Requests the OS print dialog for one slip; it cannot confirm paper came out. */
 export function PackingSlipPrintButton({ slip }: { slip: PackingSlip }) {
+  const timeZone = useWorkspaceTimeZone();
   const [format, setFormat] = useState<CounterReceiptFormat>('A4');
   const [error, setError] = useState<string | null>(null);
   const selectId = useId();
@@ -22,7 +25,7 @@ export function PackingSlipPrintButton({ slip }: { slip: PackingSlip }) {
       <label className="sr-only" htmlFor={selectId}>
         Packing slip paper for {slip.reference}
       </label>
-      <select
+      <StudioSelect
         className="min-h-9 rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-2 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         id={selectId}
         onChange={(event) => setFormat(event.target.value as CounterReceiptFormat)}
@@ -33,14 +36,14 @@ export function PackingSlipPrintButton({ slip }: { slip: PackingSlip }) {
             {option.label}
           </option>
         ))}
-      </select>
+      </StudioSelect>
       <Button
         aria-describedby={error ? errorId : undefined}
         disabled={!ready}
         onClick={async () => {
           try {
             setError(null);
-            await printPackingSlip(slip, format);
+            await printPackingSlip({ ...slip, timeZone }, format);
           } catch (failure) {
             setError(
               failure instanceof Error ? failure.message : 'The packing slip could not be printed.'

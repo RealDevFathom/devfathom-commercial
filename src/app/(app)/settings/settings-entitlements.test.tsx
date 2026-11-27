@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -451,8 +452,20 @@ describe('Print routing settings', () => {
       )
     );
     renderSection(<PrintRoutingSection />, entitlementView(true, true));
-    await waitFor(() => expect(screen.getByLabelText('Branch')).toHaveValue('branch-1'));
-    expect(screen.getByLabelText('Kitchen printer (KOT) station')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        selectFieldControl(
+          screen.getByLabelText('Branch', {
+            selector: ':not([data-select-field-native][aria-hidden="true"])',
+          })
+        )
+      ).toHaveValue('branch-1')
+    );
+    expect(
+      screen.getByLabelText('Kitchen printer (KOT) station', {
+        selector: ':not([data-select-field-native][aria-hidden="true"])',
+      })
+    ).toBeInTheDocument();
     expect(screen.getByLabelText('Bar tickets printer ID')).toBeInTheDocument();
     expect(screen.getByRole('switch', { name: 'Enable receipts' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save print routes' })).toBeEnabled();

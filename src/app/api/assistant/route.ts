@@ -30,6 +30,7 @@ import {
 } from '@/lib/ai/turn-budget';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { supportOperatorIdentity } from '@/lib/tenancy/support-session-rule';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { createActionLedgerContext, recordProposalsTransform } from '@/lib/ai/action-ledger';
@@ -167,6 +168,8 @@ async function respond(req: Request) {
     department: session.user.department,
     status: session.user.status,
     enabledModules: entitlements.enabledModules,
+    supportSession: Boolean(actor.support || session.user.isSupportSession),
+    supportOperator: supportOperatorIdentity({ support: actor.support, session }) ?? undefined,
   };
   // DEV-576 write ledger: approval-gated writes run once, only as proposed.
   const ledger = createActionLedgerContext({ organizationId: organization.id, userId: ctx.userId });

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
@@ -1070,7 +1072,7 @@ export function FloorConsole() {
                   {!editor.item ? (
                     <>
                       <Field label="Target type">
-                        <select
+                        <StudioSelect
                           name="targetType"
                           className={selectClass}
                           value={routingTargetType}
@@ -1083,7 +1085,7 @@ export function FloorConsole() {
                           <option value="product">Product</option>
                           <option value="category">Category</option>
                           <option value="course">Course</option>
-                        </select>
+                        </StudioSelect>
                       </Field>
                       {routingTargetType === 'course' ? (
                         <Field label="Course number">
@@ -1109,7 +1111,7 @@ export function FloorConsole() {
                             placeholder={`Search ${routingTargetType === 'product' ? 'products' : 'categories'}`}
                             className="mb-2 h-11"
                           />
-                          <select
+                          <StudioSelect
                             id="routing-target"
                             name="targetId"
                             required
@@ -1155,7 +1157,7 @@ export function FloorConsole() {
                                   {item.label}
                                 </option>
                               ))}
-                          </select>
+                          </StudioSelect>
                         </div>
                       )}
                     </>

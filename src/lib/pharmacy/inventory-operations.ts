@@ -7,7 +7,23 @@ import {
   postInterbranchTransferEntry,
   postInterbranchTransferReceiptEntry,
 } from './finance-postings';
+import {
+  assertNotHeldForCounter,
+  counterHoldsOn,
+  heldForCounterMessage,
+  releaseCounterQuotasAffectedBy,
+  releaseCounterQuotasForSafety,
+  type CounterQuotaSafetyCause,
+} from './counter-stock-holds';
 import { arrangementFor, PharmacyInventoryError } from './inventory';
+import {
+  planQuarantineRelease,
+  reconcileQuarantineHolds,
+  recordQuarantineHold,
+  recordQuarantineRelease,
+  type QuarantineHoldOrigin,
+  type QuarantineReleaseRights,
+} from './quarantine-holds';
 import type { LedgerScope } from './stock-ledger';
 import { lockStockBalances, lockStockRowsFrom } from './stock-lock-order';
 import { hasKnownExpiryPassed } from './unrecorded-batch';
@@ -57,7 +73,9 @@ export async function setManufacturingBatchState(
     manufacturingBatchId: string;
     state: 'ACTIVE' | 'RECALLED' | 'QUARANTINED';
     reason?: string;
-  }
+  },
+  /** DEV-957: who is acting, for the audit row of any counter quota this releases. */
+  actorId: string | null = null
 ) {
   // Callers run this inside a scoped interactive transaction. The lock is held
   // through commit, closing the READ COMMITTED check/write race with recalls.
@@ -78,7 +96,7 @@ export async function setManufacturingBatchState(
     if (openRecalls) throw new OpenRecallConflictError();
   }
 
-  return db.pharmacyManufacturingBatch.update({
+  const updated = await db.pharmacyManufacturingBatch.update({
     where: { id: batch.id },
     data: {
       state: input.state,
@@ -86,6 +104,16 @@ export async function setManufacturingBatchState(
       stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
     },
   });
+  // DEV-957: a recalled or quarantined batch is off sale everywhere, so no counter may
+  // keep selling it offline. Safety wins: its open quotas go, never the other way round.
+  if (input.state !== 'ACTIVE')
+    await releaseCounterQuotasForSafety(
+      db,
+      { organizationId, actorId },
+      { batchIds: [batch.id] },
+      input.state === 'RECALLED' ? 'RECALL' : 'QUARANTINE'
+    );
+  return updated;
 }
 
 function assertPositive(units: number) {
@@ -96,21 +124,24 @@ function assertPositive(units: number) {
 async function manualQuarantineBalance(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { inventoryLotId: string; stockLocationId: string; units: number }
+  input: { inventoryLotId: string; stockLocationId: string; units: number },
+  /** The caller already took both locks below, in this order, in this transaction. */
+  balancesLocked = false
 ) {
   // Lock before reading the reserve, then read it in a separate statement so a
   // waiter sees the preceding transaction's committed balance and recall action.
   // AVAILABLE comes first (the global balance key order, stock-lock-order.ts),
   // so a release never takes the two projection locks in the opposite order.
-  await lockStockBalances(
-    db,
-    scope,
-    (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
-      inventoryLotId: input.inventoryLotId,
-      stockLocationId: input.stockLocationId,
-      disposition,
-    }))
-  );
+  if (!balancesLocked)
+    await lockStockBalances(
+      db,
+      scope,
+      (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({
+        inventoryLotId: input.inventoryLotId,
+        stockLocationId: input.stockLocationId,
+        disposition,
+      }))
+    );
   const [balance, recallActions] = await Promise.all([
     db.pharmacyStockBalance.findFirst({
       where: {
@@ -168,11 +199,17 @@ async function removalArrangement(
   stockLocationId: string,
   units: number,
   unitsPerPack: number,
-  disposition: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' = 'AVAILABLE'
+  disposition: 'AVAILABLE' | 'QUARANTINE' | 'DAMAGED' = 'AVAILABLE',
+  balancesLocked = false
 ) {
   const balance =
     disposition === 'QUARANTINE'
-      ? await manualQuarantineBalance(db, scope, { inventoryLotId, stockLocationId, units })
+      ? await manualQuarantineBalance(
+          db,
+          scope,
+          { inventoryLotId, stockLocationId, units },
+          balancesLocked
+        )
       : await db.pharmacyStockBalance.findFirst({
           where: {
             organizationId: scope.organizationId,
@@ -484,6 +521,27 @@ export async function approveCount(
   for (const [index, line] of count.lines.entries()) {
     const variance = line.varianceUnits ?? 0;
     if (!variance) continue;
+    if (variance < 0) {
+      const holds = await counterHoldsOn(db, scope, line);
+      if (holds.length) {
+        const balance = await db.pharmacyStockBalance.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId: line.inventoryLotId,
+            stockLocationId: line.stockLocationId,
+            disposition: 'AVAILABLE',
+          },
+          select: { onHandUnits: true },
+        });
+        const freeUnits = balance?.onHandUnits ?? 0;
+        if (freeUnits + variance < holds.reduce((sum, hold) => sum + hold.heldUnits, 0))
+          throw new PharmacyInventoryError(
+            'HELD_FOR_COUNTER',
+            heldForCounterMessage({ holds, freeUnits, action: 'removed by this count' })
+          );
+      }
+    }
     await db.pharmacyStockMovement.create({
       data: {
         organizationId: scope.organizationId,
@@ -591,6 +649,42 @@ export async function writeOff(
     lot.unitsPerPack,
     input.disposition
   );
+  // DEV-957: units set aside for an offline counter. Writing off good stock is an
+  // ordinary removal and leaves them alone; writing off recalled, quarantined or expired
+  // stock is a safety removal, never refused, and it releases the counters' quotas.
+  let safetyCause: CounterQuotaSafetyCause | null = null;
+  if ((input.disposition ?? 'AVAILABLE') === 'AVAILABLE') {
+    const batch = await db.pharmacyManufacturingBatch.findFirst({
+      where: { id: lot.manufacturingBatchId, organizationId: scope.organizationId },
+      select: { state: true, expiresAt: true },
+    });
+    safetyCause =
+      batch?.state === 'RECALLED'
+        ? 'RECALL'
+        : batch?.state === 'QUARANTINED'
+          ? 'QUARANTINE'
+          : batch && hasKnownExpiryPassed(batch.expiresAt, new Date())
+            ? 'EXPIRY'
+            : null;
+    if (!safetyCause) {
+      const balance = await db.pharmacyStockBalance.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          inventoryLotId: input.inventoryLotId,
+          stockLocationId: input.stockLocationId,
+          disposition: 'AVAILABLE',
+        },
+        select: { onHandUnits: true },
+      });
+      await assertNotHeldForCounter(
+        db,
+        scope,
+        { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+        { freeUnits: balance?.onHandUnits ?? 0, units: input.units, action: 'written off' }
+      );
+    }
+  }
   const movement = await db.pharmacyStockMovement.create({
     data: {
       organizationId: scope.organizationId,
@@ -618,6 +712,22 @@ export async function writeOff(
       evidenceRef: input.evidenceRef,
     },
   });
+  if (safetyCause)
+    await releaseCounterQuotasAffectedBy(
+      db,
+      scope,
+      { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+      safetyCause
+    );
+  // DEV-1052: destroyed units leave their hold. Inventory holds go first, so a write-off
+  // never turns what is left of a safety hold into stock the inventory permission releases.
+  if (input.disposition === 'QUARANTINE')
+    await reconcileQuarantineHolds(
+      db,
+      scope,
+      { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+      { movementId: movement.id, reason: input.reason }
+    );
   return { movement, custody };
 }
 
@@ -631,6 +741,14 @@ export async function quarantinePart(
     damaged?: boolean;
     reason: string;
     idempotencyKeyPrefix: string;
+    /** DEV-957: why stock leaves sale, for the audit of any counter quota released. */
+    cause?: CounterQuotaSafetyCause;
+    /**
+     * DEV-1052: who owns the hold. Omitted, it is a SAFETY hold placed by hand, which only
+     * the safety permission releases. A stock workflow names itself and holds for INVENTORY.
+     * RECALL records nothing: the caller's `PharmacyRecallQuarantineAction` owns those units.
+     */
+    hold?: Exclude<QuarantineHoldOrigin, 'MANUAL'> | 'RECALL';
   }
 ) {
   assertPositive(input.units);
@@ -690,10 +808,37 @@ export async function quarantinePart(
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
     },
   });
+  // DEV-957: a quarantine is a safety move and is never refused because a counter holds
+  // units. When it took units a counter held, that counter's quota here is released.
+  await releaseCounterQuotasAffectedBy(
+    db,
+    scope,
+    { inventoryLotId: input.inventoryLotId, stockLocationId: input.stockLocationId },
+    input.cause ?? 'QUARANTINE'
+  );
+  // DEV-1052: record who placed the hold and under which authority. Damaged units are never
+  // released back to sale, so they carry no hold.
+  if (!input.damaged && input.hold !== 'RECALL')
+    await recordQuarantineHold(db, scope, {
+      inventoryLotId: input.inventoryLotId,
+      stockLocationId: input.stockLocationId,
+      units: input.units,
+      authority: input.hold ? 'INVENTORY' : 'SAFETY',
+      origin: input.hold ?? 'MANUAL',
+      movementId: held.id,
+      reason: input.reason,
+    });
   return { removed, held };
 }
 
-/** Return manually held stock to saleable inventory after it has been cleared. */
+/**
+ * Return manually held stock to saleable inventory after it has been cleared.
+ *
+ * DEV-1052: `rights` are the releasing person's live permissions, read by the caller inside
+ * this transaction. Each unit is checked against its own hold: a safety hold needs the safety
+ * permission, a workflow's inventory hold needs the inventory permission, and a release that
+ * asks for more than the person may release moves nothing.
+ */
 export async function releaseQuarantinedPart(
   db: ScopedDb,
   scope: LedgerScope,
@@ -703,9 +848,11 @@ export async function releaseQuarantinedPart(
     units: number;
     reason: string;
     idempotencyKeyPrefix: string;
+    rights: QuarantineReleaseRights;
   }
 ) {
   assertPositive(input.units);
+  if (!input.reason.trim()) throw new PharmacyInventoryError('INVALID_STATE');
   const lot = await db.pharmacyInventoryLot.findFirst({
     where: {
       id: input.inventoryLotId,
@@ -714,6 +861,46 @@ export async function releaseQuarantinedPart(
     },
   });
   if (!lot) throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
+  const position = {
+    inventoryLotId: input.inventoryLotId,
+    stockLocationId: input.stockLocationId,
+  };
+  // Both balances this release writes, in the global key order, before the replay check:
+  // a concurrent duplicate waits here and then finds the first request's movements.
+  await lockStockBalances(
+    db,
+    scope,
+    (['AVAILABLE', 'QUARANTINE'] as const).map((disposition) => ({ ...position, disposition }))
+  );
+  const outKey = `${input.idempotencyKeyPrefix}:out`;
+  const inKey = `${input.idempotencyKeyPrefix}:in`;
+  const legs = await db.pharmacyStockMovement.findMany({
+    where: { organizationId: scope.organizationId, idempotencyKey: { in: [outKey, inKey] } },
+  });
+  if (legs.length) {
+    // A replay returns the release that already happened and moves nothing. Anything else
+    // under the same key is a different request.
+    const removed = legs.find((leg) => leg.idempotencyKey === outKey);
+    const released = legs.find((leg) => leg.idempotencyKey === inKey);
+    if (
+      !removed ||
+      !released ||
+      [removed, released].some(
+        (leg) =>
+          leg.branchId !== scope.branchId ||
+          leg.inventoryLotId !== input.inventoryLotId ||
+          leg.stockLocationId !== input.stockLocationId ||
+          leg.actorId !== scope.actorId ||
+          leg.kind !== 'ADJUSTMENT'
+      ) ||
+      removed.disposition !== 'QUARANTINE' ||
+      released.disposition !== 'AVAILABLE' ||
+      removed.quantityUnits !== -input.units ||
+      released.quantityUnits !== input.units
+    )
+      throw new PharmacyInventoryError('IDEMPOTENCY_CONFLICT');
+    return { removed, released };
+  }
   const a = await removalArrangement(
     db,
     scope,
@@ -721,7 +908,13 @@ export async function releaseQuarantinedPart(
     input.stockLocationId,
     input.units,
     lot.unitsPerPack,
-    'QUARANTINE'
+    'QUARANTINE',
+    true
+  );
+  const plan = planQuarantineRelease(
+    await reconcileQuarantineHolds(db, scope, position),
+    input.units,
+    input.rights
   );
   const common = {
     organizationId: scope.organizationId,
@@ -751,6 +944,12 @@ export async function releaseQuarantinedPart(
       looseUnitDelta: a.looseUnits,
       idempotencyKey: `${input.idempotencyKeyPrefix}:in`,
     },
+  });
+  await recordQuarantineRelease(db, scope, {
+    ...position,
+    plan,
+    movementId: removed.id,
+    reason: input.reason,
   });
   return { removed, released };
 }
@@ -928,6 +1127,13 @@ export async function dispatchTransfer(
     // DEV-853: an unrecorded expiry is never treated as expired.
     if (balance.state !== 'ACTIVE' || hasKnownExpiryPassed(balance.expiresAt, new Date()))
       throw new PharmacyInventoryError('BLOCKED_STOCK');
+    // DEV-957: units set aside for an offline counter do not leave the branch.
+    await assertNotHeldForCounter(
+      db,
+      scope,
+      { inventoryLotId: line.sourceLotId, stockLocationId: line.sourceStockLocationId },
+      { freeUnits: Number(balance.onHandUnits), units: line.quantityUnits, action: 'dispatched' }
+    );
     const a = arrangementFor(line.quantityUnits, balance.unitsPerPack);
     const common = {
       organizationId: scope.organizationId,
@@ -1093,6 +1299,13 @@ export async function createRecall(
     data: { state: 'RECALLED', stateReason: input.reason, stateChangedAt: new Date() },
   });
   if (!result.count) throw new PharmacyInventoryError('NOT_FOUND');
+  // DEV-957: no counter may keep selling a recalled batch offline; its quotas go now.
+  await releaseCounterQuotasForSafety(
+    db,
+    scope,
+    { batchIds: lockedBatches.map((batch) => batch.id) },
+    'RECALL'
+  );
   return db.pharmacyRecallNotice.create({
     data: {
       organizationId: scope.organizationId,
@@ -1337,6 +1550,17 @@ export async function reserveSupplierClaim(
   });
   if (onHand - (already._sum.reservedUnits ?? 0) < input.reservedUnits)
     throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  // DEV-957: units set aside for an offline counter are not claimed for the supplier.
+  await assertNotHeldForCounter(
+    db,
+    scope,
+    { inventoryLotId: input.inventoryLotId },
+    {
+      freeUnits: onHand - (already._sum.reservedUnits ?? 0),
+      units: input.reservedUnits,
+      action: 'reserved for the supplier',
+    }
+  );
   return db.pharmacySupplierClaim.create({
     data: {
       organizationId: scope.organizationId,

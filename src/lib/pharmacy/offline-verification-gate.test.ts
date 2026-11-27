@@ -76,7 +76,8 @@ async function readyCounter(
       await counter.installSnapshot({
         envelope,
         signature: 'valid',
-        payload: { kind },
+        // Offline cash selling forced ON in the signed RULES (it is off in the product).
+        payload: kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind },
         payloadHash: HASH,
         nowMs: Date.now(),
       })
@@ -149,16 +150,22 @@ describe('PH-OFF OFF-05 — offline verification gate', () => {
     const backing = createMemoryDriver();
     await readyCounter(backing);
     let failNextWrite = true;
+    function requirePower() {
+      if (failNextWrite) {
+        failNextWrite = false;
+        throw new Error('power lost during atomic write');
+      }
+    }
     const interrupted: TerminalStorageDriver = {
       read: (key) => backing.read(key),
-      write: (key, value) => {
-        if (failNextWrite) {
-          failNextWrite = false;
-          return Promise.reject(new Error('power lost during atomic write'));
-        }
+      write: async (key, value) => {
+        requirePower();
         return backing.write(key, value);
       },
-      writeIfRevision: (key, value, expected) => backing.writeIfRevision(key, value, expected),
+      writeIfRevision: async (key, value, expected) => {
+        requirePower();
+        return backing.writeIfRevision(key, value, expected);
+      },
       remove: (key) => backing.remove(key),
       close: () => backing.close(),
     };

@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useState, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -702,7 +704,12 @@ function EditMemberForm({
   onClose: () => void;
 }) {
   const utils = trpc.useUtils();
-  const copy = inviteCopyForVertical(useEntitlements().vertical);
+  const vertical = useEntitlements().vertical;
+  const copy = inviteCopyForVertical(vertical);
+  // DEV-959B: a pharmacy role or status change that touches a weighty sub-role needs the
+  // owner's own PIN, checked on the server by the shared verifier.
+  const [pin, setPin] = useState('');
+  const pinInput = vertical === 'PHARMACY' && pin ? { pin } : {};
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
   const [editName, setEditName] = useState(member.name);
   const [editTitle, setEditTitle] = useState(member.title);
@@ -754,7 +761,7 @@ function EditMemberForm({
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Department</label>
-            <select
+            <StudioSelect
               value={editDept}
               onChange={(e) => setEditDept(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -764,7 +771,7 @@ function EditMemberForm({
                   {d.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Role</label>
@@ -795,12 +802,13 @@ function EditMemberForm({
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Status</label>
-            <select
+            <StudioSelect
               defaultValue={member.status}
               onChange={(e) =>
                 updateMember.mutate({
                   id: memberId,
                   status: e.target.value as 'ACTIVE' | 'INACTIVE' | 'ON_LEAVE',
+                  ...pinInput,
                 })
               }
               className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -808,7 +816,7 @@ function EditMemberForm({
               <option value="ACTIVE">Active</option>
               <option value="ON_LEAVE">On Leave</option>
               <option value="INACTIVE">Inactive</option>
-            </select>
+            </StudioSelect>
           </div>
         </div>
         <div>
@@ -859,6 +867,36 @@ function EditMemberForm({
             </div>
           )}
         </div>
+        {vertical === 'PHARMACY' ? (
+          <div>
+            <label
+              htmlFor="edit-member-access-pin"
+              className="block text-xs font-medium text-foreground mb-1"
+            >
+              Your PIN
+            </label>
+            <input
+              id="edit-member-access-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              value={pin}
+              onChange={(event) => setPin(event.target.value)}
+              aria-describedby="edit-member-access-pin-help"
+              className="w-40 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+            />
+            <p id="edit-member-access-pin-help" className="mt-1 text-xs text-text-muted">
+              Needed when the change gives or takes away a sub-role that carries extra weight. Only
+              the owner can make that change.
+            </p>
+          </div>
+        ) : null}
+        {updateMember.error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {updateMember.error.message}
+          </p>
+        ) : null}
         <div className="flex justify-end gap-2">
           <button
             onClick={onClose}
@@ -877,6 +915,7 @@ function EditMemberForm({
                 phone: editPhone || null,
                 bio: editBio || null,
                 skills: editSkills,
+                ...pinInput,
               })
             }
             disabled={updateMember.isPending}

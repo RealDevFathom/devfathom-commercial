@@ -732,7 +732,10 @@ it('separates strength, form and stock into labeled lines below the medicine ide
   expect(within(result).getByText('Stock:').parentElement).toHaveTextContent('240 tabs');
 });
 
-it('DEV-852: shows a missing strength in plain words, not as an error', () => {
+// DEV-977 phase 3 (owner, 21 Nov 2026: "Why is the strength showing unavailable? If we are not
+// using it why is it showing at all?"): imported medicines carry the strength in their name, so
+// a missing strength shows nothing at all on the counter, not "Strength not recorded".
+it('DEV-852, DEV-977: shows nothing for a missing strength, and never an error', () => {
   render(
     <CounterSearchResults
       rows={[{ ...row, brandName: 'Panadol', strength: null }]}
@@ -745,8 +748,101 @@ it('DEV-852: shows a missing strength in plain words, not as an error', () => {
     />
   );
   const result = screen.getByRole('button', { name: /Panadol.*Paracetamol/ });
-  expect(within(result).getByText('Strength not recorded')).toBeInTheDocument();
+  expect(within(result).queryByText(/Strength not recorded/)).not.toBeInTheDocument();
   expect(within(result).queryByText('Strength:')).not.toBeInTheDocument();
+  // No empty placeholder is left in its place: Form leads the details, as laid out before.
+  const form = within(result).getByText('Form:').parentElement!;
+  expect(form).toHaveTextContent('Tablet');
+  expect(form.previousElementSibling).toBeNull();
   expect(within(result).queryByText(/Unavailable/)).not.toBeInTheDocument();
   expect(within(result).queryByRole('alert')).not.toBeInTheDocument();
+});
+
+describe('DEV-977 chosen result mark', () => {
+  it('marks the chosen result with a start border as well as a tint', () => {
+    render(
+      <CounterSearchResults
+        rows={[row, { ...row, medicineId: 'med-other', presentationId: 'presentation-other' }]}
+        state="ready"
+        query="para"
+        activeMedicineId={row.medicineId}
+        onSelect={vi.fn()}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const [chosen, other] = within(
+      screen.getByRole('list', { name: 'Search results' })
+    ).getAllByRole('button');
+    expect(chosen).toHaveAttribute('aria-pressed', 'true');
+    expect(chosen).toHaveClass('border-s-[3px]', 'border-s-accent-brand', 'bg-surface-sunken');
+    expect(other).toHaveAttribute('aria-pressed', 'false');
+    expect(other).toHaveClass('border-s-[3px]', 'border-s-transparent');
+  });
+});
+
+describe('DEV-977B (Counter v2, A6 and B6) results', () => {
+  it('adds a pressed result when the counter adds in one step, and keeps alternatives staging', () => {
+    const onSelect = vi.fn();
+    const onAdd = vi.fn();
+    const alternative: CounterSearchRow = { ...row, medicineId: 'med-alt', displayName: 'Alt' };
+    render(
+      <CounterSearchResults
+        rows={[
+          {
+            ...row,
+            onHandUnits: 0,
+            stockAlternatives: {
+              ingredientRecorded: true,
+              exact: [alternative],
+              other: [],
+              truncated: false,
+            },
+          },
+        ]}
+        state="ready"
+        query="para"
+        activeMedicineId={null}
+        onSelect={onSelect}
+        onAdd={onAdd}
+        onCaptureDemand={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    const [result] = screen.getAllByRole('button', { name: /Paracetamol/ });
+    // A result row is at least 64px tall, as drawn.
+    expect(result).toHaveClass('min-h-16', 'py-3');
+    fireEvent.click(result!);
+    expect(onAdd).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ medicineId: 'med-1' }));
+    expect(onSelect).not.toHaveBeenCalled();
+    // The line form stays one press away, beside the result.
+    const [options] = screen.getAllByRole('button', { name: /^Quantity or batch first: / });
+    fireEvent.click(options!);
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ medicineId: 'med-1' })
+    );
+    onSelect.mockClear();
+    const alternatives = screen.getByRole('list', { name: 'Same ingredient, strength and form' });
+    fireEvent.click(within(alternatives).getByRole('button'));
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(alternative);
+  });
+
+  it('says a slow search is still running, and keeps the plain loading line otherwise', () => {
+    const props = {
+      rows: [],
+      state: 'loading' as const,
+      query: 'para',
+      activeMedicineId: null,
+      onSelect: vi.fn(),
+      onCaptureDemand: vi.fn(),
+      onRetry: vi.fn(),
+    };
+    const { rerender } = render(<CounterSearchResults {...props} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Searching the catalog…');
+    rerender(<CounterSearchResults {...props} slow />);
+    expect(screen.getByRole('status')).toHaveTextContent(
+      'Still searching… Scanning the barcode is faster.'
+    );
+    expect(screen.getByRole('status').parentElement).toHaveAttribute('aria-busy', 'true');
+  });
 });

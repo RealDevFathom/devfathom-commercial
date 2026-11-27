@@ -1,4 +1,5 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { reversedTenderRefundIds } from './card-terminal/provider-refunds';
+import { createHash, createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { PREPAID_PROVIDER } from './prepaid-tiers';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -6,7 +7,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { legacyStripOption, packLevelCanonicalUnits } from './counter-pricing';
 import { mrpRoundingIncrementForLot, priceFromLot } from './medicine';
 import { COUNTER_DISCOUNT_NOTICES } from './counter-messages';
-import { billShareHeldByTier } from './bill-discount';
+import {
+  BillDiscountRefused,
+  billShareHeldByTier,
+  planBillDiscount,
+  type BillDiscountRequest,
+} from './bill-discount';
 import {
   lineDiscountRoomMinor,
   maxDiscountMinorFor,
@@ -20,6 +26,7 @@ import {
   notifyCapture,
   resolveVisit,
   serverUnitPriceMinor,
+  MAX_COUNTER_DEMAND_QUANTITY,
 } from './lost-sales';
 import type { LostSaleOutcome } from './lost-sales';
 import {
@@ -47,7 +54,12 @@ import { assertStoredPharmacyMayOperate } from './regulatory';
 import { isRefillCycleCampaignKey } from './refill-subscription-rules';
 import { assertVoucherEligibleLine, VoucherScopeError } from './voucher-scope';
 import { assertVoucherIssuerRights, VoucherIssuerRevoked } from './voucher-controls';
-import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import {
+  allocateForSale,
+  allocateReservedForSale,
+  lockMedicineBalances,
+  reverseMovements,
+} from './stock-ledger';
 import {
   claimSoldPackSerial,
   PharmacySerializedPackError,
@@ -58,6 +70,7 @@ import {
   type ResolvedSerializedPack,
 } from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
+import { recordQuarantineHold } from './quarantine-holds';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
 import { anyCardTerminalTender } from './card-terminal/open-attempts';
@@ -240,6 +253,23 @@ export class PharmacySaleError extends Error {
       | 'BILL_DISCOUNT_LOCKED_BY_PAYMENT'
       // DEV-966: the prepaid tier priced on top of the bill share, so the bill is fixed.
       | 'BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER'
+      // DEV-977B: a line is changed or taken off only before any payment on the bill.
+      | 'LINE_LOCKED_BY_PAYMENT'
+      // DEV-977B: a line with dispensing records (controlled register, prescription, pharmacist
+      // review, emergency supply, substitution, a scanned serialized pack) stays as recorded.
+      | 'LINE_HAS_DISPENSING_RECORD'
+      // DEV-977B: a line whose price was approved for its quantity (manual discount, voucher,
+      // batch override) is changed by taking it off and adding it again with its approval.
+      | 'PACK_CHECK_REQUIRED'
+      | 'LINE_CHANGE_NEEDS_READD'
+      // DEV-977B: a customer order's or refill's bill holds the lines that order reserved and
+      // packed; it is settled through its own flow, never changed line by line at the counter.
+      | 'LINE_ON_ORDER_BILL'
+      // DEV-977B: a sale an offline counter sealed and the server replayed is a closed record.
+      | 'LINE_ON_OFFLINE_SALE'
+      // DEV-977B: a bill started in a cash shift that has since closed; a closed shift never
+      // changes, so neither do the lines it rang up.
+      | 'LINE_ON_CLOSED_SHIFT'
   ) {
     super(reason);
   }
@@ -701,7 +731,8 @@ export async function saleHasPaymentActivity(db: ScopedDb, scope: LedgerScope, s
 async function clearBillDiscountForNewLine(
   db: ScopedDb,
   scope: LedgerScope,
-  sale: Awaited<ReturnType<typeof saleInScope>>
+  sale: Awaited<ReturnType<typeof saleInScope>>,
+  cause: 'LINE_ADDED' | 'LINE_CHANGED' | 'LINE_REMOVED' = 'LINE_ADDED'
 ) {
   if (await saleHasPaymentActivity(db, scope, sale.id))
     throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PAYMENT');
@@ -726,7 +757,7 @@ async function clearBillDiscountForNewLine(
     });
   const clearedMinor = shared.reduce((sum, row) => sum + row.billDiscountMinor, 0);
   await event(db, scope, sale.id, 'BILL_DISCOUNT', 'CLEARED', {
-    cause: 'LINE_ADDED',
+    cause,
     totalMinor: 0,
     previousTotalMinor: clearedMinor,
     lines: shared.map((row) => ({ saleLineId: row.id, discountMinor: row.billDiscountMinor })),
@@ -740,7 +771,12 @@ async function addSaleLineWithAllocation(
   input: AddSaleLineInput,
   reservation?: ReservedSaleAllocation,
   applyCounterPromotions = false,
-  saleUnitAt?: Date
+  saleUnitAt?: Date,
+  /**
+   * DEV-977B: a changed line keeps its place on the bill (and the receipt), which is ordered by
+   * when each line was first rung up. The change itself is dated by its own LINE_ADDED event.
+   */
+  placedAt?: Date
 ) {
   // #414: a sale opened while the licence was valid must not keep dispensing after it
   // lapses. Every line path (counter, controlled, offline replay, customer orders)
@@ -996,6 +1032,7 @@ async function addSaleLineWithAllocation(
       promotionId: promotion?.promotion.id,
       promotionName: promotion?.promotion.name,
       idempotencyKey: input.idempotencyKey,
+      ...(placedAt ? { createdAt: placedAt } : {}),
     },
   });
   const allocationDiscountMinors = apportionDiscount(discountMinor, allocationGrossMinors);
@@ -1044,6 +1081,540 @@ async function addSaleLineWithAllocation(
     allocation,
     replayed: false,
     ...(promotionNotice ? { promotionNotice } : {}),
+    ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
+  };
+}
+
+/**
+ * DEV-977B: a counter line is changed (quantity or sale unit) or taken off an open, unpaid
+ * bill. Allocation rows and stock movements are append-only, so a line is never edited or
+ * deleted in place: it is taken off the bill onto its own one-line VOID record, its stock is
+ * reversed, and (for a change) a new line is added through `addSaleLineWithAllocation` with
+ * every rule of adding a line: licence and pharmacist-presence gates, the sale-unit check,
+ * FEFO allocation and stock sufficiency, pricing, automatic promotions, discount limits.
+ * Every reader of the bill (totals, payment, receipt, returns, reports) then sees only the
+ * lines still on it. The record names the bill and the line, and when goods came off the bill
+ * (a removal, or a change to fewer units) it carries a VOIDED event, so it is in the day's
+ * void evidence like any other void.
+ */
+export type SaleLineChangeRequest = {
+  saleId: string;
+  saleLineId: string;
+  idempotencyKey: string;
+  /** DEV-821: a counter user changes only a bill they created unless a manager or owner. */
+  actorIsManager: boolean;
+  /**
+   * DEV-958B: the counter's cash-shift gate, asked under the bill's row lock. On a branch that
+   * runs shifts it refuses between shifts and for a bill whose shift has closed, exactly as a
+   * payment is refused, and returns the open shift the change happens in (null without shifts),
+   * which the void records so the shift report counts it once.
+   */
+  cashShift: (bill: { createdAt: Date; createdByUserId: string }) => Promise<string | null>;
+};
+
+export type SaleLineNewUnit = {
+  packLevelId: string;
+  saleUnit: 'PACK' | 'STRIP' | 'UNIT';
+  quantity: number;
+  canonicalUnitsPerSaleUnit: number;
+};
+
+type LineChangeCause = 'LINE_CHANGED' | 'LINE_REMOVED';
+
+/** DEV-977B: the line keys a customer order's or refill's checkout gives the lines it adds. */
+const ORDER_LINE_KEY = /^(customer-order|refill-cycle):/;
+
+/** The removal record written for this request key, if a committed attempt already made it. */
+async function lineChangeRecord(db: ScopedDb, scope: LedgerScope, idempotencyKey: string) {
+  // DEV-1004: written with the predicate of the partial index on line-change events (migration
+  // 20261118127000). Under row-level security the index narrows to this organisation and branch,
+  // and the key is checked over the branch's line-change events only, never every sale event.
+  const [record] = await db.$queryRaw<{ saleId: string; payload: Prisma.JsonValue }[]>(Prisma.sql`
+    SELECT "saleId", "payload" FROM "pharmacy_sale_events"
+     WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+       AND "kind" = 'CREATED' AND ("payload"->>'lineChangeKey') = ${idempotencyKey}
+     LIMIT 1`);
+  return record ?? null;
+}
+
+type LineChangePayload = {
+  cause: LineChangeCause;
+  fromSaleId: string;
+  saleLineId: string;
+  lineChangeKey: string;
+  /** DEV-958B: the open cash shift the change happened in, on a branch that runs shifts. */
+  shiftId?: string;
+};
+
+function lineChangePayload(value: Prisma.JsonValue): LineChangePayload | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const { cause, fromSaleId, saleLineId, lineChangeKey } = value as Record<string, unknown>;
+  if (
+    (cause !== 'LINE_CHANGED' && cause !== 'LINE_REMOVED') ||
+    typeof fromSaleId !== 'string' ||
+    typeof saleLineId !== 'string' ||
+    typeof lineChangeKey !== 'string'
+  )
+    return null;
+  return { cause, fromSaleId, saleLineId, lineChangeKey };
+}
+
+/**
+ * Locks the open bill, then reads the line and refuses everything a change may not touch.
+ * Returns the locked bill and the line.
+ */
+async function lockLineForChange(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest,
+  cause: LineChangeCause
+) {
+  const sale = await saleInScope(db, scope, input.saleId);
+  if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
+  // The same row lock adding a line takes: a concurrent payment, add, change or void of this
+  // bill waits here, and whichever loses sees the bill as the winner left it.
+  const locked = await db.pharmacySale.updateMany({
+    where: {
+      id: input.saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+    },
+    data: { status: 'OPEN' },
+  });
+  if (locked.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+  const lockedSale = await saleInScope(db, scope, input.saleId);
+  if (!input.actorIsManager && lockedSale.createdByUserId !== scope.actorId)
+    throw new PharmacySaleError('NOT_BILL_OWNER');
+  const line = lockedSale.lines.find((row) => row.id === input.saleLineId);
+  if (!line) throw new PharmacySaleError('NOT_FOUND');
+  if (cause === 'LINE_CHANGED' && line.packCheckBlocked)
+    throw new PharmacySaleError('PACK_CHECK_REQUIRED');
+  const shiftId = await input.cashShift(lockedSale);
+  if (await saleHasPaymentActivity(db, scope, input.saleId))
+    throw new PharmacySaleError('LINE_LOCKED_BY_PAYMENT');
+  // A customer order's or refill's checkout opens the bill and adds the lines it reserved under
+  // keys only the server sets (customer-ordering.ts, refill-subscriptions.ts). The line keys are
+  // read from the bill itself, so the refusal never depends on who may see the order rows.
+  const saleWhere = { organizationId: scope.organizationId, branchId: scope.branchId };
+  const [order, refillCycle, offlineCommand] = await Promise.all([
+    db.pharmacyCustomerOrder.findFirst({
+      where: { ...saleWhere, counterSaleId: input.saleId },
+      select: { id: true },
+    }),
+    db.pharmacyRefillSubscriptionCycle.findFirst({
+      where: { ...saleWhere, counterSaleId: input.saleId },
+      select: { id: true },
+    }),
+    db.pharmacyOfflineCommand.findFirst({
+      where: { ...saleWhere, serverRef: input.saleId },
+      select: { id: true },
+    }),
+  ]);
+  if (
+    order ||
+    refillCycle ||
+    lockedSale.lines.some((row) => ORDER_LINE_KEY.test(row.idempotencyKey))
+  )
+    throw new PharmacySaleError('LINE_ON_ORDER_BILL');
+  if (offlineCommand) throw new PharmacySaleError('LINE_ON_OFFLINE_SALE');
+  // A prepaid tier priced this line; its evidence is frozen (DEV-966).
+  if (line.tierDiscountMinor > 0)
+    throw new PharmacySaleError('BILL_DISCOUNT_LOCKED_BY_PREPAID_TIER');
+  const where = { organizationId: scope.organizationId, saleLineId: line.id };
+  const [review, followUp, substitution, serial, movements] = await Promise.all([
+    db.pharmacyPharmacistReviewItem.findFirst({ where, select: { id: true } }),
+    db.pharmacyEmergencyRxFollowUp.findFirst({ where, select: { id: true } }),
+    db.pharmacySubstitutionRecord.findFirst({ where, select: { id: true } }),
+    db.pharmacySoldPackSerial.findFirst({ where, select: { id: true } }),
+    db.pharmacyStockMovement.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: (await lineAllocations(db, scope, line.id)).map((row) => row.stockMovementId) },
+      },
+      select: { id: true, allocationOverrideId: true },
+    }),
+  ]);
+  if (
+    line.medicine.controlled ||
+    line.prescriptionLineId !== null ||
+    review ||
+    followUp ||
+    substitution ||
+    serial
+  )
+    throw new PharmacySaleError('LINE_HAS_DISPENSING_RECORD');
+  const overridden = movements.some((movement) => movement.allocationOverrideId !== null);
+  // A changed line is priced again from its new quantity. An approval given for the old
+  // quantity (a manual discount, a voucher, a batch override) does not carry over.
+  if (
+    cause === 'LINE_CHANGED' &&
+    (overridden ||
+      line.voucherId !== null ||
+      (line.discountMinor - line.billDiscountMinor > 0 && line.promotionId === null))
+  )
+    throw new PharmacySaleError('LINE_CHANGE_NEEDS_READD');
+  return { sale: lockedSale, line, shiftId };
+}
+
+async function lineAllocations(db: ScopedDb, scope: LedgerScope, saleLineId: string) {
+  return db.pharmacySaleLineAllocation.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, saleLineId },
+    orderBy: { createdAt: 'asc' },
+    select: { stockMovementId: true },
+  });
+}
+
+/**
+ * Takes the line off the bill onto its own VOID record and gives its stock back. The caller
+ * holds the bill's row lock and has cleared any whole-bill discount.
+ */
+async function takeLineOffBill(
+  db: ScopedDb,
+  scope: LedgerScope,
+  sale: { id: string },
+  line: { id: string; voucherId: string | null; canonicalUnits: number },
+  input: { idempotencyKey: string; cause: LineChangeCause; reason: string; shiftId: string | null }
+) {
+  const record = await db.pharmacySale.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      createdByUserId: scope.actorId,
+      status: 'VOID',
+    },
+  });
+  await db.pharmacySaleLine.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: line.id } },
+    data: { saleId: record.id },
+  });
+  // DEV-819: a voucher use goes back when its line comes off an unpaid bill, as on a void.
+  if (line.voucherId)
+    await db.pharmacyVoucher.updateMany({
+      where: {
+        id: line.voucherId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        usedCount: { gte: 1 },
+      },
+      data: { usedCount: { decrement: 1 } },
+    });
+  const allocations = await lineAllocations(db, scope, line.id);
+  await reverseMovements(db, scope, {
+    movementIds: allocations.map((allocation) => allocation.stockMovementId),
+    reason: input.reason,
+    at: new Date(),
+  });
+  const payload: LineChangePayload = {
+    cause: input.cause,
+    fromSaleId: sale.id,
+    saleLineId: line.id,
+    lineChangeKey: input.idempotencyKey,
+    ...(input.shiftId ? { shiftId: input.shiftId } : {}),
+  };
+  await event(db, scope, record.id, 'CREATED', input.reason, payload);
+  // The line as it now stands (any whole-bill share was cleared before it moved).
+  const moved = await db.pharmacySaleLine.findFirstOrThrow({
+    where: { organizationId: scope.organizationId, id: line.id },
+    select: { grossMinor: true, discountMinor: true },
+  });
+  return { record, netMinor: moved.grossMinor - moved.discountMinor };
+}
+
+/**
+ * The VOIDED event of a line-change record: written when goods came off the bill, with the value
+ * that came off (`voidedMinor`), which the day's void evidence counts (cash-close check), and
+ * (DEV-958B) the open shift it happened in, whose report counts it.
+ */
+async function voidLineChangeRecord(
+  db: ScopedDb,
+  scope: LedgerScope,
+  recordId: string,
+  input: {
+    cause: LineChangeCause;
+    fromSaleId: string;
+    saleLineId: string;
+    voidedMinor: number;
+    reason: string;
+    shiftId: string | null;
+    replacementSaleLineId?: string;
+  }
+) {
+  await event(db, scope, recordId, 'VOIDED', input.reason, {
+    cause: input.cause,
+    fromSaleId: input.fromSaleId,
+    saleLineId: input.saleLineId,
+    voidedMinor: Math.max(0, input.voidedMinor),
+    ...(input.shiftId ? { shiftId: input.shiftId } : {}),
+    ...(input.replacementSaleLineId ? { replacementSaleLineId: input.replacementSaleLineId } : {}),
+  });
+}
+
+/** DEV-977B: takes one line off an open, unpaid counter bill. */
+export async function removeSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest
+) {
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await lineChangeRecord(db, scope, input.idempotencyKey);
+  if (previous) {
+    const payload = lineChangePayload(previous.payload);
+    if (
+      payload?.cause !== 'LINE_REMOVED' ||
+      payload.fromSaleId !== input.saleId ||
+      payload.saleLineId !== input.saleLineId
+    )
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    // Never replay into another branch or bill than the one this request names.
+    await saleInScope(db, scope, input.saleId);
+    return { saleLineId: input.saleLineId, removed: true, replayed: true };
+  }
+  const { sale, line, shiftId } = await lockLineForChange(db, scope, input, 'LINE_REMOVED');
+  const billDiscountClearedMinor = sale.lines.some((row) => row.billDiscountMinor > 0)
+    ? await clearBillDiscountForNewLine(db, scope, sale, 'LINE_REMOVED')
+    : 0;
+  const reason = 'Line removed from the bill at the counter';
+  const taken = await takeLineOffBill(db, scope, sale, line, {
+    idempotencyKey: input.idempotencyKey,
+    cause: 'LINE_REMOVED',
+    reason,
+    shiftId,
+  });
+  await voidLineChangeRecord(db, scope, taken.record.id, {
+    cause: 'LINE_REMOVED',
+    fromSaleId: sale.id,
+    saleLineId: line.id,
+    voidedMinor: taken.netMinor,
+    reason,
+    shiftId,
+  });
+  return {
+    saleLineId: line.id,
+    removed: true,
+    replayed: false,
+    ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
+  };
+}
+
+/** Price an existing line under the same owner limits and batch cost floors as a new line. */
+export async function discountBillLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest & {
+    discount: BillDiscountRequest;
+    approval: { approvedByUserId: string; approvalPolicy: string };
+    confirmApproval: () => Promise<void>;
+  }
+) {
+  const request = { saleLineId: input.saleLineId, discount: input.discount };
+  const eventId =
+    'discount_' +
+    createHash('sha256')
+      .update(
+        canonicalJson([
+          scope.organizationId,
+          scope.branchId,
+          scope.actorId,
+          input.saleId,
+          input.idempotencyKey,
+        ])
+      )
+      .digest('hex');
+  await lockSaleLineKey(db, scope, eventId);
+  const prior = await db.pharmacySaleEvent.findFirst({
+    where: {
+      id: eventId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: input.saleId,
+      kind: 'LINE_DISCOUNT',
+    },
+  });
+  if (prior) {
+    const payload = prior.payload as { request?: unknown; discountMinor?: number };
+    if (
+      canonicalJson(payload.request) !== canonicalJson(request) ||
+      typeof payload.discountMinor !== 'number'
+    )
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { discountMinor: payload.discountMinor };
+  }
+  const { line } = await lockLineForChange(db, scope, input, 'LINE_CHANGED');
+  if (
+    line.billDiscountMinor ||
+    line.promotionId ||
+    line.voucherId ||
+    line.discountKind ||
+    line.tierName
+  )
+    throw new PharmacySaleError('LINE_CHANGE_NEEDS_READD');
+  const allocations = await db.pharmacySaleLineAllocation.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, saleLineId: line.id },
+    include: { lot: { select: { unitCostMinor: true } } },
+    orderBy: { id: 'asc' },
+  });
+  const limits = await readDiscountLimits(db, scope);
+  let plan;
+  try {
+    plan = planBillDiscount([{ ...line, allocations }], input.discount, limits);
+  } catch (e) {
+    if (!(e instanceof BillDiscountRefused)) throw e;
+    if (e.reason === 'DISCOUNT_ABOVE_MAXIMUM')
+      throw new PharmacySaleError('DISCOUNT_ABOVE_MAXIMUM');
+    if (line.medicine.rx || line.medicine.restricted || line.medicine.controlled)
+      throw new PharmacySaleError('REGULATED_DISCOUNT_REFUSED');
+    throw new PharmacySaleError('MARGIN_GUARDRAIL');
+  }
+  const share = plan.shares[0];
+  if (!share || share.discountMinor <= 0) throw new PharmacySaleError('INVALID_QUANTITY');
+  await input.confirmApproval();
+  const approval = input.approval;
+  validateDiscount({
+    regulated: line.medicine.rx || line.medicine.restricted || line.medicine.controlled,
+    discountMinor: share.discountMinor,
+    grossMinor: line.grossMinor,
+    costMinor: allocations.reduce((s, a) => s + a.canonicalUnits * a.lot.unitCostMinor, 0),
+    ...limits,
+    approvedByUserId: approval.approvedByUserId,
+    approvalPolicy: approval.approvalPolicy,
+  });
+  await db.pharmacySaleLine.update({
+    where: { id: line.id },
+    data: {
+      lineAllocationDiscounts: share.allocations,
+      discountMinor: share.discountMinor,
+      discountKind: 'DISCOUNT',
+      approvedByUserId: approval.approvedByUserId,
+      approvalPolicy: approval.approvalPolicy,
+    },
+  });
+  await db.pharmacySaleEvent.create({
+    data: {
+      id: eventId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: input.saleId,
+      actorId: scope.actorId,
+      kind: 'LINE_DISCOUNT',
+      payload: {
+        request,
+        discountMinor: share.discountMinor,
+        allocations: share.allocations,
+        approvedByUserId: approval.approvedByUserId,
+        approvalPolicy: approval.approvalPolicy,
+      },
+    },
+  });
+  return { discountMinor: share.discountMinor };
+}
+
+/**
+ * DEV-977B: changes the quantity or sale unit of one line on an open, unpaid counter bill.
+ * The old line is taken off and a new one added under the request key with every rule of
+ * adding a line, so the bill's money is exactly that of a bill rung up with the new line.
+ */
+export async function changeSaleLine(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: SaleLineChangeRequest & SaleLineNewUnit
+) {
+  if (
+    !Number.isSafeInteger(input.quantity) ||
+    input.quantity <= 0 ||
+    !Number.isSafeInteger(input.canonicalUnitsPerSaleUnit) ||
+    input.canonicalUnitsPerSaleUnit <= 0 ||
+    !Number.isSafeInteger(input.quantity * input.canonicalUnitsPerSaleUnit)
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  await lockSaleLineKey(db, scope, input.idempotencyKey);
+  const previous = await lineChangeRecord(db, scope, input.idempotencyKey);
+  if (previous) {
+    const payload = lineChangePayload(previous.payload);
+    const replacement = await db.pharmacySaleLine.findFirst({
+      where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
+    });
+    if (
+      payload?.cause !== 'LINE_CHANGED' ||
+      payload.fromSaleId !== input.saleId ||
+      payload.saleLineId !== input.saleLineId ||
+      !replacement ||
+      replacement.branchId !== scope.branchId ||
+      replacement.saleId !== input.saleId ||
+      replacement.packLevelId !== input.packLevelId ||
+      replacement.saleUnit !== input.saleUnit ||
+      replacement.quantity !== input.quantity ||
+      replacement.canonicalUnitsPerSaleUnit !== input.canonicalUnitsPerSaleUnit
+    )
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { line: replacement, replacedSaleLineId: input.saleLineId, replayed: true };
+  }
+  // A key that already added a line (an add, not a change) is never reused for a change.
+  const keyTaken = await db.pharmacySaleLine.findFirst({
+    where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
+    select: { id: true },
+  });
+  if (keyTaken) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  const { sale, line, shiftId } = await lockLineForChange(db, scope, input, 'LINE_CHANGED');
+  if (
+    line.packLevelId === input.packLevelId &&
+    line.saleUnit === input.saleUnit &&
+    line.quantity === input.quantity &&
+    line.canonicalUnitsPerSaleUnit === input.canonicalUnitsPerSaleUnit
+  )
+    return { line, replacedSaleLineId: null, replayed: false, unchanged: true };
+  const billDiscountClearedMinor = sale.lines.some((row) => row.billDiscountMinor > 0)
+    ? await clearBillDiscountForNewLine(db, scope, sale, 'LINE_CHANGED')
+    : 0;
+  const newUnits = input.quantity * input.canonicalUnitsPerSaleUnit;
+  // Every balance the reversal writes and the new allocation draws from, locked first in the
+  // global order, so a concurrent sale of the same medicine cannot deadlock with this change.
+  await lockMedicineBalances(db, scope, line.medicineId);
+  const reason = 'Line quantity or unit changed at the counter';
+  const taken = await takeLineOffBill(db, scope, sale, line, {
+    idempotencyKey: input.idempotencyKey,
+    cause: 'LINE_CHANGED',
+    reason,
+    shiftId,
+  });
+  const added = await addSaleLineWithAllocation(
+    db,
+    scope,
+    {
+      saleId: input.saleId,
+      medicineId: line.medicineId,
+      presentationId: line.presentationId,
+      packLevelId: input.packLevelId,
+      saleUnit: input.saleUnit,
+      quantity: input.quantity,
+      canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
+      idempotencyKey: input.idempotencyKey,
+    },
+    undefined,
+    true,
+    undefined,
+    line.createdAt
+  );
+  // Goods came off the bill only when the new line holds fewer units; the void counts the value
+  // that came off, never the whole old line.
+  if (newUnits < line.canonicalUnits)
+    await voidLineChangeRecord(db, scope, taken.record.id, {
+      cause: 'LINE_CHANGED',
+      fromSaleId: sale.id,
+      saleLineId: line.id,
+      voidedMinor: taken.netMinor - (added.line.grossMinor - added.line.discountMinor),
+      reason,
+      shiftId,
+      replacementSaleLineId: added.line.id,
+    });
+  return {
+    line: added.line,
+    replacedSaleLineId: line.id,
+    replayed: false,
+    ...('promotionNotice' in added && added.promotionNotice
+      ? { promotionNotice: added.promotionNotice }
+      : {}),
     ...(billDiscountClearedMinor ? { billDiscountClearedMinor } : {}),
   };
 }
@@ -1135,12 +1706,19 @@ export async function changeSaleStatus(
         type: true,
         provider: true,
         amountMinor: true,
-        refunds: { select: { amountMinor: true } },
+        refunds: { select: { id: true, amountMinor: true } },
       },
     });
+    const reversed = await reversedTenderRefundIds(
+      db,
+      scope,
+      tenders.filter((t) => t.type === 'CARD').flatMap((t) => t.refunds)
+    );
     const unrefunded = (tender: (typeof tenders)[number]) =>
       tender.amountMinor -
-      tender.refunds.reduce((refunded, refund) => refunded + refund.amountMinor, 0);
+      tender.refunds
+        .filter((r) => !reversed.has(r.id))
+        .reduce((refunded, refund) => refunded + refund.amountMinor, 0);
     const unrefundedMinor = tenders.reduce((total, tender) => total + unrefunded(tender), 0);
     // DEV-743: a card-terminal charge cannot be refunded here (it goes back through the
     // provider), so the void names that instead of sending the cashier to a refund that refuses.
@@ -1325,13 +1903,20 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       netMinor: line.grossMinor - line.discountMinor,
     };
   });
+  const reversed = await reversedTenderRefundIds(
+    db,
+    scope,
+    sale.tenders.filter((t) => t.type === 'CARD').flatMap((t) => t.refunds)
+  );
   const tenders = sale.tenders.map((tender) => ({
     id: tender.id,
     type: tender.type,
     // DEV-863: a prepaid wallet tender is restored to the customer's balance, never paid in cash.
     prepaid: tender.provider === PREPAID_PROVIDER,
     amountMinor: tender.amountMinor,
-    refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
+    refundedMinor: tender.refunds
+      .filter((r) => !reversed.has(r.id))
+      .reduce((n, row) => n + row.amountMinor, 0),
     refunds: tender.refunds.map((row) => ({
       id: row.id,
       amountMinor: row.amountMinor,
@@ -1487,6 +2072,13 @@ export async function quoteSaleLineReturn(
   };
 }
 
+const returnGroup = Symbol('verified return group');
+type ReturnGroup = {
+  [returnGroup]: true;
+  header: Prisma.PharmacySaleReturnGetPayload<object>;
+  witness?: ControlledRestorationWitness;
+};
+
 export async function returnSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
@@ -1500,7 +2092,8 @@ export async function returnSaleLine(
     reason: string;
     integrityDecision: string;
     idempotencyKey: string;
-  }
+  },
+  group?: ReturnGroup
 ) {
   // Serialize the operation key across lines, then quantity checks for this sold line.
   await db.$queryRaw(
@@ -1519,8 +2112,12 @@ export async function returnSaleLine(
     },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
+  // A controlled classification added after group preflight requires a fresh inspection.
+  if (group && line.medicine.controlled && !group.witness)
+    throw new PharmacySaleError('INVALID_STATE');
   const witness = line.medicine.controlled
-    ? await controlledSaleRestorationWitness(db, scope, input.controlledWitness)
+    ? (group?.witness ??
+      (await controlledSaleRestorationWitness(db, scope, input.controlledWitness)))
     : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
@@ -1616,15 +2213,17 @@ export async function returnSaleLine(
     if (!location) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
     quarantineLocationId = location.id;
   }
-  const saleReturn = await db.pharmacySaleReturn.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      originalSaleId: line.saleId,
-      actorId: scope.actorId,
-      reason: input.reason,
-    },
-  });
+  const saleReturn =
+    group?.header ??
+    (await db.pharmacySaleReturn.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        originalSaleId: line.saleId,
+        actorId: scope.actorId,
+        reason: input.reason,
+      },
+    }));
   if (!input.lotId) {
     const money = priceReturn(line, input.canonicalUnits);
     const holding = await db.pharmacyUnidentifiedReturnHold.create({
@@ -1758,6 +2357,17 @@ export async function returnSaleLine(
         idempotencyKey: `${input.idempotencyKey}:${allocation.id}`,
       },
     });
+    // DEV-1052: a return set aside for inspection is an inventory hold, placed by this person.
+    if (disposition === 'QUARANTINE')
+      await recordQuarantineHold(db, scope, {
+        inventoryLotId: allocation.inventoryLotId,
+        stockLocationId,
+        units,
+        authority: 'INVENTORY',
+        origin: 'CUSTOMER_RETURN',
+        movementId: movement.id,
+        reason: input.reason,
+      });
     const returnedLine = await db.pharmacySaleReturnLine.create({
       data: {
         organizationId: scope.organizationId,
@@ -1828,6 +2438,112 @@ export async function returnSaleLine(
  * refund exactly what that return is worth in the same transaction. A replayed return
  * reads the same snapshot, so its refund amount (and refund idempotency hash) is stable.
  */
+/** The selected receipt lines share one return header, manager authorization and witnessed inspection. */
+export async function returnSaleLines(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    saleId: string;
+    requestId: string;
+    reason: string;
+    controlledWitness?: ControlledRestorationPin;
+    lines: {
+      saleLineId: string;
+      canonicalUnits: number;
+      lotId?: string;
+      disposition: 'RESTOCK' | 'QUARANTINE';
+      quarantineLocationId?: string;
+      integrityDecision: string;
+    }[];
+    refund?: {
+      originalTenderId: string;
+      deviceId: string;
+      businessDate: Date;
+      amountMinor?: number;
+      manualCashFallback: boolean;
+    };
+  }
+) {
+  const ids = input.lines.map((l) => l.saleLineId);
+  if (ids.length < 2 || ids.length > 100 || new Set(ids).size !== ids.length)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  const [receipt] = await db.$queryRaw<
+    { id: string }[]
+  >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND status='COMPLETED' FOR UPDATE`;
+  if (!receipt) throw new PharmacySaleError('NOT_FOUND');
+  const where = {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    saleId: input.saleId,
+  };
+  const sold = await db.pharmacySaleLine.findMany({
+    where: { ...where, id: { in: ids } },
+    select: { id: true, medicine: { select: { controlled: true } } },
+  });
+  if (sold.length !== ids.length) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  const witness = sold.some((l) => l.medicine.controlled)
+    ? await controlledSaleRestorationWitness(db, scope, input.controlledWitness)
+    : undefined;
+  const id =
+    'multi_' +
+    createHash('sha256')
+      .update(canonicalJson([scope.organizationId, scope.branchId, input.requestId]))
+      .digest('hex');
+  const lines = [...input.lines].sort((a, b) => a.saleLineId.localeCompare(b.saleLineId));
+  const fingerprint = createHash('sha256')
+    .update(
+      canonicalJson({
+        saleId: input.saleId,
+        actorId: scope.actorId,
+        reason: input.reason,
+        lines,
+        refund: input.refund
+          ? { ...input.refund, businessDate: input.refund.businessDate.toISOString() }
+          : null,
+      })
+    )
+    .digest('hex');
+  const prior = await db.pharmacySaleEvent.findFirst({
+    where: { id, ...where, kind: 'RETURNED' },
+    select: { payload: true },
+  });
+  if (prior) {
+    if ((prior.payload as { fingerprint?: string })?.fingerprint !== fingerprint)
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { returnId: id, returnedMinor: await saleReturnValueMinor(db, scope, id) };
+  }
+  const header = await db.pharmacySaleReturn.create({
+    data: {
+      id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      originalSaleId: input.saleId,
+      actorId: scope.actorId,
+      reason: input.reason,
+    },
+  });
+  for (const line of lines) {
+    const returned = await returnSaleLine(
+      db,
+      scope,
+      { ...line, reason: input.reason, idempotencyKey: id + ':' + line.saleLineId },
+      { [returnGroup]: true, header, witness }
+    );
+    if (returned.replayed) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+  }
+  await db.pharmacySaleEvent.create({
+    data: {
+      ...where,
+      id,
+      kind: 'RETURNED',
+      actorId: scope.actorId,
+      reason: input.reason,
+      payload: { returnId: id, fingerprint, saleLineIds: ids },
+    },
+  });
+  return { returnId: id, returnedMinor: await saleReturnValueMinor(db, scope, id) };
+}
+
 export async function saleReturnValueMinor(db: ScopedDb, scope: LedgerScope, returnId: string) {
   const where = { organizationId: scope.organizationId, branchId: scope.branchId, returnId };
   const select = { grossMinor: true, discountMinor: true } as const;
@@ -1845,7 +2561,11 @@ export async function saleReturnValueMinor(db: ScopedDb, scope: LedgerScope, ret
 export async function captureDemand(
   db: ScopedDb,
   scope: LedgerScope,
-  input: {
+  {
+    shareBillDemand,
+    ...input
+  }: {
+    shareBillDemand?: boolean;
     saleId?: string;
     requestedMedicineId?: string;
     requestedText?: string;
@@ -1871,7 +2591,8 @@ export async function captureDemand(
     matchedProductId?: string;
     matchConfidence?: number;
   },
-  now: Date = new Date()
+  now: Date = new Date(),
+  eventId?: string
 ) {
   if (!input.requestedMedicineId && !input.requestedText?.trim())
     throw new PharmacySaleError('INVALID_QUANTITY');
@@ -1883,6 +2604,32 @@ export async function captureDemand(
     notify = notifyCapture(input);
   } catch {
     throw new PharmacySaleError('CONSENT_REQUIRED');
+  }
+  // Check the bill's branch for every linked event. The bill lock serializes shared captures.
+  const [bill] = input.saleId
+    ? await db.$queryRaw<
+        { id: string }[]
+      >`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+    : [];
+  if (input.saleId && !bill) throw new PharmacySaleError('NOT_FOUND');
+  if (shareBillDemand && bill) {
+    const existing = await db.unfulfilledDemandEvent.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: bill.id,
+        status: 'OPEN',
+        requestedMedicineId: input.requestedMedicineId ?? null,
+        ...(!input.requestedMedicineId && {
+          requestedText: { equals: input.requestedText!.trim(), mode: 'insensitive' as const },
+        }),
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    if (existing) {
+      if (existing.saleUnit !== input.saleUnit) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+      return existing;
+    }
   }
   const outcome = input.outcome ?? 'UNKNOWN';
   // DEV-81: visit, price and loss are derived here, never taken from the client.
@@ -1914,6 +2661,7 @@ export async function captureDemand(
     data: {
       ...input,
       ...notify,
+      id: eventId,
       outcome,
       freeText: input.freeText?.trim() || null,
       requestedQty: input.requestedQty ?? input.quantity,
@@ -1933,6 +2681,98 @@ export async function captureDemand(
       createdAt: now,
     },
   });
+}
+
+/** Record the counter request and its optional restock follow-up in one tenant transaction. */
+export async function recordCounterDemand(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    requestId: string;
+    saleId?: string;
+    requestedText: string;
+    requestedMedicineId?: string;
+    quantity: number;
+    reason:
+      'STOCKOUT' | 'NOT_CARRIED' | 'PACK_UNAVAILABLE' | 'PRICE_REJECTED' | 'SUBSTITUTE_DECLINED';
+    followUp?: { customerId: string; channel: 'SMS' | 'WHATSAPP'; reserveOnArrival: boolean };
+  }
+) {
+  if (
+    !Number.isSafeInteger(input.quantity) ||
+    input.quantity < 1 ||
+    input.quantity > MAX_COUNTER_DEMAND_QUANTITY
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  const { requestId, ...request } = input;
+  const digest = (value: unknown) =>
+    createHash('sha256').update(canonicalJson(value)).digest('hex');
+  const id = 'asked_' + digest([scope.organizationId, scope.branchId, scope.actorId, requestId]);
+  const fingerprint = digest(request);
+  await db.$queryRaw(Prisma.sql`SELECT 1 FROM pg_advisory_xact_lock(hashtextextended(${id}, 0))`);
+  const existing = await db.unfulfilledDemandEvent.findFirst({
+    where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { inventoryRuleSnapshot: true },
+  });
+  if (existing) {
+    if ((existing.inventoryRuleSnapshot as { fingerprint?: string })?.fingerprint !== fingerprint)
+      throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    return { id };
+  }
+  const medicine =
+    input.requestedMedicineId &&
+    (await db.medicine.findFirst({
+      where: { id: input.requestedMedicineId, organizationId: scope.organizationId },
+      select: { id: true },
+    }));
+  if (input.requestedMedicineId && !medicine) throw new PharmacySaleError('NOT_FOUND');
+  if (input.followUp && !medicine) throw new PharmacySaleError('INVALID_STATE');
+  const demand = await captureDemand(
+    db,
+    scope,
+    {
+      shareBillDemand: true,
+      saleId: input.saleId,
+      requestedText: input.requestedText,
+      requestedMedicineId: input.requestedMedicineId,
+      saleUnit: 'UNIT',
+      quantity: input.quantity,
+      reason: input.reason,
+      inventoryRuleSnapshot: { source: 'CUSTOMER_REQUEST', fingerprint },
+    },
+    new Date(),
+    id
+  );
+  if (input.followUp) {
+    const { customerId, channel, reserveOnArrival } = input.followUp;
+    const customer = await db.pharmacyCustomer.findFirst({
+      where: { id: customerId, organizationId: scope.organizationId, active: true },
+      select: { patientId: true },
+    });
+    if (!customer) throw new PharmacySaleError('NOT_FOUND');
+    await activateRestockBranch(db, scope);
+    const prior = await db.pharmacyRestockInterest.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        demandEventId: demand.id,
+        patientId: customer.patientId,
+      },
+    });
+    if (prior) {
+      if (prior.channel !== channel || prior.reserveOnArrival !== reserveOnArrival)
+        throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+      return { id: demand.id };
+    }
+    await addRestockInterest(db, scope, {
+      demandEventId: demand.id,
+      quantityUnits: input.quantity,
+      patientId: customer.patientId,
+      channel,
+      reserveOnArrival,
+    });
+  }
+  return { id: demand.id };
 }
 
 export async function recoverDemandWithAlternate(

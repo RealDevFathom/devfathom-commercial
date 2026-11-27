@@ -20,6 +20,8 @@ const mocks = vi.hoisted(() => ({
   branchFindMany: vi.fn(),
   branchFindUnique: vi.fn(),
   userFindFirst: vi.fn(),
+  // DEV-974: live hierarchy reads for a pending-invitation refresh.
+  userFindUnique: vi.fn(),
   userCreate: vi.fn(),
   userUpdate: vi.fn(),
   userCount: vi.fn(),
@@ -77,6 +79,7 @@ function makeClient() {
     restaurantBranch: { findMany: mocks.branchFindMany, findUnique: mocks.branchFindUnique },
     user: {
       findFirst: mocks.userFindFirst,
+      findUnique: mocks.userFindUnique,
       create: mocks.userCreate,
       update: mocks.userUpdate,
       count: mocks.userCount,
@@ -176,6 +179,13 @@ function asBranchManager() {
 beforeEach(() => {
   vi.clearAllMocks();
   transactions.length = 0;
+  // DEV-974: the acting administrator and the pending invitees are ordinary members.
+  mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+    role: where.id === 'user_actor' ? 'ADMIN' : 'EMPLOYEE',
+    status: 'ACTIVE',
+    organizationRole: null,
+    permissionOverrides: [],
+  }));
   mocks.can.mockResolvedValue(true);
   mocks.resolveStaffCapabilities.mockResolvedValue(new Set(['staff:manage']));
   mocks.raw.mockResolvedValue([{ id: 'org_workspace' }]);
@@ -301,6 +311,31 @@ describe('restaurantStaff.invite', () => {
     expect(mocks.userUpdate).not.toHaveBeenCalled();
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
     expect(mocks.staffCreate).not.toHaveBeenCalled();
+  });
+
+  it('DEV-974: refuses an administrator re-sending the pending invitation of another administrator', async () => {
+    mocks.userFindFirst.mockImplementation(
+      async ({ where }: { where: { id?: string; email?: string } }) =>
+        where.email === 'pending@example.com' && !('restaurantStaffProfiles' in where)
+          ? { id: 'user_pending', status: 'INVITED' }
+          : null
+    );
+    mocks.userFindUnique.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      role: 'ADMIN',
+      status: 'ACTIVE',
+      organizationRole: null,
+      permissionOverrides: [],
+      id: where.id,
+    }));
+    await expect(
+      caller().invite({
+        displayName: 'Pending Admin',
+        email: 'pending@example.com',
+        organizationRoleId: 'role_server',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
 
   it('lets an administrator re-send a pending invitation as a staff invite', async () => {

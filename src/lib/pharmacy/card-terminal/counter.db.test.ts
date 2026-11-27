@@ -22,6 +22,7 @@
 import { randomUUID } from 'node:crypto';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { expectNoPersistedPin } from '@/lib/test-support/persisted-pin';
 import {
   retirePharmacyRegulatoryRules,
   seedPharmacyRegulatoryProfile,
@@ -75,7 +76,7 @@ const run = randomUUID().replaceAll('-', '').slice(0, 10);
 const organizationId = `ct_counter_${run}`;
 const branchMain = `ct_branch_main_${run}`;
 const branchClose = `ct_branch_close_${run}`;
-const branchReview = `ct_branch_review_${run}`;
+let reviewSequence = 0;
 const actorId = `ct-cashier-${run}`;
 /** A counter cashier: takes payments, never resolves a review. */
 const cashierId = `ct-counter-cashier-${run}`;
@@ -295,8 +296,9 @@ beforeAll(async () => {
   await assertRlsEnforcingRole(withPlatformDb);
   await withPlatformDb((db) =>
     db.$executeRawUnsafe(
-      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
-       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt", "requireApprovalAuthenticator")
+       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now(), false)`,
       organizationId
     )
   );
@@ -307,7 +309,6 @@ beforeAll(async () => {
   businessDate = new Date(`${workspaceToday(organization.timezone)}T00:00:00.000Z`);
   await setupBranch(branchMain);
   await setupBranch(branchClose);
-  await setupBranch(branchReview);
   // The counter cashier, with counter access on the main branch.
   const { seedDepartments } = await import('@/lib/test-support/departments');
   await tenant(async (db) => {
@@ -326,10 +327,25 @@ beforeAll(async () => {
       data: { userId: actorId, capability: 'pharmacy:counter', effect: 'ALLOW', reason: 'DEV-743' },
     });
     await db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchMain } });
-    await db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchReview } });
     // The owner manages the pharmacy (a cashier never does): the refund rule's grant.
     await db.userPermissionOverride.create({
       data: { userId: actorId, capability: 'pharmacy:manage', effect: 'ALLOW', reason: 'DEV-743' },
+    });
+    await db.userPermissionOverride.create({
+      data: {
+        userId: actorId,
+        capability: 'finance:manage',
+        effect: 'ALLOW',
+        reason: 'Book the terminal review in accounts',
+      },
+    });
+    await db.userPermissionOverride.create({
+      data: {
+        userId: actorId,
+        capability: 'finance:read',
+        effect: 'ALLOW',
+        reason: 'Read terminal refund accounts',
+      },
     });
     // The owner's own approval PIN: this workspace has no second manager (solo owner).
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
@@ -639,8 +655,15 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
   }
 
   it('resolves a review exactly once when two resolutions race, and the day closes after', async () => {
+    // Closing the branch day is permanent, so use a fresh branch for each test run.
+    const branchReview = `ct_branch_review_${run}_${++reviewSequence}`;
+    const slipRef = `RRN-${run}-review-${reviewSequence}`;
+    await setupBranch(branchReview);
+    await tenant((db) =>
+      db.pharmacyBranchAssignment.create({ data: { userId: actorId, branchId: branchReview } })
+    );
     const reviewScope = scopeOf(branchReview);
-    const { saleId, review } = await chargeIntoReview(branchReview, `RRN-${run}-6`);
+    const { saleId, review } = await chargeIntoReview(branchReview, slipRef);
     // The review holds the business day.
     await expect(
       tenant((db) => settlement.cutPharmacyDailyClose(db, reviewScope, { businessDate }))
@@ -653,7 +676,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
           attemptKey: review.attemptKey,
           outcome: 'REVERSED',
           resolutionReason: reason,
-          slipRef: `RRN-${run}-6`,
+          slipRef,
           managerPin,
         })
       );
@@ -677,8 +700,8 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
     expect(attempt).toMatchObject({
       status: 'REVERSED',
       resolvedById: actorId,
-      resolutionRef: `RRN-${run}-6`,
-      providerRef: `RRN-${run}-6`,
+      resolutionRef: slipRef,
+      providerRef: slipRef,
       tenderId: null,
     });
     // Money taken is recorded for a provider refund, never as a tender on the bill.
@@ -703,7 +726,16 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
         branchId: branchReview,
       }),
     });
-    expect(JSON.stringify(resolutions)).not.toContain(managerPin);
+    expectNoPersistedPin(resolutions, managerPin, {
+      organizationId: [organizationId],
+      actorId: [actorId],
+      initiatedById: [actorId],
+      approverId: [actorId],
+      resolvedById: [actorId],
+      attemptKey: [review.attemptKey],
+      providerRef: [slipRef],
+      resolutionRef: [slipRef],
+    });
 
     // The sale may take another payment: a new terminal attempt starts, and is declined.
     const terminal = gatedTerminal();
@@ -1024,7 +1056,7 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
           role: 'EMPLOYEE',
         },
       });
-      for (const capability of ['pharmacy:counter', 'pharmacy:manage'])
+      for (const capability of ['pharmacy:counter', 'pharmacy:manage', 'admin:access'])
         await db.userPermissionOverride.create({
           data: { userId: managerId, capability, effect: 'ALLOW', reason: 'DEV-743' },
         });
@@ -1068,6 +1100,120 @@ describeDatabase('DEV-743 card-terminal counter flow on PostgreSQL', () => {
       )
     ).toEqual([]);
 
+    await expect(
+      withTenantDb(
+        organizationId,
+        (db) =>
+          counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
+            ...resolution,
+            managerPin: secondManagerPin,
+          }),
+        { userId: managerId }
+      )
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(await attemptsFor(saleId)).toEqual([
+      expect.objectContaining({ status: 'MANUAL_REVIEW' }),
+    ]);
+    // Unknown outcomes on a separate day-close branch have no confirmed card charge.
+    const nonPostingBranch = 'ct_non_posting_' + run;
+    await setupBranch(nonPostingBranch);
+    await tenant((db) =>
+      db.pharmacyBranchAssignment.createMany({
+        data: [actorId, managerId].map((userId) => ({ userId, branchId: nonPostingBranch })),
+      })
+    );
+    async function declineUncharged(branchId: string, slipRef: string) {
+      const saleId = await openSale(branchId);
+      const testScope = scopeOf(branchId);
+      const { store } = depsFor(gatedTerminal());
+      const { attempt } = await store.create(testScope, {
+        ...chargeInput(saleId),
+        provider: 'FAKE_TERMINAL',
+      });
+      const sent = await store.transition(testScope, attempt, {
+        status: 'SENT',
+        sentAt: new Date(),
+      });
+      await store.transition(testScope, sent!, {
+        status: 'MANUAL_REVIEW',
+        reviewReason: 'No terminal response',
+      });
+      const read = await withTenantDb(
+        organizationId,
+        (db) =>
+          counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).attempt({
+            branchId,
+            saleId,
+          }),
+        { userId: managerId }
+      );
+      await expect(
+        withTenantDb(
+          organizationId,
+          (db) =>
+            counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
+              branchId,
+              attemptKey: attempt.attemptKey,
+              outcome: 'DECLINED',
+              slipRef,
+              resolutionReason: 'Statement confirms no charge',
+              managerPin: secondManagerPin,
+            }),
+          { userId: managerId }
+        )
+      ).resolves.toMatchObject({ phase: 'DECLINED', open: false });
+      expect(
+        await tenant((db) =>
+          db.pharmacyTerminalRefundEvent.findFirstOrThrow({ where: { attemptId: attempt.id } })
+        )
+      ).toMatchObject({ kind: 'DECLINED', journalId: null, remainingMinor: 0 });
+      return read?.reviewAccess;
+    }
+    expect(await declineUncharged(nonPostingBranch, 'NO-CHARGE-A')).toMatchObject({
+      mayResolve: true,
+      mayPostRefund: false,
+    });
+    await expect(
+      tenant((db) =>
+        settlement.cutPharmacyDailyClose(db, scopeOf(nonPostingBranch), { businessDate })
+      )
+    ).resolves.toMatchObject({ branchId: nonPostingBranch, sequence: 1 });
+    await tenant((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: managerId,
+          capability: 'finance:manage',
+          effect: 'ALLOW',
+          reason: 'Post terminal review obligations',
+        },
+      })
+    );
+    // Manage alone is insufficient for a posting decision.
+    const resolveAsManager = (values: typeof resolution) =>
+      withTenantDb(
+        organizationId,
+        (db) =>
+          counterCaller(db, { id: managerId, role: 'EMPLOYEE' }).resolveReview({
+            ...values,
+            managerPin: secondManagerPin,
+          }),
+        { userId: managerId }
+      );
+    await expect(resolveAsManager(resolution)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await tenant((db) =>
+      db.userPermissionOverride.create({
+        data: {
+          userId: managerId,
+          capability: 'finance:read',
+          effect: 'ALLOW',
+          reason: 'Read refund accounts',
+        },
+      })
+    );
+    expect(await declineUncharged(branchMain, 'NO-CHARGE-B')).toMatchObject({
+      mayResolve: true,
+      mayPostRefund: true,
+    });
     // The other manager resolves it with their own PIN.
     await expect(
       withTenantDb(

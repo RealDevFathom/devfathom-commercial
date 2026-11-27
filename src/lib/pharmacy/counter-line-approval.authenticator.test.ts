@@ -7,6 +7,12 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 vi.mock('@/lib/abac', () => ({ can: vi.fn(), subjectFromSession: (user: unknown) => user }));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'dummy-hash') }));
+const gate = vi.hoisted(() => ({ holders: [] as string[] }));
+vi.mock('@/lib/approval-authenticator-gate', () => ({
+  holdsAnyApprovalRight: vi.fn(async (_db: unknown, input: { userId: string }) =>
+    gate.holders.includes(input.userId)
+  ),
+}));
 vi.mock('@/lib/restaurant/operator-credentials', () => ({
   OPERATOR_CREDENTIAL_BCRYPT_COST: 12,
   verifyOperatorCredential: vi.fn(),
@@ -54,9 +60,12 @@ function fixture(options: {
   holders?: string[];
   others?: Array<typeof manager>;
   enrolled?: string[];
+  /** The owner's "Authenticator for approvals" setting; on by default. */
+  required?: boolean;
 }) {
   const approver = options.approver ?? manager;
   const holders = options.holders ?? [approver.id];
+  gate.holders = holders;
   vi.mocked(can).mockImplementation(async (subject) => holders.includes(subject.id));
   vi.mocked(verifyOperatorCredential).mockImplementation(
     async (_type, secret, credentialHash) => credentialHash === `hash:${secret}`
@@ -67,7 +76,9 @@ function fixture(options: {
     $queryRaw: vi.fn(),
     user: { findFirst: vi.fn().mockResolvedValue(options.actor ?? cashier) },
     organization: {
-      findFirst: vi.fn().mockResolvedValue({ requireApprovalAuthenticator: false }),
+      findFirst: vi.fn().mockResolvedValue({
+        requireApprovalAuthenticator: options.required ?? true,
+      }),
     },
     approvalAuthenticator: {
       findFirst: vi.fn(async ({ where }: { where: { userId: string } }) =>
@@ -227,6 +238,24 @@ describe('DEV-879 manager or owner refunds with an authenticator code', () => {
     });
   });
 
+  it('records the second reviewer approving a correction for another person', async () => {
+    const db = fixture({ enrolled: ['manager'] });
+    await expect(
+      verifyRefundPin(db as never, {
+        ...input,
+        requestedById: 'owner',
+        action: 'pharmacyCardTerminal.recordRefundAction',
+        pin: currentCode(),
+      })
+    ).resolves.toEqual({ verified: true });
+    expect(db.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        actorId: 'manager',
+        metadata: expect.objectContaining({ approvalPurpose: 'APPROVAL', requestedById: 'owner' }),
+      }),
+    });
+  });
+
   it('refuses the enrolled manager’s fixed PIN for a refund and records the strike', async () => {
     const db = fixture({ enrolled: ['manager'] });
     await expect(verifyRefundPin(db as never, { ...input, pin: '1234' })).resolves.toHaveProperty(
@@ -238,11 +267,47 @@ describe('DEV-879 manager or owner refunds with an authenticator code', () => {
     });
   });
 
-  it('keeps accepting the PIN of a manager who has not enrolled', async () => {
+  it('with the setting on, refuses the PIN of a manager who has not enrolled, with a strike', async () => {
     const db = fixture({});
-    await expect(verifyRefundPin(db as never, { ...input, pin: '1234' })).resolves.toEqual({
-      verified: true,
+    await expect(verifyRefundPin(db as never, { ...input, pin: '1234' })).resolves.toHaveProperty(
+      'blocked'
+    );
+    expect(db.restaurantOperatorCredential.update).toHaveBeenCalledWith({
+      where: { id: 'cred' },
+      data: { failedAttempts: 1 },
     });
     expect(db.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('with the setting off, takes the manager’s PIN, enrolled or not, and records the method', async () => {
+    for (const enrolled of [[], ['manager']]) {
+      const db = fixture({ enrolled, required: false });
+      await expect(verifyRefundPin(db as never, { ...input, pin: '1234' })).resolves.toEqual({
+        verified: true,
+      });
+      expect(db.auditLog.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          action: 'pharmacySales.refundTender',
+          actorId: 'manager',
+          metadata: expect.objectContaining({
+            approvalMethod: 'PIN',
+            approvalPurpose: 'OWN_ACTION',
+          }),
+        }),
+      });
+      vi.clearAllMocks();
+    }
+  });
+
+  it('keeps a cashier’s own PIN for their own confirmation while the setting is on', async () => {
+    const db = fixture({ approver: cashier, holders: [] });
+    await expect(
+      verifyRefundPin(db as never, {
+        organizationId: 'org',
+        actorId: 'cashier',
+        pin: '1234',
+        action: 'pharmacy.voucherRedemption',
+      })
+    ).resolves.toEqual({ verified: true });
   });
 });

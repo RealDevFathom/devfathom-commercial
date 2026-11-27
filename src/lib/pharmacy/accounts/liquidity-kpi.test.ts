@@ -20,6 +20,12 @@ function row(accountCode: string, currency: string, closingMinor: string) {
 }
 
 describe('projectLiquidityKpi', () => {
+  it('includes the fixed provider refund liability in cash coverage', () => {
+    expect(
+      projectLiquidityKpi([row('BANK', 'PKR', '800'), row('CARD_REFUNDS_PAYABLE', 'PKR', '-400')])
+        .currencies[0]
+    ).toMatchObject({ denominatorMinor: '400', ratio: '800/400' });
+  });
   it('divides CASH + BANK by credit-positive AP + goods-received accrual with exact strings', () => {
     const kpi = projectLiquidityKpi([
       row('CASH', 'PKR', '15000'),
@@ -37,6 +43,7 @@ describe('projectLiquidityKpi', () => {
         bankMinor: '5000',
         accountsPayableMinor: '6000',
         goodsReceivedAccrualMinor: '2000',
+        providerRefundLiabilityMinor: '0',
         numeratorMinor: '20000',
         denominatorMinor: '8000',
         ratio: '20000/8000',
@@ -181,7 +188,7 @@ describe('liquidityKpiCsv', () => {
     const lines = csv.split('\r\n');
     expect(lines).toHaveLength(3);
     expect(lines[0]).toBe(
-      '"evidence_scope","branch_id","cutoff_exclusive_utc","retrieved_at_utc","recorded_currency","cash_minor","bank_minor","accounts_payable_minor","goods_received_accrual_minor","numerator_minor","denominator_minor","ratio_exact","ratio_truncated_4dp","status","flags"'
+      '"evidence_scope","branch_id","cutoff_exclusive_utc","retrieved_at_utc","recorded_currency","cash_minor","bank_minor","accounts_payable_minor","goods_received_accrual_minor","numerator_minor","denominator_minor","ratio_exact","ratio_truncated_4dp","status","flags","provider_refund_liability_minor"'
     );
     expect(lines[1]).toContain(`"'=HYPERLINK(""x"")  branch"`);
     expect(lines[1]).toContain('"PKR"');

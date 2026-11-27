@@ -361,6 +361,7 @@ beforeAll(async () => {
     inventoryRouter.restaurantInventoryRouter.createCaller({
       db: scopedDb.createTenantDb(orgId),
       entitlements: {
+        organizationId: orgId,
         enabledModules: ['restaurant-pos'],
         activeSeats: 1,
         seatLimit: 50,
@@ -379,6 +380,7 @@ beforeAll(async () => {
     purchasingRouter.restaurantPurchasingRouter.createCaller({
       db: scopedDb.createTenantDb(orgId),
       entitlements: {
+        organizationId: orgId,
         enabledModules: ['restaurant-pos'],
         activeSeats: 1,
         seatLimit: 50,
@@ -396,6 +398,7 @@ beforeAll(async () => {
   const context = {
     db: scopedDb.createTenantDb(orgId),
     entitlements: {
+      organizationId: orgId,
       enabledModules: ['restaurant-pos'],
       activeSeats: 1,
       seatLimit: 50,

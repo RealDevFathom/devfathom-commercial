@@ -27,7 +27,14 @@ const ALLOWED: Record<CardTerminalAttemptStatus, readonly CardTerminalAttemptSta
   REVERSED: [],
 };
 
-const EVIDENCE = ['providerRef', 'approvalCode', 'cardBrand', 'cardLast4', 'sentAt'] as const;
+const EVIDENCE = [
+  'providerRef',
+  'approvedAmountMinor',
+  'approvalCode',
+  'cardBrand',
+  'cardLast4',
+  'sentAt',
+] as const;
 const RESOLUTION = ['resolvedById', 'resolutionReason', 'resolutionRef'] as const;
 
 export type InMemoryAttemptStore = CardTerminalAttemptStore & {
@@ -92,6 +99,7 @@ export function createInMemoryAttemptStore(
         ...draft,
         status: 'CREATED',
         providerRef: null,
+        approvedAmountMinor: null,
         approvalCode: null,
         cardBrand: null,
         cardLast4: null,

@@ -11,6 +11,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { OfflineSnapshotEnvelope } from '@/lib/pharmacy/offline-snapshot-envelope';
+import { offlineSaleChain } from '@/lib/test-support/offline-sale-seal';
 
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
@@ -20,6 +21,12 @@ const mocks = vi.hoisted(() => ({
   addSaleLine: vi.fn(),
   openDeviceLotQuota: vi.fn(),
   consumeDeviceLotQuota: vi.fn(),
+}));
+
+// Exercise booking with the live switch on. The live-off case has a separate DB test.
+vi.mock('@/lib/pharmacy/offline-cash-selling', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/offline-cash-selling')>()),
+  readOfflineCashSelling: async () => ({ enabled: true, available: true }),
 }));
 
 vi.mock('@/lib/pharmacy/sales', async (importOriginal) => ({
@@ -84,9 +91,20 @@ function envelope(
 }
 
 /** A ten-tablet pack sold as one PACK; `multiplier` is what the device claims it holds. */
+
+/**
+ * DEV-957 phase 2 (hardening 4): the counter seals each sale when it is taken; the route
+ * checks that seal. This counter's first sale names no sale before it.
+ */
 function command(multiplier: number) {
+  return router.counterReplaySchema.parse(offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealedCommand(multiplier), {
+    previousHash: null,
+  }));
+}
+
+function unsealedCommand(multiplier: number) {
   const receiptEnvelope = envelope('RULES', { kind: 'RULES' });
-  return router.counterReplaySchema.parse({
+  return {
     sequence: 1,
     idempotencyKey: 'idem_1',
     action: 'CASH_OTC_SALE',
@@ -98,7 +116,8 @@ function command(multiplier: number) {
       signature: signing.signSnapshotEnvelope(receiptEnvelope),
     },
     snapshots: KINDS.map((kind) => {
-      const payload = { kind };
+      // Offline cash selling forced ON in the signed RULES (it is off in the product).
+      const payload = kind === 'RULES' ? { kind, offlineCashSelling: true } : { kind };
       const signed = envelope(kind, payload);
       return { envelope: signed, signature: signing.signSnapshotEnvelope(signed), payload };
     }),
@@ -116,7 +135,7 @@ function command(multiplier: number) {
     ],
     amountMinor: 100,
     cashReceivedMinor: 100,
-  });
+  };
 }
 
 function db() {
@@ -194,8 +213,12 @@ describe('DEV-830 offline replay derives the sale-unit multiplier', () => {
 describe('DEV-874 offline add-line lock ordering', () => {
   it('locks every line key before preparing stock, including later lines in the command', async () => {
     const target = db();
-    const body = command(10);
-    body.lines.push({ ...body.lines[0]! });
+    const unsealed = unsealedCommand(10);
+    unsealed.lines.push({ ...unsealed.lines[0]! });
+    // The counter seals the sale it took, with both lines.
+    const body = router.counterReplaySchema.parse(
+      offlineSaleChain(SCOPE, DEVICE, 'pcd_secret').seal(unsealed, { previousHash: null })
+    );
     await expect(replay(target, body)).rejects.toThrow('REACHED_LINE');
     // Typed by ScopedDb: tagged-template locks pass (strings, ...values), stock reads one Prisma.Sql.
     const calls = vi.mocked(target.$queryRaw).mock.calls;

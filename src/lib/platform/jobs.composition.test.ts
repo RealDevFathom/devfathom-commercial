@@ -1,4 +1,6 @@
 // @vitest-environment node
+import https from 'node:https';
+import pg from 'pg';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const m = vi.hoisted(() => ({
@@ -13,8 +15,10 @@ const m = vi.hoisted(() => ({
   lifecycle: vi.fn(),
   deployment: vi.fn(),
   support: vi.fn(),
+  supportAudits: vi.fn(),
   scope: vi.fn(),
   snapshot: vi.fn(),
+  resetRequest: vi.fn(),
   retention: vi.fn(),
   consent: vi.fn(),
   archiveCreate: vi.fn(),
@@ -24,6 +28,7 @@ const m = vi.hoisted(() => ({
   ownerExport: null as null | ((...args: unknown[]) => Promise<unknown>),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: m.scope }));
+vi.mock('@/lib/auth/password-reset-request', () => ({ runPasswordResetJob: m.resetRequest }));
 vi.mock('@/lib/pharmacy/counter-evidence', () => ({
   PHARMACY_CAMERA_SNAPSHOT_JOB: 'pharmacy.camera.snapshot.v1',
   runCounterEvidenceSnapshotJob: m.snapshot,
@@ -38,10 +43,12 @@ vi.mock('@/lib/pharmacy/owner-data-export', async (importOriginal) => {
     ) => (m.ownerExport ? m.ownerExport(...args) : actual.runPharmacyOwnerDataExportJob(...args)),
   };
 });
+import { Prisma } from '@/generated/prisma/client';
 import { OwnerDataExportTimeLimitError } from '@/lib/pharmacy/owner-data-export';
 import { processPlatformJobs } from './jobs';
 
 const db = {
+  $executeRaw: vi.fn().mockResolvedValue(0),
   $queryRaw: m.query,
   $executeRawUnsafe: m.execute,
   platformJob: {
@@ -53,9 +60,10 @@ const db = {
   },
   organization: { findUnique: m.organization, update: m.organizationUpdate },
   organizationLifecycleEvent: { create: m.lifecycle },
-  platformAuditLog: { create: m.platformAudit },
-  organizationDeployment: { updateMany: m.deployment },
-  platformSupportSession: { updateMany: m.support },
+  platformAuditLog: { create: m.platformAudit, createMany: m.supportAudits },
+  organizationDeployment: { updateMany: m.deployment, upsert: vi.fn() },
+  organizationIdentityConnection: { findFirst: vi.fn(), update: vi.fn() },
+  platformSupportSession: { updateMany: m.support, updateManyAndReturn: m.support },
   pharmacyCustomer: { findMany: m.consent },
   pharmacyWhatsAppConsentArchive: { createMany: m.archiveCreate, deleteMany: m.archiveDelete },
 };
@@ -92,6 +100,7 @@ function queue(
       claimed = true;
       return [{ id: item.id }];
     }
+    if (text.includes("AND status = 'RUNNING' AND attempts =")) return [{ id: item.id }];
     if (text.includes('WITH tenant_tables')) return dependencies;
     if (text.includes('FROM "audit_logs"')) return [auditSummary];
     return [];
@@ -134,6 +143,40 @@ describe('composed platform worker boundaries', () => {
     expect(m.archiveCreate).not.toHaveBeenCalled();
   });
 
+  it('ends SSO cleanup on a partial batch and caps work per pass', async () => {
+    db.$executeRaw.mockResolvedValueOnce(500).mockResolvedValueOnce(2);
+    await processPlatformJobs();
+    expect(db.$executeRaw).toHaveBeenCalledTimes(2);
+    expect(db.$executeRaw.mock.calls[0]?.[0].join('')).toContain(
+      'DELETE FROM "organization_sso_states"'
+    );
+    db.$executeRaw.mockClear().mockResolvedValue(500);
+    await processPlatformJobs();
+    expect(db.$executeRaw).toHaveBeenCalledTimes(16);
+  });
+
+  it('revalidates a stored discovery destination in the identity worker', async () => {
+    using fetchSpy = vi.spyOn(globalThis, 'fetch').mockRejectedValue(new Error('Unexpected fetch'));
+    using transport = vi.spyOn(https, 'request').mockImplementation(() => {
+      throw new Error('Unexpected HTTPS request');
+    });
+    db.organizationIdentityConnection.findFirst.mockResolvedValue({
+      id: 'fixture',
+      protocol: 'OIDC',
+      clientId: 'client',
+      issuer: 'https://idp.example',
+      discoveryUrl: 'https://192.0.2.1/doc',
+    });
+    queue(job('SYNC_IDENTITY', { payload: { connectionId: 'fixture' } }));
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 0, retried: 1 });
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
+    expect(db.organizationIdentityConnection.update).toHaveBeenCalledWith({
+      where: { id: 'fixture' },
+      data: expect.objectContaining({ status: 'ERROR' }),
+    });
+  });
+
   const purgeScans = () =>
     m.query.mock.calls.filter(([sql]) =>
       String(sql?.text ?? '').includes('pharmacy_retention_days(')
@@ -158,6 +201,61 @@ describe('composed platform worker boundaries', () => {
     // Enqueueing never runs the purge inline.
     expect(purgeScans()).toHaveLength(0);
   });
+
+  it('dispatches a reset job and removes the address from its completed row', async () => {
+    const request = job('PASSWORD_RESET_REQUEST_V1', {
+      organizationId: null,
+      payload: { host: 'app.localhost', email: 'member@example.test' },
+    });
+    queue(request);
+    m.resetRequest.mockResolvedValue({});
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1, failed: 0 });
+    expect(m.resetRequest).toHaveBeenCalledExactlyOnceWith(request);
+    expect(m.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ status: 'SUCCEEDED', payload: Prisma.DbNull, result: {} }),
+      })
+    );
+  });
+
+  it.skipIf(!process.env.TEST_DATABASE_URL)(
+    'claims provisioning ahead of older queued reset mail with one available slot',
+    async () => {
+      vi.useRealTimers();
+      const client = new pg.Client({ connectionString: process.env.TEST_DATABASE_URL });
+      await client.connect();
+      try {
+        // Keep the worker's actual claim SQL and isolate its queue from every other suite.
+        await client.query(
+          'CREATE TEMP TABLE platform_jobs (id text, type text, status text, "scheduledAt" timestamptz, "createdAt" timestamptz)'
+        );
+        await client.query(`INSERT INTO pg_temp.platform_jobs VALUES
+        ('older-reset','password.reset.request.v1','QUEUED',now() - interval '1 hour',now()),
+        ('another-reset','password.reset.request.v1','QUEUED',now() - interval '5 minutes',now()),
+        ('provision','PROVISION_SHARED','QUEUED',now(),now())`);
+        m.query.mockImplementation(async (sql: Prisma.Sql) => {
+          if (!sql.text.includes('FOR UPDATE SKIP LOCKED')) return [];
+          return (await client.query(sql.text, sql.values)).rows;
+        });
+        m.update.mockImplementation(async ({ where, data }) => {
+          if (data.status !== 'RUNNING') return data;
+          return job(where.id === 'provision' ? 'PROVISION_SHARED' : 'PASSWORD_RESET_REQUEST_V1', {
+            id: where.id,
+          });
+        });
+        m.organization.mockResolvedValue({ slug: 'synthetic' });
+        db.organizationDeployment.upsert.mockResolvedValue({
+          id: 'synthetic-deployment',
+          status: 'READY',
+        });
+        await expect(processPlatformJobs(1)).resolves.toMatchObject({ claimed: 1, succeeded: 1 });
+        expect(db.organizationDeployment.upsert).toHaveBeenCalledOnce();
+        expect(m.resetRequest).not.toHaveBeenCalled();
+      } finally {
+        await client.end();
+      }
+    }
+  );
 
   it('runs the retention purge as its own job with the long timeout', async () => {
     queue(job('PHARMACY_RECORD_RETENTION_V1', { organizationId: null }));
@@ -229,6 +327,14 @@ describe('composed platform worker boundaries', () => {
   });
   it('recovers stale work and preserves suspend revocation after a successful enqueue', async () => {
     queue(job('SUSPEND'));
+    m.support.mockResolvedValue([
+      {
+        id: 'session-1',
+        platformUserId: 'support-1',
+        tenantUserId: 'admin-1',
+        organizationId: 'tenant-a',
+      },
+    ]);
     await expect(processPlatformJobs(1)).resolves.toEqual({
       recovered: 2,
       claimed: 1,
@@ -246,7 +352,22 @@ describe('composed platform worker boundaries', () => {
     );
     expect(m.support).toHaveBeenCalledWith({
       where: { organizationId: 'tenant-a', status: 'ACTIVE' },
-      data: { status: 'REVOKED', endedAt: now },
+      data: { status: 'REVOKED', endedAt: now, tokenCiphertext: null, launchTokenHash: null },
+      select: { id: true, platformUserId: true, organizationId: true, tenantUserId: true },
+    });
+    expect(m.supportAudits).toHaveBeenCalledWith({
+      data: [
+        {
+          organizationId: 'tenant-a',
+          actorPlatformUserId: 'platform-admin-1',
+          actorTenantUserId: 'admin-1',
+          action: 'support.session.ended',
+          targetType: 'PlatformSupportSession',
+          targetId: 'session-1',
+          reason: 'Organization suspended.',
+          metadata: { sessionPlatformUserId: 'support-1' },
+        },
+      ],
     });
     expect(m.deployment).toHaveBeenCalledWith(
       expect.objectContaining({

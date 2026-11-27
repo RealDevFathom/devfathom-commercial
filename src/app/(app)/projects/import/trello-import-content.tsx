@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
+import { useState, useCallback, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -15,21 +17,34 @@ import {
   StickyNote,
   Tag,
 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
 // Avatar unused currently but will be used for member mapping enhancement
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { trelloBoardSchema } from '@/types/trello';
+import {
+  MAX_TRELLO_REQUEST_BYTES,
+  TRELLO_LIMIT_MESSAGE,
+  TRELLO_IMPORT_LIMITS,
+  trelloRawLimit,
+  trelloRecordLimit,
+} from '@/types/trello-import-limits';
 import type { TrelloBoard, TrelloMember } from '@/types/trello';
 
 type Step = 'upload' | 'preview' | 'importing' | 'done';
 
 export function TrelloImportContent() {
   const router = useRouter();
+  const fileInput = useRef<HTMLInputElement>(null);
   const [step, setStep] = useState<Step>('upload');
   const [error, setError] = useState('');
-  const [trelloData, setTrelloData] = useState<TrelloBoard | null>(null);
+  const [uploadedBoard, setUploadedBoard] = useState<{
+    preview: TrelloBoard;
+    json: unknown;
+  } | null>(null);
+  const trelloData = uploadedBoard?.preview ?? null;
   const [memberMapping, setMemberMapping] = useState<Record<string, string>>({});
   const [includeArchived, setIncludeArchived] = useState(false);
   // IMP-TRELLO-01: import into an existing project or spin up a brand-new one.
@@ -64,10 +79,19 @@ export function TrelloImportContent() {
 
   const handleFileUpload = useCallback((file: File) => {
     setError('');
+    if (file.size > MAX_TRELLO_REQUEST_BYTES) {
+      setError(TRELLO_LIMIT_MESSAGE);
+      return;
+    }
     const reader = new FileReader();
     reader.onload = (e) => {
       try {
         const json = JSON.parse(e.target?.result as string);
+        const limit = trelloRawLimit({ trelloJson: json });
+        if (limit) {
+          setError(limit);
+          return;
+        }
         const parsed = trelloBoardSchema.safeParse(json);
         if (!parsed.success) {
           setError(
@@ -75,7 +99,7 @@ export function TrelloImportContent() {
           );
           return;
         }
-        setTrelloData(parsed.data);
+        setUploadedBoard({ preview: parsed.data, json });
         setStep('preview');
       } catch {
         setError('Invalid JSON file. Please upload a valid Trello board export.');
@@ -110,16 +134,23 @@ export function TrelloImportContent() {
   const canImport = !!trelloData && (targetMode === 'existing' ? !!selectedProjectId : true);
 
   const handleImport = () => {
-    if (!trelloData || !canImport) return;
+    if (!uploadedBoard || !canImport) return;
+    const limit = trelloRecordLimit(uploadedBoard.json, includeArchived);
+    if (limit) {
+      setError(limit);
+      return;
+    }
     setStep('importing');
     setError('');
     importMutation.mutate({
-      trelloJson: trelloData,
+      // The transport accepts plain JSON. Keep the original parsed export so
+      // preview defaults never introduce SuperJSON annotations.
+      trelloJson: uploadedBoard.json,
       memberMapping,
       includeArchived,
       ...(targetMode === 'existing'
         ? { projectId: selectedProjectId }
-        : { newProjectName: newProjectName.trim() || trelloData.name }),
+        : { newProjectName: newProjectName.trim() || uploadedBoard.preview.name }),
     });
   };
 
@@ -178,9 +209,12 @@ export function TrelloImportContent() {
       </div>
 
       {error && (
-        <div className="flex items-start gap-3 rounded-xl border border-red-500/20 bg-red-500/5 px-4 py-3">
-          <AlertCircle className="h-5 w-5 text-red-500 shrink-0 mt-0.5" />
-          <p className="text-sm text-red-400">{error}</p>
+        <div
+          role="alert"
+          className="flex items-start gap-3 rounded-control border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          <AlertCircle aria-hidden="true" className="mt-0.5 size-5 shrink-0" />
+          <p>{error}</p>
         </div>
       )}
 
@@ -200,18 +234,35 @@ export function TrelloImportContent() {
           <p className="mt-2 text-sm text-muted-foreground text-center max-w-sm">
             Export from Trello: Menu &rarr; More &rarr; Print and Export &rarr; Export as JSON
           </p>
-          <label className="mt-6 cursor-pointer rounded-xl bg-primary px-6 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]">
+          <p className="mt-2 max-w-sm text-center text-sm text-text-muted">
+            Up to 16 MiB per upload. Each import can include{' '}
+            {TRELLO_IMPORT_LIMITS.cards.toLocaleString('en-US')} cards,{' '}
+            {TRELLO_IMPORT_LIMITS.lists.toLocaleString('en-US')} lists,{' '}
+            {TRELLO_IMPORT_LIMITS.checklistItems.toLocaleString('en-US')} checklist items and{' '}
+            {TRELLO_IMPORT_LIMITS.comments.toLocaleString('en-US')} comments. Card names can be up
+            to {TRELLO_IMPORT_LIMITS.cardName.toLocaleString('en-US')} characters. Complex exports
+            can also exceed the {TRELLO_IMPORT_LIMITS.work.toLocaleString('en-US')}-unit processing
+            limit.
+          </p>
+          <Button
+            type="button"
+            size="touch"
+            className="mt-6"
+            onClick={() => fileInput.current?.click()}
+          >
             Choose File
-            <input
-              type="file"
-              accept=".json"
-              className="hidden"
-              onChange={(e) => {
-                const file = e.target.files?.[0];
-                if (file) handleFileUpload(file);
-              }}
-            />
-          </label>
+          </Button>
+          <input
+            ref={fileInput}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) handleFileUpload(file);
+              e.target.value = '';
+            }}
+          />
         </div>
       )}
 
@@ -265,7 +316,7 @@ export function TrelloImportContent() {
               ))}
             </div>
             {targetMode === 'existing' ? (
-              <select
+              <StudioSelect
                 value={selectedProjectId}
                 onChange={(e) => setSelectedProjectId(e.target.value)}
                 className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
@@ -276,7 +327,7 @@ export function TrelloImportContent() {
                     {p.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             ) : (
               <>
                 <input
@@ -450,7 +501,7 @@ function MemberMappingRow({
         <p className="text-xs text-muted-foreground">@{trelloMember.username}</p>
       </div>
       <span className="text-xs text-muted-foreground">&rarr;</span>
-      <select
+      <StudioSelect
         value={value}
         onChange={(e) => onChange(e.target.value)}
         className="w-full sm:w-44 rounded-lg border border-border bg-secondary px-3 py-1.5 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -461,7 +512,7 @@ function MemberMappingRow({
             {m.name}
           </option>
         ))}
-      </select>
+      </StudioSelect>
     </div>
   );
 }

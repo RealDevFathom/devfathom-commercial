@@ -277,6 +277,7 @@ describe('DEV-743 card terminal around one durable attempt (mocked end to end)',
       providerRef: 'RRN-000111222',
       cardLast4: null,
       reviewReason: 'Terminal approved a different amount',
+      approvedAmountMinor: 1600,
     });
     expect(store.tenders).toEqual([]);
   });

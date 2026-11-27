@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -180,13 +181,16 @@ describe('PharmacyCameraWizard callbacks', () => {
     const form = screen.getByRole('form', { name: 'Register a camera' });
     const source = within(form).getByRole('combobox', { name: /^Simulator source/ });
     expect(
-      within(source)
-        .getAllByRole('option')
+      within(selectFieldControl(source))
+        .getAllByRole('option', { hidden: true })
         .map((option) => (option as HTMLOptionElement).value)
     ).toEqual(['sim-camera-1', 'sim-counter-1', 'sim-fridge-1']);
-    fireEvent.change(within(form).getByRole('combobox', { name: 'Camera gateway' }), {
-      target: { value: 'gw_1' },
-    });
+    fireEvent.change(
+      selectFieldControl(within(form).getByRole('combobox', { name: 'Camera gateway' })),
+      {
+        target: { value: 'gw_1' },
+      }
+    );
     fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Till' } });
     fireEvent.change(within(form).getByLabelText('Username'), { target: { value: 'placeholder' } });
     fireEvent.change(within(form).getByLabelText('Password'), { target: { value: 'placeholder' } });
@@ -217,7 +221,7 @@ describe('PharmacyCamerasConsole presets', () => {
   it('blocks a cold-chain preset when the branch has no cold-chain zone', () => {
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Settings for Counter camera' });
-    fireEvent.change(within(form).getByRole('combobox', { name: /^Preset/ }), {
+    fireEvent.change(selectFieldControl(within(form).getByRole('combobox', { name: /^Preset/ })), {
       target: { value: 'COLD_CHAIN' },
     });
     expect(within(form).getByRole('status')).toHaveTextContent('No active cold-chain zone');
@@ -431,7 +435,14 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     render(<PharmacyCamerasConsole />);
     const form = screen.getByRole('form', { name: 'Register a configured camera' });
     fireEvent.change(within(form).getByLabelText('Camera name'), { target: { value: 'Fridge' } });
-    fireEvent.change(within(form).getByLabelText('Camera gateway'), { target: { value: 'gw_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        within(form).getByLabelText('Camera gateway', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'gw_1' } }
+    );
     fireEvent.change(within(form).getByLabelText('Gateway stream path'), {
       target: { value: 'fridge-1' },
     });
@@ -462,6 +473,28 @@ describe('PharmacyCamerasConsole configured gateway (DEV-740)', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
     expect(mocks.diagnose).toHaveBeenCalledWith({ cameraId: 'cam_1' });
+  });
+
+  it.each([
+    [{ outcome: 'ok', videoCodec: 'h265' }, 'Safari on Mac, iPhone and iPad plays it'],
+    [{ outcome: 'relay-unsupported' }, 'Supported: MediaMTX v1.17.1 to v1.21.4'],
+  ])('states the configured check result %j in plain words', (result, text) => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.diagnose.mockReturnValue(result);
+    const view = render(<PharmacyCamerasConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
+    view.rerender(<PharmacyCamerasConsole />);
+    expect(screen.getByText(new RegExp(text))).toBeVisible();
+  });
+
+  it('adds no H.265 line for an H.264 camera', () => {
+    mocks.workspace.mockReturnValue(ready(configured()));
+    mocks.diagnose.mockReturnValue({ outcome: 'ok', videoCodec: 'h264' });
+    const view = render(<PharmacyCamerasConsole />);
+    fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
+    view.rerender(<PharmacyCamerasConsole />);
+    expect(screen.getByText(/Supported manifest received/)).toBeVisible();
+    expect(screen.queryByText(/H\.265/)).not.toBeInTheDocument();
   });
 
   it('opens live view on the pharmacy endpoint and releases the grant on close', async () => {

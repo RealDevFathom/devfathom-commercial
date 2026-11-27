@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { RoleAccessButton } from './role-access-panel';
 import { memo, useState, useMemo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -115,10 +117,13 @@ export function TeamContent() {
         }
         actions={
           canManageMembers ? (
-            <Button size="lg" onClick={() => setShowAddMember(true)}>
-              <Plus className="h-4 w-4" />
-              {canReadDirectory ? 'Add Member' : 'Invite a colleague'}
-            </Button>
+            <>
+              {entitlements.vertical === 'PHARMACY' ? <RoleAccessButton /> : null}
+              <Button size="lg" onClick={() => setShowAddMember(true)}>
+                <Plus className="h-4 w-4" />
+                {canReadDirectory ? 'Add Member' : 'Invite a colleague'}
+              </Button>
+            </>
           ) : undefined
         }
       />
@@ -397,7 +402,8 @@ export function AddMemberModal({
   /** Lets a host surface (e.g. Organization) refresh its own member list. */
   onInvited?: () => void;
 }) {
-  const copy = inviteCopyForVertical(useEntitlements().vertical);
+  const vertical = useEntitlements().vertical;
+  const copy = inviteCopyForVertical(vertical);
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
   const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
@@ -417,6 +423,9 @@ export function AddMemberModal({
   const [bio, setBio] = useState('');
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
+  // DEV-959B: in a pharmacy, inviting someone into a role with a weighty sub-role needs the
+  // owner's own PIN, checked on the server by the shared verifier.
+  const [pin, setPin] = useState('');
   const [error, setError] = useState('');
   const [sent, setSent] = useState<{
     email: string;
@@ -468,6 +477,7 @@ export function AddMemberModal({
         phone: phone || undefined,
         bio: bio || undefined,
         skills,
+        ...(vertical === 'PHARMACY' && pin ? { pin } : {}),
       },
       {
         onSuccess: (data) => {
@@ -648,7 +658,7 @@ export function AddMemberModal({
                     >
                       Department
                     </label>
-                    <select
+                    <StudioSelect
                       id="invite-department"
                       value={selectedDepartment ? department : ''}
                       disabled={
@@ -668,7 +678,7 @@ export function AddMemberModal({
                           {item.name}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                     <div
                       id="invite-department-status"
                       className="mt-2 text-sm text-text-muted"
@@ -727,7 +737,7 @@ export function AddMemberModal({
                   >
                     {templateBaseRoles === undefined ? copy.staffRoleLabel : 'Role'}
                   </label>
-                  <select
+                  <StudioSelect
                     id="invite-role-template"
                     aria-describedby="invite-role-template-help"
                     value={organizationRoleId}
@@ -741,7 +751,7 @@ export function AddMemberModal({
                         {item.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                   <p id="invite-role-template-help" className="mt-2 text-sm text-text-muted">
                     {roleQuery.isFetching
                       ? 'Loading staff roles…'
@@ -752,6 +762,32 @@ export function AddMemberModal({
                       ` Access level: ${copy.baseRoleLabels[submittedRole]}.`}
                   </p>
                 </div>
+
+                {vertical === 'PHARMACY' ? (
+                  <div>
+                    <label
+                      htmlFor="invite-access-pin"
+                      className="block text-sm font-medium text-foreground mb-1.5"
+                    >
+                      Your PIN
+                    </label>
+                    <input
+                      id="invite-access-pin"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      maxLength={8}
+                      value={pin}
+                      onChange={(event) => setPin(event.target.value)}
+                      aria-describedby="invite-access-pin-help"
+                      className="w-40 rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                    <p id="invite-access-pin-help" className="mt-2 text-sm text-text-muted">
+                      Needed when the role gives a sub-role that carries extra weight. Only the
+                      owner can give one.
+                    </p>
+                  </div>
+                ) : null}
 
                 <div>
                   <label className="block text-sm font-medium text-foreground mb-1.5">Bio</label>

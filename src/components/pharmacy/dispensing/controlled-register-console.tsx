@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import Link from 'next/link';
 import { useRef, useState } from 'react';
 import { PendingLegalReviewNotice } from '../pending-legal-review-notice';
@@ -11,7 +13,8 @@ import {
   serializePrintDocument,
   type PrintWindow,
 } from '@/lib/browser-print/print-window';
-import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { formatWorkspaceDateTime } from '@/lib/timezone';
 import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
@@ -23,6 +26,7 @@ const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
 const head = 'px-2 py-1.5 text-left font-mono text-xs tracking-wide text-text-muted uppercase';
 
 export function ControlledRegisterConsole() {
+  const timeZone = useWorkspaceTimeZone();
   const page = useRef<HTMLDivElement>(null);
   const [printError, setPrintError] = useState(false);
   const [branchId, setBranchId] = useState('');
@@ -75,7 +79,7 @@ export function ControlledRegisterConsole() {
     const branchName =
       branches.data?.find((branch) => branch.id === selected)?.name ?? 'This branch';
     const stamp = doc.createElement('p');
-    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName}`;
+    stamp.textContent = `Printed ${formatWorkspaceDateTime(new Date(), timeZone)} · ${branchName}`;
     const style = doc.createElement('style');
     style.textContent =
       '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
@@ -97,7 +101,7 @@ export function ControlledRegisterConsole() {
         <PageHeader
           eyebrow="Pharmacy"
           heading="Controlled register"
-          description="Append-only sales, purchases and corrections for this branch."
+          description="Append-only sales, purchases, supplier returns and corrections for this branch."
         />
         <AccessDeniedState title="You do not have controlled-register access">
           The controlled register is restricted to users holding the pharmacy safety permission.
@@ -122,7 +126,7 @@ export function ControlledRegisterConsole() {
         }
         eyebrow="Pharmacy"
         heading="Controlled register"
-        description="Append-only sales, purchases and corrections for this branch."
+        description="Append-only sales, purchases, supplier returns and corrections for this branch."
       />
       {printError ? (
         <p className="text-xs text-destructive" role="alert">
@@ -159,7 +163,7 @@ export function ControlledRegisterConsole() {
       {branches.data && branches.data.length > 1 ? (
         <label className="block text-xs text-text-muted" htmlFor="register-branch">
           Branch
-          <select
+          <StudioSelect
             id="register-branch"
             className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
             value={selected}
@@ -170,7 +174,7 @@ export function ControlledRegisterConsole() {
                 {branch.name}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </label>
       ) : null}
       {branches.error ? (
@@ -238,15 +242,17 @@ export function ControlledRegisterConsole() {
                         <tr className="border-b border-border-subtle" key={entry.id}>
                           <td className={`${cell} font-mono tabular-nums`}>{entry.serial}</td>
                           <td className={cell}>
-                            {formatKarachiDateTime(entry.createdAt)}
+                            {formatWorkspaceDateTime(entry.createdAt, timeZone)}
                             <span className="mt-0.5 block text-text-muted">
                               {entry.entryKind === 'PURCHASE'
                                 ? 'Purchase'
                                 : entry.entryKind === 'CORRECTION'
                                   ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
-                                  : entry.emergency
-                                    ? 'Emergency sale'
-                                    : 'Sale'}
+                                  : entry.entryKind === 'RETURN_TO_SUPPLIER'
+                                    ? supplierReturnLabel(entry, timeZone)
+                                    : entry.emergency
+                                      ? 'Emergency sale'
+                                      : 'Sale'}
                               {entry.refEntry ? ` · repeats ${entry.refEntry.serial}` : ''}
                             </span>
                           </td>
@@ -299,9 +305,18 @@ export function ControlledRegisterConsole() {
                             {batchNumberLabel(entry.batchNumber)}
                           </td>
                           <td className={cell}>
-                            {entry.witnessName ?? '—'}
+                            {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')}
                             {entry.signatureRef ? (
-                              <span className="mt-0.5 block text-text-muted">PIN witnessed</span>
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.lateDispatchAt
+                                  ? 'Owner confirmed'
+                                  : entry.entryKind === 'RETURN_TO_SUPPLIER' &&
+                                      entry.signatureRef.startsWith('solo-')
+                                    ? 'Sender confirmed'
+                                    : entry.signatureRef.startsWith('authenticator:')
+                                      ? 'Approval code witnessed'
+                                      : 'PIN witnessed'}
+                              </span>
                             ) : null}
                             {open ? (
                               <span className="mt-0.5 block text-destructive">
@@ -350,7 +365,7 @@ export function ControlledRegisterConsole() {
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="text-xs text-text-muted" htmlFor="correct-entry">
                   Entry to correct
-                  <select
+                  <StudioSelect
                     id="correct-entry"
                     className="mt-1 h-9 w-full rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
                     value={correctsEntryId}
@@ -361,7 +376,7 @@ export function ControlledRegisterConsole() {
                     {register.data.entries
                       .filter(
                         (entry) =>
-                          entry.entryKind !== 'CORRECTION' &&
+                          (entry.entryKind === 'PURCHASE' || entry.entryKind === 'SALE') &&
                           !register.data.entries.some((other) => other.correctsEntryId === entry.id)
                       )
                       .map((entry) => (
@@ -369,11 +384,11 @@ export function ControlledRegisterConsole() {
                           {entry.serial} · {entry.entryKind} · {batchNumberLabel(entry.batchNumber)}
                         </option>
                       ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="text-xs text-text-muted" htmlFor="correct-pharmacist">
                   Qualified person
-                  <select
+                  <StudioSelect
                     id="correct-pharmacist"
                     className="mt-1 h-9 w-full rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
                     value={staffProfileId}
@@ -386,7 +401,7 @@ export function ControlledRegisterConsole() {
                         {staff.name}
                       </option>
                     ))}
-                  </select>
+                  </StudioSelect>
                 </label>
                 <label className="text-xs text-text-muted sm:col-span-2" htmlFor="correct-reason">
                   Reason
@@ -468,6 +483,12 @@ type ShownEntry = {
   prescriber: { name: string; registrationNumber: string } | null;
   line: { medicine: { productName: string } } | null;
   correctsEntry: { serial: number } | null;
+  lateDispatchAt?: Date | null;
+  sentByName?: string | null;
+  recordedByName?: string | null;
+  supplierReturnReason?: string | null;
+  signatureRef?: string | null;
+  sourcePurchase: { serial: number } | null;
   refEntry: { serial: number } | null;
 };
 
@@ -488,7 +509,29 @@ function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
   );
 }
 
+function supplierReturnLabel(
+  entry: Pick<
+    ShownEntry,
+    | 'sourcePurchase'
+    | 'lateDispatchAt'
+    | 'createdAt'
+    | 'sentByName'
+    | 'recordedByName'
+    | 'supplierReturnReason'
+    | 'signatureRef'
+  >,
+  timeZone: string
+) {
+  const label = `Returned to supplier · purchase ${entry.sourcePurchase?.serial ?? '—'}`;
+  if (entry.lateDispatchAt)
+    return `${label} · Recorded late, no witness · Sent by ${entry.sentByName ?? 'Name unavailable'} on ${formatWorkspaceDateTime(entry.lateDispatchAt, timeZone)} · Recorded by ${entry.recordedByName ?? 'Name unavailable'} on ${formatWorkspaceDateTime(entry.createdAt, timeZone)} · Reason: ${entry.supplierReturnReason ?? '—'}`;
+  if (entry.signatureRef?.startsWith('solo-'))
+    return `${label} · No second person available · Reason: ${entry.supplierReturnReason ?? '—'}`;
+  return label;
+}
+
 function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
+  const timeZone = useWorkspaceTimeZone();
   const totals = registerPrintTotals(entries);
   return (
     <div className="space-y-2 md:hidden">
@@ -497,14 +540,18 @@ function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
         return (
           <article className="rounded-md border border-border-subtle p-3 text-xs" key={entry.id}>
             <p className="font-mono text-text-strong">
-              {entry.serial} · {formatKarachiDateTime(entry.createdAt)}
+              {entry.serial} · {formatWorkspaceDateTime(entry.createdAt, timeZone)}
             </p>
+            {entry.entryKind === 'RETURN_TO_SUPPLIER' && (
+              <p className="mt-1 text-text-muted">{supplierReturnLabel(entry, timeZone)}</p>
+            )}
             <p className="mt-1 text-text-body">
               {drug} · {batchNumberLabel(entry.batchNumber)} · qty {entry.quantityCanonicalUnits}
             </p>
             <p className="mt-1 text-text-muted">
               {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
-              {entry.witnessName ?? '—'} · balance {entry.runningBalance}
+              {entry.lateDispatchAt ? 'No witness' : (entry.witnessName ?? '—')} · balance{' '}
+              {entry.runningBalance}
             </p>
           </article>
         );

@@ -48,6 +48,7 @@ export class FinancePostingError extends Error {
  * every report re-deciding what the sign of a credit account means.
  */
 export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSide>> = {
+  CARD_REFUNDS_PAYABLE: 'CREDIT',
   CUSTOMER_PREPAID: 'CREDIT',
   INVENTORY: 'DEBIT',
   INVENTORY_IN_TRANSIT: 'DEBIT',
@@ -70,6 +71,18 @@ export const ACCOUNT_NORMAL_SIDE: Readonly<Record<FinanceAccountCode, JournalSid
   /** Liability. Only a posted pharmacy journal voucher writes it. */
   MANUAL_NONTRADE_ACCRUAL: 'CREDIT',
 };
+
+/**
+ * Read an entry's legs in the order they were posted. A leg's id is a cuid,
+ * generated in posting order within the writing transaction, and unique, so
+ * `id` is a total, stable order. Without it PostgreSQL returns legs in whatever
+ * order the chosen plan yields: through the (organizationId, accountCode,
+ * branchId) index that is account-code order, so the same entry could read back
+ * with its legs in a different order from one call to the next.
+ */
+export const JOURNAL_LINES_IN_POSTING_ORDER = {
+  lines: { orderBy: { id: 'asc' } },
+} as const;
 
 /** Sources whose idempotent replay must also match the original source row. */
 export const REPLAY_IDENTITY_CHECKED_SOURCES: ReadonlySet<FinanceSourceKind> = new Set([
@@ -199,7 +212,7 @@ export async function postJournalEntry(
 
   const existing = await db.financeJournalEntry.findFirst({
     where: { organizationId: scope.organizationId, idempotencyKey: input.idempotencyKey },
-    include: { lines: true },
+    include: JOURNAL_LINES_IN_POSTING_ORDER,
   });
   if (existing) {
     // Sources that opted in prove a replayed key belongs to the same document,
@@ -259,7 +272,7 @@ export async function postJournalEntry(
 
   return db.financeJournalEntry.findFirstOrThrow({
     where: { organizationId: scope.organizationId, id: entry.id },
-    include: { lines: true },
+    include: JOURNAL_LINES_IN_POSTING_ORDER,
   });
 }
 
@@ -290,13 +303,13 @@ export async function reverseJournalEntry(
 
   const original = await db.financeJournalEntry.findFirst({
     where: { organizationId: scope.organizationId, id: input.entryId },
-    include: { lines: { orderBy: { id: 'asc' } } },
+    include: JOURNAL_LINES_IN_POSTING_ORDER,
   });
   if (!original) throw new FinancePostingError('NOT_FOUND');
 
   const existing = await db.financeJournalEntry.findFirst({
     where: { organizationId: scope.organizationId, reversesEntryId: original.id },
-    include: { lines: true },
+    include: JOURNAL_LINES_IN_POSTING_ORDER,
   });
   if (existing) return existing;
 
@@ -344,7 +357,7 @@ export async function reverseJournalEntry(
 
   return db.financeJournalEntry.findFirstOrThrow({
     where: { organizationId: scope.organizationId, id: reversal.id },
-    include: { lines: true },
+    include: JOURNAL_LINES_IN_POSTING_ORDER,
   });
 }
 
@@ -361,7 +374,7 @@ export function entriesForSource(
 ) {
   return db.financeJournalEntry.findMany({
     where: { organizationId, sourceKind, sourceId },
-    include: { lines: { orderBy: { id: 'asc' } } },
+    include: JOURNAL_LINES_IN_POSTING_ORDER,
     orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
   });
 }

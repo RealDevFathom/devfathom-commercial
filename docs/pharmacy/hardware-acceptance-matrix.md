@@ -46,7 +46,7 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
 
 | Device class | What `develop` has | Evidence class | Physical acceptance |
 | --- | --- | --- | --- |
-| DVR / cameras (live view) | Pharmacy live view through the shared MediaMTX HLS gateway (DEV-740): configured-gateway registration, diagnostics, short-lived grants and a per-request authorized stream route. Tested with mocks, fixtures and a disposable-database browser run only. | `REAL-INTEGRATION` code (Pharmacy and Restaurant) | UNTESTED on hardware; needs a connected camera and an owner-provisioned gateway |
+| DVR / cameras (live view) | Pharmacy live view through the shared MediaMTX HLS gateway (DEV-740): configured-gateway registration, diagnostics, short-lived grants and a per-request authorized stream route. Relay client tested against the real MediaMTX v1.17.1, v1.18.0 and v1.21.4 release binaries with a synthetic H.264/H.265 source (DEV-1003); supported range MediaMTX v1.17.1 to v1.21.4. No DVR or browser playback test yet. | `REAL-INTEGRATION` code (Pharmacy and Restaurant) | UNTESTED on hardware; needs a connected camera and an owner-provisioned gateway |
 | Camera still snapshots (transaction / cold-chain evidence) | Evidence capture works against the simulator. Real DVR snapshots are not wired. | `SIMULATOR` | UNTESTED, BLOCKED by DEV-745 |
 | Thermal 58 / 80 mm — raw ESC/POS | The counter sends a settled receipt to a branch print queue; an enrolled print bridge (Pharmacy > Printer settings, administrators) collects it and reports QUEUED, SENDING, SENT_TO_PRINTER, FAILED, UNCONFIRMED or EXPIRED. Retry after FAILED or UNCONFIRMED needs a paper check. `SENT_TO_PRINTER` means the printer accepted the bytes, never that paper came out (DEV-741, DEV-904). | `REAL-INTEGRATION` code | UNTESTED on hardware; needs an enrolled bridge and owner approval (#1698) |
 | Thermal 58 / 80 mm and A4 — browser | Receipt HTML opened in a popup, then `window.print()`. Format choice is not saved. | `BROWSER-OS-DIALOG` | UNTESTED, saved settings BLOCKED by DEV-742 |
@@ -94,6 +94,15 @@ real card or wallet, or put credentials into chat, a ticket or a file until the 
   16 MiB segment cap, 10 s deadline. Pharmacy reuses the same transport; bindings carry
   `"vertical": "pharmacy"`, and bindings without it stay restaurant-only. This is code, not a
   hardware pass.
+- **Relay versions (DEV-1003).** Supported: MediaMTX **v1.17.1 to v1.21.4**. MediaMTX v1.18.0
+  and later use HLS sessions (a same-path `302` to `?cookieCheck=1`, then a session secret on
+  every request, closed after 30 s idle). The client follows only that exact step, keeps the
+  secret on the server and renews it, and reports `relay-unsupported` for anything else. The
+  owner's relay, v1.21.4 from Homebrew, answered the old client with that `302`, which the app
+  then showed as "gateway unreachable". Use the reference relay configuration in
+  `industry-specific-docs/pharmacy/cameras/001-configured-gateway-live-view.md` (`moq: false`,
+  `hlsVariant: fmp4`, no `hlsCDNSecret`). Integration test:
+  `src/lib/cameras/mediamtx.relay.integration.test.ts` (needs `MEDIAMTX_BINARY`).
 - Evidence snapshots: `evidenceSnapshotAdapter` returns an adapter only for the simulator
   runtime and `null` otherwise, so real snapshots fail closed
   (`src/lib/cameras/evidence.ts`). HLS playback does not provide a still. Real snapshot support
@@ -237,7 +246,13 @@ with credentials, card numbers, or public IP addresses.
 | DVR LAN segment, who may reach it, gateway host location | _unknown_ | operator |
 | Dedicated read-only viewer account exists (name only, no password) | _unknown_ | operator |
 
-H.265 matters: browsers often cannot play HEVC HLS; a transcode may be needed. Untested.
+H.265 matters: browsers often cannot play HEVC HLS. The owner decided (20 Nov 2026) not to
+change anything on the DVR, and nothing is transcoded. The relay must use `hlsVariant: fmp4`
+(MPEG-TS carries H.264 only). The app reads the codec from the playlist: for H.265, **Check
+configured connection** says that Safari on Mac, iPhone and iPad plays it, and Chrome and Edge
+only on computers with H.265 hardware decoding. Live view then shows a plain H.265 message, not a
+black picture, when the browser cannot decode it. Owner's channel 6 sub stream is H.265
+(20 Nov 2026 test); browser playback is untested.
 
 ### 4.2 Printers (one row per printer)
 
@@ -293,7 +308,7 @@ delivered and deployed to the test environment.
 | HW-CAM-02 | Read-only account exists and is least-privilege | Review device user list | Dedicated account, no admin | Screenshot with names only | Operator | UNTESTED |
 | HW-CAM-03 | Gateway reaches DVR on the private network only | Gateway-side diagnostic (DEV-740) | `ok` / `auth-failed` / `unreachable` only; no topology detail | Probe result record | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
 | HW-CAM-04 | Live view of one channel in the supported browser | Open Pharmacy camera view | Video plays; no RTSP URL, host or password in page source, network tab, console or logs | Screen capture, HAR with secrets scrubbed | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
-| HW-CAM-05 | Codec compatibility (H.264 and, if used, H.265) | Play main and sub stream | Plays, or fails with an honest message | Capture per codec | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
+| HW-CAM-05 | Codec compatibility (H.264 and, if used, H.265) | Play main and sub stream in each browser; record the relay version (`mediamtx --version`, supported v1.17.1 to v1.21.4) | Plays, or the H.265 line and message name the browsers that play it | Capture per codec | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
 | HW-CAM-06 | Role access: admin allowed; cashier / pharmacist / read-only denied | Sign in as each role | Allowed roles only | Per-role result | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
 | HW-CAM-07 | Branch isolation: branch A user cannot view branch B | Sign in as A, request B camera | Denied | Result + audit entry | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |
 | HW-CAM-08 | Viewer grant expiry and revocation | Revoke / wait for expiry while playing | Playback stops; reuse refused | Timestamps | DEV-740 code merged; needs connected camera and owner-provisioned gateway | UNTESTED |

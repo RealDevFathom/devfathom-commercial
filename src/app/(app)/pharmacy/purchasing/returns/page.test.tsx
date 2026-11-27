@@ -22,6 +22,7 @@ const reads = {
   workspace: vi.fn(),
   purchaseReturns: vi.fn(),
   supplierCredits: vi.fn(),
+  legacySupplierDispatches: vi.fn().mockResolvedValue(null),
   returnableLots: vi.fn(),
 };
 const params = () => Promise.resolve({ branch: 'branch' });
@@ -171,7 +172,7 @@ it('offers a no-expiry lot for return as "No expiry", never 9998-12-31 (QA-3)', 
     },
   ]);
   render(await ReturnsPage({ searchParams: params() }));
-  const options = screen.getAllByRole('option', { name: /RETAIL-NOEXP/ });
+  const options = screen.getAllByRole('option', { hidden: true, name: /RETAIL-NOEXP/ });
   expect(options.length).toBeGreaterThan(0);
   for (const option of options) {
     expect(option).toHaveTextContent(

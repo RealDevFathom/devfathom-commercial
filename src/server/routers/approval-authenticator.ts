@@ -1,20 +1,34 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { annotateAudit } from '../audit';
 import { hasAllCapabilityAccess } from '@/lib/abac/owner-access';
 import {
   APPROVAL_TOTP_WINDOW,
   approvalAuthenticatorPartySelect,
   approvalAuthenticatorResetDenial,
+  consumeMemberApprovalCode,
 } from '@/lib/approval-authenticator';
 import {
   currentPasswordInput,
   requirePasswordReauthentication as requireAccountPassword,
 } from '@/lib/password-reauthentication';
+import {
+  approvalAuthenticatorGate,
+  holdsAnyApprovalRight,
+} from '@/lib/approval-authenticator-gate';
+import { hasModule } from '@/lib/entitlements';
+import type { EntitlementView } from '@/lib/module-catalog';
 import { rateLimit } from '@/lib/rate-limit';
 import { decryptSecret, encryptionConfigured, encryptSecret } from '@/lib/secret-crypto';
-import { generateTotpSecret, matchTotpStep, totpAuthUri } from '@/lib/totp';
+import {
+  generateRecoveryCodes,
+  generateTotpSecret,
+  hashRecoveryCode,
+  matchTotpStep,
+  totpAuthUri,
+} from '@/lib/totp';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // DEV-879 — each member enrols an authenticator app for approvals in their own security
@@ -23,11 +37,20 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 // one valid code. The code used to confirm is consumed, so it cannot also approve an
 // action. Recovery (reset) belongs to the owner or an administrator, with an audit record.
 // The owner alone turns fixed approval PINs off for the whole organization.
+//
+// DEV-961: the requirement is on by default. Confirming set-up issues one-time recovery codes,
+// shown once and stored hashed; using one (with the member's password) removes the
+// authenticator, so a lost phone is recovered by setting up a new one. Turning the
+// requirement off needs the owner's own current code, or, before they have set one up, their
+// password and a plain acknowledgement of what turning it off means.
 
 const ENROLMENT_UNAVAILABLE =
   'Approval authenticators are not available until the server encryption key is configured.';
 
-type Ctx = { db: ScopedDb; session: { user: { id: string; organizationId?: string | null } } };
+type Ctx = {
+  db: ScopedDb;
+  session: { user: { id: string; organizationId?: string | null; signedInAt?: number } };
+};
 
 function organizationOf(ctx: Ctx): string {
   const id = ctx.session.user.organizationId;
@@ -58,6 +81,18 @@ async function requireManager(ctx: Ctx, organizationId: string) {
 
 const reauthentication = currentPasswordInput;
 
+/** DEV-961: recovery codes issued at each confirmed set-up. */
+export const APPROVAL_RECOVERY_CODE_COUNT = 10;
+
+function tooManyAttempts(): TRPCError {
+  return new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Too many attempts. Try later.' });
+}
+
+const approvalCode = z
+  .string()
+  .trim()
+  .regex(/^\d{6}$/);
+
 /**
  * Starting an enrolment or resetting an authenticator changes which factor approves money,
  * stock and controlled-drug actions, so a live session alone is not enough: the member
@@ -73,10 +108,93 @@ async function requirePasswordReauthentication(ctx: Ctx, organizationId: string,
   });
 }
 
+/** DEV-961: how recent a sign-in must be to stand in for a password that does not exist. */
+export const PASSWORDLESS_REAUTHENTICATION_MS = 15 * 60_000;
+
+export const PASSWORDLESS_REAUTHENTICATION_MESSAGE =
+  'For your security, sign out and sign in again, then try again straight away.';
+
+/**
+ * DEV-961: setting up (or recovering) the authenticator is forced on every approver, including
+ * members provisioned by single sign-on or SCIM, who have no password to re-enter; and an owner
+ * who signs in only that way must still be able to switch approvals to PINs and reset a member's
+ * app. For such an account only, a fresh sign-in through the identity provider (the
+ * server-issued sign-in time on the session, at most 15 minutes old) stands in for the password.
+ * An account that has a password must always enter it. Returns which proof was taken.
+ */
+async function requireSetupReauthentication(
+  ctx: Ctx,
+  organizationId: string,
+  password: string | undefined
+): Promise<'PASSWORD' | 'FRESH_SIGN_IN'> {
+  const account = await ctx.db.user.findFirst({
+    where: { id: ctx.session.user.id, organizationId, status: 'ACTIVE' },
+    select: { password: true },
+  });
+  if (account && !account.password) {
+    const signedInAt = ctx.session.user.signedInAt;
+    if (
+      typeof signedInAt !== 'number' ||
+      !Number.isFinite(signedInAt) ||
+      Date.now() - signedInAt > PASSWORDLESS_REAUTHENTICATION_MS ||
+      signedInAt > Date.now()
+    )
+      throw new TRPCError({ code: 'FORBIDDEN', message: PASSWORDLESS_REAUTHENTICATION_MESSAGE });
+    return 'FRESH_SIGN_IN';
+  }
+  if (!password)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Your current password is incorrect.' });
+  await requirePasswordReauthentication(ctx, organizationId, password);
+  return 'PASSWORD';
+}
+
+/**
+ * DEV-961: the ACTIVE members who can approve (the same derivation as the forced set-up) and
+ * have no live permanent PIN on their staff profile, so cannot approve while the setting is off.
+ */
+async function approversWithoutPin(
+  db: ScopedDb,
+  organizationId: string
+): Promise<{ id: string; name: string }[]> {
+  const members = await db.user.findMany({
+    where: {
+      organizationId,
+      status: 'ACTIVE',
+      restaurantStaffProfiles: {
+        none: {
+          status: 'ACTIVE',
+          credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+        },
+      },
+    },
+    select: { id: true, name: true },
+    orderBy: [{ name: 'asc' }, { id: 'asc' }],
+  });
+  const approvers: { id: string; name: string }[] = [];
+  for (const member of members)
+    if (await holdsAnyApprovalRight(db, { organizationId, userId: member.id }))
+      approvers.push(member);
+  return approvers;
+}
+
+/**
+ * DEV-961: how a member gets a permanent PIN, which follows the PIN rules of the workspace.
+ * Where the "Your PIN" page exists (`OWN_PIN_PATH`, module `pharmacy-core`), a person sets their
+ * own PIN there, signed in and confirming with their password; nobody else can set it for them.
+ * Elsewhere PINs are issued on the staff screen by someone who manages staff.
+ */
+export function pinNeededMessage(ctx: { entitlements: EntitlementView }): string {
+  const lead =
+    'The owner turned off the authenticator for approvals, so approvals now take your permanent PIN, and you have none yet.';
+  return hasModule(ctx.entitlements, 'pharmacy-core')
+    ? `${lead} Set it yourself under Your PIN; nobody else can set it for you.`
+    : `${lead} Ask the owner or someone who manages staff to issue one on the staff screen.`;
+}
+
 export const approvalAuthenticatorRouter = router({
   getStatus: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = organizationOf(ctx);
-    const [authenticator, organization, actor] = await Promise.all([
+    const [authenticator, organization, actor, account] = await Promise.all([
       ctx.db.approvalAuthenticator.findFirst({
         where: { organizationId, userId: ctx.session.user.id },
         select: { enabledAt: true },
@@ -86,10 +204,33 @@ export const approvalAuthenticatorRouter = router({
         select: { requireApprovalAuthenticator: true },
       }),
       liveParty(ctx, organizationId, ctx.session.user.id),
+      ctx.db.user.findFirst({
+        where: { id: ctx.session.user.id, organizationId },
+        select: { password: true },
+      }),
     ]);
     const owner = Boolean(actor && hasAllCapabilityAccess(actor));
+    const recoveryCodesLeft = authenticator?.enabledAt
+      ? await ctx.db.approvalAuthenticatorRecoveryCode.count({
+          where: { organizationId, userId: ctx.session.user.id, usedAt: null },
+        })
+      : 0;
     return {
       enrolled: Boolean(authenticator?.enabledAt),
+      /** DEV-961: this member must finish set-up before the rest of the account works. */
+      setupRequired: (
+        await approvalAuthenticatorGate(ctx.db, {
+          organizationId,
+          userId: ctx.session.user.id,
+          approver:
+            typeof ctx.session.user.approvalApprover === 'boolean'
+              ? ctx.session.user.approvalApprover
+              : undefined,
+        })
+      ).setupRequired,
+      recoveryCodesLeft,
+      /** DEV-961: signed in by single sign-on, with no password to re-enter. */
+      passwordless: Boolean(account && !account.password),
       required: Boolean(organization?.requireApprovalAuthenticator),
       isOwner: owner,
       canManage: owner || (actor?.status === 'ACTIVE' && actor.role === 'ADMIN'),
@@ -100,13 +241,16 @@ export const approvalAuthenticatorRouter = router({
   // Phase 1: mint a secret and return it (+ otpauth URI for the QR code) once. Inactive
   // until confirmEnrollment succeeds. Restarting replaces any unconfirmed secret.
   beginEnrollment: protectedProcedure
-    .input(z.strictObject({ currentPassword: reauthentication }))
+    .meta(refuseSupportSession)
+    .input(z.strictObject({ currentPassword: reauthentication.optional() }))
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
       if (!encryptionConfigured())
         throw new TRPCError({ code: 'PRECONDITION_FAILED', message: ENROLMENT_UNAVAILABLE });
-      await requirePasswordReauthentication(ctx, organizationId, input.currentPassword);
+      if (!(await rateLimit(`approval-authenticator-begin:${userId}`, 10, 15 * 60_000)).ok)
+        throw tooManyAttempts();
+      await requireSetupReauthentication(ctx, organizationId, input.currentPassword);
       const [user, existing] = await Promise.all([
         ctx.db.user.findFirst({ where: { id: userId, organizationId }, select: { email: true } }),
         ctx.db.approvalAuthenticator.findFirst({
@@ -140,6 +284,7 @@ export const approvalAuthenticatorRouter = router({
   // Phase 2: one valid code activates the authenticator. From then on this member's
   // fixed PIN is no longer accepted for approvals.
   confirmEnrollment: protectedProcedure
+    .meta(refuseSupportSession)
     .input(
       z.strictObject({
         token: z
@@ -152,10 +297,7 @@ export const approvalAuthenticatorRouter = router({
       const organizationId = organizationOf(ctx);
       const userId = ctx.session.user.id;
       if (!(await rateLimit(`approval-authenticator-confirm:${userId}`, 10, 15 * 60_000)).ok)
-        throw new TRPCError({
-          code: 'TOO_MANY_REQUESTS',
-          message: 'Too many attempts. Try later.',
-        });
+        throw tooManyAttempts();
       const pending = await ctx.db.approvalAuthenticator.findFirst({
         where: { organizationId, userId },
         select: { id: true, encryptedSecret: true, enabledAt: true },
@@ -187,13 +329,66 @@ export const approvalAuthenticatorRouter = router({
       });
       if (activated.count !== 1)
         throw new TRPCError({ code: 'CONFLICT', message: 'Start the set-up again.' });
+      // DEV-961: fresh one-time recovery codes, shown once; only their hashes are kept and
+      // any codes from an earlier set-up stop working.
+      const { codes, hashes } = generateRecoveryCodes(APPROVAL_RECOVERY_CODE_COUNT);
+      await ctx.db.approvalAuthenticatorRecoveryCode.deleteMany({
+        where: { organizationId, userId },
+      });
+      await ctx.db.approvalAuthenticatorRecoveryCode.createMany({
+        data: hashes.map((codeHash) => ({ organizationId, userId, codeHash })),
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: userId,
         description: 'Enrolled an approval authenticator',
-        metadata: { approvalAuthenticator: 'enrolled' },
+        metadata: { approvalAuthenticator: 'enrolled', recoveryCodesIssued: hashes.length },
       });
-      return { enrolled: true };
+      return { enrolled: true, recoveryCodes: codes };
+    }),
+
+  // DEV-961: a member who lost their phone uses one of their recovery codes, with their
+  // password. The code is spent, the authenticator is removed and the other codes stop
+  // working, so they must set up a new authenticator before approving (and, while the
+  // organization requires one, before using their account).
+  useRecoveryCode: protectedProcedure
+    .meta(refuseSupportSession)
+    .input(
+      z.strictObject({
+        code: z.string().trim().min(1).max(32),
+        currentPassword: reauthentication.optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = organizationOf(ctx);
+      const userId = ctx.session.user.id;
+      annotateAudit(ctx, { skipInput: true });
+      if (!(await rateLimit(`approval-authenticator-recovery:${userId}`, 5, 15 * 60_000)).ok)
+        throw tooManyAttempts();
+      await requireSetupReauthentication(ctx, organizationId, input.currentPassword);
+      const spent = await ctx.db.approvalAuthenticatorRecoveryCode.updateMany({
+        where: { organizationId, userId, codeHash: hashRecoveryCode(input.code), usedAt: null },
+        data: { usedAt: new Date() },
+      });
+      if (spent.count !== 1)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'That recovery code is not valid or has already been used.',
+        });
+      const [removed] = await Promise.all([
+        ctx.db.approvalAuthenticator.deleteMany({ where: { organizationId, userId } }),
+        ctx.db.approvalAuthenticatorRecoveryCode.deleteMany({
+          where: { organizationId, userId, usedAt: null },
+        }),
+      ]);
+      annotateAudit(ctx, {
+        operation: 'DELETE',
+        targetType: 'User',
+        targetId: userId,
+        description: 'Used an approval authenticator recovery code',
+        metadata: { approvalAuthenticator: 'recovery-code-used', removed: removed.count },
+      });
+      return { reset: true };
     }),
 
   // Owner and administrators: who has an approval authenticator, for recovery.
@@ -219,12 +414,48 @@ export const approvalAuthenticatorRouter = router({
     }));
   }),
 
+  // DEV-961: staff profiles with a PIN but no web login cannot set up an authenticator, so
+  // they keep approving with their PIN while the requirement is on. Listed for the owner.
+  // DEV-961: what approvals take in this organization, for the wording of approval fields
+  // (the counter's "Approval code" or "Approver PIN"). Any signed-in member may read it.
+  mode: protectedProcedure.query(async ({ ctx }) => {
+    const organization = await ctx.db.organization.findFirst({
+      where: { id: organizationOf(ctx) },
+      select: { requireApprovalAuthenticator: true },
+    });
+    return { required: organization?.requireApprovalAuthenticator ?? true };
+  }),
+
+  terminalOnlyApprovers: protectedProcedure.query(async ({ ctx }) => {
+    const organizationId = organizationOf(ctx);
+    await requireManager(ctx, organizationId);
+    const profiles = await ctx.db.restaurantStaffProfile.findMany({
+      where: {
+        organizationId,
+        userId: null,
+        status: 'ACTIVE',
+        credentials: { some: { type: 'PIN', revokedAt: null } },
+      },
+      select: { id: true, displayName: true },
+      orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+    });
+    return profiles;
+  }),
+
   // Recovery: remove a member's approval authenticator so they can enrol a new phone.
   resetForMember: protectedProcedure
-    .input(z.strictObject({ userId: z.string().min(1), currentPassword: reauthentication }))
+    .meta(refuseSupportSession)
+    .input(
+      z.strictObject({ userId: z.string().min(1), currentPassword: reauthentication.optional() })
+    )
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
-      await requirePasswordReauthentication(ctx, organizationId, input.currentPassword);
+      // DEV-961: a member with no password (single sign-on) proves it is them with a fresh sign-in.
+      const confirmedWith = await requireSetupReauthentication(
+        ctx,
+        organizationId,
+        input.currentPassword
+      );
       const [actor, target] = await Promise.all([
         liveParty(ctx, organizationId, ctx.session.user.id),
         liveParty(ctx, organizationId, input.userId),
@@ -233,42 +464,129 @@ export const approvalAuthenticatorRouter = router({
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
       const denial = approvalAuthenticatorResetDenial(actor, target);
       if (denial) throw new TRPCError({ code: 'FORBIDDEN', message: denial });
-      const removed = await ctx.db.approvalAuthenticator.deleteMany({
-        where: { organizationId, userId: target.id },
-      });
+      const [removed] = await Promise.all([
+        ctx.db.approvalAuthenticator.deleteMany({
+          where: { organizationId, userId: target.id },
+        }),
+        ctx.db.approvalAuthenticatorRecoveryCode.deleteMany({
+          where: { organizationId, userId: target.id },
+        }),
+      ]);
       annotateAudit(ctx, {
         operation: 'DELETE',
         targetType: 'User',
         targetId: target.id,
         description: 'Reset a member approval authenticator',
-        metadata: { approvalAuthenticator: 'reset', resetById: actor.id, removed: removed.count },
+        metadata: {
+          approvalAuthenticator: 'reset',
+          resetById: actor.id,
+          removed: removed.count,
+          confirmedWith,
+        },
       });
       return { reset: removed.count > 0 };
     }),
 
-  // Owner only: refuse every fixed PIN for approvals across the organization.
+  // Owner only: refuse every fixed PIN for approvals across the organization (the default,
+  // DEV-961). Turning it off is confirmed with the owner's own current authenticator code, or,
+  // when they have not set one up, their password and an acknowledgement of what it means.
   setRequired: protectedProcedure
-    .input(z.strictObject({ required: z.boolean() }))
+    .meta(refuseSupportSession)
+    .input(
+      z.union([
+        z.strictObject({ required: z.literal(true) }),
+        z.strictObject({ required: z.literal(false), code: approvalCode }),
+        z.strictObject({
+          required: z.literal(false),
+          // Omitted only by an owner with no password, who confirms with a fresh sign-in.
+          currentPassword: reauthentication.optional(),
+          acknowledged: z.literal(true),
+        }),
+      ])
+    )
     .mutation(async ({ ctx, input }) => {
       const organizationId = organizationOf(ctx);
-      const actor = await liveParty(ctx, organizationId, ctx.session.user.id);
+      const userId = ctx.session.user.id;
+      annotateAudit(ctx, { skipInput: true });
+      const actor = await liveParty(ctx, organizationId, userId);
       if (!actor || !hasAllCapabilityAccess(actor))
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Only the owner can change this setting.',
         });
+      let confirmedWith: 'AUTHENTICATOR' | 'PASSWORD' | 'FRESH_SIGN_IN' | null = null;
+      if (!input.required) {
+        if (!(await rateLimit(`approval-authenticator-off:${userId}`, 5, 15 * 60_000)).ok)
+          throw tooManyAttempts();
+        const ownAuthenticator = await ctx.db.approvalAuthenticator.findFirst({
+          where: { organizationId, userId, enabledAt: { not: null } },
+          select: { id: true },
+        });
+        if ('code' in input) {
+          if (
+            !(await consumeMemberApprovalCode(ctx.db, {
+              organizationId,
+              userId,
+              code: input.code,
+              action: 'approvalAuthenticator.setRequired',
+            }))
+          )
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'That code is incorrect. Enter the current code from your app.',
+            });
+          confirmedWith = 'AUTHENTICATOR';
+        } else {
+          if (ownAuthenticator)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Confirm with the current code from your authenticator app.',
+            });
+          // DEV-961: an owner who signs in only by single sign-on confirms with a fresh sign-in.
+          confirmedWith = await requireSetupReauthentication(
+            ctx,
+            organizationId,
+            input.currentPassword
+          );
+        }
+      }
       const saved = await ctx.db.organization.update({
         where: { id: organizationId },
         data: { requireApprovalAuthenticator: input.required },
         select: { requireApprovalAuthenticator: true },
       });
+      // DEV-961: while it is off everyone approves with their permanent PIN, so anyone who can
+      // approve and has none yet is asked to set one, and the owner is shown who they are.
+      const withoutPin = saved.requireApprovalAuthenticator
+        ? []
+        : await approversWithoutPin(ctx.db, organizationId);
+      if (withoutPin.length > 0)
+        await ctx.db.notification.createMany({
+          data: withoutPin.map((member) => ({
+            organizationId,
+            userId: member.id,
+            type: 'approval_pin_needed',
+            title: 'Set your approval PIN',
+            message: pinNeededMessage(ctx),
+            entityType: 'User',
+            entityId: member.id,
+          })),
+        });
       annotateAudit(ctx, {
         operation: 'UPDATE',
         targetType: 'Organization',
         targetId: organizationId,
-        description: `${saved.requireApprovalAuthenticator ? 'Required' : 'Stopped requiring'} an authenticator for approvals`,
-        metadata: { requireApprovalAuthenticator: saved.requireApprovalAuthenticator },
+        description: saved.requireApprovalAuthenticator
+          ? 'Turned the authenticator for approvals on'
+          : 'Turned the authenticator for approvals off: approvals take permanent PINs',
+        metadata: {
+          requireApprovalAuthenticator: saved.requireApprovalAuthenticator,
+          ...(confirmedWith ? { confirmedWith } : {}),
+          ...(saved.requireApprovalAuthenticator
+            ? {}
+            : { askedToSetPin: withoutPin.map((member) => member.id) }),
+        },
       });
-      return { required: saved.requireApprovalAuthenticator };
+      return { required: saved.requireApprovalAuthenticator, withoutPin };
     }),
 });

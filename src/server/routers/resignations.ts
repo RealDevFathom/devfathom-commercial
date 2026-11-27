@@ -1,8 +1,12 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure, hrProcedure, capabilityProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { can, subjectFromSession } from '@/lib/abac';
 import { annotateAudit } from '../audit';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { guardPharmacyAccessChanges } from '@/lib/team/pharmacy-access-guard';
+import { rethrowAccessChange } from '@/lib/team/member-sub-role-edit';
 import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 
@@ -155,6 +159,7 @@ export const resignationsRouter = router({
   // your own, HR may not review an admin's) is enforced via the ABAC engine. Does
   // NOT deactivate the account — offboarding happens separately on the last day.
   review: hrProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),
@@ -235,10 +240,38 @@ export const resignationsRouter = router({
         // IMP-HR-02: off-boarding automation. Keep deactivation atomic with the
         // winning decision so a failed off-boarding cannot leave a partial review.
         if (approved && decided.lastWorkingDay && decided.lastWorkingDay <= new Date()) {
-          await tx.user.update({
-            where: { organizationId_id: { organizationId, id: resignation.userId } },
-            data: { status: 'INACTIVE' },
-          });
+          const deactivate = async () => {
+            await tx.user.update({
+              where: { organizationId_id: { organizationId, id: resignation.userId } },
+              data: { status: 'INACTIVE' },
+            });
+          };
+          const scoped = tx as unknown as ScopedDb;
+          if (ctx.entitlements.vertical !== 'PHARMACY') await deactivate();
+          else {
+            // DEV-959B: in a pharmacy, off-boarding passes the access guard, so it never
+            // leaves the pharmacy without an active owner; the audit shares this transaction.
+            try {
+              await guardPharmacyAccessChanges(
+                scoped,
+                {
+                  organizationId,
+                  actor: { kind: 'system', source: 'RESIGNATION' },
+                  targetIds: [resignation.userId],
+                  pinVerified: false,
+                  mode: 'role',
+                  action: 'resignations.decide',
+                  describe: (person) => `Resignation approval deactivated ${person}`,
+                },
+                async () => {
+                  await deactivate();
+                  return { targetIds: [resignation.userId], value: null };
+                }
+              );
+            } catch (error) {
+              rethrowAccessChange(error);
+            }
+          }
         }
 
         return { resignation, updated: decided };

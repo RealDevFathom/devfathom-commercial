@@ -5,13 +5,17 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 // DEV-295: accept canonical colon-delimited grants beside legacy dotted grants so migrated
 // Cashier roles and un-migrated roles pass the same counter/receipt gate.
-export const RECEIPT_READ_CAPABILITIES = [
+export const CART_WRITE_CAPABILITIES = [
   'pharmacy:dispense',
   'pharmacy.dispense',
-  'pharmacy:receipt',
-  'pharmacy.receipt',
   'pharmacy:counter',
   'pharmacy.counter',
+] as const;
+
+export const RECEIPT_READ_CAPABILITIES = [
+  ...CART_WRITE_CAPABILITIES,
+  'pharmacy:receipt',
+  'pharmacy.receipt',
 ] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {

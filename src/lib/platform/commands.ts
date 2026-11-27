@@ -1,4 +1,7 @@
+import { changesPharmacyFinanceRules } from '@/lib/abac/pharmacy-sub-roles';
 import 'server-only';
+
+import { validateOidcSettings } from '@/lib/oidc-discovery';
 
 import { hash } from 'bcryptjs';
 import { createHash, randomBytes } from 'node:crypto';
@@ -19,11 +22,17 @@ import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activa
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { verifyTotp } from '@/lib/totp';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { revokeOperatorSessions } from '@/lib/platform/capabilities';
 import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { emailSchema } from '@/lib/email-address';
-import { organizationRolePermissionsSchema } from '@/lib/organization-role';
+import { organizationRolePermissionsSchema, replaceRolePermissions } from '@/lib/organization-role';
+import {
+  AccessChangeError,
+  guardPharmacyAccessChanges,
+  isPharmacyOrganization,
+} from '@/lib/team/pharmacy-access-guard';
 import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
@@ -208,6 +217,44 @@ type CommandResult = {
 };
 
 /** Structural JSON cast. Redacts nothing: persistence must keep what it stores. */
+/**
+ * DEV-959B: in a pharmacy, a platform command that changes what people may do (their role,
+ * status, custom role or an exception) passes the same access guard as the tenant screens.
+ * The platform operator is not the owner and gives no fresh tenant approval, so it may never
+ * give a weighty sub-role, make an administrator or an owner, or leave the pharmacy without
+ * an owner; the change and its audit share the command's transaction.
+ */
+async function platformAccessChange<T>(
+  db: ScopedDb,
+  organizationId: string,
+  targets: string[] | (() => Promise<string[]>),
+  action: string,
+  write: () => Promise<T>
+): Promise<T> {
+  if (!(await isPharmacyOrganization(db, organizationId))) return write();
+  // A list function runs under the organisation lock, so nobody joins it before the write.
+  let targetIds: string[] = Array.isArray(targets) ? targets : [];
+  try {
+    const { value } = await guardPharmacyAccessChanges(
+      db,
+      {
+        organizationId,
+        actor: { kind: 'system', source: 'PLATFORM' },
+        targetIds: Array.isArray(targets) ? targets : async () => (targetIds = await targets()),
+        pinVerified: false,
+        mode: 'role',
+        action,
+        describe: (name) => `Platform operator changed ${name}`,
+      },
+      async () => ({ targetIds, value: await write() })
+    );
+    return value;
+  } catch (error) {
+    if (error instanceof AccessChangeError) throw new PlatformSecurityError(error.message, 400);
+    throw error;
+  }
+}
+
 function toJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? null)) as Prisma.InputJsonValue;
 }
@@ -274,6 +321,8 @@ function sensitiveCommand(action: string): boolean {
   return (
     [
       'organization.user.password',
+      // DEV-961: removing a member's approval authenticator (the owner's lost phone).
+      'organization.user.approvalauthenticator.reset',
       'organization.scim.token',
       'organization.scim.revoke',
       'organization.transition',
@@ -1021,7 +1070,12 @@ async function bootstrapOrganization(
       : packageRecord.defaultSeats;
   const password = demo ? null : await hash(input.adminPassword, 12);
   const organization = await createOrganizationRecord(db, {
-    ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
+    // DEV-961: demo personas sign in without a password, so they cannot set up an approval
+    // authenticator; a demo seat keeps approvals on PINs. Every real organization takes the
+    // default (on).
+    ...(demo
+      ? { id: demo.identity.organizationId, isDemo: true, requireApprovalAuthenticator: false }
+      : {}),
     slug: input.slug,
     legalName: input.legalName,
     displayName: input.displayName,
@@ -2895,6 +2949,22 @@ async function runCommand(
       const before = connectionId
         ? await db.organizationIdentityConnection.findUnique({ where: { id: connectionId } })
         : null;
+      if (connection.protocol === 'OIDC') {
+        try {
+          await validateOidcSettings({
+            issuer: connection.issuer === undefined ? before?.issuer : connection.issuer,
+            discoveryUrl:
+              connection.discoveryUrl === undefined
+                ? before?.discoveryUrl
+                : connection.discoveryUrl,
+          });
+        } catch {
+          throw new PlatformSecurityError(
+            'OIDC settings require a public HTTPS address on port 443.',
+            400
+          );
+        }
+      }
       const saved = connectionId
         ? await db.organizationIdentityConnection.update({
             where: { id: connectionId },
@@ -3023,6 +3093,7 @@ async function runCommand(
       const existing = roleId
         ? await db.organizationRole.findFirst({
             where: { id: roleId, organizationId: input.organizationId },
+            include: { permissions: true },
           })
         : null;
       if (roleId && !existing) {
@@ -3031,21 +3102,43 @@ async function runCommand(
       if (existing?.isSystem) {
         throw new PlatformSecurityError('System roles cannot be modified.', 400);
       }
-      const saved = roleId
-        ? await db.organizationRole.update({ where: { id: roleId }, data: role })
-        : await db.organizationRole.create({ data: role });
-      await db.organizationRolePermission.deleteMany({
-        where: { organizationRoleId: saved.id },
-      });
-      if (permissions.length) {
-        await db.organizationRolePermission.createMany({
-          data: permissions.map((permission) => ({
-            organizationId: input.organizationId,
-            organizationRoleId: saved.id,
-            ...permission,
-          })),
-        });
+      if (
+        changesPharmacyFinanceRules(existing?.permissions ?? [], permissions, 'increase') &&
+        (await isPharmacyOrganization(db, input.organizationId))
+      ) {
+        throw new PlatformSecurityError(
+          'Only the workspace owner can grant pharmacy finance role permissions.',
+          403
+        );
       }
+      const holders = async () =>
+        roleId
+          ? (
+              await db.user.findMany({
+                where: { organizationId: input.organizationId, organizationRoleId: roleId },
+                select: { id: true },
+              })
+            ).map((user) => user.id)
+          : [];
+      const saved = await platformAccessChange(
+        db,
+        input.organizationId,
+        holders,
+        'platform.organization.role',
+        async () => {
+          const row = roleId
+            ? await db.organizationRole.update({ where: { id: roleId }, data: role })
+            : await db.organizationRole.create({ data: role });
+          await replaceRolePermissions(
+            db,
+            input.organizationId,
+            row.id,
+            existing?.permissions ?? [],
+            permissions
+          );
+          return row;
+        }
+      );
       return {
         targetType: 'OrganizationRole',
         targetId: saved.id,
@@ -3091,16 +3184,23 @@ async function runCommand(
           expiresAt: optionalDate.optional(),
         })
         .parse(payload);
-      const saved = await db.userPermissionOverride.upsert({
-        where: {
-          userId_capability: {
-            userId: input.userId,
-            capability: input.capability,
-          },
-        },
-        update: { ...input, createdById: actor.id },
-        create: { ...input, createdById: actor.id },
-      });
+      const saved = await platformAccessChange(
+        db,
+        input.organizationId,
+        [input.userId],
+        'platform.organization.permission',
+        () =>
+          db.userPermissionOverride.upsert({
+            where: {
+              userId_capability: {
+                userId: input.userId,
+                capability: input.capability,
+              },
+            },
+            update: { ...input, createdById: actor.id },
+            create: { ...input, createdById: actor.id },
+          })
+      );
       return {
         targetType: 'UserPermissionOverride',
         targetId: saved.id,
@@ -3113,7 +3213,13 @@ async function runCommand(
       const input = z.object({ id }).parse(payload);
       const before = await db.userPermissionOverride.findUnique({ where: { id: input.id } });
       if (!before) throw new PlatformSecurityError('Permission override not found.', 400);
-      await db.userPermissionOverride.delete({ where: { id: before.id } });
+      await platformAccessChange(
+        db,
+        before.organizationId,
+        [before.userId],
+        'platform.organization.permission.remove',
+        () => db.userPermissionOverride.delete({ where: { id: before.id } })
+      );
       return {
         targetType: 'UserPermissionOverride',
         targetId: before.id,
@@ -3151,16 +3257,23 @@ async function runCommand(
         }
       }
       const auditableBefore = omit(before, 'password', 'twoFactorSecret');
-      const saved = await db.user.update({
-        where: { id: userId },
-        data: {
-          ...data,
-          tokenVersion:
-            data.status && !['ACTIVE', 'ON_LEAVE'].includes(data.status)
-              ? { increment: 1 }
-              : undefined,
-        },
-      });
+      const saved = await platformAccessChange(
+        db,
+        before.organizationId,
+        [userId],
+        'platform.organization.user',
+        () =>
+          db.user.update({
+            where: { id: userId },
+            data: {
+              ...data,
+              tokenVersion:
+                data.status && !['ACTIVE', 'ON_LEAVE'].includes(data.status)
+                  ? { increment: 1 }
+                  : undefined,
+            },
+          })
+      );
       return {
         targetType: 'User',
         targetId: saved.id,
@@ -3225,6 +3338,62 @@ async function runCommand(
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: { id: saved.id, passwordReset: true, mustChangePassword: true },
+        audit,
+      };
+    }
+    // DEV-961 — recovery of last resort for an approval authenticator. A sole owner who
+    // lost both their phone and their recovery codes has nobody inside the organization who can
+    // reset it, and while the organization requires an authenticator their account does not
+    // work. The operator removes the enrolment (never sees or sets the secret) with a
+    // mandatory reason; the member sets up a new authenticator at the next request, and the
+    // member and the organization's administrators are told who did it and why.
+    case 'organization.user.approvalauthenticator.reset': {
+      const input = z.object({ id, reason: sensitiveReason }).strict().parse(payload);
+      const target = await db.user.findUnique({
+        where: { id: input.id },
+        select: { id: true, organizationId: true, email: true, role: true },
+      });
+      if (!target) throw new PlatformSecurityError('Organization user not found.', 400);
+      const removed = await db.approvalAuthenticator.deleteMany({
+        where: { organizationId: target.organizationId, userId: target.id },
+      });
+      const recoveryCodes = await db.approvalAuthenticatorRecoveryCode.deleteMany({
+        where: { organizationId: target.organizationId, userId: target.id },
+      });
+      const administrators = await db.user.findMany({
+        where: {
+          organizationId: target.organizationId,
+          role: 'ADMIN',
+          status: { in: ['ACTIVE', 'ON_LEAVE'] },
+        },
+        select: { id: true },
+      });
+      const recipients = [...new Set([target.id, ...administrators.map((admin) => admin.id)])];
+      await db.notification.createMany({
+        data: recipients.map((userId) => ({
+          organizationId: target.organizationId,
+          userId,
+          type: 'platform_approval_authenticator_reset',
+          title: 'Approval authenticator reset by DevFathom',
+          message: `${actor.name} (DevFathom platform) reset the approval authenticator for ${target.email}. A new authenticator must be set up before approving. Reason: ${input.reason}`,
+          entityType: 'User',
+          entityId: target.id,
+        })),
+      });
+      const audit = {
+        id: target.id,
+        email: target.email,
+        role: target.role,
+        approvalAuthenticatorReset: removed.count > 0,
+        recoveryCodesRemoved: recoveryCodes.count,
+        notifiedUserIds: recipients,
+        reason: input.reason,
+      };
+      return {
+        targetType: 'User',
+        targetId: target.id,
+        organizationId: target.organizationId,
+        data: { id: target.id, approvalAuthenticatorReset: removed.count > 0 },
         audit,
       };
     }
@@ -4344,8 +4513,24 @@ async function runCommand(
       if (!before || !['FAILED', 'CANCELLED'].includes(before.status)) {
         throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
       }
-      const saved = await db.platformJob.update({
-        where: { id: input.id },
+      const needsPurgeRequester = before.type === 'PURGE_DATA' && !before.requestedById;
+      if (needsPurgeRequester) {
+        assertPlatformCapability(actor, capabilityFor('organization.transition'));
+      }
+      const reason = needsPurgeRequester
+        ? z.object({ reason: sensitiveReason }).parse(payload).reason
+        : undefined;
+      const previousPayload = before.payload;
+      const payloadFields =
+        previousPayload && typeof previousPayload === 'object' && !Array.isArray(previousPayload)
+          ? previousPayload
+          : {};
+      const [saved] = await db.platformJob.updateManyAndReturn({
+        where: {
+          id: input.id,
+          status: before.status,
+          ...(needsPurgeRequester ? { requestedById: before.requestedById } : {}),
+        },
         data: {
           status: 'QUEUED',
           attempts: 0,
@@ -4354,14 +4539,19 @@ async function runCommand(
           scheduledAt: new Date(),
           startedAt: null,
           finishedAt: null,
+          ...(reason ? { requestedById: actor.id, payload: { ...payloadFields, reason } } : {}),
         },
       });
+      if (!saved) {
+        throw new PlatformSecurityError('Only failed or cancelled jobs can be retried.', 400);
+      }
       return {
         targetType: 'PlatformJob',
         targetId: saved.id,
         organizationId: saved.organizationId,
         data: saved,
-        audit: jobAudit(saved),
+        ...(reason ? { auditBefore: { status: before.status, requestedById: null } } : {}),
+        audit: reason ? { ...jobAudit(saved), reason } : jobAudit(saved),
       };
     }
     case 'job.cancel': {
@@ -4448,14 +4638,18 @@ async function runCommand(
               passwordHash: passwordHash!,
             },
           });
-      if (
-        !input.active ||
-        (existingOperator && (input.role !== existingOperator.role || input.password))
-      ) {
-        await db.platformSession.updateMany({
-          where: { platformUserId: saved.id, revokedAt: null },
-          data: { revokedAt: new Date() },
-        });
+      const revocationReasons = [
+        !input.active && 'Operator disabled',
+        existingOperator && input.role !== existingOperator.role && 'Operator role changed',
+        existingOperator && input.password && 'Operator password changed',
+        existingOperator &&
+          input.mfaRequired &&
+          !existingOperator.mfaRequired &&
+          !existingOperator.mfaEnabledAt &&
+          'Operator MFA required',
+      ].filter(Boolean);
+      if (revocationReasons.length > 0) {
+        await revokeOperatorSessions(db, saved.id, revocationReasons.join('; '), actor.id);
       }
       const safe = omit(saved, 'passwordHash', 'encryptedTotpSecret');
       return { targetType: 'PlatformUser', targetId: saved.id, data: safe, audit: safe };
@@ -4477,10 +4671,7 @@ async function runCommand(
           encryptedTotpSecret: null,
         },
       });
-      await db.platformSession.updateMany({
-        where: { platformUserId: input.id, revokedAt: null },
-        data: { revokedAt: new Date() },
-      });
+      await revokeOperatorSessions(db, saved.id, `Operator MFA reset: ${input.reason}`, actor.id);
       return {
         targetType: 'PlatformUser',
         targetId: saved.id,

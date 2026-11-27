@@ -1,5 +1,8 @@
 import 'server-only';
 
+import { discoverOidc } from '@/lib/oidc-discovery';
+import { deleteSpentSsoStates, SSO_CLEANUP_BATCH_SIZE } from '@/lib/sso-state';
+
 import { resolveTxt } from 'node:dns/promises';
 import { createHash } from 'node:crypto';
 import {
@@ -8,6 +11,8 @@ import {
   type PlatformJobType,
   type PrismaClient,
 } from '@/generated/prisma/client';
+import { claimJob, runClaimedJob, type JobResult } from './job-runner';
+import { endSupportSessions } from '@/lib/platform/capabilities';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
 import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
@@ -32,13 +37,11 @@ import {
 } from '@/lib/pharmacy/retention-purge';
 
 type JobPayload = Record<string, unknown>;
-type JobResult = Record<string, unknown>;
 
 const STALE_JOB_MS = 15 * 60_000;
 
 /** A failure that no retry can cure: the job is marked FAILED at once. */
 class PermanentJobError extends Error {}
-const RETRY_BASE_MS = 30_000;
 const CONTROL_PLANE_TABLES = new Set([
   'organizations',
   'organization_lifecycle_events',
@@ -61,10 +64,6 @@ function objectPayload(value: Prisma.JsonValue | null): JobPayload {
   return value && typeof value === 'object' && !Array.isArray(value) ? (value as JobPayload) : {};
 }
 
-function json(value: unknown): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
-}
-
 function requiredOrganization(job: PlatformJob): string {
   if (!job.organizationId) throw new Error(`${job.type} requires an organization.`);
   return job.organizationId;
@@ -76,32 +75,6 @@ function requiredString(payload: JobPayload, key: string): string {
     throw new Error(`Job payload requires "${key}".`);
   }
   return value.trim();
-}
-
-async function claimJob(): Promise<PlatformJob | null> {
-  return withPlatformDb(async (db) => {
-    const candidates = await db.$queryRaw<Array<{ id: string }>>(Prisma.sql`
-      SELECT "id"
-      FROM "platform_jobs"
-      WHERE "status" = 'QUEUED'
-        AND "scheduledAt" <= NOW()
-      ORDER BY "scheduledAt" ASC, "createdAt" ASC
-      FOR UPDATE SKIP LOCKED
-      LIMIT 1
-    `);
-    const id = candidates[0]?.id;
-    if (!id) return null;
-    return db.platformJob.update({
-      where: { id },
-      data: {
-        status: 'RUNNING',
-        attempts: { increment: 1 },
-        startedAt: new Date(),
-        finishedAt: null,
-        error: null,
-      },
-    });
-  });
 }
 
 async function recoverStaleJobs(): Promise<number> {
@@ -458,27 +431,8 @@ async function syncIdentity(
   if (!connection) throw new Error('Identity connection no longer exists.');
   try {
     if (connection.protocol === 'OIDC') {
-      const discoveryUrl =
-        connection.discoveryUrl ??
-        (connection.issuer
-          ? `${connection.issuer.replace(/\/$/, '')}/.well-known/openid-configuration`
-          : null);
-      if (!discoveryUrl || !connection.clientId) {
-        throw new Error('OIDC issuer/discovery URL and client ID are required.');
-      }
-      const response = await fetch(discoveryUrl, {
-        signal: AbortSignal.timeout(10_000),
-        headers: { accept: 'application/json' },
-      });
-      if (!response.ok) throw new Error(`OIDC discovery returned HTTP ${response.status}.`);
-      const metadata = (await response.json()) as Record<string, unknown>;
-      if (
-        typeof metadata.authorization_endpoint !== 'string' ||
-        typeof metadata.token_endpoint !== 'string' ||
-        typeof metadata.jwks_uri !== 'string'
-      ) {
-        throw new Error('OIDC discovery metadata is incomplete.');
-      }
+      if (!connection.clientId) throw new Error('OIDC client ID is required.');
+      await discoverOidc(connection, connection.clientId, undefined, true);
     } else if (!connection.ssoUrl || !connection.entityId || !connection.certificate) {
       throw new Error('SAML SSO URL, entity ID, and signing certificate are required.');
     }
@@ -834,20 +788,31 @@ async function setDeploymentAvailability(
     },
   });
   if (suspended) {
-    await db.platformSupportSession.updateMany({
-      where: { organizationId, status: 'ACTIVE' },
-      data: { status: 'REVOKED', endedAt: now },
-    });
+    const { reason } = objectPayload(job.payload);
+    await endSupportSessions(
+      db,
+      { organizationId },
+      typeof reason === 'string' && reason.trim()
+        ? `Organization suspended: ${reason.trim()}`
+        : 'Organization suspended.',
+      job.requestedById,
+      'REVOKED'
+    );
   }
   return { organizationId, deployments: deployments.count, suspended };
 }
 
 async function executeJob(job: PlatformJob): Promise<JobResult> {
+  if (job.type === 'PASSWORD_RESET_REQUEST_V1') {
+    const { runPasswordResetJob } = await import('@/lib/auth/password-reset-request');
+    return runPasswordResetJob(job);
+  }
+  const jobType = job.type;
   return withPlatformDb(
     async (db) => {
       const payload = objectPayload(job.payload);
       const handlers: Record<
-        PlatformJobType,
+        Exclude<PlatformJobType, 'PASSWORD_RESET_REQUEST_V1'>,
         (database: PrismaClient, item: PlatformJob, data: JobPayload) => Promise<JobResult>
       > = {
         PROVISION_SHARED: sharedProvision,
@@ -872,7 +837,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
           }),
         PHARMACY_OWNER_DATA_EXPORT_V1: runPharmacyOwnerDataExportJob,
       };
-      return handlers[job.type](db, job, payload);
+      return handlers[jobType](db, job, payload);
     },
     {
       timeout:
@@ -890,60 +855,6 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         : {}),
     }
   );
-}
-
-async function completeJob(job: PlatformJob, result: JobResult): Promise<void> {
-  await withPlatformDb(async (db) => {
-    const current = await db.platformJob.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
-    if (!current || current.status === 'CANCELLED') return;
-    await db.platformJob.update({
-      where: { id: job.id },
-      data: {
-        status: 'SUCCEEDED',
-        result: json(result),
-        error: null,
-        finishedAt: new Date(),
-      },
-    });
-  });
-}
-
-async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'failed'> {
-  const message = error instanceof Error ? error.message : 'Unknown worker error.';
-  // An export over its size cap or build time limit stays over it: retrying only repeats the work.
-  const retry =
-    !(error instanceof PermanentJobError) &&
-    !(error instanceof OwnerDataExportTooLargeError) &&
-    !(error instanceof OwnerDataExportTimeLimitError) &&
-    job.attempts < job.maxAttempts;
-  await withPlatformDb(async (db) => {
-    const current = await db.platformJob.findUnique({
-      where: { id: job.id },
-      select: { status: true },
-    });
-    if (!current || current.status === 'CANCELLED') return;
-    await db.platformJob.update({
-      where: { id: job.id },
-      data: retry
-        ? {
-            status: 'QUEUED',
-            scheduledAt: new Date(
-              Date.now() + Math.min(RETRY_BASE_MS * 2 ** Math.max(0, job.attempts - 1), 30 * 60_000)
-            ),
-            startedAt: null,
-            error: message.slice(0, 2_000),
-          }
-        : {
-            status: 'FAILED',
-            error: message.slice(0, 2_000),
-            finishedAt: new Date(),
-          },
-    });
-  });
-  return retry ? 'retried' : 'failed';
 }
 
 const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
@@ -1013,6 +924,10 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  // Bound each five-minute cleanup pass and release locks between batches.
+  for (let batch = 0; batch < 16; batch++) {
+    if ((await withPlatformDb(deleteSpentSsoStates)) < SSO_CLEANUP_BATCH_SIZE) break;
+  }
   await withPlatformDb((db) => deleteExpiredWhatsAppConsentArchives(db));
   await withPlatformDb((db) => purgeExpiredOwnerDataExports(db));
   await enqueueCameraEvidenceJobs(new Date());
@@ -1027,13 +942,15 @@ export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResu
     const job = await claimJob();
     if (!job) break;
     result.claimed += 1;
-    try {
-      await completeJob(job, await executeJob(job));
-      result.succeeded += 1;
-    } catch (error) {
-      const status = await failJob(job, error);
-      result[status] += 1;
-    }
+    const status = await runClaimedJob(
+      job,
+      executeJob,
+      (error) =>
+        error instanceof PermanentJobError ||
+        error instanceof OwnerDataExportTooLargeError ||
+        error instanceof OwnerDataExportTimeLimitError
+    );
+    result[status] += 1;
   }
   return result;
 }

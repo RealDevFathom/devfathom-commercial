@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -141,7 +142,14 @@ describe('FloorConsole', () => {
 
     renderConsole();
     expect(mocks.floorCalls.at(-1)?.enabled).toBe(false);
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     expect(mocks.floorCalls.at(-1)).toEqual({
       input: { branchId: 'branch_1', includeInactive: false },
       enabled: true,
@@ -164,7 +172,14 @@ describe('FloorConsole', () => {
       { id: floorId, name: 'Garden Terrace', sortOrder: 3, active: true, tables: [] },
     ];
     const { container } = renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
 
     expect(screen.getByText('Garden Terrace · sort 3')).toBeVisible();
     expect(container).not.toHaveTextContent(floorId);
@@ -181,7 +196,14 @@ describe('FloorConsole', () => {
 
   it('creates a floor with the exact router payload', () => {
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Add floor' }));
     const dialog = screen.getByRole('dialog', { name: 'Add floor' });
     fireEvent.change(within(dialog).getByLabelText('Floor name'), {
@@ -203,7 +225,14 @@ describe('FloorConsole', () => {
       { id: 'floor_1', name: 'Dining room', sortOrder: 0, active: true, tables: [] },
     ];
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
 
     expect(screen.getByText('Read-only floor')).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Add floor' })).not.toBeInTheDocument();
@@ -223,7 +252,14 @@ describe('FloorConsole', () => {
       },
     ];
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     expect(screen.queryByRole('button', { name: 'Make default' })).not.toBeInTheDocument();
   });
 
@@ -238,15 +274,34 @@ describe('FloorConsole', () => {
       },
     ];
     renderConsole();
-    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(
+      selectFieldControl(
+        screen.getByLabelText('Branch', {
+          selector: ':not([data-select-field-native][aria-hidden="true"])',
+        })
+      ),
+      { target: { value: 'branch_1' } }
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Add rule' }));
     const dialog = screen.getByRole('dialog', { name: 'Add routing rule' });
     fireEvent.change(within(dialog).getByPlaceholderText('Search products'), {
       target: { value: 'karahi' },
     });
-    const product = within(dialog).getByLabelText('Product');
-    expect(within(product).getByRole('option', { name: 'Chicken Karahi' })).toBeVisible();
-    expect(within(product).queryByRole('option', { name: 'Mango Lassi' })).not.toBeInTheDocument();
+    const product = within(dialog).getByLabelText('Product', {
+      selector: ':not([data-select-field-native][aria-hidden="true"])',
+    });
+    expect(
+      within(selectFieldControl(product)).getByRole('option', {
+        hidden: true,
+        name: 'Chicken Karahi',
+      })
+    ).toBeVisible();
+    expect(
+      within(selectFieldControl(product)).queryByRole('option', {
+        hidden: true,
+        name: 'Mango Lassi',
+      })
+    ).not.toBeInTheDocument();
     expect(within(dialog).queryByText(/product or category id/i)).not.toBeInTheDocument();
   });
 });

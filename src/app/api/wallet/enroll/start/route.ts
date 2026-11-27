@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { sendEmail } from '@/lib/email';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { startEnrollment } from '@/lib/restaurant/wallet/enrollment';
 import { admitWalletEnrollment } from '@/lib/restaurant/wallet/enrollment-rate-limit';
 
@@ -11,7 +12,9 @@ const ACCEPTED = { ok: true, message: 'If this link is active, a code is on its 
 
 export async function POST(request: Request) {
   const context = await enrollmentContext(request);
-  const parsed = inputSchema.safeParse(await request.json().catch(() => null));
+  const body = await readBoundedJson(request, 4 * 1024).catch(() => null);
+  if (body?.tooLarge) return Response.json(INVALID, { status: 413 });
+  const parsed = inputSchema.safeParse(body?.value);
   if (!context || !parsed.success) return Response.json(ACCEPTED, { status: 202 });
   const email = parsed.data.email.trim().toLowerCase();
   const gate = await admitWalletEnrollment({ ip: context.ip, token: parsed.data.token, email });

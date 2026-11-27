@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { readBoundedJson } from '@/lib/http/read-bounded-body';
 import { appRouter } from '@/server/routers/_app';
 import { createTRPCContext } from '@/server/trpc';
 
@@ -57,7 +58,10 @@ export async function POST(request: Request) {
   if (!isSameOriginJson(request)) {
     return NextResponse.json({ error: 'Forbidden.' }, { status: 403, headers });
   }
-  const parsed = input.safeParse(await request.json().catch(() => null));
+  const body = await readBoundedJson(request, 4 * 1024).catch(() => null);
+  if (body?.tooLarge)
+    return NextResponse.json({ error: 'Request body is too large.' }, { status: 413, headers });
+  const parsed = input.safeParse(body?.value);
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid receipt print request.' }, { status: 400, headers });
   }

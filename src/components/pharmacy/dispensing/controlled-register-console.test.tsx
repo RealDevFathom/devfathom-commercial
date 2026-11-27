@@ -1,3 +1,5 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
+import { EntitlementsProvider } from '@/components/entitlements-provider';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -133,16 +135,71 @@ describe('DEV-672 controlled register branch list', () => {
 
     const picker = screen.getByRole('combobox', { name: /Branch/ });
     expect(
-      within(picker)
-        .getAllByRole('option')
+      within(selectFieldControl(picker))
+        .getAllByRole('option', { hidden: true })
         .map((option) => option.textContent)
     ).toEqual(['Gulberg', 'Johar Town']);
     expect(h.registerInputs.at(-1)?.input).toEqual({ branchId: 'br-1' });
 
-    fireEvent.change(picker, { target: { value: 'br-2' } });
+    fireEvent.change(selectFieldControl(picker), { target: { value: 'br-2' } });
 
     expect(h.registerInputs.at(-1)).toEqual({ input: { branchId: 'br-2' }, enabled: true });
   });
+
+  it('identifies the outgoing supplier and original purchase on the mobile register card', () => {
+    h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
+    h.entries = [
+      {
+        ...entry,
+        serial: 3,
+        entryKind: 'RETURN_TO_SUPPLIER',
+        sourcePurchase: { serial: 1 },
+        patient: null,
+        counterpartyName: 'Test supplier',
+        quantityCanonicalUnits: 80,
+        balanceDelta: -80,
+        runningBalance: 0,
+      },
+    ];
+    render(<ControlledRegisterConsole />);
+    const card = screen.getByRole('article');
+    expect(card).toHaveTextContent('Returned to supplier · purchase 1');
+    expect(card).toHaveTextContent('Test supplier');
+    expect(card).toHaveTextContent('balance 0');
+  });
+
+  it.each([
+    ['Asia/Karachi', '3 Sep 2026, 4:47 PM PKT', '1 Nov 2026, 11:00 AM PKT'],
+    ['UTC', '3 Sep 2026, 11:47 AM UTC', '1 Nov 2026, 6:00 AM UTC'],
+  ])(
+    'shows both late-entry dates in the %s workspace time zone',
+    (timeZone, dispatchDate, entryDate) => {
+      h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
+      h.entries = [
+        {
+          ...entry,
+          entryKind: 'RETURN_TO_SUPPLIER',
+          sourcePurchase: { serial: 1 },
+          lateDispatchAt: new Date('2026-09-03T11:47:00Z'),
+          sentByName: 'Sending pharmacist',
+          recordedByName: 'Recording owner',
+          supplierReturnReason: 'Checked old dispatch',
+        },
+      ];
+      render(
+        <EntitlementsProvider value={{ timeZone } as never}>
+          <ControlledRegisterConsole />
+        </EntitlementsProvider>
+      );
+      expect(screen.getByRole('table')).not.toHaveTextContent('PIN witnessed');
+      expect(screen.getByRole('article')).toHaveTextContent(
+        `Recorded late, no witness · Sent by Sending pharmacist on ${dispatchDate} · Recorded by Recording owner on ${entryDate} · Reason: Checked old dispatch`
+      );
+      expect(screen.getByRole('table')).toHaveTextContent(
+        `Recorded late, no witness · Sent by Sending pharmacist on ${dispatchDate} · Recorded by Recording owner on ${entryDate} · Reason: Checked old dispatch`
+      );
+    }
+  );
 
   it('prints the register table with the branch name', async () => {
     h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Gulberg' }] };
@@ -161,4 +218,18 @@ describe('DEV-672 controlled register branch list', () => {
     expect(popup.querySelector('table')?.textContent).toContain('Register Tablet 5mg');
     expect(screen.queryByText(/Allow the print window/)).not.toBeInTheDocument();
   });
+});
+
+it.each([
+  ['Asia/Karachi', '2 Nov 2026'],
+  ['UTC', '1 Nov 2026'],
+])('shows the register entry on the %s clock', (timeZone, date) => {
+  h.branches = { isLoading: false, error: null, data: [{ id: 'br-1', name: 'Main' }] };
+  h.entries = [{ ...entry, createdAt: new Date('2026-11-02T00:30:00+05:00') }];
+  const { container } = render(
+    <EntitlementsProvider value={{ timeZone } as never}>
+      <ControlledRegisterConsole />
+    </EntitlementsProvider>
+  );
+  expect(container).toHaveTextContent(date);
 });

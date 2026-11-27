@@ -14,6 +14,7 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ComponentProps,
   type ReactNode,
   type RefObject,
   type KeyboardEventHandler,
@@ -21,7 +22,15 @@ import {
 import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
 import Link from 'next/link';
 import { flushSync } from 'react-dom';
-import { ShieldCheck, Star, UserRound } from 'lucide-react';
+import {
+  CircleCheck,
+  Ellipsis,
+  ScanBarcode,
+  ShieldCheck,
+  Star,
+  UserRound,
+  WifiOff,
+} from 'lucide-react';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
@@ -38,15 +47,28 @@ import {
   type TenderDraft,
 } from './tender-attempt-storage';
 
-import { CounterCartPanel, CounterLotOverride, type CounterLotOverrideValue } from './counter-cart';
+import {
+  CounterCartPanel,
+  CounterLotOverride,
+  type CounterLineChange,
+  type CounterLotOverrideValue,
+} from './counter-cart';
 import { CounterChangeDue } from './counter-change-due';
 import { CounterKeymapLegend } from './counter-keymap-legend';
+import { CounterActionBar, CounterFrame, CounterFrameContent } from './counter-frame';
 import { CounterOpenDrawerStep } from './counter-open-drawer-step';
 import { CounterSaleReadiness, CounterSetupNextStep } from './counter-sale-readiness';
 import { clearCounterReadinessOkay } from '@/lib/pharmacy/counter-readiness-okay';
 import { CounterDrawerOperator } from './counter-drawer-operator';
+import { CounterCashShiftPanel } from './counter-cash-shift-panel';
 import { CounterOpenBills, type CounterOpenBill } from './counter-open-bills';
 import { CounterPackApprovalDialog } from './counter-pack-approval-dialog';
+import {
+  ApprovalSecretKindContext,
+  useCounterApprovalCopy,
+  type CounterApprovalCopy,
+} from './counter-approval-copy';
+import { useApprovalSecretKind } from '@/components/pharmacy/own-approval-copy';
 import type { CounterApprovalPin } from '@/lib/pharmacy/counter-line-approval';
 import { CounterVoidDialog } from './counter-void-dialog';
 import type { SaleVoidReason } from '@/lib/pharmacy/sale-void-reasons';
@@ -59,13 +81,15 @@ import {
 } from './counter-receipt-view';
 import { CounterCardTerminalPanel } from './counter-card-terminal-panel';
 import { CounterKhataPaymentPanel } from './counter-khata-payment-panel';
+import { CounterPackCheck } from './counter-pack-check';
+import { CounterDemandSheet } from './counter-demand-sheet';
 import { CounterReturnPanel } from './counter-return-panel';
-import { CounterRxPanel } from './counter-rx-panel';
+import { CounterControlledAuthorization, CounterRxPanel } from './counter-rx-panel';
 import { CounterRxSelfSign } from './counter-rx-self-sign';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterScanInput } from './counter-scan-input';
 import { CounterVoucherEntry, type CounterHeldVoucher } from './counter-voucher';
-import { CounterBillDiscountEntry } from './counter-bill-discount';
+import { CounterBillDiscountEntry, useCounterBillDiscount } from './counter-bill-discount';
 import {
   CounterDiscountEntry,
   counterDiscountMinor,
@@ -85,8 +109,15 @@ import type { CounterTenderDiscardInput } from './counter-tender-discard';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { CounterUpsellSuggestions } from './counter-upsell-suggestions';
 import { useBrowserOnline } from './use-browser-online';
+import { useHorizontalOverflow } from './use-horizontal-overflow';
 import { useCounterEnrolment, useCounterOffline } from './use-counter-offline';
-import { CounterOfflineOnly, CounterOfflinePanel } from './counter-offline-panel';
+import {
+  CounterOfflineBannerDetail,
+  CounterOfflineOnly,
+  CounterOfflinePanel,
+} from './counter-offline-panel';
+import { OfflineQueue } from './counter-offline-sale';
+import { CounterSalesToReconcile } from './counter-sales-to-reconcile';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -94,15 +125,17 @@ import { PageHeader } from '@/components/ui/page-header';
 import { Eyebrow } from '@/components/ui/eyebrow';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { Dialog, DialogPortal, DialogOverlay, DialogDescription } from '@/components/ui/dialog';
 import {
-  Dialog,
-  DialogPortal,
-  DialogOverlay,
-  DialogTitle,
-  DialogDescription,
-  DialogClose,
-} from '@/components/ui/dialog';
-import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+  COUNTER_SHEET_BACKDROP,
+  CounterNote,
+  CounterStateCard,
+  CounterSheetFooter,
+  CounterSheetHeader,
+  counterSheetClassName,
+  type CounterSheetVariant,
+} from './counter-sheet';
+import type { CounterCart, CounterCartLine, CounterSearchRow } from '@/lib/pharmacy/counter';
 import { counterLabelScanDecision } from '@/lib/pharmacy/counter-label-scan';
 import {
   counterMedicineDisplayName,
@@ -156,6 +189,7 @@ import {
   preferredSaleUnitOption,
   previewSaleLine,
   type SaleUnitKind,
+  type SaleUnitOption,
 } from '@/lib/pharmacy/counter-pricing';
 import {
   formatMinor,
@@ -165,6 +199,7 @@ import {
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
 import {
+  allocateWhileCounterPrintWindowOpen,
   assertCounterBrowserPrintReady,
   buildCounterBrowserReceipt,
   counterFormatFromLayout,
@@ -194,6 +229,7 @@ type Notice = {
   /** DEV-910: stays on screen until the cashier dismisses it. */
   persistent?: boolean;
   inventoryBranchId?: string;
+  printReceiptSaleId?: string;
   /** DEV-860: a sale refused for a setup gap carries its fix link or whom to ask. */
   setup?: CounterSetupAdvice;
 };
@@ -331,6 +367,55 @@ function freshControlledAuth(
   return fresh;
 }
 
+/**
+ * DEV-977 phase 3 (Counter v2 A5): what a controlled line still needs before it is added, in the
+ * order of the authorisation steps. These are exactly the conditions the add checks before it
+ * sends the line; the server checks every field and the pharmacist's PIN again.
+ */
+function controlledAuthMissing(
+  patient: unknown,
+  patientAddress: string | null,
+  auth: typeof EMPTY_CONTROLLED_AUTH,
+  online: boolean,
+  copy: CounterApprovalCopy
+): string[] {
+  const missing: string[] = [];
+  if (!patient) missing.push('the patient');
+  if (patientAddress !== null && patientAddress.trim().length < 3)
+    missing.push("the patient's address");
+  if (!auth.emergency && !auth.prescriptionLineId)
+    missing.push('a prescription or an emergency supply');
+  if (auth.emergency && auth.prescriberName.trim().length === 0)
+    missing.push("the prescriber's name");
+  if (!auth.staffProfileId) missing.push('the approving pharmacist');
+  if (!/^\d{4,8}$/.test(auth.pin)) missing.push(copy.controlledSecretNeeded);
+  if (!online) missing.push('a connection');
+  return missing;
+}
+
+/**
+ * DEV-977 phase 3: why this counter cannot take a controlled line's authorisation, as far as the
+ * client knows: without Pharmacy Safety the pharmacists' list is not read at all; a member the
+ * server refuses that list cannot dispense. Neither changes who may authorise.
+ */
+type ControlledBlock = 'NO_SAFETY_MODULE' | 'NOT_DISPENSER' | null;
+
+/** DEV-977 phase 3: the notice for a controlled line refused until it is authorised. */
+function controlledNotice(
+  block: ControlledBlock,
+  online: boolean,
+  copy: CounterApprovalCopy
+): string {
+  const needs = copy.controlledNeeds;
+  if (block === 'NO_SAFETY_MODULE')
+    return `${needs} This counter cannot take that authorisation: it needs Pharmacy Safety, which is not switched on for this business. Ask the owner.`;
+  if (block === 'NOT_DISPENSER')
+    return `${needs} Only a pharmacist can authorise it at this till: ask the pharmacist on duty.`;
+  return online
+    ? `${needs} Fill in the three steps to complete the authorization panel, then press Authorise line.`
+    : `${needs} Connect online, then complete the authorization panel and press Authorise line.`;
+}
+
 function tenderAcknowledgement(value: unknown): value is {
   tenderId: string;
   settled: boolean;
@@ -375,6 +460,11 @@ function tenderRejected(error: unknown): boolean {
 
 /** DEV-575: typed search fires this long after the last keystroke. */
 export const COUNTER_SEARCH_DEBOUNCE_MS = 150;
+/** DEV-977B: changing or removing a bill line is a server action, never done offline. */
+const LINE_CHANGE_NEEDS_CONNECTION =
+  'Changing or removing a line needs the connection. Reconnect, then change it on the bill.';
+/** DEV-977B (Counter v2, B6): a search running this long shows its slow state. */
+export const COUNTER_SLOW_SEARCH_MS = 1500;
 
 /**
  * A barcode (six or more digits) or a GS1 payload: input a scanner sends as one
@@ -400,6 +490,10 @@ const UNKNOWN_TENDER_MESSAGE =
   'Payment outcome is unknown. The original attempt is saved in this browser. Check payment outcome before taking more money. Refreshing the bill will not retry the payment.';
 
 type ConsoleProps = { initialSaleId?: string | null; initialBranchId?: string };
+
+/** DEV-977: a key named beside the control it drives (Counter v2 keycap). */
+const KEYCAP_CLASS =
+  'inline-flex min-h-5 items-center rounded-[var(--radius-control)] border border-border-subtle bg-surface-sunken px-1.5 font-mono text-xs font-semibold text-text-body';
 
 function counterSelectionPreview(
   row: CounterSearchRow | null,
@@ -531,33 +625,52 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
     return (
-      <SectionCard title="Counter unavailable">
-        <p role="status" className="text-sm text-text-body">
-          {status === 'loading'
-            ? 'Checking counter access…'
-            : 'Sign in with an authorized pharmacy account to open this counter.'}
-        </p>
-      </SectionCard>
+      <CounterFrame>
+        <CounterFrameContent>
+          <SectionCard title="Counter unavailable">
+            <p role="status" className="text-sm text-text-body">
+              {status === 'loading'
+                ? 'Checking counter access…'
+                : 'Sign in with an authorized pharmacy account to open this counter.'}
+            </p>
+          </SectionCard>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
   return (
-    <ScopedPharmacyCounterConsole
-      {...props}
-      key={JSON.stringify([
-        user.organizationId,
-        user.id,
-        user.role,
-        user.status,
-        [...entitlements.enabledModules].sort(),
-      ])}
-      organizationId={user.organizationId}
-      accountId={user.id}
-      evidenceAuthorized={user.role === 'ADMIN'}
-      keymapPreviewAuthorized={user.role === 'ADMIN'}
-      safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
-      dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
-      accountEmail={user.email}
-    />
+    <CounterApprovalMode>
+      <ScopedPharmacyCounterConsole
+        {...props}
+        key={JSON.stringify([
+          user.organizationId,
+          user.id,
+          user.role,
+          user.status,
+          [...entitlements.enabledModules].sort(),
+        ])}
+        organizationId={user.organizationId}
+        accountId={user.id}
+        evidenceAuthorized={user.role === 'ADMIN'}
+        keymapPreviewAuthorized={user.role === 'ADMIN'}
+        safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
+        dispensingLicensed={isModuleGranted('pharmacy-dispensing', entitlements.enabledModules)}
+        accountEmail={user.email}
+      />
+    </CounterApprovalMode>
+  );
+}
+
+/**
+ * DEV-961: the counter's approval fields follow the owner's "Authenticator for approvals"
+ * setting: "Approval code" while it is on (the default, and until it is read), "Approver PIN"
+ * while the owner has it off. The server decides either way; this is the wording only.
+ */
+function CounterApprovalMode({ children }: { children: React.ReactNode }) {
+  return (
+    <ApprovalSecretKindContext.Provider value={useApprovalSecretKind()}>
+      {children}
+    </ApprovalSecretKindContext.Provider>
   );
 }
 
@@ -663,6 +776,17 @@ function ScopedPharmacyCounterConsole({
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: safetyLicensed,
   });
+  // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A FORBIDDEN read means this
+  // actor cannot dispense, so the controlled authorization panel is not offered (the server
+  // refuses it anyway). Without Pharmacy Safety the read is not made at all, with the same outcome.
+  const controlledBlock: ControlledBlock = !safetyLicensed
+    ? 'NO_SAFETY_MODULE'
+    : (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code === 'FORBIDDEN'
+      ? 'NOT_DISPENSER'
+      : null;
+  const controlledAuthorisable = controlledBlock === null;
+  // DEV-961, DEV-977 phase 3: the Authorise sheet's wording follows the approvals setting.
+  const approvalCopy = useCounterApprovalCopy();
   // DEV-35: the same ABAC read the rail uses decides whether the Rx substitute
   // hand-off links to the substitution workspace (dispense or Pharmacy Safety).
   const railAccess = trpc.pharmacyAccess.navigation.useQuery(undefined, {
@@ -715,6 +839,8 @@ function ScopedPharmacyCounterConsole({
     receipt: CounterReceipt;
   } | null>(null);
   const receiptIntent = useRef<ReceiptIntent | null>(null);
+  const printInFlight = useRef(false);
+  const [printPending, setPrintPending] = useState(false);
   // The patient on the bill when it was first seen paid or voided, and the
   // authorization fields the operator has edited since then (DEV-712).
   const closedBillPatient = useRef<{
@@ -762,13 +888,54 @@ function ScopedPharmacyCounterConsole({
   const quantityReviewed = useRef(false);
   const restoreSearchAfterAdd = useRef(false);
   const rxPanelRef = useRef<HTMLDivElement>(null);
+  const controlledPanelRef = useRef<HTMLDivElement>(null);
+  // DEV-977 phase 3: "Find the patient" in the authorisation sheet opens the checks sheet and
+  // comes back to the authorisation when it closes.
+  const returnToControlled = useRef(false);
   const tenderRef = useRef<HTMLDivElement>(null);
   const [paymentOpen, setPaymentOpen] = useState(false);
   const [receiptOpen, setReceiptOpen] = useState(false);
   const [actionsOpen, setActionsOpen] = useState(false);
+  // DEV-977: choosing a result (click or Enter) closes the results over the bill so the line
+  // being added is in view; typing or arrowing through results opens them again.
+  const [resultsDismissed, setResultsDismissed] = useState(false);
+  // DEV-977B (Counter v2, A6): the result the arrows are on. Moving through results no longer
+  // stages a line; Enter adds the highlighted one in one step.
+  const [highlightId, setHighlightId] = useState<string | null>(null);
+  // DEV-977B: "Adds as" (F3 pack, F4 strip, F5 unit), chosen before or while searching. Null
+  // adds each medicine in its usual unit.
+  const [addUnit, setAddUnit] = useState<SaleUnitKind | null>(null);
+  // DEV-977B: the sale units of medicines added from search, so their bill line can switch unit.
+  const knownSaleUnits = useRef(new Map<string, readonly SaleUnitOption[]>());
+  // DEV-977B: retry keys for a line change or removal whose answer was lost.
+  const lineChangeKeys = useRef(new Map<string, string>());
+  const actionsButtonRef = useRef<HTMLButtonElement>(null);
+  const actionsPanelRef = useRef<HTMLDivElement>(null);
   const [checksOpen, setChecksOpen] = useState(false);
+  // DEV-977 phase 3 (Counter v2 A5): the controlled-medicine authorisation's own sheet, and a
+  // scanned serialised pack of a controlled medicine waiting there. The pack is kept as scanned
+  // (its payload, so the server pins its own lot) and nothing is on the bill until it is added.
+  const [controlledOpen, setControlledOpen] = useState(false);
+  // DEV-977 phase 3 review: the server's refusal of an "Authorise line", said inside the open
+  // sheet (it is also the counter's notice, which the sheet covers). Never holds the PIN.
+  const [controlledError, setControlledError] = useState<string | null>(null);
+  // DEV-977 phase 3 review: the typed pharmacist PIN or code never outlives the sheet. Every way
+  // the sheet closes (Close, Escape, the backdrop, "Find the patient", "Don't add it", or an add)
+  // clears it; the add itself clears it after every attempt.
+  const closeControlled = useCallback(() => {
+    setControlledOpen(false);
+    setControlledAuth((current) => (current.pin ? { ...current, pin: '' } : current));
+    // Nor does the last refusal: it belonged to the attempt the sheet was open for.
+    setControlledError(null);
+  }, []);
+  const [pendingPack, setPendingPack] = useState<{
+    row: CounterSearchRow;
+    pack: { payload: string; serial: string };
+  } | null>(null);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [loyaltyOpen, setLoyaltyOpen] = useState(false);
+  // DEV-977 phase 3: the Counter status strip is a tab stop only while it scrolls sideways.
+  const [statusStripRef, statusStripScrolls] = useHorizontalOverflow<HTMLDivElement>();
 
   // ── Data ──────────────────────────────────────────────────────────────────
 
@@ -1008,6 +1175,14 @@ function ScopedPharmacyCounterConsole({
         : searchQuery.isError
           ? 'error'
           : 'ready';
+  // DEV-977B (Counter v2): a search still running after a moment says so.
+  const [slowQuery, setSlowQuery] = useState<string | null>(null);
+  useEffect(() => {
+    if (searchState !== 'loading') return;
+    const timer = window.setTimeout(() => setSlowQuery(trimmedQuery), COUNTER_SLOW_SEARCH_MS);
+    return () => window.clearTimeout(timer);
+  }, [searchState, trimmedQuery]);
+  const slowSearch = searchState === 'loading' && slowQuery === trimmedQuery;
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1028,6 +1203,11 @@ function ScopedPharmacyCounterConsole({
     () => counterDeviceId({ organizationId, branchId }),
     [organizationId, branchId]
   );
+  /** DEV-977B: the counter device a line change names, so the server checks its drawer's shift. */
+  const counterDevice = useCallback(() => {
+    const id = currentCounterDeviceId();
+    return id ? { deviceId: id } : {};
+  }, [currentCounterDeviceId]);
   const drawerQueryEnabled = Boolean(branchAuthorized && branchId && deviceId && !settlementDenied);
   // On the client a missing device id means site storage is blocked: no drawer
   // can be read or opened, so the step says so instead of waiting forever.
@@ -1051,6 +1231,13 @@ function ScopedPharmacyCounterConsole({
   const drawerOpen = Boolean(openDrawerSession) && !drawerQuery.isError;
   // DEV-97: someone who takes no payment opens no drawer, and still builds bills.
   const drawerRequired = branchAuthorized && !settlementDenied && !drawerOpen;
+  // DEV-958B: a drawer whose branch runs cash shifts takes money only inside a shift. Between
+  // shifts the next cashier opens theirs in place of scan/search; the server refuses otherwise.
+  const cashShift =
+    settlementDenied || !drawerOpen || !drawerQuery.data || !('cashShift' in drawerQuery.data)
+      ? undefined
+      : drawerQuery.data.cashShift;
+  const shiftRequired = Boolean(cashShift && !cashShift.openShift);
   // DEV-631: the business day is closed, so the counter says so before a bill is
   // built rather than only when payment is refused. The server still refuses it.
   const dayClosed =
@@ -1095,10 +1282,10 @@ function ScopedPharmacyCounterConsole({
   const dayClosedRef = useRef(dayClosed);
   const pharmacistCheckOffRef = useRef(pharmacistCheckOff);
   useEffect(() => {
-    drawerRequiredRef.current = drawerRequired;
+    drawerRequiredRef.current = drawerRequired || shiftRequired;
     dayClosedRef.current = dayClosed;
     pharmacistCheckOffRef.current = pharmacistCheckOff;
-  }, [drawerRequired, dayClosed, pharmacistCheckOff]);
+  }, [drawerRequired, shiftRequired, dayClosed, pharmacistCheckOff]);
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1141,6 +1328,8 @@ function ScopedPharmacyCounterConsole({
 
   const createSale = trpc.pharmacySales.create.useMutation();
   const addLine = trpc.pharmacySales.addLine.useMutation();
+  const changeLine = trpc.pharmacySales.changeLine.useMutation();
+  const removeLine = trpc.pharmacySales.removeLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   // DEV-641: only a request React Query is holding for the connection is queued.
@@ -1214,7 +1403,7 @@ function ScopedPharmacyCounterConsole({
 
   const cart = cartQuery.data ?? null;
   const patient = patientPanelQuery.data ?? null;
-  const patientAddress = patientAddressDraft ?? patient?.address ?? '';
+  const patientAddress = patient ? patientAddressDraft : '';
   const locationName = activeRow?.storage.locationName?.trim() || activeRow?.storage.locationKind;
   const locationCode = activeRow?.storage.locationCode;
   const locationLabel =
@@ -1337,7 +1526,8 @@ function ScopedPharmacyCounterConsole({
     return counterAlertsFor(lines, { at: new Date(), timeZone: workspaceZone, pharmacistCheckOff });
   }, [cart, patient, workspaceZone, pharmacistCheckOff]);
 
-  const blocked = hasBlockingAlert(alerts);
+  const packBlocked = cart?.lines.some((line) => line.packCheckBlocked) === true;
+  const blocked = hasBlockingAlert(alerts) || packBlocked;
   const safetyLabel = blocked
     ? `${alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK').length} safety block · payment locked`
     : `No safety blocks · ${alerts.length} notes to pass on`;
@@ -1345,6 +1535,7 @@ function ScopedPharmacyCounterConsole({
     ? `${customerQuery.data.pointsBalance} loyalty points${customerQuery.data.customer.creditLimitMinor > 0 || customerQuery.data.creditBalanceMinor > 0 ? ' · Khata' : ''}`
     : 'Loyalty and khata · not linked';
   const currentBill = hasValidBill(cart, saleId);
+  const demandSaleId = currentBill && cart.status === 'OPEN' ? cart.saleId : undefined;
   const currentBillClosed = billClosed(cart, saleId);
   useEffect(() => {
     if (currentBillClosed && saleId && closedBillPatient.current?.saleId !== saleId)
@@ -1401,6 +1592,100 @@ function ScopedPharmacyCounterConsole({
     branchAuthorized &&
     (pending === 'addToCart' || drainingScan || queuedScans > 0);
   const lineCount = cart?.lines.length ?? 0;
+  // DEV-977 phase 3 (Counter v2 A4): the discount sheet's supervisor block names who can
+  // approve, read only while the sheet is open. The approval dialog keeps its own read.
+  const [discountSheetOpen, setDiscountSheetOpen] = useState(false);
+  const sheetApproversQuery = trpc.pharmacySales.discountApprovers.useQuery(
+    { branchId },
+    { enabled: discountSheetOpen && Boolean(branchId) && branchAuthorized, retry: false }
+  );
+  const sheetApprovers = sheetApproversQuery.isError
+    ? ({ status: 'error' } as const)
+    : sheetApproversQuery.data
+      ? ({ status: 'ready', list: sheetApproversQuery.data } as const)
+      : ({ status: 'loading' } as const);
+  // DEV-977 phase 3 (Counter v2 A4): the discount sheet's "Whole bill" choice uses the same
+  // whole-bill procedure and approval dialog as the bill's own form (DEV-956).
+  const sheetBillDiscount = useCounterBillDiscount({
+    branchId,
+    saleId: cart?.saleId ?? '',
+    lines: cart?.lines ?? [],
+    requestApproval: requestBillDiscountApproval,
+    onChanged: (message) => {
+      setNotice({ tone: 'success', message });
+      void cartQuery.refetch();
+    },
+    // DEV-977 phase 3: the sheet closes on success, so each item left out is named in the
+    // notice, with its reason, as the bill's own form names them.
+    nameLeftOut: true,
+  });
+  const sheetWholeBill =
+    currentBill && cart && cart.status === 'OPEN' && lineCount > 0 && sheetBillDiscount.enabled
+      ? {
+          disabled:
+            busy ||
+            !branchAuthorized ||
+            !online ||
+            cart.totals.tenderedMinor > 0 ||
+            sheetBillDiscount.pending,
+          apply: async (
+            discount: { kind: 'PERCENT'; bps: number } | { kind: 'AMOUNT'; minor: number },
+            label: string
+          ) => (await sheetBillDiscount.send(discount, label)).error,
+        }
+      : undefined;
+  // DEV-977 phase 3 (Counter v2 A5): the controlled line the authorisation sheet is for: a
+  // scanned pack waiting as scanned, or the controlled medicine in the line form.
+  const controlledTarget =
+    pendingPack?.row ?? (activeRow?.restriction.controlled ? activeRow : null);
+  const controlledInPlay = Boolean(
+    pendingPack?.row.restriction.controlled ||
+    activeRow?.restriction.controlled ||
+    (currentBill && cart?.lines.some((line) => line.controlled))
+  );
+  const controlledFields:
+    ComponentProps<typeof CounterControlledAuthorization>['controlled'] | null =
+    controlledInPlay && controlledAuthorisable
+      ? {
+          ...controlledAuth,
+          pharmacists: pharmacistsQuery.data ?? [],
+          loading: pharmacistsQuery.isLoading,
+          error: pharmacistsQuery.isError,
+          patientAddress,
+          onChange: (field, value) => {
+            // A field being corrected is a new attempt: the last refusal no longer applies.
+            setControlledError(null);
+            if (field === 'patientAddress') {
+              if (typeof value === 'string') setPatientAddressDraft(value === '' ? null : value);
+              return;
+            }
+            closedBillPatient.current?.editedAuth.add(field);
+            setControlledAuth((current) => {
+              if (field === 'emergency' || field === 'rxSerialWritten') {
+                return { ...current, [field]: value === true };
+              }
+              if (typeof value !== 'string') return current;
+              return { ...current, [field]: value };
+            });
+          },
+        }
+      : null;
+  const controlledMissing = controlledAuthMissing(
+    patient,
+    patientAddress,
+    controlledAuth,
+    online,
+    approvalCopy
+  );
+  // DEV-977 phase 3 review: after a refusal, focus stays in the sheet, on the (cleared) PIN when
+  // it can take it, so the pharmacist can enter it again straight away.
+  useEffect(() => {
+    if (!controlledError || !controlledOpen) return;
+    const panel = controlledPanelRef.current;
+    const pin = panel?.querySelector<HTMLInputElement>('#controlled-pin');
+    if (pin && !pin.disabled) pin.focus();
+    else panel?.focus();
+  }, [controlledError, controlledOpen]);
   const describeBusy = (billReadRequired: boolean) =>
     unknownTender || attempt !== null || checkingOutcome
       ? 'Check the payment outcome before changing this bill or branch.'
@@ -1510,25 +1795,27 @@ function ScopedPharmacyCounterConsole({
         ? 'Browser recovery is unavailable. Review payment status before continuing.'
         : tenderReadRequired
           ? 'Refresh this bill to verify payment before taking more money.'
-          : blocked
-            ? 'Resolve the safety block in the prescription panel before taking payment.'
-            : billState === 'idle'
-              ? 'Add an item to start a sale before taking payment.'
-              : billState === 'loading'
-                ? 'Checking the bill. Please wait before taking payment.'
-                : billState === 'error' || billState === 'stale'
-                  ? 'Refresh the bill to check the balance before taking payment.'
-                  : billState === 'settled'
-                    ? 'This bill is already paid. Start a new sale.'
-                    : billState === 'unavailable'
-                      ? cart?.status === 'HELD'
-                        ? 'Resume this bill before taking payment.'
-                        : currentBill && lineCount === 0
-                          ? 'Add an item to this bill before taking payment.'
-                          : 'Refresh the bill or start a new sale before taking payment.'
-                      : busy
-                        ? 'Wait for the current counter action to finish before taking payment.'
-                        : null;
+          : packBlocked
+            ? 'Resolve the pack check or remove the blocked line before taking payment.'
+            : blocked
+              ? 'Resolve the safety block in the prescription panel before taking payment.'
+              : billState === 'idle'
+                ? 'Add an item to start a sale before taking payment.'
+                : billState === 'loading'
+                  ? 'Checking the bill. Please wait before taking payment.'
+                  : billState === 'error' || billState === 'stale'
+                    ? 'Refresh the bill to check the balance before taking payment.'
+                    : billState === 'settled'
+                      ? 'This bill is already paid. Start a new sale.'
+                      : billState === 'unavailable'
+                        ? cart?.status === 'HELD'
+                          ? 'Resume this bill before taking payment.'
+                          : currentBill && lineCount === 0
+                            ? 'Add an item to this bill before taking payment.'
+                            : 'Refresh the bill or start a new sale before taking payment.'
+                        : busy
+                          ? 'Wait for the current counter action to finish before taking payment.'
+                          : null;
   const settledReceipt =
     billState === 'settled' &&
     !receiptQuery.isError &&
@@ -1588,6 +1875,12 @@ function ScopedPharmacyCounterConsole({
     ? ((presentedReceipt?.saleId === saleId ? presentedReceipt : null) ?? settledReceipt)
     : null;
   const displayReceipt = presentedReceipt ?? currentReceipt;
+  const receiptPrintNotice =
+    receiptOpen &&
+    notice?.printReceiptSaleId &&
+    notice.printReceiptSaleId === displayReceipt?.saleId
+      ? notice
+      : null;
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
@@ -1751,6 +2044,35 @@ function ScopedPharmacyCounterConsole({
   }, [busy, clearBill, focusSearch]);
 
   const openChecks = useCallback(() => setChecksOpen(true), []);
+  // DEV-977: the More menu closes on Escape (focus returns to its button) and on a press
+  // outside it, as the workspace menus do. Its panels stay mounted while it is closed.
+  useEffect(() => {
+    if (!actionsOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      const focus = document.activeElement;
+      if (!actionsPanelRef.current?.contains(focus) && focus !== actionsButtonRef.current) return;
+      setActionsOpen(false);
+      actionsButtonRef.current?.focus();
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target as Node | null;
+      if (
+        target &&
+        !actionsPanelRef.current?.contains(target) &&
+        !actionsButtonRef.current?.contains(target) &&
+        // A panel opened from the menu (a dialog) sits outside it in the page.
+        !(target instanceof Element && target.closest('[role="dialog"]'))
+      )
+        setActionsOpen(false);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('pointerdown', onPointerDown);
+    };
+  }, [actionsOpen]);
 
   useEffect(() => {
     if (!paymentOpen) return;
@@ -1822,8 +2144,12 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'danger', message: label.message });
       return;
     }
+    // DEV-977 phase 3: staging another medicine replaces a pack waiting for authorisation.
+    setPendingPack(null);
     focusQuantityOnStage.current = focusQuantity;
     quantityReviewed.current = false;
+    setHighlightId(null);
+    if (focusQuantity) setResultsDismissed(true);
     setActiveRow(row);
     setQuantityText('1');
     setSaleUnit(preferredSaleUnitOption(row.saleUnits, row.dosageForm)?.kind ?? null);
@@ -1842,7 +2168,9 @@ function ScopedPharmacyCounterConsole({
     focusQuantityOnStage.current = false;
   }, [activeRow]);
 
-  const searchAndStage = useCallback(
+  // DEV-705, DEV-977B: Enter that beats the search debounce runs the search now and highlights
+  // its first result; nothing is added until the cashier presses Enter on what they see.
+  const searchAndHighlight = useCallback(
     async (text: string) => {
       const search = await runSearch(text);
       if (!search || search.blocked) return;
@@ -1853,13 +2181,16 @@ function ScopedPharmacyCounterConsole({
         );
         // A changed query, branch or scanner invalidates the in-flight selection.
         if (search.revision !== scannerRevision.current) return;
-        if (result.rows[0]) stageRow(result.rows[0]);
+        if (result.rows[0]) {
+          setResultsDismissed(false);
+          setHighlightId(result.rows[0].medicineId);
+        }
       } catch (error) {
         if (search.revision === scannerRevision.current)
           setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
       }
     },
-    [branchId, runSearch, stageRow, utils]
+    [branchId, runSearch, utils]
   );
 
   const openSale = useCallback(async () => {
@@ -1886,7 +2217,9 @@ function ScopedPharmacyCounterConsole({
     async (
       scannedRow?: CounterSearchRow,
       scanRevision?: number,
-      scannedPack?: { payload: string; serial: string } | null
+      scannedPack?: { payload: string; serial: string } | null,
+      /** DEV-977B: a result added in one step, in the unit chosen under "Adds as". */
+      unitOption?: SaleUnitOption
     ) => {
       const scanIsCurrent = () =>
         scanRevision === undefined || scanRevision === scannerRevision.current;
@@ -1895,9 +2228,11 @@ function ScopedPharmacyCounterConsole({
       // One serialized pack is one sealed pack, whatever unit the counter last staged.
       const option = scannedPack
         ? (scannedRow?.saleUnits.find((unit) => unit.kind === 'PACK') ?? null)
-        : scannedRow
-          ? (scannedRow.saleUnits[0] ?? null)
-          : selectedOption;
+        : unitOption && scannedRow
+          ? unitOption
+          : scannedRow
+            ? (scannedRow.saleUnits[0] ?? null)
+            : selectedOption;
       const units = scannedRow ? 1 : quantity;
       if (units === null) {
         setNotice({
@@ -1979,26 +2314,30 @@ function ScopedPharmacyCounterConsole({
         const checkOff = pharmacistCheckOffRef.current;
         const controlled = row.restriction.controlled;
         const patient = billPatient;
-        const addressOk = patientAddress.trim().length >= 3;
-        const prescriptionOk = billAuth.emergency || Boolean(billAuth.prescriptionLineId);
-        const emergencyOk = !billAuth.emergency || billAuth.prescriberName.trim().length > 0;
         if (
           controlled &&
           !checkOff &&
-          (!patient ||
-            !addressOk ||
-            !prescriptionOk ||
-            !emergencyOk ||
-            !billAuth.staffProfileId ||
-            !/^\d{4,8}$/.test(billAuth.pin) ||
-            !navigator.onLine)
+          controlledAuthMissing(patient, patientAddress, billAuth, navigator.onLine, approvalCopy)
+            .length > 0
         ) {
           setNotice({
             tone: 'warning',
-            message:
-              'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
+            message: controlledNotice(controlledBlock, navigator.onLine, approvalCopy),
           });
-          openChecks();
+          // DEV-1005: a one-step add (Enter, or a plain barcode) is staged as Shift+Enter stages
+          // it, so the authorization panel this notice points to is shown and the line is added
+          // once it is complete.
+          if (scannedRow && !scannedPack) {
+            stageRow(scannedRow, false);
+            setSaleUnit(option.kind);
+          }
+          // DEV-977 phase 3: a serialised pack is not staged (that would drop its own lot): it
+          // waits, as scanned, in the authorisation sheet, and is sent with its payload once the
+          // sheet's "Authorise line" is pressed. No line is added before that.
+          if (scannedPack && scannedRow) setPendingPack({ row: scannedRow, pack: scannedPack });
+          setChecksOpen(false);
+          setControlledError(null);
+          setControlledOpen(true);
           return;
         }
         // DEV-629: the server refuses to take payment for an Rx/restricted line without a
@@ -2055,7 +2394,8 @@ function ScopedPharmacyCounterConsole({
               controlled && patient && !checkOff
                 ? {
                     patientId: patient.patientId,
-                    patientAddress: patientAddress.trim(),
+                    patientAddress:
+                      patientAddress === null ? { useAddressOnFile: true } : patientAddress.trim(),
                     staffProfileId: billAuth.staffProfileId,
                     pin: billAuth.pin,
                     rxSerialWritten: billAuth.rxSerialWritten,
@@ -2199,17 +2539,28 @@ function ScopedPharmacyCounterConsole({
         if ('blocked' in added) {
           catalogueCache.clear();
           setNotice({ tone: 'warning', message: added.blocked });
+          if (controlled) setControlledError(added.blocked);
           return;
         }
         for (const selection of attemptKeys) lineAttempts.current.delete(selection);
         completedAdds.current += 1;
         lastAddOutcome.current = 'added';
+        for (const unit of row.saleUnits)
+          knownSaleUnits.current.set(unit.packLevelId, row.saleUnits);
         catalogueCache.sold(row.medicineId, units * option.canonicalUnitsPerSaleUnit);
         await refreshCart();
         await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
         await utils.pharmacySafety.controlledRegister.invalidate();
         await utils.pharmacySales.counterSearch.invalidate();
         setLotOverride(null);
+        // DEV-977B: a one-step add (a scan or a result) leaves no line form behind.
+        if (scannedRow) setActiveRow(null);
+        // DEV-977 phase 3: an authorised controlled line closes its sheet; a waiting pack is done.
+        if (controlled) {
+          setControlledOpen(false);
+          setControlledError(null);
+        }
+        if (scannedPack) setPendingPack(null);
         // DEV-66: a promotion the owner's maximum skipped is said, never silent.
         const discountNotice =
           'promotionNotice' in added && added.promotionNotice
@@ -2222,7 +2573,7 @@ function ScopedPharmacyCounterConsole({
             : null;
         setNotice({
           tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
-          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
+          message: `${startedNextBill ? 'New bill started. ' : ''}${units} × ${row.displayName}${unitOption ? ` (${unitOption.levelLabel.toLowerCase()})` : ''} added${overrideLotId ? ' with a recorded batch override' : ''}${voucher ? ` with voucher ${voucher.code}` : ''}${discountMinor > 0 ? ` with a discount of Rs ${formatMinor(discountMinor)}` : ''}.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
         });
         setAddVersion(completedAdds.current);
         setQuery('');
@@ -2245,6 +2596,7 @@ function ScopedPharmacyCounterConsole({
           void utils.pharmacySales.tradingDayStatus.invalidate();
         catalogueCache.clear();
         const message = counterSaleErrorMessage(error);
+        if (row.restriction.controlled) setControlledError(message);
         setNotice({
           tone: counterErrorTone(error),
           message,
@@ -2279,7 +2631,8 @@ function ScopedPharmacyCounterConsole({
       ensureSale,
       focusSearch,
       lotOverride,
-      openChecks,
+      controlledBlock,
+      approvalCopy,
       openSale,
       patientId,
       preview,
@@ -2291,6 +2644,7 @@ function ScopedPharmacyCounterConsole({
       selectedOption,
       setActiveSale,
       setupNotice,
+      stageRow,
       utils,
     ]
   );
@@ -2338,6 +2692,8 @@ function ScopedPharmacyCounterConsole({
         const row = result.rows[0]!;
         if (!cached && !search.serializedPack) catalogueCache.put(branchId, search.query, row);
         const serialized = search.serializedPack;
+        // DEV-977 phase 3: a new scan replaces a pack waiting for authorisation.
+        setPendingPack(null);
         const label = counterLabelScanDecision(row);
         if (label.kind === 'BLOCKED') {
           stageRow(row);
@@ -2345,16 +2701,20 @@ function ScopedPharmacyCounterConsole({
         }
         // Use this lookup's restrictions/availability even when the medicine ID
         // matches the previous selection. A server refusal can refresh its rules.
-        stageRow(row, false);
-        setSaleUnit(row.saleUnits[0]?.kind ?? null);
-        // Barcode entry keeps its one-item default; manual selection starts empty.
-        setQuantityText('1');
+        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
+        // DEV-977B (Counter v2): a scan adds in one step. Only an exception (a non-FEFO shelf
+        // sticker, or not enough stock) opens the line form, so the cashier can act on it.
+        if (label.kind === 'OVERRIDE' || (!serialized && !scanPreview?.sufficient)) {
+          stageRow(row, false);
+          setSaleUnit(row.saleUnits[0]?.kind ?? null);
+          // Barcode entry keeps its one-item default; manual selection starts empty.
+          setQuantityText('1');
+        }
         if (label.kind === 'OVERRIDE') {
           // A non-FEFO sticker waits for the existing reason and pharmacist approval.
           setNotice({ tone: 'warning', message: label.message });
           return;
         }
-        const scanPreview = counterSelectionPreview(row, row.saleUnits[0] ?? null, 1);
         if (serialized) {
           // The server pins the scanned pack's own lot and refuses a pack already sold.
           await addToCart(row, revision, serialized);
@@ -2374,6 +2734,218 @@ function ScopedPharmacyCounterConsole({
       }
     },
     [addToCart, branchId, busy, catalogueCache, query, runSearch, setupNotice, stageRow, utils]
+  );
+
+  /** DEV-977B: the unit a result is added in: "Adds as" when it sells that way, else its usual. */
+  const addUnitFor = useCallback(
+    (row: CounterSearchRow): SaleUnitOption | null => {
+      const preferred =
+        addUnit === 'UNIT'
+          ? looseSaleUnitOption(row.saleUnits)
+          : addUnit
+            ? (row.saleUnits.find((option) => option.kind === addUnit) ?? null)
+            : null;
+      return preferred ?? preferredSaleUnitOption(row.saleUnits, row.dosageForm) ?? null;
+    },
+    [addUnit]
+  );
+
+  /**
+   * DEV-977B (Counter v2, A6): Enter on the highlighted result, or a press on it, adds one of it
+   * to the bill in one step. Quantity and unit are then changed on the bill line. A result that
+   * needs the line form (a blocked or non-FEFO shelf label, no sellable unit, not enough stock)
+   * opens it instead, with the reason.
+   */
+  const addRowNow = useCallback(
+    (row: CounterSearchRow) => {
+      if (busy) return;
+      const label = counterLabelScanDecision(row);
+      const option = addUnitFor(row);
+      const rowPreview = option ? counterSelectionPreview(row, option, 1) : null;
+      setHighlightId(null);
+      if (
+        label.kind === 'BLOCKED' ||
+        label.kind === 'OVERRIDE' ||
+        !option ||
+        !rowPreview?.sufficient
+      ) {
+        stageRow(row);
+        if (option) setSaleUnit(option.kind);
+        if (label.kind === 'OVERRIDE') setNotice({ tone: 'warning', message: label.message });
+        return;
+      }
+      setResultsDismissed(true);
+      void addToCart(row, undefined, null, option);
+    },
+    [addToCart, addUnitFor, busy, stageRow]
+  );
+
+  /** DEV-977B: the line form, for a result the cashier wants to add with more than one step. */
+  const stageWithOptions = useCallback(
+    (row: CounterSearchRow) => {
+      setHighlightId(null);
+      stageRow(row);
+      const option = addUnitFor(row);
+      if (option) setSaleUnit(option.kind);
+    },
+    [addUnitFor, stageRow]
+  );
+
+  const lineUnitOptions = useCallback(
+    (line: CounterCartLine): readonly SaleUnitOption[] => {
+      if (!line.packLevelId) return [];
+      // Only the units of the line's own presentation (the one its pack level belongs to).
+      return (
+        knownSaleUnits.current.get(line.packLevelId) ??
+        searchQuery.data?.rows.find(
+          (row) =>
+            row.medicineId === line.medicineId &&
+            row.saleUnits.some((unit) => unit.packLevelId === line.packLevelId)
+        )?.saleUnits ??
+        []
+      );
+    },
+    [searchQuery.data]
+  );
+
+  const lineChangeMessage = useCallback((error: unknown) => {
+    // A line change stays with the bill's cashier, as a void does.
+    if (error instanceof Error && error.message === 'NOT_BILL_OWNER')
+      return 'Another cashier opened this bill. Only that cashier or a manager or owner can change its lines.';
+    return counterSaleErrorMessage(error);
+  }, []);
+
+  /** DEV-977B: changes the quantity or unit of a bill line, on the server, with its rules. */
+  const changeBillLine = useCallback(
+    async (line: CounterCartLine, next: CounterLineChange) => {
+      if (!saleId || busy) return;
+      if (!navigator.onLine) {
+        setNotice({ tone: 'warning', message: LINE_CHANGE_NEEDS_CONNECTION });
+        return;
+      }
+      const selection = JSON.stringify([
+        saleId,
+        line.saleLineId,
+        next.kind,
+        next.packLevelId,
+        next.canonicalUnitsPerSaleUnit,
+        next.quantity,
+      ]);
+      let idempotencyKey = lineChangeKeys.current.get(selection);
+      if (!idempotencyKey) {
+        idempotencyKey = `counter-change:${browserUuid()}`;
+        lineChangeKeys.current.set(selection, idempotencyKey);
+      }
+      setPending('changeLine');
+      setNotice(null);
+      try {
+        const changed = await changeLine.mutateAsync({
+          branchId,
+          saleId,
+          saleLineId: line.saleLineId,
+          packLevelId: next.packLevelId,
+          saleUnit: next.kind,
+          quantity: next.quantity,
+          canonicalUnitsPerSaleUnit: next.canonicalUnitsPerSaleUnit,
+          idempotencyKey,
+          ...counterDevice(),
+        });
+        lineChangeKeys.current.delete(selection);
+        catalogueCache.clear();
+        await refreshCart();
+        await utils.pharmacySales.counterSearch.invalidate();
+        const discountNotice =
+          'promotionNotice' in changed && changed.promotionNotice
+            ? COUNTER_DISCOUNT_NOTICES[changed.promotionNotice]
+            : null;
+        const billDiscountNotice =
+          'billDiscountClearedMinor' in changed && changed.billDiscountClearedMinor
+            ? `The whole-bill discount of Rs ${formatMinor(changed.billDiscountClearedMinor)} was removed because the bill changed. Give it again to include this change.`
+            : null;
+        setNotice({
+          tone: discountNotice || billDiscountNotice ? 'warning' : 'success',
+          message: `${line.medicineName}: ${next.quantity} × ${
+            next.kind === 'UNIT' ? counterUnitNoun(line.dosageForm) : next.kind.toLowerCase()
+          }.${discountNotice ? ` ${discountNotice}` : ''}${billDiscountNotice ? ` ${billDiscountNotice}` : ''}`,
+        });
+      } catch (error) {
+        catalogueCache.clear();
+        void refreshCart();
+        setNotice({ tone: counterErrorTone(error), message: lineChangeMessage(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [
+      branchId,
+      busy,
+      catalogueCache,
+      changeLine,
+      counterDevice,
+      lineChangeMessage,
+      refreshCart,
+      saleId,
+      utils,
+    ]
+  );
+
+  /** DEV-977B: takes a line off the bill, on the server, which gives its stock back. */
+  const removeBillLine = useCallback(
+    async (line: CounterCartLine) => {
+      if (!saleId || busy) return;
+      if (!navigator.onLine) {
+        setNotice({ tone: 'warning', message: LINE_CHANGE_NEEDS_CONNECTION });
+        return;
+      }
+      const selection = JSON.stringify([saleId, line.saleLineId, 'remove']);
+      let idempotencyKey = lineChangeKeys.current.get(selection);
+      if (!idempotencyKey) {
+        idempotencyKey = `counter-remove:${browserUuid()}`;
+        lineChangeKeys.current.set(selection, idempotencyKey);
+      }
+      setPending('removeLine');
+      setNotice(null);
+      try {
+        const removed = await removeLine.mutateAsync({
+          branchId,
+          saleId,
+          saleLineId: line.saleLineId,
+          idempotencyKey,
+          ...counterDevice(),
+        });
+        lineChangeKeys.current.delete(selection);
+        catalogueCache.clear();
+        await refreshCart();
+        await utils.pharmacySales.counterSearch.invalidate();
+        const billDiscountNotice =
+          'billDiscountClearedMinor' in removed && removed.billDiscountClearedMinor
+            ? ` The whole-bill discount of Rs ${formatMinor(removed.billDiscountClearedMinor)} was removed because the bill changed. Give it again if it still applies.`
+            : '';
+        setNotice({
+          tone: billDiscountNotice ? 'warning' : 'success',
+          message: `${line.medicineName} removed from the bill.${billDiscountNotice}`,
+        });
+        focusSearch();
+      } catch (error) {
+        catalogueCache.clear();
+        void refreshCart();
+        setNotice({ tone: counterErrorTone(error), message: lineChangeMessage(error) });
+      } finally {
+        setPending(null);
+      }
+    },
+    [
+      branchId,
+      busy,
+      catalogueCache,
+      counterDevice,
+      focusSearch,
+      lineChangeMessage,
+      refreshCart,
+      removeLine,
+      saleId,
+      utils,
+    ]
   );
 
   const queueScan = useCallback(
@@ -3110,7 +3682,7 @@ function ScopedPharmacyCounterConsole({
     try {
       const demand = await captureDemand.mutateAsync({
         branchId,
-        ...(saleId ? { saleId } : {}),
+        ...(demandSaleId ? { saleId: demandSaleId } : {}),
         ...(deviceId ? { terminalId: deviceId } : {}),
         requestedQty: Math.max(requestedCanonicalUnits ?? quantity, capturedUnits),
         ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
@@ -3151,7 +3723,7 @@ function ScopedPharmacyCounterConsole({
     focusSearch,
     query,
     quantity,
-    saleId,
+    demandSaleId,
     saleUnit,
     selectedOption,
     requestedCanonicalUnits,
@@ -3257,73 +3829,97 @@ function ScopedPharmacyCounterConsole({
 
   const printReceipt = useCallback(
     async (existingReservation?: CounterBrowserPrintReservation): Promise<boolean> => {
-      const reservation = existingReservation ?? reserveCounterBrowserPrint();
+      if (printInFlight.current) {
+        existingReservation?.cancel();
+        return false;
+      }
       // Outside the drawer the shortcut belongs to the current bill; Last
       // receipt explicitly selects the retained, authorized receipt snapshot.
       const receipt = receiptOpen ? displayReceipt : currentReceipt;
       if (!receipt || receipt.receiptNumber === null) {
         setNotice({ tone: 'warning', message: 'Load the settled receipt before printing.' });
-        reservation.cancel();
+        existingReservation?.cancel();
         return false;
       }
-      if (!existingReservation) {
-        discardReceiptIntent();
-        setReceiptSettlement(null);
-      }
+      printInFlight.current = true;
+      setPrintPending(true);
       try {
-        // Reject known popup and rendering failures before claiming an ordinal.
-        // Recheck at dispatch too: windows can close while allocation is in flight.
-        await assertCounterBrowserPrintReady(reservation);
-        buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
-        buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
-      } catch (error) {
-        reservation.cancel();
+        const reservation = existingReservation ?? reserveCounterBrowserPrint();
+        setNotice((previous) =>
+          previous?.printReceiptSaleId === receipt.saleId ? null : previous
+        );
+        if (!existingReservation) {
+          discardReceiptIntent();
+          setReceiptSettlement(null);
+        }
+        try {
+          // Reject known popup and rendering failures before claiming an ordinal.
+          // Recheck at dispatch too: windows can close while allocation is in flight.
+          await assertCounterBrowserPrintReady(reservation);
+          buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, false);
+          buildCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, true);
+        } catch (error) {
+          reservation.cancel();
+          pendingPrintAudits.current.push({
+            branchId,
+            saleId: receipt.saleId,
+            locale: receiptLocale,
+            failed: true,
+          });
+          void flushPrintAudits();
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            printReceiptSaleId: receipt.saleId,
+          });
+          return false;
+        }
+        let allocation: { copyNumber: number; reprint: boolean };
+        try {
+          allocation = await allocateWhileCounterPrintWindowOpen(reservation, () =>
+            allocateBrowserPrint.mutateAsync({
+              branchId,
+              saleId: receipt.saleId,
+              locale: receiptLocale,
+            })
+          );
+          await printCounterBrowserReceipt(
+            receipt,
+            receiptLocale,
+            receiptFormat,
+            allocation.reprint,
+            reservation
+          );
+        } catch (error) {
+          reservation.cancel();
+          setNotice({
+            tone: counterErrorTone(error),
+            message: messageFrom(error),
+            printReceiptSaleId: receipt.saleId,
+          });
+          return false;
+        }
+        // Recording faults do not undo a dialog that has already opened.
+        setLastReceipt({ branchId, receipt });
+        setReceiptReprint(allocation.reprint);
+        setNotice({
+          tone: 'success',
+          persistent: true,
+          message:
+            'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
+        });
         pendingPrintAudits.current.push({
           branchId,
           saleId: receipt.saleId,
           locale: receiptLocale,
-          failed: true,
+          copyNumber: allocation.copyNumber,
         });
         void flushPrintAudits();
-        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
-        return false;
+        return true;
+      } finally {
+        printInFlight.current = false;
+        setPrintPending(false);
       }
-      let allocation: { copyNumber: number; reprint: boolean };
-      try {
-        allocation = await allocateBrowserPrint.mutateAsync({
-          branchId,
-          saleId: receipt.saleId,
-          locale: receiptLocale,
-        });
-        await printCounterBrowserReceipt(
-          receipt,
-          receiptLocale,
-          receiptFormat,
-          allocation.reprint,
-          reservation
-        );
-      } catch (error) {
-        reservation.cancel();
-        setNotice({ tone: counterErrorTone(error), message: messageFrom(error) });
-        return false;
-      }
-      // Recording faults do not undo a dialog that has already opened.
-      setLastReceipt({ branchId, receipt });
-      setReceiptReprint(allocation.reprint);
-      setNotice({
-        tone: 'success',
-        persistent: true,
-        message:
-          'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
-      });
-      pendingPrintAudits.current.push({
-        branchId,
-        saleId: receipt.saleId,
-        locale: receiptLocale,
-        copyNumber: allocation.copyNumber,
-      });
-      void flushPrintAudits();
-      return true;
     },
     [
       currentReceipt,
@@ -3351,7 +3947,13 @@ function ScopedPharmacyCounterConsole({
         case 'selectLooseUnit': {
           const kind: SaleUnitKind =
             action === 'selectPackUnit' ? 'PACK' : action === 'selectStripUnit' ? 'STRIP' : 'UNIT';
-          const options = activeRow?.saleUnits ?? [];
+          // DEV-977B (Counter v2): with no line form open the key sets "Adds as", the unit the
+          // next result is added in.
+          if (!activeRow) {
+            setAddUnit(kind);
+            return;
+          }
+          const options = activeRow.saleUnits;
           const option =
             kind === 'UNIT'
               ? looseSaleUnitOption(options)
@@ -3502,7 +4104,13 @@ function ScopedPharmacyCounterConsole({
   // DEV-957: offline with nothing loaded from the server (the stored page opened
   // with no connection), say so and offer what still works, not "no branch".
   if ((!online || offlineMode.serverUnreachable) && !branchesQuery.data) {
-    return <CounterOfflineOnly offline={offlineMode} />;
+    return (
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <CounterOfflineOnly offline={offlineMode} />
+        </CounterFrameContent>
+      </CounterFrame>
+    );
   }
 
   if (branchesQuery.isLoading) {
@@ -3511,26 +4119,30 @@ function ScopedPharmacyCounterConsole({
 
   if (branchesQuery.isError) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy"
-          heading="Counter"
-          description="This counter is unavailable."
-        />
-        <SectionCard title="Branches unavailable">
-          <div className="space-y-3" role="alert">
-            <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              onClick={() => void branchesQuery.refetch()}
-            >
-              Retry
-            </Button>
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <div className="space-y-6">
+            <PageHeader
+              eyebrow="Pharmacy"
+              heading="Counter"
+              description="This counter is unavailable."
+            />
+            <SectionCard title="Branches unavailable">
+              <div className="space-y-3" role="alert">
+                <p className="text-sm text-warning">{messageFrom(branchesQuery.error)}</p>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void branchesQuery.refetch()}
+                >
+                  Retry
+                </Button>
+              </div>
+            </SectionCard>
           </div>
-        </SectionCard>
-      </div>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
@@ -3542,49 +4154,55 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.data.canFixSetup !== true
   ) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy"
-          heading="Counter"
-          description="You are not assigned to a branch yet."
-        />
-        <SectionCard title="Before this counter can sell">
-          <div className="space-y-3" role="alert">
-            <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
-            <div className="text-sm">
-              <CounterSetupNextStep
-                advice={{
-                  reason: BRANCH_NOT_ASSIGNED,
-                  message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
-                  nextStep: ASK_OWNER_OR_MANAGER,
-                  link: null,
-                }}
-              />
-            </div>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              onClick={() => void branchesQuery.refetch()}
-            >
-              Check again
-            </Button>
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <div className="space-y-6">
+            <PageHeader
+              eyebrow="Pharmacy"
+              heading="Counter"
+              description="You are not assigned to a branch yet."
+            />
+            <SectionCard title="Before this counter can sell">
+              <div className="space-y-3" role="alert">
+                <p className="text-sm text-text-body">{COUNTER_NO_ASSIGNED_BRANCH_MESSAGE}</p>
+                <div className="text-sm">
+                  <CounterSetupNextStep
+                    advice={{
+                      reason: BRANCH_NOT_ASSIGNED,
+                      message: COUNTER_NO_ASSIGNED_BRANCH_MESSAGE,
+                      nextStep: ASK_OWNER_OR_MANAGER,
+                      link: null,
+                    }}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void branchesQuery.refetch()}
+                >
+                  Check again
+                </Button>
+              </div>
+            </SectionCard>
+            <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
           </div>
-        </SectionCard>
-        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
-      </div>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
   if (branches.length === 0) {
     return (
-      <div className="space-y-6">
-        <PageHeader
-          eyebrow="Pharmacy"
-          heading="Counter"
-          description="No active branch is configured yet."
-        />
-        {/*
+      <CounterFrame heading={false}>
+        <CounterFrameContent>
+          <div className="space-y-6">
+            <PageHeader
+              eyebrow="Pharmacy"
+              heading="Counter"
+              description="No active branch is configured yet."
+            />
+            {/*
           UX rule 13: a precondition is a checklist with links, not a sentence.
           Name each gate the counter needs and link it to the page that clears
           it, so the operator is never told what is missing without being told
@@ -3592,68 +4210,262 @@ function ScopedPharmacyCounterConsole({
           this lane owns the counter, not that surface, so it links there rather
           than duplicating it.
         */}
-        <SectionCard title="Before this counter can sell">
-          <div className="space-y-3">
-            <p className="text-sm text-text-body">
-              A counter dispenses from one active pharmacy branch. Two things must exist first:
-            </p>
-            <ul className="space-y-2 text-sm text-text-body">
-              <li className="flex flex-wrap items-baseline gap-x-2">
-                <span aria-hidden="true" className="text-text-muted">
-                  1.
-                </span>
-                <span>An active pharmacy branch for this organization.</span>
-                <Link
-                  href="/organization"
-                  className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+            <SectionCard title="Before this counter can sell">
+              <div className="space-y-3">
+                <p className="text-sm text-text-body">
+                  A counter dispenses from one active pharmacy branch. Two things must exist first:
+                </p>
+                <ul className="space-y-2 text-sm text-text-body">
+                  <li className="flex flex-wrap items-baseline gap-x-2">
+                    <span aria-hidden="true" className="text-text-muted">
+                      1.
+                    </span>
+                    <span>An active pharmacy branch for this organization.</span>
+                    <Link
+                      href="/organization"
+                      className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      Organization administration
+                    </Link>
+                  </li>
+                  <li className="flex flex-wrap items-baseline gap-x-2">
+                    <span aria-hidden="true" className="text-text-muted">
+                      2.
+                    </span>
+                    <span>A stock location on that branch holding dispensable batches.</span>
+                    <Link
+                      href="/organization"
+                      className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+                    >
+                      Organization administration
+                    </Link>
+                  </li>
+                </ul>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  onClick={() => void branchesQuery.refetch()}
                 >
-                  Organization administration
-                </Link>
-              </li>
-              <li className="flex flex-wrap items-baseline gap-x-2">
-                <span aria-hidden="true" className="text-text-muted">
-                  2.
-                </span>
-                <span>A stock location on that branch holding dispensable batches.</span>
-                <Link
-                  href="/organization"
-                  className="inline-flex min-h-11 min-w-11 items-center font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-                >
-                  Organization administration
-                </Link>
-              </li>
-            </ul>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              onClick={() => void branchesQuery.refetch()}
-            >
-              Check again
-            </Button>
+                  Check again
+                </Button>
+              </div>
+            </SectionCard>
+            <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
           </div>
-        </SectionCard>
-        <SectionCard title="Shortcuts">{keymapLegend}</SectionCard>
-      </div>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
   if (!branchAuthorized) {
     return (
-      <SectionCard title="Counter unavailable">
-        <p role="alert" className="text-sm text-text-body">
-          This branch could not be verified for your account. Restore branch access before opening a
-          saved payment.
-        </p>
-      </SectionCard>
+      <CounterFrame>
+        <CounterFrameContent>
+          <SectionCard title="Counter unavailable">
+            <p role="alert" className="text-sm text-text-body">
+              This branch could not be verified for your account. Restore branch access before
+              opening a saved payment.
+            </p>
+          </SectionCard>
+        </CounterFrameContent>
+      </CounterFrame>
     );
   }
 
-  const scrollableCounter = (
-    <div
-      className="min-h-0 flex-1 overflow-y-auto px-4 pt-3 pb-28 xl:flex xl:flex-col xl:overflow-hidden xl:pb-4"
-      data-counter-console=""
-    >
+  const connectionOnline = online && !offlineMode.serverUnreachable;
+  const statusLine = [
+    connectionOnline ? 'Online' : 'Offline',
+    branches.find((entry) => entry.id === branchId)?.name,
+    counterLabel(deviceId),
+  ]
+    .filter(Boolean)
+    .join(' · ');
+  const searchRows =
+    searchCurrent && !searchQuery.isPlaceholderData ? (searchQuery.data?.rows ?? []) : [];
+  const actionBar = (
+    <CounterActionBar>
+      <label className="sr-only" htmlFor="counter-branch">
+        Branch
+      </label>
+      <select
+        id="counter-branch"
+        aria-describedby={counterBusyReason ? 'counter-branch-reason' : undefined}
+        value={branchId}
+        disabled={busy}
+        onChange={(event) => {
+          scannerRevision.current += 1;
+          setSelectedBranchId(event.target.value);
+          // A voucher and the cashier PIN held for one branch never carry to another.
+          setHeldVoucher(null);
+          setHeldDiscount(null);
+          setLastReceipt(null);
+          setReceiptReprint(false);
+          setActiveRow(null);
+          setPendingPack(null);
+          setActiveSale(null);
+          setHeldSaleId(null);
+        }}
+        className="h-11 max-w-40 shrink-0 truncate rounded-full border border-border-subtle bg-surface-card px-3.5 text-[13px] font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 sm:max-w-56 xl:max-w-44"
+      >
+        {branches.map((branch) => (
+          <option key={branch.id} value={branch.id}>
+            {branch.name}
+          </option>
+        ))}
+      </select>
+      {/* DEV-1005: at narrow widths this strip scrolls sideways, so it takes the keyboard focus
+          (arrow keys then scroll it) and shows the Studio focus ring. DEV-977 phase 3: only
+          while it actually scrolls; where its pills fit it is no tab stop. */}
+      <div
+        ref={statusStripRef}
+        role="group"
+        aria-label="Counter status"
+        tabIndex={statusStripScrolls ? 0 : undefined}
+        className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto rounded-full [scrollbar-width:none] focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+      >
+        <div className="flex shrink-0 items-center gap-2" aria-label="Bill status">
+          <StatusPill
+            status={saleId ? 'open' : 'idle'}
+            tone={cart?.receiptNumber ? 'success' : 'neutral'}
+            className="font-mono text-xs uppercase"
+            label={
+              cart?.receiptNumber ? (
+                `Receipt ${cart.receiptNumber}`
+              ) : saleId ? (
+                // DEV-977B: on a phone the pill reads "4 lines", so it is never cut off; the
+                // whole label is still announced.
+                <>
+                  <span className="max-sm:sr-only">Bill open · </span>
+                  {`${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`}
+                </>
+              ) : (
+                'No open bill'
+              )
+            }
+          />
+          {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+          {dayClosed ? <StatusPill status="day-closed" tone="warning" label="Day closed" /> : null}
+          {drawerOpen ? (
+            <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+          ) : drawerRequired && drawerQuery.isSuccess ? (
+            <StatusPill status="drawer-closed" tone="warning" label="Drawer closed" />
+          ) : null}
+        </div>
+        <StatusPill
+          status={connectionOnline ? 'online' : 'offline'}
+          tone={connectionOnline ? 'success' : 'warning'}
+          label={connectionOnline ? 'Online' : 'Offline'}
+          className="shrink-0"
+        />
+      </div>
+      <Button
+        ref={actionsButtonRef}
+        type="button"
+        variant="ghost"
+        className="order-last h-11 shrink-0 gap-2 px-3 xl:px-2"
+        aria-expanded={actionsOpen}
+        aria-controls="counter-actions"
+        onClick={() => setActionsOpen(!actionsOpen)}
+      >
+        <Ellipsis aria-hidden="true" />
+        More
+      </Button>
+      {/* DEV-977: below 1280px every action sits in More; from 1280px the everyday ones sit
+          in the row and the rest stay in More. One copy of each, so no panel loses state. */}
+      <div
+        id="counter-actions"
+        ref={actionsPanelRef}
+        className={`${actionsOpen ? 'flex' : 'hidden'} absolute end-4 top-full z-40 mt-2 w-[min(22rem,calc(100vw-2rem))] flex-col items-stretch gap-2 rounded-2xl border border-border-default bg-surface-card p-3 shadow-lg xl:contents [&_[data-slot=button]]:rounded-[var(--radius-sm)]`}
+      >
+        {branchAuthorized ? (
+          <CounterOpenBills
+            bills={openBillsQuery.data}
+            loading={openBillsQuery.isLoading}
+            error={openBillsQuery.isError ? messageFrom(openBillsQuery.error) : null}
+            activeSaleId={saleId}
+            disabled={busy}
+            onRefresh={() => void refetchOpenBills()}
+            onResume={resumeOpenBill}
+            onVoid={voidOpenBill}
+          />
+        ) : null}
+        <CounterReturnPanel
+          branchId={branchId}
+          organizationId={organizationId}
+          accountId={accountId}
+          deviceId={currentCounterDeviceId}
+          businessDate={todayBusinessDate}
+        />
+        <Link
+          className={buttonVariants({
+            variant: 'outline',
+            className:
+              'h-11 rounded-[var(--radius-sm)] shadow-none hover:translate-y-0 active:translate-y-0',
+          })}
+          href="/pharmacy/orders"
+        >
+          Customer orders
+        </Link>
+        <CounterSignOut
+          hasOpenSale={Boolean(heldSaleId || (saleId && !billClosed(cart, saleId)))}
+        />
+        <div
+          className={`${actionsOpen ? 'contents xl:flex' : 'contents xl:hidden'} xl:absolute xl:end-6 xl:top-full xl:z-40 xl:mt-2 xl:w-[20rem] xl:flex-col xl:items-stretch xl:gap-2 xl:rounded-2xl xl:border xl:border-border-default xl:bg-surface-card xl:p-3 xl:shadow-lg`}
+        >
+          <CounterPackCheck
+            key={`pack:${branchId}:${saleId}`}
+            branchId={branchId}
+            saleId={saleId ?? ''}
+            lines={cart?.lines ?? []}
+            disabled={
+              busy || !connectionOnline || cart?.status !== 'OPEN' || cart.totals.tenderedMinor > 0
+            }
+            refresh={refreshCart}
+          />
+          <CounterDemandSheet
+            key={branchId}
+            branchId={branchId}
+            saleId={demandSaleId}
+            query={activeRow?.displayName ?? query}
+            medicines={activeRow ? [activeRow, ...searchRows] : searchRows}
+            customer={customerQuery.data?.customer ?? null}
+            disabled={busy || !connectionOnline}
+            onSaved={(message) => setNotice({ tone: 'success', message })}
+          />
+          {canSettlePayments ? (
+            <CounterKhataPaymentPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={currentCounterDeviceId}
+              businessDate={todayBusinessDate}
+            />
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
+            onClick={() => setShortcutsOpen(true)}
+          >
+            Shortcuts
+          </Button>
+          {presentedReceipt && (
+            <Button
+              variant="outline"
+              className="h-11"
+              aria-keyshortcuts={lastReceiptShortcut}
+              onClick={() => setReceiptOpen(true)}
+            >
+              Last receipt{lastReceiptShortcut ? ` · ${lastReceiptShortcut}` : ''}
+            </Button>
+          )}
+        </div>
+      </div>
+    </CounterActionBar>
+  );
+  const counterBody = (
+    <>
       <nav
         aria-label="Counter shortcuts"
         className="sr-only focus-within:not-sr-only focus-within:mb-3"
@@ -3677,196 +4489,65 @@ function ScopedPharmacyCounterConsole({
           Skip to bill total
         </a>
       </nav>
-      <header className="mb-3 shrink-0 space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight text-text-strong">Counter</h1>
-          <CounterSignOut
-            hasOpenSale={Boolean(heldSaleId || (saleId && !billClosed(cart, saleId)))}
-          />
-          {presentedReceipt && (
-            <Button
-              variant="outline"
-              className="h-11"
-              aria-keyshortcuts={lastReceiptShortcut}
-              onClick={() => setReceiptOpen(true)}
-            >
-              Last receipt{lastReceiptShortcut ? ` · ${lastReceiptShortcut}` : ''}
-            </Button>
-          )}
-          <Button
-            variant="outline"
-            className="ml-auto h-11 rounded-[var(--radius-sm)] md:hidden"
-            aria-expanded={actionsOpen}
-            aria-controls="counter-actions"
-            onClick={() => setActionsOpen(!actionsOpen)}
-          >
-            Actions
-          </Button>
-          <div className="order-2 flex w-full flex-wrap items-center gap-3 md:order-none md:w-auto">
-            <label className="sr-only" htmlFor="counter-branch">
-              Branch
-            </label>
-            <select
-              id="counter-branch"
-              aria-describedby={counterBusyReason ? 'counter-branch-reason' : undefined}
-              value={branchId}
-              disabled={busy}
-              onChange={(event) => {
-                scannerRevision.current += 1;
-                setSelectedBranchId(event.target.value);
-                // A voucher and the cashier PIN held for one branch never carry to another.
-                setHeldVoucher(null);
-                setHeldDiscount(null);
-                setLastReceipt(null);
-                setReceiptReprint(false);
-                setActiveRow(null);
-                setActiveSale(null);
-                setHeldSaleId(null);
-              }}
-              className="h-11 max-w-full rounded-[var(--radius-xs)] border border-border-default bg-surface-sunken px-3 text-sm font-semibold text-text-strong outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-            >
-              {branches.map((branch) => (
-                <option key={branch.id} value={branch.id}>
-                  {branch.name}
-                </option>
-              ))}
-            </select>
-
-            <div className="flex flex-wrap items-center gap-2" aria-label="Bill status">
-              <StatusPill
-                status={saleId ? 'open' : 'idle'}
-                tone={cart?.receiptNumber ? 'success' : 'neutral'}
-                className="font-mono text-xs uppercase"
-                label={
-                  cart?.receiptNumber
-                    ? `Receipt ${cart.receiptNumber}`
-                    : saleId
-                      ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
-                      : 'No open bill'
-                }
-              />
-              {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-              {dayClosed ? (
-                <StatusPill status="day-closed" tone="warning" label="Day closed" />
-              ) : null}
-              {drawerOpen ? (
-                <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-              ) : drawerRequired && drawerQuery.isSuccess ? (
-                <StatusPill status="drawer-closed" tone="warning" label="Drawer closed" />
-              ) : null}
-            </div>
-          </div>
+      {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
+      {counterBusyReason ? (
+        <p
+          id="counter-branch-reason"
+          className="shrink-0 border-b border-border-subtle bg-surface-sunken px-4 py-2 text-xs text-text-body lg:px-6"
+        >
+          {counterBusyReason}
+        </p>
+      ) : null}
+      {/* DEV-957 phase 2 (review B1/B2): what this computer holds is shown online too, as
+          strips under the bars like the offline banner (Counter v2, B2 and C7). */}
+      <CounterSalesToReconcile
+        organizationId={organizationId}
+        branchId={branchId}
+        online={online && !offlineMode.serverUnreachable}
+        refreshKey={offlineMode.revokedNotice?.kept ?? null}
+        className="shrink-0 space-y-3 border-b border-border-subtle bg-surface-raised px-4 py-3 text-sm lg:px-6"
+      />
+      {online && !offlineMode.serverUnreachable ? (
+        offlineMode.queued.length > 0 ? (
           <div
-            id="counter-actions"
-            className={`${actionsOpen ? 'flex' : 'hidden'} order-3 w-full flex-wrap items-center gap-2 md:order-none md:ml-auto md:flex md:w-auto [&>button]:rounded-[var(--radius-sm)]`}
+            className="shrink-0 border-b border-border-subtle bg-surface-raised px-4 py-3 text-sm lg:px-6"
+            data-counter-offline-waiting-online=""
           >
-            {branchAuthorized ? (
-              <CounterOpenBills
-                bills={openBillsQuery.data}
-                loading={openBillsQuery.isLoading}
-                error={openBillsQuery.isError ? messageFrom(openBillsQuery.error) : null}
-                activeSaleId={saleId}
-                disabled={busy}
-                onRefresh={() => void refetchOpenBills()}
-                onResume={resumeOpenBill}
-                onVoid={voidOpenBill}
-              />
+            {offlineMode.message ? (
+              <p role="status" className="text-sm text-text-body">
+                {offlineMode.message}
+              </p>
             ) : null}
-            <CounterReturnPanel
-              branchId={branchId}
-              organizationId={organizationId}
-              accountId={accountId}
-              deviceId={currentCounterDeviceId}
-              businessDate={todayBusinessDate}
+            <OfflineQueue
+              queued={offlineMode.queued}
+              resolveConflict={offlineMode.actions?.resolveConflict}
             />
-            {canSettlePayments ? (
-              <CounterKhataPaymentPanel
-                branchId={branchId}
-                organizationId={organizationId}
-                accountId={accountId}
-                deviceId={currentCounterDeviceId}
-                businessDate={todayBusinessDate}
-              />
-            ) : null}
-            <Link
-              className={buttonVariants({
-                variant: 'outline',
-                className:
-                  'h-11 rounded-[var(--radius-sm)] shadow-none hover:translate-y-0 active:translate-y-0',
-              })}
-              href="/pharmacy/orders"
-            >
-              Customer orders
-            </Link>
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11 shadow-none hover:translate-y-0 active:translate-y-0"
-              onClick={() => setShortcutsOpen(true)}
-            >
-              Shortcuts
-            </Button>
           </div>
-        </div>
-        <div className="flex flex-wrap gap-2 text-xs" aria-label="Bill context">
-          <Button
-            variant="outline"
-            className="min-h-11 rounded-full px-3 text-xs"
-            onClick={openChecks}
-            aria-label={`${patient?.displayName ?? 'Patient + prescription'} · ${formatBinding(keymap.bindings.focusPrescriptionPanel)}`}
-          >
-            <UserRound aria-hidden="true" />
-            <span>{patient?.displayName ?? 'Patient'}</span>
-            <span className="hidden md:inline">
-              {patient ? '' : ' + prescription'} ·{' '}
-              {formatBinding(keymap.bindings.focusPrescriptionPanel)}
-            </span>
-          </Button>
-          <Button
-            variant="outline"
-            className={`min-h-11 rounded-full px-3 text-xs ${blocked ? 'border-destructive text-destructive' : ''}`}
-            onClick={openChecks}
-            aria-label={safetyLabel}
-          >
-            <ShieldCheck aria-hidden="true" />
-            <span className="hidden md:inline">{safetyLabel}</span>
-            <span className="md:hidden">{blocked ? 'Safety block' : 'No blocks'}</span>
-          </Button>
-          <Button
-            variant="outline"
-            className="min-h-11 rounded-full px-3 text-xs"
-            onClick={() => setLoyaltyOpen(true)}
-            aria-label={loyaltyLabel}
-          >
-            <Star aria-hidden="true" />
-            <span className="hidden md:inline">{loyaltyLabel}</span>
-            <span className="md:hidden">Loyalty</span>
-          </Button>
-        </div>
-      </header>
-      {online && !offlineMode.serverUnreachable ? null : (
+        ) : null
+      ) : (
         <div
           role="status"
           aria-live="polite"
           data-counter-offline=""
-          className="mb-3 flex shrink-0 flex-wrap items-start gap-3 rounded-lg border border-warning/30 bg-warning/10 p-3 text-sm"
+          // DEV-977 phase 2B (Counter v2 B2 and C7): the design's offline banner. While the
+          // owner's offline selling switch is off it tells the truth: a price check only.
+          className="flex shrink-0 flex-wrap items-start gap-3 border-b border-border-subtle bg-warning/10 px-4 py-3 text-sm lg:px-6"
         >
-          <StatusPill status="offline" tone="warning" label="Offline" />
+          <WifiOff aria-hidden="true" className="mt-0.5 size-4.5 shrink-0 text-warning" />
           <div className="min-w-0 flex-1 space-y-1">
-            <p className="font-medium text-text-strong">
+            <p className="flex flex-wrap items-center gap-2 font-semibold text-text-strong">
+              <StatusPill status="offline" tone="warning" label="Offline" />
               {paymentQueued
                 ? 'Offline — the payment will be sent when the connection returns.'
                 : pending === 'tender'
                   ? 'Offline — this payment is waiting for the server to confirm it.'
                   : 'Offline — this counter cannot reach the server.'}
             </p>
-            <p className="text-text-body">
-              {paymentQueued
-                ? '1 payment waiting to send. Keep this bill open and do not take the money again.'
-                : pending === 'tender'
-                  ? 'Keep this bill open and do not take the money again until the connection returns.'
-                  : 'Search, bill changes and payments wait until the connection returns.'}
-            </p>
+            <CounterOfflineBannerDetail
+              paymentQueued={paymentQueued}
+              tenderPending={pending === 'tender'}
+              offlineSelling={offlineMode.actions !== null && offlineMode.sellingOn}
+            />
             <CounterOfflinePanel offline={offlineMode} />
           </div>
           {paymentQueued ? (
@@ -3874,42 +4555,51 @@ function ScopedPharmacyCounterConsole({
           ) : null}
         </div>
       )}
-      {branchAuthorized && !saleId && saleReadiness.data ? (
-        <CounterSaleReadiness
-          readiness={saleReadiness.data}
-          branchId={branchId}
-          checking={saleReadiness.isFetching}
-          onCheckAgain={() => void refetchSaleReadiness()}
-          rememberFor={{ organizationId, accountId, deviceId }}
-          onHidden={() => searchRef.current?.focus()}
-        />
-      ) : null}
-      <div className="grid items-start gap-3 xl:min-h-0 xl:flex-1 xl:grid-cols-2 xl:items-stretch">
-        <div className="min-w-0 space-y-3 xl:overflow-y-auto">
-          <SectionCard
+      <div
+        className="min-h-0 flex-1 overflow-y-auto pb-28 lg:grid lg:grid-cols-[minmax(0,1fr)_340px] lg:grid-rows-[auto_auto_minmax(0,1fr)] lg:overflow-hidden lg:pb-0 xl:grid-cols-[minmax(0,1fr)_380px]"
+        data-counter-console=""
+      >
+        {/* From 1024px this wrapper steps aside (display: contents) and its sections take
+            their places in the counter grid: search and bill on the left, the line being
+            added on the right. */}
+        <div className="min-w-0 lg:contents">
+          {branchAuthorized && !saleId && saleReadiness.data ? (
+            <div className="shrink-0 px-4 pt-3 lg:col-start-1 lg:row-start-1 lg:border-e lg:border-border-subtle lg:px-6 lg:pt-4">
+              <CounterSaleReadiness
+                readiness={saleReadiness.data}
+                branchId={branchId}
+                checking={saleReadiness.isFetching}
+                onCheckAgain={() => void refetchSaleReadiness()}
+                rememberFor={{ organizationId, accountId, deviceId }}
+                onHidden={() => searchRef.current?.focus()}
+              />
+            </div>
+          ) : null}
+          <section
             id="counter-scan-search"
             tabIndex={-1}
-            className="overflow-hidden rounded-xl p-0 focus-visible:outline-2 focus-visible:outline-ring"
             aria-label="Counter bill"
+            className="relative z-10 shrink-0 border-b border-border-subtle bg-surface-page px-4 py-3 outline-none focus-visible:outline-2 focus-visible:outline-ring max-lg:sticky max-lg:top-0 lg:col-start-1 lg:row-start-2 lg:self-start lg:border-e lg:px-6 lg:pt-4 lg:pb-3.5"
           >
-            <div className="border-b border-border-subtle p-4">
-              {/* DEV-972: the search help sits beside the heading, so the medicines found start
-                  directly under the search box. */}
-              <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <h2 className="text-sm font-semibold text-text-strong">Scan or search</h2>
-                {!dayClosed && !drawerRequired ? (
-                  <p id="counter-search-help" className="text-xs text-text-muted">
-                    {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
-                    selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)}{' '}
-                    opens pay.
-                  </p>
-                ) : null}
-              </div>
-              {notice ? (
+            {/* DEV-972: the search help sits beside the heading, so the medicines found start
+                directly under the search box. DEV-977: both are announced, not drawn; the
+                field shows its key and the results list shows how to move through it. */}
+            <div className="sr-only">
+              <h2>Scan or search</h2>
+              {!dayClosed && !drawerRequired ? (
+                <p id="counter-search-help">
+                  {formatBinding(keymap.bindings.focusSearch)} focuses search. Enter adds the
+                  selected medicine, or a barcode. {formatBinding(keymap.bindings.openTender)} opens
+                  pay.
+                </p>
+              ) : null}
+            </div>
+            <div className="space-y-2.5">
+              {notice && !receiptPrintNotice ? (
                 <div
                   role={notice.tone === 'success' || notice.tone === 'info' ? 'status' : 'alert'}
                   aria-live="polite"
-                  className={`flex items-center gap-3 rounded-lg border p-3 ${notice.tone === 'success' || notice.tone === 'info' ? 'fixed inset-x-4 bottom-24 z-50 mx-auto max-w-lg bg-surface-card shadow-sm xl:bottom-6' : ''} ${
+                  className={`flex items-center gap-3 rounded-lg border p-3 ${notice.tone === 'success' || notice.tone === 'info' ? 'fixed inset-x-4 bottom-24 z-50 mx-auto max-w-lg bg-surface-card shadow-sm lg:start-11 lg:end-auto lg:bottom-11 lg:mx-0 lg:w-[35rem]' : ''} ${
                     notice.tone === 'danger'
                       ? 'border-destructive/30 bg-destructive/10'
                       : notice.tone === 'warning'
@@ -4052,9 +4742,34 @@ function ScopedPharmacyCounterConsole({
                       );
                   }}
                 />
+              ) : shiftRequired && openDrawerSession && cashShift ? (
+                <CounterCashShiftPanel
+                  branchId={branchId}
+                  drawerSessionId={openDrawerSession.id}
+                  status={cashShift}
+                  currency={cashShift.currency}
+                  timeZone={workspaceZone ?? 'UTC'}
+                  actorIsManager={actorIsManager}
+                  cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                  currentUserId={accountId}
+                  onChanged={() => void utils.pharmacySales.drawerStatus.invalidate()}
+                />
               ) : (
-                <div className="space-y-2">
-                  {openDrawerSession && drawerOperatingCashier ? (
+                <div className="space-y-2.5">
+                  {/* DEV-958B: on a drawer that runs shifts, whose shift is open and its close. */}
+                  {openDrawerSession && cashShift ? (
+                    <CounterCashShiftPanel
+                      branchId={branchId}
+                      drawerSessionId={openDrawerSession.id}
+                      status={cashShift}
+                      currency={cashShift.currency}
+                      timeZone={workspaceZone ?? 'UTC'}
+                      actorIsManager={actorIsManager}
+                      cashiers={actorIsManager ? drawerCashiers.data : undefined}
+                      currentUserId={accountId}
+                      onChanged={() => void utils.pharmacySales.drawerStatus.invalidate()}
+                    />
+                  ) : openDrawerSession && drawerOperatingCashier ? (
                     <CounterDrawerOperator
                       operatingCashier={drawerOperatingCashier}
                       cashiers={actorIsManager ? drawerCashiers.data : undefined}
@@ -4082,8 +4797,13 @@ function ScopedPharmacyCounterConsole({
                       }}
                     />
                   ) : null}
-                  <div>
-                    <div className="space-y-1.5">
+                  {/* DEV-977 (Counter v2): one large scan field, its scanner icon and key inside it. */}
+                  <div className="relative">
+                    <ScanBarcode
+                      aria-hidden="true"
+                      className="pointer-events-none absolute start-3.5 top-1/2 z-10 size-6 -translate-y-1/2 text-text-muted"
+                    />
+                    <div>
                       <Label htmlFor="counter-search" className="sr-only">
                         Scan or search
                       </Label>
@@ -4116,6 +4836,7 @@ function ScopedPharmacyCounterConsole({
                         }
                         onDraftChange={(text) => {
                           scannerRevision.current += 1;
+                          setResultsDismissed(false);
                           // Results follow the field once it is too short to search;
                           // longer drafts reach the parent when their debounce fires.
                           if (text.trim().length < 2) setQuery(text);
@@ -4123,10 +4844,49 @@ function ScopedPharmacyCounterConsole({
                             current.text ? { text: '', query: '', branchId: '' } : current
                           );
                           setActiveRow(null);
+                          setHighlightId(null);
                           setSaleUnit(null);
                           setQuantityText('1');
                         }}
                         onKeyDown={(event) => {
+                          const readyRows =
+                            !busy &&
+                            searchCurrent &&
+                            !searchQuery.isFetching &&
+                            !searchQuery.isError &&
+                            !searchQuery.isPlaceholderData
+                              ? (searchQuery.data?.rows ?? [])
+                              : [];
+                          const resultsShown = searchState !== 'idle' && !resultsDismissed;
+                          // DEV-977B (Counter v2): Escape closes the results over the bill.
+                          if (
+                            event.key === 'Escape' &&
+                            resultsShown &&
+                            !event.nativeEvent.isComposing
+                          ) {
+                            event.preventDefault();
+                            setResultsDismissed(true);
+                            setHighlightId(null);
+                            return;
+                          }
+                          // DEV-977B: Shift+Enter opens the line form for the highlighted result
+                          // (quantity before adding, another batch).
+                          if (
+                            event.key === 'Enter' &&
+                            event.shiftKey &&
+                            !event.ctrlKey &&
+                            !event.altKey &&
+                            !event.metaKey &&
+                            !event.nativeEvent.isComposing
+                          ) {
+                            const target =
+                              readyRows.find((row) => row.medicineId === highlightId) ??
+                              readyRows[0];
+                            if (!target) return;
+                            event.preventDefault();
+                            stageWithOptions(target);
+                            return;
+                          }
                           if (
                             event.nativeEvent.isComposing ||
                             event.shiftKey ||
@@ -4148,7 +4908,7 @@ function ScopedPharmacyCounterConsole({
                               return;
                             event.preventDefault();
                             const index = rows.findIndex(
-                              (row) => row.medicineId === activeRow?.medicineId
+                              (row) => row.medicineId === (highlightId ?? activeRow?.medicineId)
                             );
                             const next =
                               event.key === 'ArrowDown'
@@ -4156,8 +4916,10 @@ function ScopedPharmacyCounterConsole({
                                 : index < 0
                                   ? rows.length - 1
                                   : (index - 1 + rows.length) % rows.length;
-                            // Arrowing through results keeps focus in search (DEV-633).
-                            stageRow(rows[next]!, false);
+                            // Arrowing through results keeps focus in search (DEV-633). DEV-977B:
+                            // it highlights a result; nothing is staged until it is added.
+                            setResultsDismissed(false);
+                            setHighlightId(rows[next]!.medicineId);
                             return;
                           }
                           if (event.key !== 'Enter') return;
@@ -4176,6 +4938,17 @@ function ScopedPharmacyCounterConsole({
                             void addBarcode(trimmed);
                             return;
                           }
+                          // DEV-977B (Counter v2, A6): Enter adds the highlighted result (the
+                          // first one until the arrows move) in one step.
+                          const highlighted = highlightId
+                            ? readyRows.find((row) => row.medicineId === highlightId)
+                            : undefined;
+                          if (highlighted) {
+                            addRowNow(highlighted);
+                            return;
+                          }
+                          // The line form, opened on purpose (Shift+Enter) or for an exception,
+                          // keeps its two steps: the quantity is reviewed, then added (DEV-633).
                           if (activeRow) {
                             if (quantity === null || !quantityReviewed.current) {
                               quantityReviewed.current = true;
@@ -4183,15 +4956,9 @@ function ScopedPharmacyCounterConsole({
                             } else void addToCart();
                             return;
                           }
-                          const first =
-                            searchCurrent &&
-                            !searchQuery.isPlaceholderData &&
-                            !searchQuery.isFetching &&
-                            !searchQuery.isError
-                              ? searchQuery.data?.rows[0]
-                              : undefined;
-                          if (first) stageRow(first);
-                          else void searchAndStage(trimmed);
+                          const first = resultsShown ? readyRows[0] : undefined;
+                          if (first) addRowNow(first);
+                          else void searchAndHighlight(trimmed);
                         }}
                         // DEV-44: the field is focused on load, and the coral focus ring read as
                         // an error before anything was typed. It stays neutral until a search
@@ -4199,186 +4966,690 @@ function ScopedPharmacyCounterConsole({
                         aria-invalid={searchState === 'error' || undefined}
                         className={
                           searchState === 'error'
-                            ? 'h-12 [--ring:var(--destructive)]'
-                            : 'h-12 [--ring:var(--text-muted)]'
+                            ? 'h-14 rounded-[var(--radius-sm)] border-[1.5px] border-border-default bg-surface-card ps-12 pe-14 text-[17px] [--ring:var(--destructive)] md:text-[17px] dark:bg-surface-card'
+                            : 'h-14 rounded-[var(--radius-sm)] border-[1.5px] border-border-default bg-surface-card ps-12 pe-14 text-[17px] [--ring:var(--text-muted)] md:text-[17px] dark:bg-surface-card'
                         }
                       />
                     </div>
+                    <span
+                      aria-hidden="true"
+                      className="pointer-events-none absolute end-3 top-1/2 flex -translate-y-1/2 items-center gap-2 text-xs text-text-muted"
+                    >
+                      <kbd className={KEYCAP_CLASS}>
+                        {formatBinding(keymap.bindings.focusSearch)}
+                      </kbd>
+                    </span>
                   </div>
-
-                  <CounterSearchResults
-                    rows={
-                      searchCurrent && !searchQuery.isPlaceholderData
-                        ? (searchQuery.data?.rows ?? [])
-                        : []
-                    }
-                    state={searchState}
-                    query={trimmedQuery}
-                    disabled={busy || !branchAuthorized}
-                    disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
-                    activeMedicineId={activeRow?.medicineId ?? null}
-                    error={searchQuery.error ? messageFrom(searchQuery.error) : null}
-                    onSelect={stageRow}
-                    onCaptureDemand={() => void captureShortfall()}
-                    onRetry={() => {
-                      if (searchCurrent) void searchQuery.refetch();
-                    }}
-                  />
+                  <div
+                    className="-mx-4 flex gap-2 overflow-x-auto px-4 [scrollbar-width:none] lg:mx-0 lg:flex-wrap lg:px-0"
+                    aria-label="Bill context"
+                  >
+                    <Button
+                      variant="outline"
+                      className="min-h-11 shrink-0 rounded-full px-3.5 text-[13px]"
+                      onClick={openChecks}
+                      aria-label={`${patient?.displayName ?? 'Patient + prescription'} · ${formatBinding(keymap.bindings.focusPrescriptionPanel)}`}
+                    >
+                      <UserRound aria-hidden="true" />
+                      <span>{patient?.displayName ?? 'Patient'}</span>
+                      <span className="hidden md:inline">
+                        {patient ? '' : ' + prescription'} ·{' '}
+                        {formatBinding(keymap.bindings.focusPrescriptionPanel)}
+                      </span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className={`min-h-11 shrink-0 rounded-full px-3.5 text-[13px] ${blocked ? 'border-destructive bg-destructive/10 text-destructive' : ''}`}
+                      onClick={openChecks}
+                      aria-label={safetyLabel}
+                    >
+                      <ShieldCheck aria-hidden="true" />
+                      <span className="hidden md:inline">{safetyLabel}</span>
+                      <span className="md:hidden">{blocked ? 'Safety block' : 'No blocks'}</span>
+                    </Button>
+                    <Button
+                      variant="outline"
+                      className="min-h-11 shrink-0 rounded-full px-3.5 text-[13px]"
+                      onClick={() => setLoyaltyOpen(true)}
+                      aria-label={loyaltyLabel}
+                    >
+                      <Star aria-hidden="true" />
+                      <span className="hidden md:inline">{loyaltyLabel}</span>
+                      <span className="md:hidden">Loyalty</span>
+                    </Button>
+                    {/* DEV-977B (Counter v2, A1 and A6): the unit the next result is added in. */}
+                    <div
+                      role="radiogroup"
+                      aria-label="Adds as"
+                      className="hidden shrink-0 items-center gap-2 text-xs text-text-muted lg:ms-auto lg:flex"
+                    >
+                      <span aria-hidden="true">Adds as</span>
+                      <span className="inline-flex overflow-hidden rounded-[var(--radius-sm)] border border-border-default bg-surface-card">
+                        {(['PACK', 'STRIP', 'UNIT'] as const).map((kind) => {
+                          const checked = addUnit === kind;
+                          return (
+                            <button
+                              key={kind}
+                              type="button"
+                              role="radio"
+                              aria-checked={checked}
+                              aria-keyshortcuts={chordFor(kind)}
+                              title={chordFor(kind)}
+                              onClick={() => setAddUnit(checked ? null : kind)}
+                              className={`min-h-11 px-3 text-[13px] font-semibold focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-inset focus-visible:ring-ring/50 ${
+                                checked
+                                  ? 'bg-text-strong text-surface-card'
+                                  : 'text-text-body hover:bg-surface-sunken'
+                              }`}
+                            >
+                              {kind === 'PACK' ? 'Pack' : kind === 'STRIP' ? 'Strip' : 'Unit'}
+                              <span className="ms-1.5 hidden font-mono text-xs font-normal opacity-70 xl:inline">
+                                {chordFor(kind)}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </span>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
-            {activeRow && !drawerRequired && !dayClosed ? (
-              <section
-                aria-label="Next line"
-                className="m-4 rounded-lg border border-border-subtle bg-surface-sunken p-3"
-              >
-                <div className="grid items-center gap-4 lg:grid-cols-[minmax(10rem,1fr)_minmax(0,2fr)_auto]">
-                  <div className="min-w-0">
-                    <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
-                      Next line
-                    </h2>
-                    <p className="mt-1 text-sm font-semibold text-text-strong">
-                      {counterMedicineDisplayName(activeRow)}
-                      {activeRow.strength ? ` ${activeRow.strength}` : ''}
-                      {counterMedicineGenericName(activeRow) ? (
-                        <span dir="auto" className="block text-xs font-normal text-text-muted">
-                          {counterMedicineGenericName(activeRow)}
-                        </span>
-                      ) : null}
-                    </p>
-                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                      {[
-                        activeRow.presentation,
-                        activeRow.dosageForm,
-                        activeRow.batchNumber
-                          ? `Batch ${activeRow.batchNumber}`
-                          : activeRow.recommendedLotId
-                            ? 'Batch not recorded'
-                            : null,
-                        activeRow.nearestSafeExpiry || activeRow.recommendedLotId
-                          ? formatShortExpiry(activeRow.nearestSafeExpiry)
-                          : null,
-                        locationLabel,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                    </p>
-                  </div>
-                  <div className="counter-next-controls min-w-0 space-y-3">
-                    <CounterUnitToggle
-                      inline
-                      options={activeRow.saleUnits}
-                      dosageForm={activeRow.dosageForm}
-                      priceFor={(option) =>
-                        counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
-                      }
-                      onHandUnits={activeRow.onHandUnits}
-                      selected={saleUnit}
-                      quantity={quantityText}
-                      preview={preview}
-                      disabled={busy}
-                      onSelect={setSaleUnit}
-                      onQuantityChange={changeQuantity}
-                      quantityRef={quantityRef}
-                      onSubmit={() => void addToCart()}
-                      chordFor={chordFor}
-                      emptyMessage={<CounterUnsellableMessage row={activeRow} />}
-                    />
-                    {activeRow.saleUnits.length === 0 ? (
-                      <div className="space-y-1.5">
-                        <Label htmlFor="counter-demand-units">
-                          Requested {plural(counterUnitNoun(activeRow.dosageForm), 2)}
-                        </Label>
-                        <Input
-                          id="counter-demand-units"
-                          type="number"
-                          min={1}
-                          step={1}
-                          className="h-11 w-32"
-                          value={quantityText}
-                          disabled={busy}
-                          onChange={(event) => changeQuantity(event.target.value)}
-                        />
-                      </div>
-                    ) : null}
-                    {shortfallUnits > 0 ? (
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-auto min-h-11 whitespace-normal"
-                        disabled={busy || !branchAuthorized}
-                        aria-describedby={branchControlReason ? 'counter-branch-reason' : undefined}
-                        onClick={() => void captureShortfall()}
-                      >
-                        {pending === 'captureDemand'
-                          ? 'Recording…'
-                          : `Record shortage: ${shortfallUnits} ${plural(counterUnitNoun(activeRow.dosageForm), shortfallUnits)}`}
-                      </Button>
-                    ) : null}
-                  </div>
-
-                  <Button
-                    type="button"
-                    className="min-h-12 rounded-[var(--radius-sm)]"
-                    disabled={busy || !preview?.sufficient}
-                    aria-describedby={
-                      !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
-                    }
-                    onClick={() => void addToCart()}
-                  >
-                    {pending === 'addToCart'
-                      ? 'Adding…'
-                      : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
-                  </Button>
-                  {!busy && !preview?.sufficient ? (
-                    <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
-                      {preview
-                        ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
-                        : counterAddToCartBlockReason(activeRow, selectedOption, quantity)}
-                    </p>
-                  ) : null}
-                </div>
-                <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-text-muted">
+            {/* DEV-977 (Counter v2, A6 and B5): results drop over the bill. While the
+                field is too short to search they stay in place for screen readers only. */}
+            <div
+              data-counter-results=""
+              className={
+                searchState === 'idle'
+                  ? 'sr-only'
+                  : resultsDismissed
+                    ? 'hidden'
+                    : 'absolute inset-x-3 top-full z-20 -mt-1 max-h-[min(35rem,calc(100dvh-12.5rem))] overflow-y-auto rounded-2xl border border-border-default bg-surface-card shadow-lg lg:inset-x-6 lg:max-h-[calc(100dvh-18.75rem)]'
+              }
+            >
+              {searchState === 'ready' && searchRows.length > 0 ? (
+                <div className="sticky top-0 z-10 flex flex-wrap justify-between gap-x-3 gap-y-1 border-b border-border-subtle bg-surface-card px-4 py-2.5 text-xs text-text-muted">
                   <span>
-                    {lotOverride?.inventoryLotId
-                      ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
-                      : activeRow.recommendedLotId && activeRow.batchNumber
-                        ? `Earliest-expiry batch${activeRow.batchNumber ? ` ${activeRow.batchNumber}` : ''} is used; more batches are added if needed.`
-                        : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
-                          ? 'No batch of this medicine is in stock here.'
-                          : 'No batch can be sold here right now.'}
+                    {searchRows.length} {searchRows.length === 1 ? 'result' : 'results'}
+                    {searchQuery.data?.truncated ? ' (more match: keep typing)' : ''}
                   </span>
-                  <CounterLotOverride
-                    value={lotOverride}
-                    lots={lotOptionsQuery.data ?? []}
-                    state={
-                      lotOptionsQuery.isError
+                  <span aria-hidden="true">↑ ↓ move · Enter adds · Esc closes</span>
+                </div>
+              ) : null}
+              <div className={searchState === 'ready' && searchRows.length > 0 ? '' : 'p-4'}>
+                <CounterSearchResults
+                  rows={
+                    searchCurrent && !searchQuery.isPlaceholderData
+                      ? (searchQuery.data?.rows ?? [])
+                      : []
+                  }
+                  state={searchState}
+                  query={trimmedQuery}
+                  disabled={busy || !branchAuthorized}
+                  disabledReasonId={branchControlReason ? 'counter-branch-reason' : undefined}
+                  activeMedicineId={
+                    highlightId ??
+                    activeRow?.medicineId ??
+                    (searchState === 'ready' ? (searchRows[0]?.medicineId ?? null) : null)
+                  }
+                  error={searchQuery.error ? messageFrom(searchQuery.error) : null}
+                  onSelect={stageRow}
+                  onAdd={addRowNow}
+                  slow={slowSearch}
+                  onCaptureDemand={() => void captureShortfall()}
+                  onRetry={() => {
+                    if (searchCurrent) void searchQuery.refetch();
+                  }}
+                />
+              </div>
+              {searchState === 'ready' && searchRows.length > 0 ? (
+                <p
+                  aria-hidden="true"
+                  className="flex flex-wrap gap-x-4 gap-y-1 border-t border-border-subtle px-4 py-2.5 text-xs text-text-muted"
+                >
+                  <span>Batches are picked by earliest expiry.</span>
+                  <span>
+                    {(['PACK', 'STRIP', 'UNIT'] as const)
+                      .map((kind) => `${chordFor(kind)} ${kind.toLowerCase()}`)
+                      .join(' · ')}
+                  </span>
+                  <span>Shift+Enter quantity or batch first</span>
+                </p>
+              ) : null}
+            </div>
+          </section>
+          {/* DEV-977B (Counter v2): the bill column. A result is added in one step and changed on
+              its bill line; the line form below opens only when asked for (Shift+Enter) or for an
+              exception, above the bill, so the totals and Take payment are never covered. */}
+          <div
+            data-counter-bill-column=""
+            className="min-w-0 lg:col-start-1 lg:row-start-3 lg:min-h-0 lg:overflow-y-auto lg:border-e lg:border-border-subtle"
+          >
+            {activeRow && !drawerRequired && !dayClosed ? (
+              <div className="border-b border-border-subtle px-4 py-3 lg:px-6">
+                <section
+                  aria-label="Next line"
+                  className="rounded-[var(--radius-sm)] border border-border-subtle bg-surface-card px-3 py-2.5"
+                >
+                  <div className="flex flex-wrap items-end gap-x-4 gap-y-2">
+                    <div className="min-w-0 basis-full">
+                      <h2 className="font-mono text-xs uppercase tracking-widest text-text-muted">
+                        Next line
+                      </h2>
+                      <p className="text-[15px] font-semibold text-text-strong">
+                        {counterMedicineDisplayName(activeRow)}
+                        {activeRow.strength ? ` ${activeRow.strength}` : ''}
+                        {counterMedicineGenericName(activeRow) ? (
+                          <span dir="auto" className="block text-xs font-normal text-text-muted">
+                            {counterMedicineGenericName(activeRow)}
+                          </span>
+                        ) : null}
+                      </p>
+                      <p className="text-xs leading-relaxed text-text-muted">
+                        {[
+                          activeRow.presentation,
+                          activeRow.dosageForm,
+                          activeRow.batchNumber
+                            ? `Batch ${activeRow.batchNumber}`
+                            : activeRow.recommendedLotId
+                              ? 'Batch not recorded'
+                              : null,
+                          activeRow.nearestSafeExpiry || activeRow.recommendedLotId
+                            ? formatShortExpiry(activeRow.nearestSafeExpiry)
+                            : null,
+                          locationLabel,
+                        ]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </p>
+                    </div>
+                    <div className="counter-next-controls min-w-0 flex-1 space-y-2">
+                      <CounterUnitToggle
+                        inline
+                        options={activeRow.saleUnits}
+                        dosageForm={activeRow.dosageForm}
+                        priceFor={(option) =>
+                          counterSelectionPreview(activeRow, option, 1)?.unitPriceMinor ?? null
+                        }
+                        onHandUnits={activeRow.onHandUnits}
+                        selected={saleUnit}
+                        quantity={quantityText}
+                        preview={preview}
+                        disabled={busy}
+                        onSelect={setSaleUnit}
+                        onQuantityChange={changeQuantity}
+                        quantityRef={quantityRef}
+                        onSubmit={() => void addToCart()}
+                        chordFor={chordFor}
+                        emptyMessage={<CounterUnsellableMessage row={activeRow} />}
+                      />
+                      {activeRow.saleUnits.length === 0 ? (
+                        <div className="space-y-1.5">
+                          <Label htmlFor="counter-demand-units">
+                            Requested {plural(counterUnitNoun(activeRow.dosageForm), 2)}
+                          </Label>
+                          <Input
+                            id="counter-demand-units"
+                            type="number"
+                            min={1}
+                            step={1}
+                            className="h-11 w-32"
+                            value={quantityText}
+                            disabled={busy}
+                            onChange={(event) => changeQuantity(event.target.value)}
+                          />
+                        </div>
+                      ) : null}
+                      {shortfallUnits > 0 ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-auto min-h-11 whitespace-normal"
+                          disabled={busy || !branchAuthorized}
+                          aria-describedby={
+                            branchControlReason ? 'counter-branch-reason' : undefined
+                          }
+                          onClick={() => void captureShortfall()}
+                        >
+                          {pending === 'captureDemand'
+                            ? 'Recording…'
+                            : `Record shortage: ${shortfallUnits} ${plural(counterUnitNoun(activeRow.dosageForm), shortfallUnits)}`}
+                        </Button>
+                      ) : null}
+                    </div>
+
+                    <Button
+                      type="button"
+                      className="min-h-12 w-full rounded-[var(--radius-sm)] md:w-auto lg:w-full"
+                      disabled={busy || !preview?.sufficient}
+                      aria-describedby={
+                        !busy && !preview?.sufficient ? 'counter-add-to-cart-reason' : undefined
+                      }
+                      onClick={() => void addToCart()}
+                    >
+                      {pending === 'addToCart'
+                        ? 'Adding…'
+                        : `Add to cart · ${formatBinding(keymap.bindings.addToCart)}`}
+                    </Button>
+                    {!busy && !preview?.sufficient ? (
+                      <p id="counter-add-to-cart-reason" className="text-xs text-text-muted">
+                        {preview
+                          ? 'Not enough stock for this quantity. Reduce it or record the shortage.'
+                          : counterAddToCartBlockReason(activeRow, selectedOption, quantity)}
+                      </p>
+                    ) : null}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-t border-border-subtle pt-2 text-xs text-text-muted">
+                    <span>
+                      {lotOverride?.inventoryLotId
+                        ? `Selected batch ${lotOptionsQuery.data?.find((lot) => lot.inventoryLotId === lotOverride.inventoryLotId)?.batchNumber ?? 'override'} will be used with a recorded reason.`
+                        : activeRow.recommendedLotId && activeRow.batchNumber
+                          ? `Earliest-expiry batch${activeRow.batchNumber ? ` ${activeRow.batchNumber}` : ''} is used; more batches are added if needed.`
+                          : activeRow.onHandUnits === 0 && activeRow.blocked.length === 0
+                            ? 'No batch of this medicine is in stock here.'
+                            : 'No batch can be sold here right now.'}
+                    </span>
+                    <CounterLotOverride
+                      value={lotOverride}
+                      lots={lotOptionsQuery.data ?? []}
+                      state={
+                        lotOptionsQuery.isError
+                          ? 'error'
+                          : lotOptionsQuery.isSuccess
+                            ? 'ready'
+                            : 'loading'
+                      }
+                      error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                      disabled={busy}
+                      onChange={(next) => {
+                        // An explicit batch choice replaces the scanned sticker's lot pin;
+                        // otherwise the server refuses the chosen batch as a mismatch.
+                        // Merely opening the picker (lotOverride still null) keeps the pin.
+                        setActiveRow((current) =>
+                          lotOverride !== null &&
+                          current?.labelLot &&
+                          next?.inventoryLotId !== current.labelLot.inventoryLotId
+                            ? { ...current, labelLot: null }
+                            : current
+                        );
+                        setLotOverride(next);
+                      }}
+                      onRetry={() => void lotOptionsQuery.refetch()}
+                    />
+                  </div>
+                </section>
+              </div>
+            ) : null}
+            <section
+              aria-label="Cart"
+              tabIndex={0}
+              className="min-w-0 px-4 pb-4 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:ring-inset lg:px-6 lg:pb-6"
+            >
+              <h2 className="sr-only">Cart</h2>
+              <CounterCartPanel
+                cart={cart}
+                alerts={alerts}
+                state={
+                  !saleId
+                    ? 'idle'
+                    : cartQuery.isLoading
+                      ? 'loading'
+                      : cartQuery.isError
                         ? 'error'
-                        : lotOptionsQuery.isSuccess
-                          ? 'ready'
-                          : 'loading'
-                    }
-                    error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
-                    disabled={busy}
-                    onChange={(next) => {
-                      // An explicit batch choice replaces the scanned sticker's lot pin;
-                      // otherwise the server refuses the chosen batch as a mismatch.
-                      // Merely opening the picker (lotOverride still null) keeps the pin.
-                      setActiveRow((current) =>
-                        lotOverride !== null &&
-                        current?.labelLot &&
-                        next?.inventoryLotId !== current.labelLot.inventoryLotId
-                          ? { ...current, labelLot: null }
-                          : current
-                      );
-                      setLotOverride(next);
+                        : 'ready'
+                }
+                error={cartQuery.error ? messageFrom(cartQuery.error) : null}
+                onRetry={() => void refreshTenderBill()}
+                lineControls={{
+                  // DEV-977B: a line change needs the server; offline (or when the server cannot
+                  // be reached) the bill's lines are read-only. Between cash shifts they are
+                  // read-only too, as adding a line and taking payment are (the server refuses).
+                  disabled:
+                    busy ||
+                    !connectionOnline ||
+                    dayClosed ||
+                    drawerRequired ||
+                    shiftRequired ||
+                    !cart ||
+                    cart.status !== 'OPEN' ||
+                    cart.totals.tenderedMinor > 0 ||
+                    Boolean(attempt),
+                  unitOptions: lineUnitOptions,
+                  onChange: (line, next) => void changeBillLine(line, next),
+                  onRemove: (line) => void removeBillLine(line),
+                }}
+                emptyHints={
+                  <>
+                    <span>
+                      <kbd className={KEYCAP_CLASS}>
+                        {formatBinding(keymap.bindings.focusSearch)}
+                      </kbd>{' '}
+                      search
+                    </span>
+                    <span>
+                      <kbd className={KEYCAP_CLASS}>Enter</kbd> add
+                    </span>
+                    <span>
+                      <kbd className={KEYCAP_CLASS}>
+                        {formatBinding(keymap.bindings.openTender)}
+                      </kbd>{' '}
+                      take payment
+                    </span>
+                  </>
+                }
+              />
+            </section>
+          </div>
+        </div>
+        <aside
+          id="counter-bill-total"
+          tabIndex={-1}
+          aria-label="Bill total"
+          className="flex min-w-0 flex-col gap-3.5 p-4 outline-none lg:col-start-2 lg:row-span-3 lg:row-start-1 lg:min-h-0 lg:overflow-y-auto lg:bg-surface-card lg:p-5 [&_button]:rounded-[var(--radius-sm)]"
+        >
+          <div className="flex items-center gap-3 rounded-2xl border border-border-subtle bg-surface-card px-4 py-3.5">
+            <span
+              aria-hidden="true"
+              className="grid size-10 shrink-0 place-items-center rounded-[var(--radius-sm)] bg-surface-sunken text-text-body"
+            >
+              <UserRound className="size-[18px]" />
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-semibold text-text-strong">
+                {customerQuery.data?.customer.displayName ?? 'Walk-in customer'}
+              </span>
+              <span className="block text-xs text-text-muted">
+                {customerQuery.data ? 'Linked to this bill' : 'No customer on this bill'}
+              </span>
+            </span>
+            <Button
+              type="button"
+              variant="outline"
+              className="h-11 shrink-0 px-3 text-[13px]"
+              onClick={() => setLoyaltyOpen(true)}
+            >
+              {customerQuery.data ? 'Change' : 'Link customer'}
+            </Button>
+          </div>
+          {/* DEV-972: the next item's voucher and discount sit in the bill total's own header
+                row, never between the search box and its results, and add no row above Pay. */}
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <Eyebrow>Bill total</Eyebrow>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {!dayClosed && !drawerRequired ? (
+                <div
+                  role="group"
+                  aria-label="Voucher and discount for the next item"
+                  className="flex flex-wrap items-center gap-2"
+                >
+                  <CounterVoucherEntry
+                    branchId={branchId}
+                    held={heldVoucher}
+                    disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
+                    returnFocus={searchRef}
+                    onHold={(voucher) => {
+                      setHeldVoucher({ ...voucher, branchId });
+                      setNotice({
+                        tone: 'success',
+                        message: `Voucher ${voucher.code} will be used on the next item you add.`,
+                      });
+                      focusSearch();
                     }}
-                    onRetry={() => void lotOptionsQuery.refetch()}
+                    onClear={() => setHeldVoucher(null)}
+                  />
+                  <CounterDiscountEntry
+                    branchId={branchId}
+                    held={heldDiscount}
+                    disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
+                    returnFocus={searchRef}
+                    key={`discount:${branchId}:${cart?.saleId}`}
+                    billLines={
+                      currentBill && cart && cart.status === 'OPEN' && !cart.totals.tenderedMinor
+                        ? {
+                            lines: cart.lines,
+                            apply: async (saleLineId, discount, requestId, discountApproval) => {
+                              await utils.client.pharmacySales.discountBillLine.mutate({
+                                branchId,
+                                saleId: cart.saleId,
+                                saleLineId,
+                                discount,
+                                requestId,
+                                deviceId: currentCounterDeviceId(),
+                                discountApproval,
+                              });
+                              await refreshCart();
+                              setNotice({
+                                tone: 'success',
+                                message: 'Discount recorded against the selected bill line.',
+                              });
+                            },
+                          }
+                        : undefined
+                    }
+                    wholeBill={sheetWholeBill}
+                    approvers={sheetApprovers}
+                    onOpenChange={setDiscountSheetOpen}
+                    onHold={(discount) => {
+                      setHeldDiscount({ ...discount, branchId });
+                      setNotice({
+                        tone: 'success',
+                        message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
+                      });
+                      focusSearch();
+                    }}
+                    onClear={() => setHeldDiscount(null)}
                   />
                 </div>
-              </section>
-            ) : null}
-          </SectionCard>
+              ) : null}
+              <span className="text-xs text-text-muted">
+                {lineCount} {lineCount === 1 ? 'line' : 'lines'}
+              </span>
+            </div>
+          </div>
+          <dl className="grid gap-2 text-sm">
+            {(
+              [
+                ['Gross', cart?.totals.grossMinor],
+                ['Discount', cart?.totals.discountMinor],
+                ['Total', cart?.totals.netMinor],
+                ['Tendered', cart?.totals.tenderedMinor],
+              ] as const
+            ).map(([label, value]) => (
+              <div
+                key={label}
+                className={`flex items-baseline justify-between gap-3 ${label === 'Total' ? 'border-t border-border-subtle pt-2 text-[15px] font-semibold text-text-strong' : 'text-text-body'}`}
+              >
+                <dt>{label}</dt>
+                <dd
+                  className={`tabular-nums ${label === 'Discount' && value ? 'font-semibold text-success' : 'font-semibold text-text-strong'}`}
+                >
+                  {currentBill && value !== undefined ? formatMinor(value) : '—'}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
+          {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
+            <CounterBillDiscountEntry
+              branchId={branchId}
+              saleId={cart.saleId}
+              lines={cart.lines}
+              disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
+              requestApproval={requestBillDiscountApproval}
+              onChanged={(message) => {
+                setNotice({ tone: 'success', message });
+                void cartQuery.refetch();
+              }}
+            />
+          ) : null}
+          <div className="grid gap-3.5">
+            <div className="grid gap-0.5 rounded-2xl bg-surface-sunken px-4 py-3.5">
+              <p className="flex items-center gap-1.5 text-[13px] font-semibold text-text-body">
+                {/* Counter v2 A3: a paid bill says so with a mark, not by colour alone. */}
+                {billState === 'settled' ? (
+                  <CircleCheck aria-hidden="true" className="size-4 shrink-0 text-success" />
+                ) : null}
+                {billState === 'settled' ? `Paid · receipt ${cart?.receiptNumber}` : 'Balance due'}
+              </p>
+              <p className="text-[34px] leading-tight font-semibold tracking-[-0.02em] text-text-strong tabular-nums">
+                {billState === 'settled' && currentBill
+                  ? formatMinor(cart.totals.tenderedMinor)
+                  : balanceMinor === null
+                    ? '—'
+                    : formatMinor(balanceMinor)}
+              </p>
+              <div className="empty:hidden">
+                <CounterChangeDue minor={confirmedChangeMinor} />
+              </div>
+            </div>
+            {billState === 'settled' ? (
+              <div className="space-y-2">
+                <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
+                  Start next bill
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  onClick={() => {
+                    if (settledReceipt) {
+                      if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
+                      setLastReceipt({ branchId, receipt: settledReceipt });
+                    }
+                    setReceiptOpen(true);
+                  }}
+                >
+                  Preview receipt
+                </Button>
+                <Button
+                  variant="outline"
+                  className="h-11 w-full"
+                  disabled={printPending}
+                  aria-busy={printPending || undefined}
+                  onClick={() => void printReceipt()}
+                >
+                  {printPending
+                    ? 'Printing receipt…'
+                    : `Print · ${formatBinding(keymap.bindings.printReceipt)}`}
+                </Button>
+              </div>
+            ) : (
+              <Button
+                className="h-14 w-full justify-between px-5 text-[17px]"
+                disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
+                aria-describedby="counter-pay-reason"
+                onClick={openPayment}
+              >
+                <span>Take payment</span>
+                <span className="sr-only">·</span>
+                <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
+                  {formatBinding(keymap.bindings.openTender)}
+                </kbd>
+              </Button>
+            )}
+          </div>
+          {!canSettlePayments ? (
+            <div
+              role="status"
+              className={`text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
+            >
+              <p id="counter-pay-reason">{payDisabledReason}</p>
+              {settlementAccess.isError ? (
+                <Button
+                  variant="outline"
+                  className="mt-2 min-h-11"
+                  onClick={() => void settlementAccess.refetch()}
+                >
+                  Retry payment access
+                </Button>
+              ) : null}
+            </div>
+          ) : (
+            <p
+              id="counter-pay-reason"
+              className={`text-xs ${blocked ? 'rounded-[var(--radius-sm)] bg-destructive/10 px-3.5 py-3 text-[13px] font-semibold text-destructive' : 'text-text-muted'}`}
+            >
+              {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
+            </p>
+          )}
+          {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
+            <Button variant="outline" className="min-h-11 w-full" onClick={openPayment}>
+              Review payment status
+            </Button>
+          ) : null}
+          <div className="grid grid-cols-3 gap-2" aria-label="Bill actions">
+            <Button
+              variant="outline"
+              className="h-11 px-2 text-xs"
+              disabled={busy || !saleId || cart?.status !== 'OPEN'}
+              aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
+              onClick={() => void runTransition('hold')}
+            >
+              Hold{' '}
+              <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+                {formatBinding(keymap.bindings.holdSale)}
+              </kbd>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 px-2 text-xs"
+              disabled={busy || !heldSaleId}
+              aria-describedby={resumeReasonId}
+              onClick={() => void runTransition('resume')}
+            >
+              Resume{' '}
+              <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
+                {formatBinding(keymap.bindings.resumeSale)}
+              </kbd>
+            </Button>
+            <Button
+              variant="outline"
+              className="h-11 px-2 text-xs text-destructive"
+              disabled={busy || !saleId || cart?.status !== 'OPEN'}
+              aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
+              onClick={() => setVoidOpen(true)}
+            >
+              Void
+            </Button>
+          </div>
+          {billActionReason ? (
+            <p id="counter-bill-action-reason" className="text-xs text-text-muted">
+              {billActionReason}
+            </p>
+          ) : null}
+          {resumeReasonId === 'counter-resume-reason' ? (
+            <p id="counter-resume-reason" className="text-xs text-text-muted">
+              {resumeDisabledReason}
+            </p>
+          ) : null}
+          {packApproval ? (
+            <CounterPackApprovalDialog
+              medicineName={packApproval.medicineName}
+              copy={
+                packApproval.discount
+                  ? {
+                      title: 'Approve this discount?',
+                      description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
+                      confirm: 'Approve discount',
+                    }
+                  : undefined
+              }
+              loadApprovers={
+                packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
+              }
+              onCancel={() => finishPackApproval(null)}
+              onConfirm={finishPackApproval}
+            />
+          ) : null}
+          <CounterVoidDialog
+            open={voidOpen && Boolean(saleId)}
+            onOpenChange={setVoidOpen}
+            busy={busy}
+            onConfirm={(reason) => {
+              setVoidOpen(false);
+              void runTransition('void', reason);
+            }}
+          />
+          {/* DEV-977: suggestions sit with the bill, as drawn, never between search and results. */}
           {substituteInput ? (
             <SectionCard
               compact
@@ -4428,283 +5699,11 @@ function ScopedPharmacyCounterConsole({
               setActiveRow(null);
             }}
           />
-        </div>
-        <aside
-          id="counter-bill-total"
-          tabIndex={-1}
-          aria-label="Bill total"
-          className="min-w-0 space-y-3 xl:sticky xl:top-0 xl:flex xl:min-h-0 xl:flex-col [&_button]:rounded-[var(--radius-sm)]"
-        >
-          <section
-            aria-label="Cart"
-            tabIndex={0}
-            className="rounded-xl border border-border-subtle bg-surface-card outline-none focus-visible:ring-3 focus-visible:ring-ring/50 xl:min-h-24 xl:flex-1 xl:overflow-y-auto"
-          >
-            <h2 className="sticky top-0 border-b border-border-subtle bg-surface-card px-4 py-3 text-sm font-semibold text-text-strong">
-              Cart
-            </h2>
-            <CounterCartPanel
-              cart={cart}
-              alerts={alerts}
-              state={
-                !saleId
-                  ? 'idle'
-                  : cartQuery.isLoading
-                    ? 'loading'
-                    : cartQuery.isError
-                      ? 'error'
-                      : 'ready'
-              }
-              error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-              onRetry={() => void refreshTenderBill()}
-            />
-          </section>
-          <SectionCard className="shrink-0 rounded-xl p-3" compact>
-            {/* DEV-972: the next item's voucher and discount sit in the bill total's own header
-                row, never between the search box and its results, and add no row above Pay. */}
-            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-              <Eyebrow>Bill total</Eyebrow>
-              <div className="flex flex-wrap items-center justify-end gap-2">
-                {!dayClosed && !drawerRequired ? (
-                  <div
-                    role="group"
-                    aria-label="Voucher and discount for the next item"
-                    className="flex flex-wrap items-center gap-2"
-                  >
-                    <CounterVoucherEntry
-                      branchId={branchId}
-                      held={heldVoucher}
-                      disabled={busy || !branchAuthorized || !online || Boolean(heldDiscount)}
-                      returnFocus={searchRef}
-                      onHold={(voucher) => {
-                        setHeldVoucher({ ...voucher, branchId });
-                        setNotice({
-                          tone: 'success',
-                          message: `Voucher ${voucher.code} will be used on the next item you add.`,
-                        });
-                        focusSearch();
-                      }}
-                      onClear={() => setHeldVoucher(null)}
-                    />
-                    <CounterDiscountEntry
-                      branchId={branchId}
-                      held={heldDiscount}
-                      disabled={busy || !branchAuthorized || !online || Boolean(heldVoucher)}
-                      returnFocus={searchRef}
-                      onHold={(discount) => {
-                        setHeldDiscount({ ...discount, branchId });
-                        setNotice({
-                          tone: 'success',
-                          message: `A discount of ${describeCounterDiscount(discount)} will come off the next item you add.`,
-                        });
-                        focusSearch();
-                      }}
-                      onClear={() => setHeldDiscount(null)}
-                    />
-                  </div>
-                ) : null}
-                <span className="text-xs text-text-muted">
-                  {lineCount} {lineCount === 1 ? 'line' : 'lines'}
-                </span>
-              </div>
-            </div>
-            <dl className="grid grid-cols-3 gap-3 text-xs">
-              {(
-                [
-                  ['Gross', cart?.totals.grossMinor],
-                  ['Discount', cart?.totals.discountMinor],
-                  ['Tendered', cart?.totals.tenderedMinor],
-                ] as const
-              ).map(([label, value]) => (
-                <div key={label} className="space-y-1">
-                  <dt className="text-text-muted">{label}</dt>
-                  <dd className="font-mono tabular-nums">
-                    {currentBill && value !== undefined ? formatMinor(value) : '—'}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-            {/* DEV-956: shown only when the owner has turned the whole-bill discount on. */}
-            {currentBill && cart.status === 'OPEN' && lineCount > 0 ? (
-              <CounterBillDiscountEntry
-                branchId={branchId}
-                saleId={cart.saleId}
-                lines={cart.lines}
-                disabled={busy || !branchAuthorized || !online || cart.totals.tenderedMinor > 0}
-                requestApproval={requestBillDiscountApproval}
-                onChanged={(message) => {
-                  setNotice({ tone: 'success', message });
-                  void cartQuery.refetch();
-                }}
-              />
-            ) : null}
-            <div className="my-3 grid grid-cols-2 items-center gap-3 border-y border-border-subtle py-3">
-              <div>
-                <p className="font-mono text-xs text-text-muted">
-                  {billState === 'settled'
-                    ? `Paid · receipt ${cart?.receiptNumber}`
-                    : 'Balance due'}
-                </p>
-                <p className="mt-1 font-mono text-3xl font-semibold tracking-tight text-text-strong tabular-nums">
-                  {billState === 'settled' && currentBill
-                    ? formatMinor(cart.totals.tenderedMinor)
-                    : balanceMinor === null
-                      ? '—'
-                      : formatMinor(balanceMinor)}
-                </p>
-                <div className="empty:hidden">
-                  <CounterChangeDue minor={confirmedChangeMinor} />
-                </div>
-              </div>
-              {billState === 'settled' ? (
-                <div className="space-y-2">
-                  <Button className="h-14 w-full" disabled={busy} onClick={startNextBill}>
-                    Start next bill
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-11 w-full"
-                    onClick={() => {
-                      if (settledReceipt) {
-                        if (presentedReceipt?.saleId !== saleId) setReceiptReprint(false);
-                        setLastReceipt({ branchId, receipt: settledReceipt });
-                      }
-                      setReceiptOpen(true);
-                    }}
-                  >
-                    Preview receipt
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="h-11 w-full"
-                    onClick={() => void printReceipt()}
-                  >
-                    Print · {formatBinding(keymap.bindings.printReceipt)}
-                  </Button>
-                </div>
-              ) : (
-                <Button
-                  className="h-14 w-full justify-between"
-                  disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
-                  aria-describedby="counter-pay-reason"
-                  onClick={openPayment}
-                >
-                  <span>Pay</span>
-                  <span className="sr-only">·</span>
-                  <kbd className="rounded border border-primary-foreground/30 bg-primary-foreground/10 px-1.5 py-0.5 font-mono text-xs">
-                    {formatBinding(keymap.bindings.openTender)}
-                  </kbd>
-                </Button>
-              )}
-            </div>
-            {!canSettlePayments ? (
-              <div
-                role="status"
-                className={`mt-2 text-sm ${settlementAccess.isError ? 'text-warning' : 'text-text-muted'}`}
-              >
-                <p id="counter-pay-reason">{payDisabledReason}</p>
-                {settlementAccess.isError ? (
-                  <Button
-                    variant="outline"
-                    className="mt-2 min-h-11"
-                    onClick={() => void settlementAccess.refetch()}
-                  >
-                    Retry payment access
-                  </Button>
-                ) : null}
-              </div>
-            ) : (
-              <p
-                id="counter-pay-reason"
-                className={`mt-2 text-xs ${blocked ? 'text-destructive' : 'text-text-muted'}`}
-              >
-                {payDisabledReason ?? 'Cash, card, bank transfer, wallet or khata.'}
-              </p>
-            )}
-            {canSettlePayments && billState !== 'ready' && billState !== 'settled' && saleId ? (
-              <Button variant="outline" className="mt-2 min-h-11 w-full" onClick={openPayment}>
-                Review payment status
-              </Button>
-            ) : null}
-            <div className="mt-3 grid grid-cols-3 gap-2" aria-label="Bill actions">
-              <Button
-                variant="outline"
-                className="h-11 px-2 text-xs"
-                disabled={busy || !saleId || cart?.status !== 'OPEN'}
-                aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
-                onClick={() => void runTransition('hold')}
-              >
-                Hold{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-                  {formatBinding(keymap.bindings.holdSale)}
-                </kbd>
-              </Button>
-              <Button
-                variant="outline"
-                className="h-11 px-2 text-xs"
-                disabled={busy || !heldSaleId}
-                aria-describedby={resumeReasonId}
-                onClick={() => void runTransition('resume')}
-              >
-                Resume{' '}
-                <kbd className="rounded border border-border-subtle bg-surface-sunken px-1.5 py-0.5 font-mono text-xs">
-                  {formatBinding(keymap.bindings.resumeSale)}
-                </kbd>
-              </Button>
-              <Button
-                variant="outline"
-                className="h-11 px-2 text-xs text-destructive"
-                disabled={busy || !saleId || cart?.status !== 'OPEN'}
-                aria-describedby={billActionReason ? 'counter-bill-action-reason' : undefined}
-                onClick={() => setVoidOpen(true)}
-              >
-                Void
-              </Button>
-            </div>
-            {billActionReason ? (
-              <p id="counter-bill-action-reason" className="mt-2 text-xs text-text-muted">
-                {billActionReason}
-              </p>
-            ) : null}
-            {resumeReasonId === 'counter-resume-reason' ? (
-              <p id="counter-resume-reason" className="mt-2 text-xs text-text-muted">
-                {resumeDisabledReason}
-              </p>
-            ) : null}
-            {packApproval ? (
-              <CounterPackApprovalDialog
-                medicineName={packApproval.medicineName}
-                copy={
-                  packApproval.discount
-                    ? {
-                        title: 'Approve this discount?',
-                        description: `${packApproval.medicineName}: a discount of ${packApproval.discount}. A manager or owner must enter a fresh PIN. A solo owner can enter their own PIN. The approval is recorded in the audit.`,
-                        confirm: 'Approve discount',
-                      }
-                    : undefined
-                }
-                loadApprovers={
-                  packApproval.discount ? loadDiscountApprovers : loadScannedPackApprovers
-                }
-                onCancel={() => finishPackApproval(null)}
-                onConfirm={finishPackApproval}
-              />
-            ) : null}
-            <CounterVoidDialog
-              open={voidOpen && Boolean(saleId)}
-              onOpenChange={setVoidOpen}
-              busy={busy}
-              onConfirm={(reason) => {
-                setVoidOpen(false);
-                void runTransition('void', reason);
-              }}
-            />
-          </SectionCard>
         </aside>
       </div>
       <div
         aria-label="Phone payment"
-        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] xl:hidden"
+        className="fixed inset-x-0 bottom-0 z-30 flex items-center gap-3 border-t border-border-default bg-surface-card px-4 pt-2.5 pb-[max(0.75rem,env(safe-area-inset-bottom))] lg:hidden"
       >
         <div className="min-w-0 flex-1">
           <p id="counter-phone-pay-reason" className="text-xs text-text-muted">
@@ -4712,13 +5711,13 @@ function ScopedPharmacyCounterConsole({
               ? (payDisabledReason ?? 'Balance due')
               : 'Balance due'}
           </p>
-          <p className="font-mono text-xl font-semibold text-text-strong tabular-nums">
+          <p className="text-2xl leading-tight font-semibold text-text-strong tabular-nums">
             {balanceMinor === null ? '—' : formatMinor(balanceMinor)}
           </p>
         </div>
         <Button
           variant="outline"
-          className="h-13 min-w-11 rounded-[var(--radius-sm)]"
+          className="h-14 min-w-11 rounded-[var(--radius-sm)]"
           onClick={() =>
             document.getElementById('counter-bill-total')?.scrollIntoView({ block: 'start' })
           }
@@ -4726,7 +5725,7 @@ function ScopedPharmacyCounterConsole({
           Bill
         </Button>
         <Button
-          className="h-13 min-w-28 rounded-[var(--radius-sm)]"
+          className="h-14 min-w-36 rounded-[var(--radius-sm)] text-[17px]"
           disabled={!canSettlePayments || billState !== 'ready' || blocked || busy}
           // While payment access is unresolved, the reason (with its retry) sits in the bill panel.
           aria-describedby={
@@ -4736,39 +5735,22 @@ function ScopedPharmacyCounterConsole({
           }
           onClick={openPayment}
         >
-          Pay <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
+          Take payment{' '}
+          <span className="sr-only">· {formatBinding(keymap.bindings.openTender)}</span>
         </Button>
       </div>
       <CounterOverlay
-        title="Payment"
+        title="Take payment"
+        // Counter v2 (A2, C4): the sheet's name carries the bill total, as drawn.
+        titleDetail={currentBill ? formatMinor(cart.totals.netMinor) : undefined}
+        eyebrow={`Bill · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`}
+        variant="wide"
         enabled={canSettlePayments}
         open={paymentOpen}
         onOpenChange={setPaymentOpen}
         initialFocus={tenderRef}
         finalFocus={searchRef}
       >
-        <p className="text-xs text-text-muted">
-          {lineCount} {lineCount === 1 ? 'line' : 'lines'} · Tendered{' '}
-          {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
-        </p>
-        <div className="mb-4 space-y-1">
-          <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
-            <input
-              ref={autoPrintRef}
-              id="counter-auto-print"
-              type="checkbox"
-              checked={autoPrint}
-              disabled={busy}
-              onChange={(event) => setAutoPrint(event.target.checked)}
-              aria-describedby="counter-auto-print-help"
-              className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
-            />
-            Automatically open print dialog after payment
-          </Label>
-          <p id="counter-auto-print-help" className="text-xs text-text-muted">
-            Opens the print window after each payment on this computer.
-          </p>
-        </div>
         {/* DEV-950: a prescription line still waiting for its pharmacist's signature. */}
         {canSignPrescriptionLines && paymentOpen ? (
           <CounterRxSelfSign
@@ -4838,6 +5820,42 @@ function ScopedPharmacyCounterConsole({
           }
           onRetry={() => void refreshTenderBill()}
           onTender={takePayment}
+          summaryExtra={
+            <>
+              <p className="text-xs text-text-muted">
+                {lineCount} {lineCount === 1 ? 'line' : 'lines'} · Tendered{' '}
+                {currentBill ? formatMinor(cart.totals.tenderedMinor) : '—'}
+              </p>
+              <div className="space-y-1">
+                <Label
+                  htmlFor="counter-auto-print"
+                  className="flex min-h-11 items-center gap-3 text-[13px]"
+                >
+                  <input
+                    ref={autoPrintRef}
+                    id="counter-auto-print"
+                    type="checkbox"
+                    checked={autoPrint}
+                    disabled={busy}
+                    onChange={(event) => setAutoPrint(event.target.checked)}
+                    aria-describedby="counter-auto-print-help"
+                    className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                  />
+                  Automatically open print dialog after payment
+                </Label>
+                <p id="counter-auto-print-help" className="text-xs text-text-muted max-sm:hidden">
+                  Opens the print window after each payment on this computer.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                className="h-11 w-full shadow-none hover:translate-y-0 active:translate-y-0"
+                onClick={() => setPaymentOpen(false)}
+              >
+                Back to bill
+              </Button>
+            </>
+          }
         />
         {/* DEV-743: shown only where an admitted card terminal serves this counter. */}
         <CounterCardTerminalPanel
@@ -4849,56 +5867,195 @@ function ScopedPharmacyCounterConsole({
           businessDate={todayBusinessDate}
           onSettled={() => void refreshTenderBill('accepted')}
         />
-
-        <Button variant="outline" className="h-11" onClick={() => setPaymentOpen(false)}>
-          Back to bill
-        </Button>
+      </CounterOverlay>
+      {/* DEV-977 phase 3 (Counter v2 A5): the controlled-medicine authorisation in its own sheet.
+          The same fields and steps as before; "Authorise line" runs the same add, which checks
+          every field and the server re-checks them and the pharmacist's PIN. Nothing is on the
+          bill before that. A scanned serialised pack waits here as scanned, so its own lot is
+          kept. A member who cannot dispense is told who can; no way round is offered. */}
+      <CounterOverlay
+        title={
+          controlledTarget
+            ? `Authorise ${controlledTarget.displayName}`
+            : 'Authorise a controlled medicine'
+        }
+        eyebrow="Controlled medicine · online only"
+        subtitle={
+          pendingPack
+            ? 'One scanned pack. Its own batch is kept; nothing is on the bill until it is authorised.'
+            : controlledTarget
+              ? `${quantityText || '1'} × ${selectedOption?.levelLabel.toLowerCase() ?? 'unit'}. Nothing is on the bill until it is authorised.`
+              : undefined
+        }
+        open={controlledOpen}
+        onOpenChange={(open) => {
+          if (open) setControlledOpen(true);
+          else closeControlled();
+          setControlledError(null);
+          if (open || !pendingPack) return;
+          // Closed without adding: the waiting pack is let go, and the cashier is told.
+          setPendingPack(null);
+          setNotice({
+            tone: 'warning',
+            message: `The scanned pack of ${pendingPack.row.displayName} was not added. Scan it again to authorise it.`,
+          });
+        }}
+        initialFocus={controlledPanelRef}
+        finalFocus={searchRef}
+        variant="side"
+        footer={
+          controlledFields && controlledTarget ? (
+            <>
+              {/* In the footer, so it stays on screen while focus is on the cleared PIN. */}
+              {controlledError ? (
+                <p
+                  role="alert"
+                  data-counter-controlled-error=""
+                  className="basis-full rounded-sm bg-destructive/10 px-3.5 py-3 text-sm text-destructive"
+                >
+                  {controlledError}
+                </p>
+              ) : null}
+              <p
+                id="controlled-sheet-help"
+                className="min-w-0 flex-1 text-xs text-text-muted"
+                aria-live="polite"
+              >
+                {controlledMissing.length > 0
+                  ? `Still needed: ${controlledMissing.join(', ')}.`
+                  : approvalCopy.controlledReady}
+              </p>
+              <Button
+                type="button"
+                className="min-h-11"
+                aria-describedby="controlled-sheet-help"
+                disabled={busy || controlledMissing.length > 0}
+                onClick={() => {
+                  setControlledError(null);
+                  if (pendingPack) void addToCart(pendingPack.row, undefined, pendingPack.pack);
+                  else void addToCart();
+                }}
+              >
+                Authorise line
+              </Button>
+            </>
+          ) : undefined
+        }
+      >
+        <div
+          ref={controlledPanelRef}
+          tabIndex={-1}
+          data-counter-controlled-sheet=""
+          className="grid gap-4 outline-none"
+        >
+          {controlledFields ? (
+            <>
+              {patient ? (
+                <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]">
+                  <dt className="text-text-muted">Patient</dt>
+                  <dd className="font-semibold text-text-strong">{patient.displayName}</dd>
+                </dl>
+              ) : (
+                <CounterNote tone="warning">
+                  <p>
+                    <b className="font-semibold text-text-strong">Choose the patient first.</b> The
+                    patient and their address go into the controlled-drug register.
+                  </p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="mt-1 min-h-11"
+                    onClick={() => {
+                      returnToControlled.current = true;
+                      closeControlled();
+                      setChecksOpen(true);
+                    }}
+                  >
+                    Find the patient
+                  </Button>
+                </CounterNote>
+              )}
+              <CounterControlledAuthorization
+                controlled={controlledFields}
+                patient={patient}
+                disabled={busy}
+                inSheet
+              />
+            </>
+          ) : controlledTarget ? (
+            <CounterStateCard
+              tone="warning"
+              heading={
+                controlledBlock === 'NO_SAFETY_MODULE'
+                  ? 'This line cannot be authorised at this counter'
+                  : 'A pharmacist must authorise this line'
+              }
+              actions={
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11"
+                  onClick={() => {
+                    setPendingPack(null);
+                    if (activeRow?.restriction.controlled) setActiveRow(null);
+                    closeControlled();
+                    setNotice({
+                      tone: 'warning',
+                      message: `${controlledTarget.displayName} was not added.`,
+                    });
+                  }}
+                >
+                  Don&apos;t add it
+                </Button>
+              }
+            >
+              <p>
+                {controlledBlock === 'NO_SAFETY_MODULE'
+                  ? 'The controlled-medicine authorisation needs Pharmacy Safety, which is not switched on for this business, so it cannot be completed at this counter. Ask the owner.'
+                  : approvalCopy.controlledPharmacistOnly}
+              </p>
+            </CounterStateCard>
+          ) : null}
+        </div>
       </CounterOverlay>
       <CounterOverlay
         title="Patient, prescription and checks"
+        eyebrow={formatBinding(keymap.bindings.focusPrescriptionPanel)}
         open={checksOpen}
-        onOpenChange={setChecksOpen}
+        onOpenChange={(open) => {
+          setChecksOpen(open);
+          // DEV-977 phase 3: back to the authorisation the cashier came from.
+          if (!open && returnToControlled.current && controlledTarget) setControlledOpen(true);
+          if (!open) returnToControlled.current = false;
+        }}
+        summary={
+          controlledTarget && controlledFields && !pharmacistCheckOff ? (
+            <CounterNote tone="warning">
+              <p>
+                {controlledTarget.displayName} is a controlled medicine. It is added once it is
+                authorised.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                className="mt-1 min-h-11"
+                onClick={() => {
+                  returnToControlled.current = false;
+                  setChecksOpen(false);
+                  setControlledOpen(true);
+                }}
+              >
+                Authorise {controlledTarget.displayName}
+              </Button>
+            </CounterNote>
+          ) : undefined
+        }
         initialFocus={rxPanelRef}
         finalFocus={searchRef}
-        drawer
+        variant="side"
       >
         <CounterRxPanel
           ref={rxPanelRef}
-          controlled={
-            // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
-            // FORBIDDEN read means this actor cannot dispense, so the controlled
-            // authorization panel is not offered (the server refuses it anyway).
-            // Without Pharmacy Safety the read is not made at all, with the same outcome.
-            !(
-              activeRow?.restriction.controlled ||
-              (currentBill && cart.lines.some((line) => line.controlled))
-            ) ||
-            !safetyLicensed ||
-            (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-              'FORBIDDEN'
-              ? undefined
-              : {
-                  ...controlledAuth,
-                  pharmacists: pharmacistsQuery.data ?? [],
-                  loading: pharmacistsQuery.isLoading,
-                  error: pharmacistsQuery.isError,
-                  patientAddress,
-                  onChange: (field, value) => {
-                    if (field === 'patientAddress') {
-                      setPatientAddressDraft(typeof value === 'string' ? value : '');
-                      return;
-                    }
-                    closedBillPatient.current?.editedAuth.add(field);
-                    setControlledAuth((current) => {
-                      if (field === 'emergency' || field === 'rxSerialWritten') {
-                        return { ...current, [field]: value === true };
-                      }
-                      if (typeof value !== 'string') return current;
-                      return { ...current, [field]: value };
-                    });
-                  },
-                }
-          }
           alerts={alerts}
           acknowledgementScope={saleId && branchId ? { branchId, saleId } : null}
           patient={patient}
@@ -4942,10 +6099,11 @@ function ScopedPharmacyCounterConsole({
       </CounterOverlay>
       <CounterOverlay
         title="Customer loyalty and khata"
+        eyebrow="Khata and loyalty"
         open={loyaltyOpen}
         onOpenChange={setLoyaltyOpen}
         finalFocus={searchRef}
-        drawer
+        variant="side"
       >
         <SectionCard
           compact
@@ -5098,6 +6256,7 @@ function ScopedPharmacyCounterConsole({
       </CounterOverlay>
       <CounterOverlay
         title="Shortcuts"
+        eyebrow="Keyboard"
         open={shortcutsOpen}
         onOpenChange={setShortcutsOpen}
         finalFocus={searchRef}
@@ -5106,6 +6265,10 @@ function ScopedPharmacyCounterConsole({
       </CounterOverlay>
       <CounterOverlay
         title="Receipt preview"
+        eyebrow={
+          displayReceipt?.receiptNumber ? `Receipt ${displayReceipt.receiptNumber}` : 'Receipt'
+        }
+        variant="side"
         open={receiptOpen}
         onOpenChange={setReceiptOpen}
         finalFocus={searchRef}
@@ -5149,7 +6312,6 @@ function ScopedPharmacyCounterConsole({
           }
         }}
         summary={<CounterChangeDue minor={confirmedChangeMinor} />}
-        drawer
       >
         <CounterReceiptView
           branchId={branchId}
@@ -5183,6 +6345,8 @@ function ScopedPharmacyCounterConsole({
           format={receiptFormat}
           reprint={receiptReprint}
           printing={!displayReceipt && receiptQuery.isFetching}
+          printPending={printPending}
+          printError={receiptPrintNotice?.message}
           error={!displayReceipt && receiptQuery.error ? messageFrom(receiptQuery.error) : null}
           onLocaleChange={setReceiptLocale}
           onFormatChange={setReceiptFormat}
@@ -5221,28 +6385,25 @@ function ScopedPharmacyCounterConsole({
       <p className="sr-only" aria-live="polite">
         {COUNTER_ACTION_LABELS.focusSearch}: {formatBinding(keymap.bindings.focusSearch)}
       </p>
-    </div>
+    </>
   );
 
   return (
-    <div className="pos-calm flex h-full min-h-0 flex-col overflow-hidden bg-surface-page">
-      {/* Reserve space outside the scroller: one reason stays visible without covering controls. */}
-      {counterBusyReason ? (
-        <p
-          id="counter-branch-reason"
-          className="shrink-0 border-b border-border-subtle px-4 py-2 text-xs text-text-muted"
-        >
-          {counterBusyReason}
-        </p>
-      ) : null}
-      {scrollableCounter}
-    </div>
+    <CounterFrame statusLine={statusLine} actionBar={actionBar}>
+      {counterBody}
+    </CounterFrame>
   );
 }
 
-/** Keep tender drafts and receipt settlement deduplication mounted across drawer toggles. */
+/**
+ * Keep tender drafts and receipt settlement deduplication mounted across drawer toggles.
+ * DEV-977 phase 2B: drawn in the Counter v2 sheet frame (eyebrow, title, icon close, footer).
+ */
 function CounterOverlay({
   title,
+  titleDetail,
+  eyebrow,
+  subtitle,
   open,
   enabled = true,
   onOpenChange,
@@ -5250,10 +6411,15 @@ function CounterOverlay({
   finalFocus,
   onKeyDown,
   summary,
-  drawer = false,
+  footer,
+  variant = 'dialog',
   children,
 }: {
   title: string;
+  /** Shown after the title, inside the dialog's name (the payment sheet's bill total). */
+  titleDetail?: string;
+  eyebrow?: ReactNode;
+  subtitle?: ReactNode;
   open: boolean;
   /** False unmounts even the normally retained, closed contents (DEV-97: lost access). */
   enabled?: boolean;
@@ -5262,16 +6428,18 @@ function CounterOverlay({
   finalFocus: RefObject<HTMLInputElement | null>;
   onKeyDown?: KeyboardEventHandler<HTMLDivElement>;
   summary?: ReactNode;
-  drawer?: boolean;
+  footer?: ReactNode;
+  variant?: CounterSheetVariant;
   children: ReactNode;
 }) {
   if (!enabled) return null;
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogPortal keepMounted>
-        <DialogOverlay hidden={!open} className="bg-foreground/40 backdrop-blur-none" />
+        <DialogOverlay hidden={!open} className={COUNTER_SHEET_BACKDROP} />
         <DialogPrimitive.Popup
           hidden={!open}
+          data-counter-sheet={variant}
           // Focus already inside the initial target (moved there when it opened, or by the
           // cashier since) stays where it is; the dialog's queued initial focus never takes it back.
           initialFocus={
@@ -5284,17 +6452,27 @@ function CounterOverlay({
           }
           finalFocus={finalFocus}
           onKeyDown={onKeyDown}
-          className={`pharmacy-workspace pos-calm fixed z-50 flex flex-col overflow-hidden border border-border-subtle bg-surface-card text-text-strong outline-none [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)] ${drawer ? 'inset-y-0 right-0 w-full lg:max-w-[30rem]' : 'top-1/2 left-1/2 max-h-[90dvh] w-[calc(100%-2rem)] max-w-[38.75rem] -translate-x-1/2 -translate-y-1/2 rounded-xl'}`}
+          // Portalled out of the route layout, so the sheet carries the pharmacy scope itself
+          // (12px metadata floor, POS-calm controls).
+          className={counterSheetClassName(
+            variant,
+            'pharmacy-workspace pos-calm [&_:is([data-slot=button],[data-slot=dialog-close]):not(.rounded-full)]:rounded-[var(--radius-sm)]'
+          )}
         >
-          <div className="flex shrink-0 items-center justify-between gap-3 border-b border-border-subtle p-5">
-            <DialogTitle className="text-lg font-semibold">{title}</DialogTitle>
-            <DialogClose render={<Button variant="outline" className="h-11" />}>Close</DialogClose>
-          </div>
+          <CounterSheetHeader
+            eyebrow={eyebrow}
+            subtitle={subtitle}
+            // One text run, so the name reads "Take payment · 894.00" as a single phrase.
+            title={titleDetail ? `${title} · ${titleDetail}` : title}
+          />
           {summary ? <div className="shrink-0 px-5 pt-5 empty:hidden">{summary}</div> : null}
           <DialogDescription className="sr-only">
             {`${title} for the current counter bill.`}
           </DialogDescription>
-          <div className="grid min-h-0 gap-4 overflow-y-auto p-5">{children}</div>
+          <div className="grid min-h-0 flex-1 content-start gap-4 overflow-y-auto px-5 py-4.5">
+            {children}
+          </div>
+          {footer ? <CounterSheetFooter>{footer}</CounterSheetFooter> : null}
         </DialogPrimitive.Popup>
       </DialogPortal>
     </Dialog>

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-const guards = vi.hoisted(() => ({ solo: vi.fn(), pin: vi.fn() }));
+const guards = vi.hoisted(() => ({ solo: vi.fn(), pin: vi.fn(), required: false }));
 vi.mock('./solo-owner', () => ({ isSoloPharmacyOwner: guards.solo }));
 vi.mock('./owner-data-export-pin', () => ({
   verifyOwnerExportPin: guards.pin,
@@ -57,6 +57,9 @@ function fixture(editorId = 'editor') {
       findMany: vi.fn(async (): Promise<unknown[]> => []),
     },
     auditLog: { create: vi.fn(async () => ({ id: 'audit' })) },
+    organization: {
+      findFirst: vi.fn(async () => ({ requireApprovalAuthenticator: guards.required })),
+    },
     packLevel: {
       findMany: vi.fn(async () => [
         {
@@ -82,6 +85,66 @@ beforeEach(() => {
   vi.clearAllMocks();
   guards.solo.mockResolvedValue(false);
   guards.pin.mockResolvedValue('OK');
+  // DEV-961: these cases word the owner's own approval as a PIN, which applies while the owner has
+  // the authenticator for approvals turned off; the code wording is covered on its own below.
+  guards.required = false;
+});
+
+describe('DEV-961 the owner approves a catalogue edit the way approvals work here', () => {
+  it('words every refusal with the app code while the setting is on', async () => {
+    guards.required = true;
+    const f = fixture('reviewer');
+    await expect(
+      requireIndependentCatalogueReviewer(f.db, scope, ['reviewer'], undefined, {
+        ownerWithoutOtherReviewer: true,
+      })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message:
+        'Another reviewer must approve this edit. When nobody else can review, the owner may enter the current code from their authenticator app.',
+    });
+    guards.solo.mockResolvedValue(true);
+    guards.pin.mockResolvedValue('REJECTED');
+    await expect(
+      requireIndependentCatalogueReviewer(f.db, scope, ['reviewer'], '482913')
+    ).rejects.toMatchObject({
+      message:
+        'That approval code is not right or was already used. Enter the current code from your authenticator app.',
+    });
+    guards.pin.mockResolvedValue('LOCKED');
+    await expect(
+      requireIndependentCatalogueReviewer(f.db, scope, ['reviewer'], '482913')
+    ).rejects.toMatchObject({
+      message: 'Your approvals are locked after too many wrong tries. Wait and try again.',
+    });
+    // The entry goes to the shared verifier as it is; it decides whether a code or a PIN counts.
+    guards.pin.mockResolvedValue('OK');
+    await expect(
+      requireIndependentCatalogueReviewer(f.db, scope, ['reviewer'], '482913')
+    ).resolves.toBe(true);
+    expect(guards.pin).toHaveBeenLastCalledWith({
+      organizationId: 'org_a',
+      userId: 'reviewer',
+      pin: '482913',
+    });
+  });
+
+  it('words the refusals with the PIN while the owner has the setting off', async () => {
+    const f = fixture('reviewer');
+    await expect(
+      requireIndependentCatalogueReviewer(f.db, scope, ['reviewer'], undefined)
+    ).rejects.toMatchObject({
+      message:
+        'Another reviewer must approve this edit. A solo owner may enter their own fresh PIN.',
+    });
+    guards.solo.mockResolvedValue(true);
+    guards.pin.mockResolvedValue('LOCKED');
+    await expect(
+      requireIndependentCatalogueReviewer(f.db, scope, ['reviewer'], '2468')
+    ).rejects.toMatchObject({
+      message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+    });
+  });
 });
 
 describe('DEV-766 durable catalogue approvals', () => {
@@ -232,6 +295,18 @@ describe('DEV-766 durable catalogue approvals', () => {
     await expect(
       decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
     ).rejects.toMatchObject({ message: 'Fresh owner PIN verification failed.' });
+  });
+  it('tells a solo owner whose PIN is locked that it is locked, not wrong (DEV-976)', async () => {
+    guards.solo.mockResolvedValue(true);
+    guards.pin.mockResolvedValue('LOCKED');
+    const f = fixture('reviewer');
+    await expect(
+      decideCatalogueEdit(f.db, scope, { editId: 'edit', decision: 'APPROVE', soloPin: '2468' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Your PIN is locked after too many wrong tries. Wait and try again.',
+    });
+    expect(f.raw.medicine.updateMany).not.toHaveBeenCalled();
   });
   it('rejects stale edits instead of overwriting a later catalogue change', async () => {
     const f = fixture();

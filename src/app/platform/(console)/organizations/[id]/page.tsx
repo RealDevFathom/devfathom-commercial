@@ -1272,6 +1272,15 @@ export default async function OrganizationDetailPage({
                         },
                       ]}
                     />
+                    <PlatformCommandForm
+                      compact
+                      action="organization.user.approvalauthenticator.reset"
+                      submitLabel="Reset approval authenticator"
+                      confirm={`Reset the approval authenticator for ${user.name} (${user.email}, ${user.role}) in ${organization.displayName}? Their authenticator and recovery codes stop working, they must set up a new authenticator before approving, and the organization's administrators are notified.`}
+                      fields={[
+                        { name: 'id', label: 'User', type: 'hidden', defaultValue: user.id },
+                      ]}
+                    />
                   </div>
                 </details>
               ))}

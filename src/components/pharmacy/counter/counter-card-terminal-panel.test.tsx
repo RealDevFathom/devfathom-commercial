@@ -10,6 +10,7 @@ import type {
 type LatestAttempt = CardTerminalCounterView & { reviewAccess?: CardTerminalReviewAccess | null };
 
 const mocks = vi.hoisted(() => ({
+  approvalCodeRequired: false,
   available: true,
   mayResolveReview: true,
   latest: null as LatestAttempt | null,
@@ -22,6 +23,9 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    approvalAuthenticator: {
+      mode: { useQuery: () => ({ data: { required: mocks.approvalCodeRequired } }) },
+    },
     pharmacyCardTerminal: {
       availability: {
         useQuery: (input: unknown, options: { enabled: boolean }) => {
@@ -70,7 +74,7 @@ const view = (patch: Partial<LatestAttempt>): LatestAttempt => ({
   reviewReason: null,
   chargeReported: false,
   // A manager resolving a cashier's charge, unless a test says otherwise.
-  reviewAccess: { mayResolve: true, selfResolve: false, askName: null },
+  reviewAccess: { mayResolve: true, mayPostRefund: true, selfResolve: false, askName: null },
   ...patch,
 });
 
@@ -192,7 +196,7 @@ describe('DEV-743 counter card-terminal panel', () => {
     mocks.latest = view({
       phase: 'MANUAL_REVIEW',
       open: true,
-      reviewAccess: { mayResolve: false, selfResolve: false, askName: null },
+      reviewAccess: { mayResolve: false, mayPostRefund: false, selfResolve: false, askName: null },
     });
     renderPanel();
     expect(
@@ -206,7 +210,12 @@ describe('DEV-743 counter card-terminal panel', () => {
     mocks.latest = view({
       phase: 'MANUAL_REVIEW',
       open: true,
-      reviewAccess: { mayResolve: false, selfResolve: false, askName: 'Ayesha Khan' },
+      reviewAccess: {
+        mayResolve: false,
+        mayPostRefund: false,
+        selfResolve: false,
+        askName: 'Ayesha Khan',
+      },
     });
     renderPanel();
     expect(
@@ -222,11 +231,39 @@ describe('DEV-743 counter card-terminal panel', () => {
     mocks.latest = view({
       phase: 'MANUAL_REVIEW',
       open: true,
-      reviewAccess: { mayResolve: true, selfResolve: true, askName: null },
+      reviewAccess: { mayResolve: true, mayPostRefund: true, selfResolve: true, askName: null },
     });
     renderPanel();
     expect(screen.getByText(/you may resolve it yourself with your PIN/)).toBeInTheDocument();
     expect(screen.getByLabelText('Your manager or owner PIN')).toBeInTheDocument();
+  });
+
+  it('offers only the non-posting outcome to a manager without both finance grants', () => {
+    mocks.latest = view({
+      phase: 'MANUAL_REVIEW',
+      open: true,
+      chargeReported: false,
+      reviewAccess: { mayResolve: true, mayPostRefund: false, selfResolve: false, askName: null },
+    });
+    renderPanel();
+    expect(screen.getByRole('radio', { name: /Not charged/ })).toBeEnabled();
+    expect(screen.queryByRole('radio', { name: /Money taken/ })).toBeNull();
+    expect(
+      screen.getByText(
+        /finance management and accounts administration access can record a card refund/
+      )
+    ).toBeVisible();
+  });
+
+  it('names the authenticator code in authenticator mode', () => {
+    mocks.approvalCodeRequired = true;
+    try {
+      mocks.latest = view({ phase: 'MANUAL_REVIEW', open: true });
+      renderPanel();
+      expect(screen.getByLabelText('Your manager or owner authenticator code')).toBeVisible();
+    } finally {
+      mocks.approvalCodeRequired = false;
+    }
   });
 
   function fillReview(outcome: RegExp, pin = '2468') {

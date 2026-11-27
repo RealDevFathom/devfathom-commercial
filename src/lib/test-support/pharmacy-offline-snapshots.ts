@@ -106,6 +106,127 @@ export function fixturePayloads() {
     { inventoryLotId: 'lot_ors_recalled', stockLocationId: 'loc_front', quotaUnits: 5, consumedUnits: 0 },
     { inventoryLotId: 'lot_rx_only', stockLocationId: 'loc_front', quotaUnits: 5, consumedUnits: 0 },
   ];
-  const RULES = { controlledMedicinesPermittedOffline: false, rxPermittedOffline: false };
+  // DEV-957 phase 2 (review): offline cash selling forced ON for the tests that sell.
+  const RULES = {
+    controlledMedicinesPermittedOffline: false,
+    rxPermittedOffline: false,
+    offlineCashSelling: true,
+  };
+  return { CATALOG, PRICES, TAX: [], RULES, LOT_BALANCES };
+}
+
+/**
+ * DEV-957 phase 2: a shop the counter can SELL from offline. A box of 3 strips of 7
+ * tablets (21 per pack, an odd count; each level's unitsPerParent counts it inside its parent) with a rounding rule of 5 paisa, a 10-tablet strip
+ * received as its own pack, and the cashier the RULES snapshot names.
+ */
+export function fixtureSalePayloads(
+  options: {
+    operator?: { userId: string; name: string | null };
+    quotaUnits?: number;
+    /** The owner's switch as the signed RULES carry it; forced ON for the selling tests. */
+    offlineCashSelling?: boolean;
+  } = {}
+) {
+  const levels = (prefix: string, created: string) => ({
+    box: {
+      id: `${prefix}_box`,
+      level: 'BOX',
+      parentPackLevelId: null,
+      unitsPerParent: 1,
+      effectiveFrom: created,
+      effectiveTo: null,
+    },
+    strip: {
+      id: `${prefix}_strip`,
+      level: 'STRIP',
+      parentPackLevelId: `${prefix}_box`,
+      unitsPerParent: 3,
+      effectiveFrom: created,
+      effectiveTo: null,
+    },
+    unit: {
+      id: `${prefix}_unit`,
+      level: 'UNIT',
+      parentPackLevelId: `${prefix}_strip`,
+      unitsPerParent: 7,
+      effectiveFrom: created,
+      effectiveTo: null,
+    },
+  });
+  const brufen = levels('pack_brufen', '2026-01-01T00:00:00.000Z');
+  const CATALOG = [
+    {
+      id: 'med_brufen',
+      productName: 'Brufen 400mg',
+      presentations: [
+        {
+          id: 'pres_brufen',
+          presentation: 'Tablet, 3 x 7',
+          dosageForm: 'TABLET',
+          packLevels: [brufen.box, brufen.strip, brufen.unit],
+        },
+      ],
+    },
+    {
+      id: 'med_panadol',
+      productName: 'Panadol 500mg',
+      presentations: [
+        {
+          id: 'pres_panadol',
+          presentation: 'Tablet, 10 per strip',
+          dosageForm: 'TABLET',
+          packLevels: [
+            {
+              id: 'pack_panadol',
+              level: 'STRIP',
+              parentPackLevelId: null,
+              unitsPerParent: 10,
+              effectiveFrom: '2026-01-01T00:00:00.000Z',
+              effectiveTo: null,
+            },
+          ],
+        },
+      ],
+    },
+  ];
+  const PRICES = [
+    {
+      id: 'lot_brufen',
+      manufacturingBatchId: 'batch_brufen',
+      packLevelId: 'pack_brufen_box',
+      unitsPerPack: 21,
+      printedMrpMinor: 1_000,
+      receivedExpiresAt: '2030-01-31T00:00:00.000Z',
+      roundingIncrementMinor: 5,
+      batchNumber: 'BR-01',
+    },
+    {
+      id: 'lot_panadol_a',
+      manufacturingBatchId: 'batch_a',
+      packLevelId: 'pack_panadol',
+      unitsPerPack: 10,
+      printedMrpMinor: 3_500,
+      receivedExpiresAt: '2030-01-31T00:00:00.000Z',
+      roundingIncrementMinor: 1,
+      batchNumber: 'PN-07',
+    },
+  ];
+  const units = options.quotaUnits ?? 20;
+  const LOT_BALANCES = [
+    { inventoryLotId: 'lot_brufen', stockLocationId: 'loc_front', quotaUnits: units, consumedUnits: 0 },
+    { inventoryLotId: 'lot_panadol_a', stockLocationId: 'loc_front', quotaUnits: units, consumedUnits: 0 },
+  ];
+  const RULES = {
+    controlledMedicinesPermittedOffline: false,
+    rxPermittedOffline: false,
+    manualMerchantPolicies: {},
+    manualMerchantRevision: 0,
+    operator: options.operator ?? { userId: 'user_cashier_a', name: 'Ayesha Khan' },
+    branchName: 'Gulberg branch',
+    // DEV-957 phase 2 (review B1): off and not available in the product; forced on here so
+    // the selling code can be tested. `offlineCashSelling: false` tests the switch itself.
+    offlineCashSelling: options.offlineCashSelling ?? true,
+  };
   return { CATALOG, PRICES, TAX: [], RULES, LOT_BALANCES };
 }

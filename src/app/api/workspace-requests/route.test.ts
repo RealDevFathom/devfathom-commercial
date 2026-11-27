@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { beforeEach, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 const mocks = vi.hoisted(() => ({ create: vi.fn(), gate: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: (run: (db: unknown) => unknown) =>
@@ -7,6 +8,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 vi.mock('@/lib/rate-limit', () => ({ rateLimit: mocks.gate }));
 vi.mock('@/server/audit', () => ({ ipFromHeaders: () => '127.0.0.1' }));
+import { LICENCE_DOCUMENT_REFUSAL } from '@/lib/workspace-requests/licence-document';
+import {
+  syntheticClassicLicence,
+  syntheticLicencePdf,
+} from '@/lib/workspace-requests/licence-test-fixtures';
 import { POST } from './route';
 beforeEach(() => {
   vi.clearAllMocks();
@@ -83,26 +89,52 @@ it('requires a real supported document and persists its bytes privately', async 
       )
     ).status
   ).toBe(400);
+  const pdf = syntheticLicencePdf();
   const response = await POST(
     request(
       pharmacy,
       undefined,
-      new File(['%PDF-1.7\nEvidence'], 'licence.pdf', { type: 'application/pdf' })
+      new File([Uint8Array.from(pdf)], 'sender-chosen.png', { type: 'application/pdf' })
     )
   );
   expect(response.status).toBe(201);
   const document = JSON.parse(mocks.create.mock.calls[0][0].data.notes).document;
-  expect(Buffer.from(document.base64, 'base64').toString()).toBe('%PDF-1.7\nEvidence');
+  expect(Buffer.from(document.base64, 'base64')).toEqual(pdf);
+  expect(document).toMatchObject({ name: 'licence.pdf', type: 'application/pdf', checked: true });
 });
 it('bounds actual request bytes, including requests without a content length', async () => {
-  const req = new Request('https://app.example.test/api/workspace-requests', {
-    method: 'POST',
+  const limit = 1024 * 1024 + 64 * 1024;
+  const input = oversizedRequest(limit, {
+    url: 'https://app.example.test/api/workspace-requests',
     headers: {
       origin: 'https://app.example.test',
       'content-type': 'multipart/form-data; boundary=abc',
     },
-    body: 'x'.repeat(1200000),
   });
-  expect((await POST(req)).status).toBe(413);
+  expect((await POST(input.request)).status).toBe(413);
+  expect(input.cancelled()).toBe(true);
+  expect(input.bytesRead()).toBe(limit + 16_384);
+  expect(mocks.create).not.toHaveBeenCalled();
+});
+
+it('uses the same plain message for malformed, encrypted and active PDFs', async () => {
+  for (const bytes of [
+    Buffer.from('%PDF-1.7\nIncomplete'),
+    syntheticClassicLicence({ trailer: '/Encrypt << /Filter /Standard >>' }),
+    syntheticClassicLicence({ catalog: '/OpenAction << /S /Launch >>' }),
+  ]) {
+    const response = await POST(
+      request(
+        pharmacy,
+        undefined,
+        new File([Uint8Array.from(bytes)], 'licence.pdf', { type: 'application/pdf' })
+      )
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: LICENCE_DOCUMENT_REFUSAL,
+      fields: { licenceCopy: [LICENCE_DOCUMENT_REFUSAL] },
+    });
+  }
   expect(mocks.create).not.toHaveBeenCalled();
 });

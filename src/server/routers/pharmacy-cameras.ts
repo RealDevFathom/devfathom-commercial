@@ -23,6 +23,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '../audit';
 import { annotateAuditBranch } from '../audit-branch';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 const id = z.string().min(1).max(128);
 const refs = z.enum(['sim-camera-1', 'sim-counter-1', 'sim-fridge-1']);
@@ -184,6 +185,7 @@ export const pharmacyCamerasRouter = router({
     };
   }),
   enrollGateway: cameraProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -278,6 +280,7 @@ export const pharmacyCamerasRouter = router({
       };
     }),
   register: cameraProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -386,6 +389,7 @@ export const pharmacyCamerasRouter = router({
       return saved;
     }),
   configure: cameraProcedure
+    .meta(refuseSupportSession)
     .input(
       z
         .object({
@@ -440,6 +444,7 @@ export const pharmacyCamerasRouter = router({
       return { days: input.days, gateways: updated.count };
     }),
   issueViewerGrant: cameraProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ cameraId: id, previousGrantId: id.optional() }).strict())
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
@@ -506,7 +511,11 @@ export const pharmacyCamerasRouter = router({
         description: 'Checked configured pharmacy camera gateway connection',
         metadata: { outcome: result.outcome },
       });
-      return { outcome: result.outcome };
+      // The codec lets the camera card say which browsers play H.265; nothing else
+      // from the transport is returned.
+      return result.outcome === 'ok' && 'videoCodec' in result
+        ? { outcome: result.outcome, videoCodec: result.videoCodec }
+        : { outcome: result.outcome };
     }),
   /**
    * Short-lived live-view grant. Renewal needs a live grant this viewer holds
@@ -565,6 +574,7 @@ export const pharmacyCamerasRouter = router({
       return { grantId: grant.id, expiresAt: grant.expiresAt };
     }),
   revokeViewerGrant: cameraProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ cameraId: id, grantId: id }).strict())
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });

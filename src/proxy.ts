@@ -1,14 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getPlatformSession } from '@/lib/platform/auth';
-import { contentSecurityPolicy } from '@/lib/security/content-security-policy';
+import { proxyRequestHeaders } from '@/lib/security/proxy-request-headers';
 import {
   canReadPlatformRoute,
   platformReadHrefForPathname,
   platformSafeFallback,
 } from '@/lib/platform/read-policy';
 
-const TENANT_HOST_HEADER = 'x-devfathom-host';
-const REQUEST_ID_HEADER = 'x-devfathom-request-id';
 const INTERNAL_ORGANIZATION_QUERY = 'organizationId';
 
 const publicPaths = [
@@ -64,31 +62,30 @@ function isPrivateUploadPath(pathname: string): boolean {
   }
 }
 
+function isWorkspaceRequestDownload(pathname: string): boolean {
+  try {
+    return /^\/api\/platform\/workspace-requests\/[^/]+\/?$/.test(decodeURIComponent(pathname));
+  } catch {
+    return false;
+  }
+}
+
 export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   // Before auth, host redirects, and especially the static-extension bypass.
   // File access belongs exclusively to the authorized /api/files route.
   if (isPrivateUploadPath(pathname)) return new NextResponse(null, { status: 404 });
-  const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
-  const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';
+  const { requestHeaders, hostWithPort, csp } = proxyRequestHeaders(request);
   const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
-  const requestHeaders = new Headers(request.headers);
-  const nonce = btoa(crypto.randomUUID());
-  const csp = contentSecurityPolicy(nonce);
-  // Next reads the request policy and copies its nonce to generated scripts.
-  requestHeaders.set('Content-Security-Policy', csp);
-  requestHeaders.set('x-nonce', nonce);
-  // Host classification ignores ports, but downstream login redirects need the
-  // original authority to keep local tenant navigation on the same dev server.
-  requestHeaders.set(TENANT_HOST_HEADER, hostWithPort);
-  requestHeaders.set(
-    REQUEST_ID_HEADER,
-    request.headers.get(REQUEST_ID_HEADER) ?? crypto.randomUUID()
-  );
   const next = () => {
     const response = NextResponse.next({ request: { headers: requestHeaders } });
-    response.headers.set('Content-Security-Policy', csp);
+    // Next uses the proxy's response header in place of the handler's policy.
+    // Keep the page policy and enforce the attachment sandbox at this boundary.
+    response.headers.set(
+      'Content-Security-Policy',
+      isWorkspaceRequestDownload(pathname) ? `${csp}; sandbox` : csp
+    );
     if (pathname === '/demo' || pathname.startsWith('/demo/')) {
       response.headers.set('X-Robots-Tag', 'noindex, nofollow');
     }
@@ -203,3 +200,11 @@ export async function proxy(request: Request) {
 
   return next();
 }
+
+// These upload handlers and the single-segment tRPC route apply the API
+// header policy themselves. They enforce their limits while reading the
+// original stream, without Next first buffering it in proxy.
+export const config = {
+  matcher:
+    '/((?!api/(?:upload|trpc/[^/]+|pharmacy/(?:supplier-documents/upload|portal/prescription-upload)|(?:restaurant|pharmacy)/sop/evidence)/?$).*)',
+};

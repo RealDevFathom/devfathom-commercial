@@ -7,6 +7,7 @@
  * out. The slip carries physical facts only — medicine, batch, expiry, packs and
  * locations — and no cost, price or patient data.
  */
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { printInWindow } from '@/lib/browser-print/print-window';
 import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
 import { formatLotExpiry } from '@/lib/pharmacy/product-class';
@@ -27,6 +28,7 @@ export type PackingSlipLine = {
 };
 
 export type PackingSlip = {
+  timeZone?: string;
   reference: string;
   status: string;
   fromBranch: string;
@@ -71,7 +73,7 @@ export function buildPackingSlipText(slip: PackingSlip, columns: number): string
     `To:   ${slip.toBranch}`,
     `Allocated by: ${slip.allocatedBy ?? '—'}`,
     `Approved by:  ${slip.approvedBy ?? '—'}`,
-    `Dispatched:   ${slip.dispatchedAt ? `${day(slip.dispatchedAt)} by ${slip.dispatchedBy ?? '—'}` : 'not yet'}`,
+    `Dispatched:   ${slip.dispatchedAt ? `${pharmacyCalendarDay(slip.timeZone, new Date(slip.dispatchedAt))} by ${slip.dispatchedBy ?? '—'}` : 'not yet'}`,
     rule,
   ];
   slip.lines.forEach((line, index) => {

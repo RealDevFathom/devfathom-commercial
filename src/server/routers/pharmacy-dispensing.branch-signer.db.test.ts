@@ -581,3 +581,110 @@ describeIfDatabase('prescription checks are decided only at the signer’s branc
     );
   });
 });
+
+describeIfDatabase('branch-scoped clinical reads (DEV-1010)', () => {
+  it('filters both reads by the reviewed sale line and protects the safety-only projection', async () => {
+    const first = await ringUp();
+    await tenant(async (db) => {
+      // The same prescription at a second branch must not make both sales visible.
+      const otherSale = await db.pharmacySale.create({
+        data: { branchId: ids.otherBranch, createdByUserId: ids.elsewhere },
+      });
+      const otherLine = await db.pharmacySaleLine.create({
+        data: {
+          branchId: ids.otherBranch,
+          saleId: otherSale.id,
+          ...rx,
+          saleUnit: 'STRIP',
+          quantity: 1,
+          canonicalUnitsPerSaleUnit: 10,
+          canonicalUnits: 10,
+          unitPriceMinor: 100,
+          grossMinor: 100,
+          proRataCeilingMinor: 100,
+          unitCostMinor: 50,
+          idempotencyKey: key(),
+          prescriptionLineId,
+          prescriptionPatientId: patientId,
+        },
+      });
+      const other = await db.pharmacyPharmacistReviewItem.create({
+        data: { prescriptionLineId, saleLineId: otherLine.id, requestedByUserId: ids.elsewhere },
+      });
+      const read = (userId: string) =>
+        pharmacyDispensingRouter.createCaller({ db, ...context(byId(userId)) } as never);
+      for (const [userId, expected, hidden] of [
+        [ids.here, first.reviewItemId, other.id],
+        [ids.elsewhere, other.id, first.reviewItemId],
+      ] as const) {
+        const api = read(userId);
+        const queue = await api.reviewQueue();
+        const workspace = await api.substitutionWorkspace();
+        for (const rows of [queue.items, workspace.lines]) {
+          expect(rows.map((row) => row.id)).toContain(expected);
+          expect(rows.map((row) => row.id)).not.toContain(hidden);
+        }
+      }
+      // Dispense ordinarily includes prescriptions; an explicit DENY takes precedence.
+      const rxDenial = await db.userPermissionOverride.create({
+        data: {
+          userId: ids.customAllow,
+          capability: 'pharmacy:prescriptions',
+          effect: 'DENY',
+          reason: 'Clinical reads fixture',
+        },
+      });
+      const dispenseOnly = await read(ids.customAllow).reviewQueue();
+      const restricted = dispenseOnly.items.find((row) => row.id === first.reviewItemId);
+      expect(restricted?.line.prescription.patient).toEqual({ displayName: null });
+      expect(JSON.stringify(dispenseOnly)).not.toContain(patientId);
+      expect(JSON.stringify(dispenseOnly)).not.toContain(`paper:${suffix}`);
+
+      await db.userPermissionOverride.delete({ where: { id: rxDenial.id } });
+      await db.pharmacyBranchAssignment.create({
+        data: { branchId: ids.otherBranch, userId: ids.here, active: false },
+      });
+      for (const rows of [
+        (await read(ids.here).reviewQueue()).items,
+        (await read(ids.here).substitutionWorkspace()).lines,
+      ])
+        expect(rows.map((row) => row.id)).not.toContain(other.id);
+
+      const admin = read(ids.admin);
+      expect((await admin.reviewQueue()).items).toEqual([]);
+      expect((await admin.substitutionWorkspace()).lines).toEqual([]);
+
+      // A role change is visible to the same caller. Keep the fixture's
+      // dispensing-only admin for the separate decision tests.
+      const ownerGrant = await db.organizationRolePermission.create({
+        data: { organizationRoleId: `role_${ids.admin}`, capability: '*', effect: 'ALLOW' },
+      });
+      for (const rows of [
+        (await admin.reviewQueue()).items,
+        (await admin.substitutionWorkspace()).lines,
+      ])
+        expect(rows.map((row) => row.id)).toEqual(
+          expect.arrayContaining([first.reviewItemId, other.id])
+        );
+      await db.organizationRolePermission.delete({ where: { id: ownerGrant.id } });
+
+      const safety = await db.userPermissionOverride.create({
+        data: {
+          userId: ids.cashier,
+          capability: 'pharmacy:safety',
+          effect: 'ALLOW',
+          reason: 'Clinical reads fixture',
+        },
+      });
+      const workspace = await read(ids.cashier).substitutionWorkspace();
+      expect(workspace.canRecord).toBe(false);
+      expect(workspace.canViewPatients).toBe(false);
+      const item = workspace.lines.find((row) => row.id === first.reviewItemId);
+      expect(item?.line.prescription).toEqual({ id: expect.any(String), patient: null });
+      expect(JSON.stringify(workspace)).not.toContain(patientId);
+      expect(JSON.stringify(workspace)).not.toContain(`paper:${suffix}`);
+      expect(workspace.lines.map((row) => row.id)).not.toContain(other.id);
+      await db.userPermissionOverride.delete({ where: { id: safety.id } });
+    });
+  });
+});

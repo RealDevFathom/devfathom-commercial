@@ -20,7 +20,8 @@
  * error aborts its whole transaction, so a case that provokes a trigger and
  * then reads back must do the read from a new one (`expectRejection`).
  */
-import { randomBytes, randomInt } from 'node:crypto';
+import { createHmac, randomBytes, randomInt } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import { beforeAll, describe, expect, it } from 'vitest';
 
@@ -35,6 +36,10 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 const suffix = randomBytes(6).toString('hex');
 const ORG_A = `org_wha1171_a_${suffix}`;
 const ORG_B = `org_wha1171_b_${suffix}`;
+const soloOrg = (mode: string) => `org_controlled_solo_${mode.toLowerCase()}_${suffix}`;
+
+const ORG_RETURN = `org_controlled_return_${suffix}`;
+const BRANCH_RETURN = `branch_controlled_return_${suffix}`;
 const BRANCH_A = `branch_a_${suffix}`;
 const BRANCH_B = `branch_b_${suffix}`;
 const RECEIVER = 'user_receiver';
@@ -336,12 +341,14 @@ beforeAll(async () => {
   // key requires the organization itself to exist before any tenant fixtures.
   await scopedDb.withPlatformDb((db) =>
     db.organization.createMany({
-      data: [ORG_A, ORG_B].map((id) => ({
+      data: [ORG_A, ORG_B, ORG_RETURN, soloOrg('PIN'), soloOrg('AUTHENTICATOR')].map((id) => ({
         id,
         slug: id,
         legalName: `Goods receipt ${id}`,
         displayName: `Goods receipt ${id}`,
         status: 'ACTIVE' as const,
+        // DEV-961: these approvals use PINs, which apply while the authenticator is off.
+        requireApprovalAuthenticator: false,
       })),
       skipDuplicates: true,
     })
@@ -1163,29 +1170,34 @@ describeIfDatabase('PUR-04 — exceptions remain visible until resolved', () => 
 });
 
 describeIfDatabase('PUR-04 — reversal creates linked movements and never edits', () => {
-  it('keeps the controlled register equal to sellable stock after receiving and reversing (DEV-892)', async () => {
-    const f = await fixture(ORG_A, BRANCH_A, 'controlled-reverse');
+  async function controlledReceipt(
+    label: string,
+    line: LineOverrides,
+    organizationId = ORG_A,
+    branchId = BRANCH_A
+  ) {
+    const f = await fixture(organizationId, branchId, label);
     const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
     const pin = String(randomInt(100_000, 1_000_000));
     const credentialHash = await hashOperatorCredential('PIN', pin);
     // Commit the people and credential before reversal: its fresh witness PIN
     // is verified in an independent tenant transaction.
-    const { actor, witness, staff, receipt } = await inOrg(ORG_A, async (db) => {
+    const { actor, witness, staff, receipt } = await inOrg(organizationId, async (db) => {
       const department = await db.organizationDepartment.create({
-        data: { organizationId: ORG_A, key: tag('controlled'), name: tag('Pharmacy') },
+        data: { organizationId: organizationId, key: tag('controlled'), name: tag('Pharmacy') },
       });
       async function member(capability: string) {
         const label = tag('pharmacist');
         return db.user.create({
           data: {
-            organizationId: ORG_A,
+            organizationId: organizationId,
             name: label,
             email: `${label}@example.test`,
             department: department.key,
             title: 'Pharmacist',
             permissionOverrides: {
               create: {
-                organizationId: ORG_A,
+                organizationId: organizationId,
                 capability,
                 effect: 'ALLOW',
                 reason: 'Test fixture',
@@ -1195,22 +1207,29 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         });
       }
       const actor = await member('pharmacy:safety');
+      await db.userPermissionOverride.create({
+        data: {
+          organizationId: organizationId,
+          userId: actor.id,
+          capability: 'pharmacy:dispense',
+          effect: 'ALLOW',
+          reason: 'Test fixture',
+        },
+      });
       const witness = await member('pharmacy:dispense');
       await db.pharmacyBranchAssignment.create({
-        data: { organizationId: ORG_A, branchId: BRANCH_A, userId: actor.id },
+        data: { organizationId: organizationId, branchId: branchId, userId: actor.id },
       });
       const staff = await db.restaurantStaffProfile.create({
         data: {
-          organizationId: ORG_A,
+          organizationId: organizationId,
           userId: witness.id,
           displayName: witness.name,
-          credentials: { create: { organizationId: ORG_A, type: 'PIN', credentialHash } },
+          credentials: { create: { organizationId: organizationId, type: 'PIN', credentialHash } },
         },
       });
       await db.medicine.update({ where: { id: f.medicineId }, data: { controlled: true } });
-      const receipt = await draftReceipt(db, f, 'controlled-reverse', {
-        line: { receivedPacks: 10, bonusPacks: 2, rejectedCanonicalUnits: 30 },
-      });
+      const receipt = await draftReceipt(db, f, label, { line });
       await db.pharmacyGoodsReceipt.update({
         where: { id: receipt.id },
         data: { qualifiedPersonUserId: witness.id },
@@ -1218,7 +1237,7 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
       return { actor, witness, staff, receipt };
     });
     const scope = { ...scopeOf(f), actorId: actor.id };
-    const posted = await inOrg(ORG_A, (db) =>
+    const posted = await inOrg(organizationId, (db) =>
       deps.receipts.postGoodsReceipt(db, scope, {
         goodsReceiptId: receipt.id,
         at: RECEIVED_AT,
@@ -1228,16 +1247,16 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     );
     const lotId = posted.lines[0]!.inventoryLotId;
     async function snapshot() {
-      return inOrg(ORG_A, async (db) => ({
+      return inOrg(organizationId, async (db) => ({
         entries: await db.pharmacyControlledRegisterEntry.findMany({
-          where: { organizationId: ORG_A, branchId: BRANCH_A, inventoryLotId: lotId },
+          where: { organizationId: organizationId, branchId: branchId, inventoryLotId: lotId },
           orderBy: { serial: 'asc' },
         }),
-        balances: await balancesFor(db, ORG_A, lotId),
+        balances: await balancesFor(db, organizationId, lotId),
         sellable: await db.pharmacyStockBalance.aggregate({
           where: {
-            organizationId: ORG_A,
-            branchId: BRANCH_A,
+            organizationId: organizationId,
+            branchId: branchId,
             inventoryLotId: lotId,
             disposition: 'AVAILABLE',
           },
@@ -1245,6 +1264,538 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         }),
       }));
     }
+    return { f, actor, witness, staff, receipt, scope, posted, pin, lotId, snapshot };
+  }
+
+  async function enableApprovalCode(organizationId: string, userId: string) {
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    await withPlatformDb((db) =>
+      db.organization.update({
+        where: { id: organizationId },
+        data: { requireApprovalAuthenticator: true },
+      })
+    );
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const rfcSecret = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';
+    await inOrg(organizationId, (db) =>
+      db.approvalAuthenticator.create({
+        data: {
+          organizationId: organizationId,
+          userId,
+          enabledAt: new Date(),
+          encryptedSecret: encryptSecret(rfcSecret),
+        },
+      })
+    );
+    const counter = Buffer.alloc(8);
+    counter.writeBigUInt64BE(BigInt(Math.floor(Date.now() / 30000)));
+    const mac = createHmac('sha1', '12345678901234567890').update(counter).digest();
+    const code = String(
+      (mac.readUInt32BE(mac[mac.length - 1]! & 15) & 0x7fffffff) % 1000000
+    ).padStart(6, '0');
+    return code;
+  }
+
+  async function selfApprovalFixture(organizationId: string, userId: string) {
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    const pin = String(randomInt(100000, 1000000));
+    const credentialHash = await hashOperatorCredential('PIN', pin);
+    const staff = await inOrg(organizationId, (db) =>
+      db.restaurantStaffProfile.create({
+        data: {
+          organizationId,
+          userId,
+          displayName: tag('Pharmacist'),
+          credentials: { create: { organizationId, type: 'PIN', credentialHash } },
+        },
+      })
+    );
+    const strikes = () =>
+      inOrg(organizationId, (db) =>
+        db.restaurantOperatorCredential.findFirstOrThrow({
+          where: { staffProfileId: staff.id },
+          select: { failedAttempts: true },
+        })
+      );
+    return {
+      proof: { staffProfileId: staff.id, pin },
+      wrong: { staffProfileId: staff.id, pin: pin === '000000' ? '111111' : '000000' },
+      strikes,
+    };
+  }
+
+  async function sellControlled(
+    f: Fixture,
+    scope: { organizationId: string; branchId: string; actorId: string },
+    witnessId: string,
+    quantity: number
+  ) {
+    const { appendControlledSaleEntries } = await import('./controlled-register');
+    await inOrg(scope.organizationId, async (db) => {
+      const patient = await db.pharmacyPatient.create({
+        data: { organizationId: scope.organizationId, displayName: tag('patient') },
+      });
+      const prescriber = await db.pharmacyPrescriber.create({
+        data: {
+          organizationId: scope.organizationId,
+          name: tag('doctor'),
+          registrationNumber: tag('reg'),
+        },
+      });
+      const pack = await db.packLevel.findUniqueOrThrow({ where: { id: f.packLevelId } });
+      const rx = await db.prescription.create({
+        data: {
+          organizationId: scope.organizationId,
+          patientId: patient.id,
+          prescriberId: prescriber.id,
+          sourceKind: 'PAPER_IMAGE',
+          sourceFileRef: tag('rx'),
+          validFrom: RECEIVED_AT,
+          validUntil: EXPIRY,
+          capturedByUserId: scope.actorId,
+          lines: {
+            create: {
+              lineNumber: 1,
+              medicineId: f.medicineId,
+              presentationId: pack.presentationId,
+              authorizedCanonicalUnits: quantity,
+              directions: 'Test prescription',
+            },
+          },
+        },
+        include: { lines: true },
+      });
+      const sale = await deps.ledger.allocateForSale(db, scope, {
+        medicineId: f.medicineId,
+        requiredUnits: quantity,
+        at: RECEIVED_AT,
+        idempotencyKeyPrefix: tag('sale'),
+      });
+      await appendControlledSaleEntries(db, {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        movementIds: sale.movementIds,
+        patientId: patient.id,
+        patientAddress: 'Test address',
+        medicineId: f.medicineId,
+        manufacturer: null,
+        prescriberId: prescriber.id,
+        prescriberName: prescriber.name,
+        prescriberRegNo: prescriber.registrationNumber,
+        prescriptionId: rx.id,
+        prescriptionLineId: rx.lines[0]!.id,
+        emergency: false,
+        rxSerialWritten: true,
+        refEntryId: null,
+        recordedByUserId: scope.actorId,
+        witnessedByUserId: witnessId,
+        signatureRef: tag('test-signature'),
+      });
+    });
+  }
+
+  // The upgrade harness runs the first case on the actual pre-migration source
+  // and the second against the same disposable database after migrating it.
+  const upgradeFixture = process.env.DEV293_UPGRADE_FIXTURE;
+  type UpgradeFixture = {
+    f: Fixture;
+    scope: { organizationId: string; branchId: string; actorId: string };
+    witnessId: string;
+    staffId: string;
+    pin: string;
+    lotId: string;
+    purchaseReturnId: string;
+    lineId: string;
+    dispatchedAt: string;
+    ownerId: string;
+  };
+
+  it.skipIf(!upgradeFixture)(
+    'prepares the develop supplier dispatch fixture',
+    async () => {
+      const { f, scope, actor, witness, staff, pin, lotId, snapshot } = await controlledReceipt(
+        'legacy-return',
+        { receivedPacks: 10, bonusPacks: 0 }
+      );
+      await sellControlled(f, scope, witness.id, 20);
+      const operations = await import('./supplier-returns-operations');
+      const at = new Date('2026-09-03T11:47:00Z');
+      const doc = await inOrg(scope.organizationId, async (db) => {
+        const d = await operations.createPurchaseReturn(db, scope, {
+          supplierId: f.supplierId,
+          kind: 'PURCHASE_RETURN',
+          reference: tag('legacy-return'),
+          lines: [
+            {
+              inventoryLotId: lotId,
+              stockLocationId: f.storeId,
+              quantityUnits: 30,
+              reason: 'Supplier collection',
+              returnWindowEndsAt: EXPIRY,
+              expectedCreditMinor: 30000,
+            },
+          ],
+        });
+        await operations.submitPurchaseReturn(db, scope, { purchaseReturnId: d.id, at });
+        return operations.dispatchPurchaseReturn(db, scope, {
+          purchaseReturnId: d.id,
+          at,
+          idempotencyKeyPrefix: tag('pre-upgrade-client'),
+        });
+      });
+      // Historical paperwork without a stock movement cannot be recorded late.
+      await inOrg(scope.organizationId, (db) =>
+        db.pharmacyPurchaseReturn.create({
+          data: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            supplierId: f.supplierId,
+            kind: 'PURCHASE_RETURN',
+            reference: tag('unmatched-archive'),
+            status: 'DISPATCHED',
+            createdByUserId: actor.id,
+            submittedByUserId: actor.id,
+            dispatchedByUserId: actor.id,
+            submittedAt: at,
+            dispatchedAt: at,
+            lines: {
+              create: {
+                lineNumber: 1,
+                inventoryLotId: lotId,
+                stockLocationId: f.storeId,
+                quantityUnits: 1,
+                reason: 'Historical paperwork',
+                returnWindowEndsAt: EXPIRY,
+                expectedCreditMinor: 1000,
+              },
+            },
+          },
+        })
+      );
+      const before = await snapshot();
+      expect(before.balances).toMatchObject({ AVAILABLE: 50, RETURN_TO_SUPPLIER: 30 });
+      expect(before.entries.map((e) => [e.entryKind, e.runningBalance])).toEqual([
+        ['PURCHASE', 100],
+        ['SALE', 80],
+      ]);
+      const owner = await inOrg(scope.organizationId, (db) =>
+        db.user.create({
+          data: {
+            organizationId: scope.organizationId,
+            role: 'ADMIN',
+            name: tag('Owner'),
+            email: tag('owner') + '@example.test',
+            department: actor.department,
+            title: 'Owner',
+            permissionOverrides: {
+              create: {
+                organizationId: scope.organizationId,
+                capability: '*',
+                effect: 'ALLOW',
+                reason: 'Synthetic owner',
+              },
+            },
+          },
+        })
+      );
+      const evidence: UpgradeFixture = {
+        f,
+        scope,
+        witnessId: witness.id,
+        staffId: staff.id,
+        pin,
+        lotId,
+        purchaseReturnId: doc.id,
+        lineId: doc.lines[0]!.id,
+        dispatchedAt: at.toISOString(),
+        ownerId: owner.id,
+      };
+      writeFileSync(upgradeFixture!, JSON.stringify(evidence), { mode: 0o600 });
+    },
+    30000
+  );
+
+  it.skipIf(!upgradeFixture)(
+    'reconciles an owner-confirmed unwitnessed late entry after a develop dispatch',
+    async () => {
+      const fixture: UpgradeFixture = JSON.parse(readFileSync(upgradeFixture!, 'utf8'));
+      const { f, scope, witnessId, lotId } = fixture;
+      const rows = () =>
+        inOrg(scope.organizationId, (db) =>
+          db.pharmacyControlledRegisterEntry.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              inventoryLotId: lotId,
+            },
+            orderBy: { serial: 'asc' },
+          })
+        );
+      const incidents = () =>
+        inOrg(scope.organizationId, (db) =>
+          db.pharmacyRegisterIncident.count({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              status: 'OPEN',
+            },
+          })
+        );
+      const { legacySupplierDispatches } = await import('./supplier-returns-operations');
+      const ownerScope = { ...scope, actorId: fixture.ownerId };
+      expect(
+        await inOrg(scope.organizationId, (db) => legacySupplierDispatches(db, scope))
+      ).toBeNull();
+      const pending = () =>
+        inOrg(scope.organizationId, (db) => legacySupplierDispatches(db, ownerScope));
+      expect((await pending())?.rows).toEqual([
+        expect.objectContaining({
+          lineId: fixture.lineId,
+          quantity: 30,
+          dispatchedAt: new Date(fixture.dispatchedAt),
+        }),
+      ]);
+      const { can } = await import('@/lib/abac');
+      const permissions = await inOrg(scope.organizationId, async (db) => {
+        const user = (id: string) =>
+          db.user.findFirstOrThrow({ where: { id, organizationId: scope.organizationId } });
+        return {
+          ownerCanDispense: await can(
+            await user(ownerScope.actorId),
+            'pharmacy:dispense',
+            undefined,
+            { db }
+          ),
+          senderCanDispense: await can(await user(scope.actorId), 'pharmacy:dispense', undefined, {
+            db,
+          }),
+        };
+      });
+      expect(permissions).toEqual({ ownerCanDispense: false, senderCanDispense: true });
+      const before = await rows();
+      expect(before.map((e) => [e.entryKind, e.runningBalance])).toEqual([
+        ['PURCHASE', 100],
+        ['SALE', 80],
+      ]);
+      await sellControlled(f, scope, witnessId, 10);
+      expect(await incidents()).toBe(0);
+      expect((await rows()).at(-1)?.runningBalance).toBe(70);
+      // A second sale also proves the next register insertion was not blocked.
+      await sellControlled(f, scope, witnessId, 10);
+      expect(await incidents()).toBe(0);
+      expect((await rows()).at(-1)?.runningBalance).toBe(60);
+      const { dispatchPurchaseReturn } = await import('./supplier-returns-operations');
+      const late = (
+        actorId: string,
+        proof?: { staffProfileId: string; pin: string },
+        approvalReason = 'Supplier collection verified against original dispatch'
+      ) =>
+        deps.withTenantDb(
+          scope.organizationId,
+          (db) =>
+            dispatchPurchaseReturn(
+              db,
+              { ...scope, actorId },
+              {
+                purchaseReturnId: fixture.purchaseReturnId,
+                recordLateLineId: fixture.lineId,
+                at: new Date(),
+                idempotencyKeyPrefix: 'late-fixture',
+                approvalReason,
+                controlledWitness: proof,
+              }
+            ),
+          { userId: actorId }
+        );
+      const proof = { staffProfileId: fixture.staffId, pin: fixture.pin };
+      const stock = () =>
+        inOrg(scope.organizationId, async (db) => ({
+          balances: await balancesFor(db, scope.organizationId, lotId),
+          movements: await db.pharmacyStockMovement.findMany({
+            where: { organizationId: scope.organizationId, inventoryLotId: lotId },
+            orderBy: { id: 'asc' },
+          }),
+        }));
+      const stockBefore = await stock();
+      expect(stockBefore.balances.AVAILABLE).toBe(30);
+      const unchanged = await rows();
+      await expect(late(scope.actorId, proof)).rejects.toThrow(/owner/i);
+      const self = await selfApprovalFixture(scope.organizationId, ownerScope.actorId);
+      await expect(late(ownerScope.actorId)).rejects.toThrow(/own|approval/i);
+      await expect(late(ownerScope.actorId, proof)).rejects.toThrow(/own|approval/i);
+      await expect(late(ownerScope.actorId, self.proof, ' ')).rejects.toThrow(/reason/i);
+      await expect(late(ownerScope.actorId, self.wrong)).rejects.toThrow(/not accepted/i);
+      expect(await self.strikes()).toEqual({ failedAttempts: 1 });
+      expect(await rows()).toEqual(unchanged);
+      expect(await stock()).toEqual(stockBefore);
+      const started = new Date();
+      await late(ownerScope.actorId, self.proof);
+      const reconciled = await rows();
+      expect(reconciled.slice(0, -1)).toEqual(unchanged);
+      const outgoing = stockBefore.movements.find(
+        (m) => m.kind === 'ADJUSTMENT' && m.quantityUnits === -30
+      );
+      expect(outgoing).toBeDefined();
+      const entry = reconciled.at(-1)!;
+      expect(entry).toMatchObject({
+        entryKind: 'RETURN_TO_SUPPLIER',
+        balanceDelta: -30,
+        quantityCanonicalUnits: 30,
+        runningBalance: stockBefore.balances.AVAILABLE,
+        supplierReturnLineId: fixture.lineId,
+        stockMovementId: outgoing!.id,
+        sourcePurchaseEntryId: before[0]!.id,
+        counterpartyName: before[0]!.counterpartyName,
+        lateDispatchAt: new Date(fixture.dispatchedAt),
+        recordedByUserId: ownerScope.actorId,
+        witnessedByUserId: null,
+        supplierReturnReason: 'Supplier collection verified against original dispatch',
+      });
+      expect(entry.createdAt.getTime()).toBeGreaterThanOrEqual(started.getTime() - 1);
+      expect(entry.createdAt.getTime()).toBeLessThanOrEqual(Date.now() + 1);
+      expect(entry.signatureRef).toMatch(/^late-owner-pin:/);
+      expect(await stock()).toEqual(stockBefore);
+      expect((await pending())?.rows).toEqual([]);
+      expect(outgoing!.actorId).toBe(scope.actorId);
+      await expect(late(ownerScope.actorId, self.proof)).rejects.toThrow(
+        /no unrecorded controlled supplier dispatch/i
+      );
+      expect(await rows()).toEqual(reconciled);
+      expect(await stock()).toEqual(stockBefore);
+      await sellControlled(f, scope, witnessId, 10);
+      expect((await rows()).at(-1)?.runningBalance).toBe(20);
+      expect((await stock()).balances.AVAILABLE).toBe(20);
+      expect(await incidents()).toBe(0);
+    },
+    30000
+  );
+
+  it.skipIf(!upgradeFixture)(
+    'pins the pre-upgrade outgoing movement independently of business dates',
+    async () => {
+      const fixture: UpgradeFixture = JSON.parse(readFileSync(upgradeFixture!, 'utf8'));
+      const { f, scope, lotId, lineId } = fixture;
+      const snapshotId = (id: string) =>
+        inOrg(scope.organizationId, async (db) => {
+          const [row] = await db.$queryRaw<{ movementId: string | null }[]>`
+          SELECT to_jsonb(l)->>'legacyOutgoingMovementId' AS "movementId" FROM pharmacy_purchase_return_lines l
+          WHERE l."organizationId"=${scope.organizationId} AND l.id=${id}`;
+          return row?.movementId;
+        });
+      const original = await inOrg(scope.organizationId, (db) =>
+        db.pharmacyStockMovement.findFirstOrThrow({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            inventoryLotId: lotId,
+            kind: 'ADJUSTMENT',
+            disposition: 'AVAILABLE',
+            quantityUnits: -30,
+            occurredAt: new Date(fixture.dispatchedAt),
+          },
+        })
+      );
+      expect(await snapshotId(lineId)).toBe(original.id);
+
+      // A normal, witnessed return entered after the upgrade has an earlier business date.
+      const at = new Date(fixture.dispatchedAt);
+      at.setUTCHours(at.getUTCHours() - 1);
+      const operations = await import('./supplier-returns-operations');
+      const sent = await inOrg(scope.organizationId, async (db) => {
+        const doc = await operations.createPurchaseReturn(db, scope, {
+          supplierId: f.supplierId,
+          kind: 'PURCHASE_RETURN',
+          reference: tag('later-return'),
+          lines: [
+            {
+              inventoryLotId: lotId,
+              stockLocationId: f.storeId,
+              quantityUnits: 10,
+              reason: 'Supplier collection',
+              returnWindowEndsAt: EXPIRY,
+              expectedCreditMinor: 10000,
+            },
+          ],
+        });
+        await operations.submitPurchaseReturn(db, scope, { purchaseReturnId: doc.id, at });
+        return operations.dispatchPurchaseReturn(db, scope, {
+          purchaseReturnId: doc.id,
+          at,
+          idempotencyKeyPrefix: tag('new-return'),
+          controlledWitness: { staffProfileId: fixture.staffId, pin: fixture.pin },
+        });
+      });
+      const newLineId = sent.lines[0]!.id;
+      const registered = await inOrg(scope.organizationId, (db) =>
+        db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+          where: { organizationId: scope.organizationId, supplierReturnLineId: newLineId },
+        })
+      );
+      const later = await inOrg(scope.organizationId, (db) =>
+        db.pharmacyStockMovement.findFirstOrThrow({
+          where: { organizationId: scope.organizationId, id: registered.stockMovementId! },
+        })
+      );
+      expect(later.occurredAt.getTime()).toBeLessThan(original.occurredAt.getTime());
+      expect(await snapshotId(newLineId)).toBeNull();
+      expect(await snapshotId(lineId)).toBe(original.id);
+      const requireSnapshot = (id: string, movement: string) =>
+        inOrg(
+          scope.organizationId,
+          (db) => db.$queryRaw`
+          SELECT pharmacy_require_legacy_supplier_outgoing(${scope.organizationId},${scope.branchId},${id},${movement}) AS eligible`
+        );
+      await expect(requireSnapshot(lineId, original.id)).resolves.toEqual([{ eligible: true }]);
+      await expect(requireSnapshot(lineId, later.id)).rejects.toThrow(/not captured at migration/i);
+      await expect(requireSnapshot(newLineId, later.id)).rejects.toThrow(
+        /not captured at migration/i
+      );
+      await expect(
+        inOrg(scope.organizationId, (db) =>
+          db.pharmacyPurchaseReturnLine.update({
+            where: { id: lineId },
+            data: { legacyOutgoingMovementId: null },
+          })
+        )
+      ).rejects.toThrow(/immutable/i);
+      await expect(
+        inOrg(scope.organizationId, (db) =>
+          db.pharmacyPurchaseReturnLine.update({
+            where: { id: newLineId },
+            data: { legacyOutgoingMovementId: later.id },
+          })
+        )
+      ).rejects.toThrow(/immutable/i);
+      await expect(
+        deps.withTenantDb(
+          scope.organizationId,
+          (db) =>
+            operations.dispatchPurchaseReturn(
+              db,
+              { ...scope, actorId: fixture.ownerId },
+              {
+                purchaseReturnId: sent.id,
+                recordLateLineId: newLineId,
+                at: new Date(),
+                idempotencyKeyPrefix: tag('late-review'),
+              }
+            ),
+          { userId: fixture.ownerId }
+        )
+      ).rejects.toThrow(/no unrecorded controlled supplier dispatch/i);
+      expect(await snapshotId(newLineId)).toBeNull();
+      expect(await snapshotId(lineId)).toBe(original.id);
+    },
+    30000
+  );
+
+  it('keeps the controlled register equal to sellable stock after receiving and reversing (DEV-892)', async () => {
+    const { actor, witness, staff, receipt, scope, posted, pin, snapshot } =
+      await controlledReceipt('controlled-reverse', {
+        receivedPacks: 10,
+        bonusPacks: 2,
+        rejectedCanonicalUnits: 30,
+      });
     const received = await snapshot();
     expect(received.balances).toEqual({ AVAILABLE: 90, QUARANTINE: 30 });
     expect(received.entries).toHaveLength(1);
@@ -1282,7 +1833,276 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     });
     expect(reversal.reversalMovementIds).toContain(reversed.entries[1]!.restorationMovementId);
     expect(reversed.entries[1]!.runningBalance).toBe(reversed.sellable._sum.onHandUnits);
+
+    await expect(
+      inOrg(ORG_A, (db) =>
+        deps.receipts.reverseGoodsReceipt(db, scope, {
+          goodsReceiptId: receipt.id,
+          reason: 'Retry reversal',
+          at: RECEIVED_AT,
+          controlledWitness: { staffProfileId: staff.id, pin },
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'INVALID_TRANSITION' });
+    expect(await snapshot()).toEqual(reversed);
   }, 30_000);
+
+  it('keeps the controlled batch in balance after a sale, a refused reversal and supplier dispatch', async () => {
+    const { f, actor, witness, staff, receipt, scope, pin, lotId, snapshot } =
+      await controlledReceipt(
+        'controlled-return',
+        { receivedPacks: 10, bonusPacks: 0 },
+        ORG_RETURN,
+        BRANCH_RETURN
+      );
+    const returns = await import('./supplier-returns-operations');
+    const received = await snapshot();
+    expect(received.balances.AVAILABLE).toBe(100);
+    expect(received.entries.at(-1)?.runningBalance).toBe(received.balances.AVAILABLE);
+    await sellControlled(f, scope, witness.id, 20);
+    const sold = await snapshot();
+    expect(sold.balances.AVAILABLE).toBe(80);
+    expect(sold.entries.at(-1)?.runningBalance).toBe(sold.balances.AVAILABLE);
+    await expect(
+      inOrg(ORG_RETURN, (db) =>
+        deps.receipts.reverseGoodsReceipt(db, scope, {
+          goodsReceiptId: receipt.id,
+          at: RECEIVED_AT,
+          reason: 'Return the remainder',
+          controlledWitness: { staffProfileId: staff.id, pin },
+        })
+      )
+    ).rejects.toMatchObject({ reason: 'REVERSAL_STOCK_MOVED' });
+    expect(await snapshot()).toEqual(sold);
+
+    const document = await inOrg(ORG_RETURN, (db) =>
+      returns.createPurchaseReturn(db, scope, {
+        supplierId: f.supplierId,
+        kind: 'PURCHASE_RETURN',
+        reference: tag('return'),
+        lines: [
+          {
+            inventoryLotId: lotId,
+            stockLocationId: f.storeId,
+            quantityUnits: 80,
+            reason: 'Return remaining stock',
+            returnWindowEndsAt: EXPIRY,
+            expectedCreditMinor: 80000,
+          },
+        ],
+      })
+    );
+    await inOrg(ORG_RETURN, (db) =>
+      returns.submitPurchaseReturn(db, scope, { purchaseReturnId: document.id, at: RECEIVED_AT })
+    );
+    const dispatch = (
+      sender: string,
+      controlledWitness?: { staffProfileId: string; pin: string }
+    ) =>
+      inOrg(ORG_RETURN, (db) =>
+        returns.dispatchPurchaseReturn(
+          db,
+          { ...scope, actorId: sender },
+          {
+            purchaseReturnId: document.id,
+            at: RECEIVED_AT,
+            idempotencyKeyPrefix: tag('dispatch'),
+            controlledWitness,
+          }
+        )
+      );
+    const proof = { staffProfileId: staff.id, pin };
+    // An old client racing the upgrade must also fail when it closes the document.
+    await expect(
+      inOrg(ORG_RETURN, (db) =>
+        db.pharmacyPurchaseReturn.update({
+          where: { id: document.id },
+          data: { status: 'DISPATCHED', dispatchedAt: RECEIVED_AT, dispatchedByUserId: actor.id },
+        })
+      )
+    ).rejects.toThrow('A controlled supplier dispatch requires a witnessed register entry.');
+    expect(await snapshot()).toEqual(sold);
+    await expect(dispatch(actor.id)).rejects.toThrow(/different pharmacist/);
+    await expect(dispatch(witness.id, proof)).rejects.toThrow(/different pharmacist/);
+    await expect(
+      dispatch(actor.id, { ...proof, pin: pin === '111111' ? '222222' : '111111' })
+    ).rejects.toThrow(/different pharmacist/);
+    expect(
+      await inOrg(ORG_RETURN, (db) =>
+        db.restaurantOperatorCredential.findFirstOrThrow({
+          where: { staffProfileId: staff.id },
+          select: { failedAttempts: true },
+        })
+      )
+    ).toEqual({ failedAttempts: 1 });
+    expect(await snapshot()).toEqual(sold);
+    // Force a transaction failure after both entries are visible, then read in a new transaction.
+    await expect(
+      inOrg(ORG_RETURN, async (db) => {
+        await returns.dispatchPurchaseReturn(db, scope, {
+          purchaseReturnId: document.id,
+          at: RECEIVED_AT,
+          idempotencyKeyPrefix: tag('rollback'),
+          controlledWitness: proof,
+        });
+        const outgoing = await db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+          where: { supplierReturnLineId: document.lines[0]!.id },
+        });
+        expect(outgoing.balanceDelta).toBe(-80);
+        expect((await balancesFor(db, ORG_RETURN, lotId)).AVAILABLE).toBe(0);
+        throw new Error('fixture rollback');
+      })
+    ).rejects.toThrow('fixture rollback');
+    expect(await snapshot()).toEqual(sold);
+    // Enrol the independent witness before the real dispatch. The approved
+    // code must be consumed once even when two submissions arrive together.
+    const code = await enableApprovalCode(ORG_RETURN, witness.id);
+    const approval = { ...proof, pin: code };
+    const attempts = await Promise.allSettled([
+      dispatch(actor.id, approval),
+      dispatch(actor.id, approval),
+    ]);
+    expect(attempts.filter((a) => a.status === 'fulfilled')).toHaveLength(1);
+    expect(attempts.find((a) => a.status === 'rejected')?.reason.message).toBe(
+      'This return has already been dispatched.'
+    );
+    const dispatched = await snapshot();
+    expect(dispatched.balances.AVAILABLE).toBe(0);
+    expect(dispatched.entries).toHaveLength(3);
+    expect(dispatched.entries.slice(0, 2)).toEqual(sold.entries);
+    expect(dispatched.entries[2]).toMatchObject({
+      entryKind: 'RETURN_TO_SUPPLIER',
+      recordedByUserId: actor.id,
+      witnessedByUserId: witness.id,
+      signatureRef: expect.stringMatching(/^authenticator:/),
+      sourcePurchaseEntryId: received.entries[0]!.id,
+      quantityCanonicalUnits: 80,
+      balanceDelta: -80,
+      runningBalance: dispatched.balances.AVAILABLE,
+    });
+    const out = await inOrg(ORG_RETURN, (db) =>
+      db.pharmacyStockMovement.findUniqueOrThrow({
+        where: { id: dispatched.entries[2]!.stockMovementId! },
+      })
+    );
+    expect(out).toMatchObject({
+      inventoryLotId: lotId,
+      disposition: 'AVAILABLE',
+      quantityUnits: -80,
+      actorId: actor.id,
+    });
+    expect(dispatched.entries[2]!.counterpartyName).toBe(received.entries[0]!.counterpartyName);
+    await expect(dispatch(actor.id, approval)).rejects.toThrow(
+      'This return has already been dispatched.'
+    );
+    expect(await snapshot()).toEqual(dispatched);
+  }, 30_000);
+
+  it.each(['PIN', 'AUTHENTICATOR'] as const)(
+    'only permits a sole pharmacist to confirm a controlled supplier dispatch alone with %s',
+    async (mode) => {
+      const ORG_SOLO = soloOrg(mode);
+      const { f, scope, actor, witness, lotId, snapshot } = await controlledReceipt(
+        'solo-dispatch',
+        { receivedPacks: 10, bonusPacks: 0 },
+        ORG_SOLO,
+        `branch_controlled_solo_${mode}_${suffix}`
+      );
+      const self = await selfApprovalFixture(ORG_SOLO, actor.id);
+      const returns = await import('./supplier-returns-operations');
+      const doc = await inOrg(ORG_SOLO, async (db) => {
+        const row = await returns.createPurchaseReturn(db, scope, {
+          supplierId: f.supplierId,
+          kind: 'PURCHASE_RETURN',
+          reference: tag('solo'),
+          lines: [
+            {
+              inventoryLotId: lotId,
+              stockLocationId: f.storeId,
+              quantityUnits: 100,
+              reason: 'Send stock back',
+              returnWindowEndsAt: EXPIRY,
+              expectedCreditMinor: 10000,
+            },
+          ],
+        });
+        return returns.submitPurchaseReturn(db, scope, {
+          purchaseReturnId: row.id,
+          at: RECEIVED_AT,
+        });
+      });
+      const dispatch = (proof?: typeof self.proof, approvalReason = 'No colleague is available') =>
+        inOrg(ORG_SOLO, (db) =>
+          returns.dispatchPurchaseReturn(db, scope, {
+            purchaseReturnId: doc.id,
+            at: RECEIVED_AT,
+            idempotencyKeyPrefix: tag('dispatch'),
+            controlledWitness: proof,
+            approvalReason,
+          })
+        );
+      const before = await snapshot();
+      for (const status of ['ACTIVE', 'ON_LEAVE'] as const) {
+        await inOrg(ORG_SOLO, (db) =>
+          db.user.update({ where: { id: witness.id }, data: { status } })
+        );
+        await expect(dispatch()).rejects.toThrow(/different pharmacist/i);
+        await expect(dispatch(self.proof)).rejects.toThrow(/different pharmacist/i);
+        expect(await snapshot()).toEqual(before);
+      }
+      await inOrg(ORG_SOLO, (db) =>
+        db.user.update({ where: { id: witness.id }, data: { status: 'INACTIVE' } })
+      );
+      const pin = mode === 'PIN' ? self.proof.pin : await enableApprovalCode(ORG_SOLO, actor.id);
+      await expect(dispatch()).rejects.toThrow(/your own/i);
+      await expect(dispatch(self.proof, ' ')).rejects.toThrow(/reason/i);
+      await expect(
+        dispatch(mode === 'PIN' ? self.wrong : { ...self.proof, pin: '00000000' })
+      ).rejects.toThrow(/not accepted/i);
+      expect(await self.strikes()).toEqual({ failedAttempts: 1 });
+      expect(await snapshot()).toEqual(before);
+      await dispatch({ ...self.proof, pin });
+      const after = await snapshot();
+      expect(after.entries).toHaveLength(2);
+      expect(after.entries[1]).toMatchObject({
+        entryKind: 'RETURN_TO_SUPPLIER',
+        recordedByUserId: actor.id,
+        witnessedByUserId: actor.id,
+        signatureRef: expect.stringMatching(new RegExp(`^solo-${mode.toLowerCase()}:`)),
+        supplierReturnReason: 'No colleague is available',
+        balanceDelta: -100,
+        runningBalance: 0,
+      });
+      expect(after.balances.AVAILABLE).toBe(0);
+      expect(after.entries[0]).toEqual(before.entries[0]);
+      await inOrg(ORG_SOLO, async (db) => {
+        await db.user.update({ where: { id: actor.id }, data: { role: 'ADMIN' } });
+        await db.userPermissionOverride.create({
+          data: {
+            organizationId: ORG_SOLO,
+            userId: actor.id,
+            capability: '*',
+            effect: 'ALLOW',
+            reason: 'Synthetic owner',
+          },
+        });
+      });
+      await expect(
+        inOrg(ORG_SOLO, (db) =>
+          returns.dispatchPurchaseReturn(db, scope, {
+            purchaseReturnId: doc.id,
+            at: RECEIVED_AT,
+            idempotencyKeyPrefix: tag('late'),
+            recordLateLineId: doc.lines[0]!.id,
+            controlledWitness: self.proof,
+            approvalReason: 'Attempt late',
+          })
+        )
+      ).rejects.toThrow(/no unrecorded controlled supplier dispatch/i);
+      expect(await snapshot()).toEqual(after);
+    },
+    30000
+  );
 
   it('adds a negating ADJUSTMENT per posting, linked to what it cancels', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'reverse');

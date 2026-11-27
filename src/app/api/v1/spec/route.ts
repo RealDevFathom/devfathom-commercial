@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { authenticateApiRequest } from '@/lib/api-auth';
+import { withApiAuth } from '@/lib/api-auth';
 import { publicRequestOrigin } from '@/lib/http-origin';
-import { recordRestAudit } from '@/server/audit';
 
 /**
  * GET /api/v1/spec
@@ -13,46 +12,27 @@ import { recordRestAudit } from '@/server/audit';
  *
  * Hand the URL of this endpoint + a token to your AI agent and it has
  * everything it needs to operate the hub on behalf of the bound user.
+ *
+ * DEV-1055: served through the shared `withApiAuth` wrapper, so it has the same
+ * per-IP limit before authentication (an invalid token costs a bcrypt compare),
+ * the same per-token limit after it, and the same audit trail as every other
+ * `/api/v1` route. Any valid token works: the scope check alone is skipped, and
+ * the calls an agent then makes are still scope-checked individually.
  */
-export async function GET(request: Request) {
-  // Any valid token works — we don't enforce a scope here. The actual
-  // endpoint calls the agent makes will still be scope-checked individually.
-  // REST-02: this route bypasses withApiAuth, so record the audit manually —
-  // reads of the full API map (and 401 attempts) must leave an audit trail.
-  const start = Date.now();
-  const auth = await authenticateApiRequest(request);
-  if (auth instanceof NextResponse) {
-    recordRestAudit({
-      request,
-      ctx: null,
-      scope: 'spec:read',
-      status: auth.status,
-      durationMs: Date.now() - start,
-    });
-    return auth;
-  }
-
-  const baseUrl = publicRequestOrigin(request);
-  const md = buildSpec(baseUrl);
-
-  recordRestAudit({
-    request,
-    ctx: auth,
-    scope: 'spec:read',
-    status: 200,
-    durationMs: Date.now() - start,
-  });
-
-  return new NextResponse(md, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/markdown; charset=utf-8',
-      // Don't cache — markdown is generated per-request and includes the
-      // exact base URL of the host serving it
-      'Cache-Control': 'private, no-store',
-    },
-  });
-}
+export const GET = withApiAuth(
+  'spec:read',
+  (_ctx, request) =>
+    new NextResponse(buildSpec(publicRequestOrigin(request)), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        // Don't cache — markdown is generated per-request and includes the
+        // exact base URL of the host serving it
+        'Cache-Control': 'private, no-store',
+      },
+    }),
+  { anyScope: true }
+);
 
 function buildSpec(baseUrl: string): string {
   return `# DevFathom API — Full Reference
@@ -248,7 +228,7 @@ Create a project. Auto-creates a default Kanban board with columns: Backlog, To 
 Get project with boards, milestones, and members.
 
 - **Scope:** \`projects:read\`
-- **Response:** \`{ data: Project }\` with included \`client\`, \`members\`, \`boards\`, \`milestones\`
+- **Response:** \`{ data: Project }\` with \`members\`, \`boards\` and \`milestones\`. A linked \`client\` contains only \`{ id, name }\`.
 
 ### \`DELETE /projects/:id\`
 Delete a project and all its boards/tasks (cascades).
@@ -270,7 +250,7 @@ Get a board with all columns, tasks, labels, and column default assignees.
 List all clients.
 
 - **Scope:** \`clients:read\`
-- **Response:** \`{ data: Client[] }\` with primary contact
+- **Response:** \`{ data: Client[] }\` with contacts. \`_count.projects\` requires \`projects:read\` and the Projects module. \`_count.invoices\` requires \`finance:read\` and the Finance module.
 
 ### \`POST /clients\`
 Create a client.
@@ -290,7 +270,7 @@ Create a client.
 - **Side effects:** logs \`client_created\` activity
 
 ### \`GET /clients/:id\`
-Get client with contacts, projects, invoices, documents.
+Get the client with contacts. The \`projects\` field requires \`projects:read\` and the Projects module. The \`invoices\` field requires \`finance:read\` and the Finance module.
 
 - **Scope:** \`clients:read\`
 
@@ -396,6 +376,7 @@ Create an invoice. \`finance:write\`. Logs \`invoice_created\`.
 
 ### \`GET /invoices/:id\` / \`PATCH /invoices/:id\`
 Get or update invoice status. \`finance:read\` / \`finance:write\`.
+GET returns the linked client as \`{ id, name }\`. With \`clients:read\` and the Clients module it returns the full client with contacts.
 PATCH body: \`{ "status": "DRAFT | SENT | OVERDUE | CANCELLED" }\`.
 The PATCH endpoint enforces valid status transitions and logs \`invoice_sent\` activity. To mark an
 invoice PAID, record its payment through the mark-paid workflow instead.

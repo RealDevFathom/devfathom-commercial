@@ -64,14 +64,20 @@ import {
 } from '@/lib/pharmacy/drap-reference-autofill';
 import { isEffective } from '@/lib/pharmacy/pack-conversion';
 import { actorIsPharmacyOwner } from '@/lib/pharmacy/procurement-access';
-import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { ACTIVE_STATUSES, can, subjectFromSession, type Action } from '@/lib/abac';
 import {
   applyLegacyControlledToMedicine,
   hasControlledCorrection,
 } from '@/lib/pharmacy/migration/legacy-controlled';
 import {
   createStagedMedicinesChunk,
+  planStagedMedicine,
+  failureDetail,
+  isPassingFailure,
+  STAGED_CREATION_BUSY,
   STAGED_CREATION_OPERATION,
+  STAGED_CREATION_STOPPED,
+  StagedCreationSystemicRefusal,
   stagedCreationProgress,
 } from '@/lib/pharmacy/migration/staged-creation';
 import { STAGING_MAX_ROWS } from '@/lib/pharmacy/migration/staging-input';
@@ -371,20 +377,21 @@ const catalogueProposer = Symbol('catalogueProposer');
 const replayAuthority = (ctx: TRPCContext) =>
   (ctx as TRPCContext & { [catalogueReplay]?: readonly Action[] })[catalogueReplay];
 const isCatalogueReplay = (ctx: TRPCContext) => Array.isArray(replayAuthority(ctx));
-// DEV-19: submitting any catalogue edit needs the catalogue-edit capability (deny
-// by default) on top of tenant administration; an explicit DENY refuses an admin.
+// Shared by catalogue submissions and the upload that prepares them.
 const CATALOGUE_EDIT_ACTIONS = ['admin:access', 'pharmacy:catalogue-edit'] as const;
-const REVIEWER_AUTHORITY = ['pharmacy:catalogue-review'] as const;
+// The navigation probe and proposed-file read ask for the same authority as a queue decision.
+export const CATALOGUE_REVIEW_ACTION = 'pharmacy:catalogue-review' as const;
+const REVIEWER_AUTHORITY = [CATALOGUE_REVIEW_ACTION] as const;
 // An owner approving without the review grant (no other reviewer) is held to the editor's own
 // capabilities; their fresh PIN was verified before the replay.
 const SOLO_OWNER_AUTHORITY = CATALOGUE_EDIT_ACTIONS;
-const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
+export const catalogueEditProcedure = contextualCapabilityProcedure(() => CATALOGUE_EDIT_ACTIONS);
 // A catalogue command is submitted by a catalogue editor. When an approved edit
 // replays it, the approver's own authority authorizes the write, so a pharmacist
 // reviewer who is not a tenant administrator can apply what they approve.
-const catalogueCommandProcedure = contextualCapabilityProcedure(
-  (ctx) => replayAuthority(ctx) ?? CATALOGUE_EDIT_ACTIONS
-);
+const catalogueCommandAuthority = (ctx: TRPCContext) =>
+  replayAuthority(ctx) ?? CATALOGUE_EDIT_ACTIONS;
+const catalogueCommandProcedure = contextualCapabilityProcedure(catalogueCommandAuthority);
 
 /**
  * Who may see and decide the catalogue queue. A reviewer holds the exact
@@ -393,7 +400,19 @@ const catalogueCommandProcedure = contextualCapabilityProcedure(
  * only with a fresh PIN. An editor may see the queue they submit to.
  */
 async function catalogueAccess(ctx: TRPCContext) {
-  const user = ctx.session!.user;
+  return catalogueAccessFor(ctx, ctx.session!.user);
+}
+/** catalogueAccess for any member of the tenant: the one rule the queue and its decisions use. */
+async function catalogueAccessFor(
+  ctx: TRPCContext,
+  user: {
+    id: string;
+    role?: string | null;
+    department?: string | null;
+    status?: string | null;
+    organizationId?: string | null;
+  }
+) {
   const subject = subjectFromSession(user);
   const opts = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
   const allowed = async (actions: readonly Action[]) => {
@@ -424,6 +443,19 @@ async function maySetStockThresholds(ctx: TRPCContext, branchId: string) {
   )
     return false;
   return (await admittedInventoryBranchIds(ctx)).has(branchId);
+}
+
+const STAGED_CREATION_ACCESS_REFUSAL =
+  'Only a catalogue editor or reviewer can check or create medicines from this file. Ask the pharmacy owner for catalogue edit or review access.';
+
+async function requireStagedReviewBranch(ctx: TRPCContext, reorderBranchId?: string | null) {
+  const branches = await admittedInventoryBranchIds(ctx);
+  if (!branches.size || (reorderBranchId && !branches.has(reorderBranchId)))
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message:
+        'This import needs a catalogue reviewer assigned to an active branch covered by the request. Ask the pharmacy owner to check the branch assignment.',
+    });
 }
 
 /** The reorder branch an approved bulk creation request carries; null for none or an older one. */
@@ -522,6 +554,41 @@ const DUPLICATE_INGREDIENT_MESSAGE = 'This ingredient already exists. Use the ex
 const DUPLICATE_PACK_MESSAGE =
   'This pack already exists for this medicine. Use the existing pack instead of adding it again.';
 
+/**
+ * DEV-1002: a creation step that stopped for a reason other than a row of the file (rows are
+ * recorded one by one). The screen gets plain words and a next step; the server log and the
+ * audit record get the codes, never a cell value.
+ */
+function stagedCreationStopped(ctx: TRPCContext, batchId: string, error: unknown): never {
+  if (error instanceof TRPCError) throw error;
+  if (error instanceof StagedCreationSystemicRefusal) {
+    // Many rows refused for one reason: the step was undone and nothing was recorded.
+    const failure = { systemic: true, rows: error.rows, ...failureDetail(error.refusal) };
+    console.error('[pharmacy] staged medicine creation step stopped', { batchId, ...failure });
+    annotateAudit(ctx, {
+      targetType: 'PharmacyMigrationBatch',
+      targetId: batchId,
+      metadata: { stopped: failure },
+    });
+    throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR', message: error.message });
+  }
+  const passing = isPassingFailure(error);
+  const failure = { passing, ...failureDetail(error) };
+  console.error('[pharmacy] staged medicine creation step stopped', { batchId, ...failure });
+  annotateAudit(ctx, {
+    targetType: 'PharmacyMigrationBatch',
+    targetId: batchId,
+    metadata: { stopped: failure },
+  });
+  throw new TRPCError({
+    code: 'INTERNAL_SERVER_ERROR',
+    message: passing ? STAGED_CREATION_BUSY : STAGED_CREATION_STOPPED,
+  });
+}
+
+/** Members read per query when naming who else can approve (DEV-1004). */
+const REVIEWER_PAGE = 500;
+
 export const pharmacyMedicineRouter = router({
   // DEV-19: reviewers and the owner with no other reviewer read the queue they decide; editors read
   // the queue they submit to. Everyone else is refused.
@@ -530,9 +597,67 @@ export const pharmacyMedicineRouter = router({
     if (!access.reviewer && !access.editor)
       throw new TRPCError({
         code: 'FORBIDDEN',
-        message: 'You do not have permission for this action.',
+        message:
+          'Your role cannot open the catalogue queue. Ask a catalogue editor to submit the change or a catalogue reviewer to decide it.',
       });
-    return listPendingCatalogueEdits(ctx.db);
+    // DEV-976: the screen asks for the approver's own PIN only on edits they submitted.
+    return (await listPendingCatalogueEdits(ctx.db)).map((edit) => ({
+      ...edit,
+      ownEdit: edit.editorId === ctx.session.user.id,
+    }));
+  }),
+  /**
+   * DEV-976: for a member who decides the queue, whether they may approve their own edits with
+   * their fresh PIN and, when not, who else can approve them. Both come from the rules the
+   * decision itself applies (isOwnerWithoutOtherReviewer and catalogueAccess), so the screen and
+   * the server agree. Names only, of active members of this organization.
+   */
+  catalogueSelfApproval: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session.user;
+    const organizationId = ctx.entitlements.organizationId;
+    const access = await catalogueAccess(ctx);
+    if (user.organizationId !== organizationId || (!access.reviewer && !access.ownerFallback))
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          'Ask a catalogue reviewer to decide this edit. When nobody else holds catalogue review permission, a pharmacy owner can approve it with their own approval code or PIN.',
+      });
+    const scope = { organizationId, actorId: user.id, actorOrganizationId: user.organizationId };
+    // The check decideCatalogueEdit makes when the approver submitted the edit.
+    const canSelfApprove = await isOwnerWithoutOtherReviewer(ctx.db, scope, {
+      countOtherOwners: true,
+    });
+    if (canSelfApprove) return { canSelfApprove, reviewers: [] as string[] };
+    const reviewers: string[] = [];
+    // DEV-1004: every active member is checked, a page at a time, so an organisation with more
+    // than one page of members never reads "Nobody else can approve it yet" by mistake.
+    for (let skip = 0; ; skip += REVIEWER_PAGE) {
+      const others = await ctx.db.user.findMany({
+        where: {
+          organizationId,
+          id: { not: user.id },
+          status: { in: [...ACTIVE_STATUSES] as Array<'ACTIVE' | 'ON_LEAVE'> },
+        },
+        select: {
+          id: true,
+          name: true,
+          role: true,
+          department: true,
+          status: true,
+          organizationId: true,
+        },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        skip,
+        take: REVIEWER_PAGE,
+      });
+      for (const member of others) {
+        const memberAccess = await catalogueAccessFor(ctx, member);
+        // Who decideCatalogueEdit admits for an edit someone else submitted.
+        if (memberAccess.reviewer || memberAccess.ownerFallback) reviewers.push(member.name);
+      }
+      if (others.length < REVIEWER_PAGE) break;
+    }
+    return { canSelfApprove, reviewers };
   }),
   /** What the signed-in member may do in the catalogue queue, for the UI only. */
   catalogueQueueAccess: auditedProtectedProcedure.query(async ({ ctx }) => {
@@ -577,7 +702,8 @@ export const pharmacyMedicineRouter = router({
       if (!access.reviewer && !access.ownerFallback)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'Approving catalogue edits needs the catalogue review permission.',
+          message:
+            'Ask a catalogue reviewer to decide this edit. When nobody else holds catalogue review permission, a pharmacy owner can approve it with their own approval code or PIN.',
         });
       const authority = access.reviewer ? REVIEWER_AUTHORITY : SOLO_OWNER_AUTHORITY;
       return decideCatalogueEdit(
@@ -590,7 +716,14 @@ export const pharmacyMedicineRouter = router({
         input,
         (tx, operation, payload, proposerId) =>
           applyCatalogueCommand(ctx, tx, operation, payload, authority, proposerId),
-        { soloOwnerAuthority: !access.reviewer, ownerWithoutOtherReviewer: true }
+        {
+          soloOwnerAuthority: !access.reviewer,
+          ownerWithoutOtherReviewer: true,
+          authorizeProposal: async (tx, operation, changes) => {
+            if (operation === STAGED_CREATION_OPERATION)
+              await requireStagedReviewBranch({ ...ctx, db: tx }, approvedReorderBranch(changes));
+          },
+        }
       );
     }),
   priceNotices: capabilityProcedure('pharmacy:safety').query(async ({ ctx }) => ({
@@ -1237,7 +1370,10 @@ export const pharmacyMedicineRouter = router({
    * approval replays this command, which checks the batch again; `runStagedMedicineCreation`
    * then creates the medicines in chunks.
    */
-  createStagedMedicines: catalogueCommandProcedure
+  createStagedMedicines: contextualCapabilityProcedure(
+    catalogueCommandAuthority,
+    'An administrator with catalogue edit access can submit this import. Ask the pharmacy owner to assign an editor to submit it or a reviewer to approve it.'
+  )
     .input(
       z
         .object({
@@ -1348,6 +1484,109 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
+  /** The proposal exposes staged rows only while pending. Its signer can resume an approved file. */
+  proposedImport: capabilityProcedure(
+    CATALOGUE_REVIEW_ACTION,
+    'Only a catalogue reviewer can inspect the proposed medicines. Ask the pharmacy owner to assign a reviewer.'
+  )
+    .input(
+      z
+        .object({
+          editId: boundedId,
+          page: z.number().int().min(1).max(10000).default(1),
+          approvedByMe: z.literal(true).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      if (
+        organizationId !== ctx.session.user.organizationId ||
+        (ctx.organization && ctx.organization.id !== organizationId)
+      )
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Sign in to the pharmacy that submitted this import to review it.',
+        });
+      const proposal = await ctx.db.pharmacyCatalogueEdit.findFirst({
+        where: {
+          organizationId,
+          id: input.editId,
+          ...(input.approvedByMe
+            ? { status: 'APPROVED', reviewerId: ctx.session.user.id }
+            : { status: 'PENDING' }),
+          operation: STAGED_CREATION_OPERATION,
+        },
+        select: { changes: true },
+      });
+      const request = z
+        .object({
+          json: z.object({
+            batchId: boundedId,
+            sourceSha256: z.string().min(1),
+            reorderBranchId: boundedId.nullish(),
+          }),
+        })
+        .safeParse(proposal?.changes);
+      const unavailable = input.approvedByMe
+        ? 'This file needs an approved request signed by you. Ask its catalogue editor to check the approval.'
+        : 'This import is no longer awaiting review here. Ask the catalogue editor to check the request.';
+      if (!request.success) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
+      const { batchId, sourceSha256, reorderBranchId } = request.data.json;
+      await requireStagedReviewBranch(ctx, reorderBranchId);
+      const batch = await ctx.db.pharmacyMigrationBatch.findFirst({
+        where: {
+          organizationId,
+          id: batchId,
+          source: { organizationId, contentHash: sourceSha256 },
+        },
+        select: { id: true, source: { select: { fileName: true } } },
+      });
+      if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: unavailable });
+      if (input.approvedByMe)
+        return {
+          approved: { batchId: batch.id, fileName: batch.source.fileName },
+          rows: [],
+          hasMore: false,
+        };
+      const pageSize = 25;
+      const rows = await ctx.db.pharmacyMigrationRow.findMany({
+        where: { organizationId, batchId: batch.id, targetModelKey: 'med.product' },
+        orderBy: [{ rowNumber: 'asc' }, { id: 'asc' }],
+        skip: (input.page - 1) * pageSize,
+        take: pageSize + 1,
+        select: {
+          id: true,
+          sourceKey: true,
+          rowNumber: true,
+          productName: true,
+          packLabel: true,
+          packFactor: true,
+          mrpMinor: true,
+          barcode: true,
+          rawPayload: true,
+        },
+      });
+      return {
+        approved: null,
+        hasMore: rows.length > pageSize,
+        rows: rows.slice(0, pageSize).map((row) => {
+          // Match the creation preview without returning arbitrary source cells or commercial terms.
+          const plan = planStagedMedicine({ ...row, costMinor: null });
+          return {
+            rowNumber: row.rowNumber,
+            productName: plan?.productName ?? null,
+            unitsPerPack: plan?.unitsPerPack ?? null,
+            presentation: plan?.presentation ?? null,
+            mrpMinor: plan?.mrpMinor ?? null,
+            controlled: plan?.narcoticsClass ?? false,
+            genericName: plan?.genericName ?? null,
+            barcode: plan?.barcode ?? null,
+          };
+        }),
+      };
+    }),
+
   /** DEV-912: where a staged file's bulk creation stands, for an editor or a reviewer. */
   stagedMedicineCreation: auditedProtectedProcedure
     .input(z.object({ batchId: boundedId }).strict())
@@ -1356,7 +1595,7 @@ export const pharmacyMedicineRouter = router({
       if (!access.editor && !access.reviewer)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'You do not have permission for this action.',
+          message: STAGED_CREATION_ACCESS_REFUSAL,
         });
       const [request] = await ctx.db.pharmacyCatalogueEdit.findMany({
         where: {
@@ -1378,6 +1617,10 @@ export const pharmacyMedicineRouter = router({
   /**
    * DEV-912: create the next chunk of medicines from an approved staged file. Running it again,
    * or for a second batch of the same file, creates nothing twice.
+   *
+   * DEV-1002: a row the database refuses is recorded on its link with a plain reason and the
+   * rest of the chunk is created. Any other failure undoes the step and is answered in plain
+   * words; its codes (never a cell value) go to the server log and the audit record.
    */
   runStagedMedicineCreation: auditedProtectedProcedure
     .input(z.object({ batchId: boundedId }).strict())
@@ -1386,9 +1629,10 @@ export const pharmacyMedicineRouter = router({
       if (!access.editor && !access.reviewer)
         throw new TRPCError({
           code: 'FORBIDDEN',
-          message: 'You do not have permission for this action.',
+          message: STAGED_CREATION_ACCESS_REFUSAL,
         });
-      const result = await ctx.db.$transaction(
+      // A row the database refuses never throws here (it is recorded); anything else does.
+      const step = ctx.db.$transaction(
         async (tx) => {
           const approved = await tx.pharmacyCatalogueEdit.findFirst({
             where: {
@@ -1402,7 +1646,8 @@ export const pharmacyMedicineRouter = router({
           if (!approved?.reviewerId)
             throw new TRPCError({
               code: 'PRECONDITION_FAILED',
-              message: 'Creating these medicines needs an approved request first.',
+              message:
+                'Creating these medicines needs an approved request first. Ask a catalogue reviewer to approve this import.',
             });
           return {
             editId: approved.id,
@@ -1421,11 +1666,25 @@ export const pharmacyMedicineRouter = router({
         },
         { maxWait: 10_000, timeout: 120_000 }
       );
-      const { medicineIds, ...summary } = result;
+      const result = await step.catch((error: unknown) =>
+        stagedCreationStopped(ctx, input.batchId, error)
+      );
+      const { medicineIds, refusals, ...summary } = result;
+      if (refusals.length)
+        console.warn('[pharmacy] staged medicine rows not created', {
+          batchId: input.batchId,
+          rows: refusals.slice(0, 50),
+          more: Math.max(0, refusals.length - 50),
+        });
       annotateAudit(ctx, {
         targetType: 'PharmacyMigrationBatch',
         targetId: input.batchId,
-        metadata: { ...summary, firstMedicineId: medicineIds[0] ?? null },
+        metadata: {
+          ...summary,
+          firstMedicineId: medicineIds[0] ?? null,
+          // Row numbers and database codes only: a refused row's cells stay in the staged file.
+          ...(refusals.length ? { notCreatedRows: refusals.slice(0, 50) } : {}),
+        },
       });
       return summary;
     }),

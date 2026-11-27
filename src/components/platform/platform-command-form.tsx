@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, LoaderCircle, Play, Save } from 'lucide-react';
@@ -207,6 +209,7 @@ export function PlatformCommandForm({
     const requiresReason =
       [
         'organization.user.password',
+        'organization.user.approvalauthenticator.reset',
         'organization.scim.token',
         'organization.scim.revoke',
         'organization.transition',
@@ -439,7 +442,7 @@ export function PlatformCommandForm({
                   errorId={errorId}
                 />
               ) : field.type === 'select' ? (
-                <select
+                <StudioSelect
                   id={fieldId}
                   name={field.name}
                   required={field.required}
@@ -456,7 +459,7 @@ export function PlatformCommandForm({
                       {option.label}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               ) : field.type === 'checkbox' ? (
                 <span className="flex h-11 items-center gap-2 rounded-lg border border-border-default bg-card px-3 text-xs">
                   <input

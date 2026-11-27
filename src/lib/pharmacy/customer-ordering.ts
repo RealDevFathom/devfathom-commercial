@@ -9,7 +9,8 @@ import { deliveryTotals } from './customer-delivery';
 import { requirePharmacyTodayOpenForTrading, saleTotalMinor } from './settlement';
 import { MAX_DELIVERY_DISTANCE_METERS } from './delivery-radius-profitability';
 import { addReservedSaleLine, createSale } from './sales';
-import type { LedgerScope } from './stock-ledger';
+import { counterSetAsidesInForce } from './offline-cash-selling';
+import { DEVICE_QUOTA_HELD, type LedgerScope } from './stock-ledger';
 import { lockStockRowsFrom } from './stock-lock-order';
 
 export type CustomerOrderFulfillment = 'COLLECT' | 'DELIVER';
@@ -106,12 +107,13 @@ export async function listStorefrontCatalog(
   search = ''
 ) {
   await activateBranchScope(db, scope);
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
   const query = search.trim();
   const rows = await db.$queryRaw<CatalogRow[]>(Prisma.sql`
     WITH safe_stock AS (
       SELECT batch."medicineId", lot."packLevelId", lot."id" AS "inventoryLotId",
              lot."unitsPerPack", lot."printedMrpMinor", batch."expiresAt", lot."receivedAt",
-             GREATEST(0, balance."onHandUnits"
+             GREATEST(0, balance."onHandUnits" - ${holds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}
                - COALESCE((SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
                    WHERE claim."organizationId" = balance."organizationId"
                      AND claim."branchId" = balance."branchId"
@@ -211,11 +213,12 @@ export async function reservationCandidates(
     ${candidates}`,
     { balance: true }
   );
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
   return db.$queryRaw<ReservationCandidate[]>(Prisma.sql`
     SELECT balance."inventoryLotId", balance."stockLocationId", balance."organizationId", balance."branchId",
            batch."state"::text AS "batchState", balance."disposition"::text AS disposition,
            batch."expiresAt", lot."receivedAt", lot."packLevelId", lot."unitsPerPack", lot."printedMrpMinor",
-           (balance."onHandUnits"
+           (balance."onHandUnits" - ${holds ? DEVICE_QUOTA_HELD : Prisma.sql`0`}
              - COALESCE((SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
                  WHERE claim."organizationId" = balance."organizationId"
                    AND claim."branchId" = balance."branchId"
@@ -650,6 +653,7 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
     WHERE reservation."organizationId" = ${scope.organizationId}
       AND reservation."branchId" = ${scope.branchId} AND line."orderId" = ${orderId}
       AND reservation.status = 'RESERVED'`;
+  const holds = await counterSetAsidesInForce(db, scope.organizationId);
   const query = Prisma.sql`
     /* handoff_reservations */
     SELECT interest."orderLineId", reservation."reservedUnits",
@@ -658,7 +662,7 @@ async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, ord
            balance."disposition"::text AS disposition, batch."state"::text AS "batchState",
            batch."expiresAt", lot."receivedAt",
            medicine.saleable, medicine.otc, medicine.rx, medicine.restricted, medicine.controlled,
-           (balance."onHandUnits" - COALESCE((
+           (balance."onHandUnits" - ${holds ? DEVICE_QUOTA_HELD : Prisma.sql`0`} - COALESCE((
              SELECT SUM(other."reservedUnits") FROM "pharmacy_restock_reservations" other
              WHERE other."organizationId" = balance."organizationId"
                AND other."branchId" = balance."branchId"

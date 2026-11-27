@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
   entitlements: { enabled: ['restaurant-pos'] as string[] },
   resolveTenantActor: vi.fn(),
   findDemoStaff: vi.fn(),
+  findStaff: vi.fn(),
+  grants: [] as { capability: string; effect: string }[],
 }));
 
 function findBy(rows: Row[], where: Record<string, unknown>): Row | null {
@@ -54,7 +56,9 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
-    restaurantStaffProfile: { findMany: h.findDemoStaff },
+    restaurantStaffProfile: { findMany: h.findDemoStaff, findUnique: h.findStaff },
+    restaurantStaffCapabilityGrant: { findMany: async () => h.grants },
+    restaurantStaffJobRole: { findMany: async () => [] },
     restaurantRegisteredDevice: {
       findUnique: async ({ where }: { where: Record<string, unknown> }) =>
         findBy(h.store.devices, where),
@@ -64,9 +68,16 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         return row;
       },
     },
+    $queryRaw: async (_query: TemplateStringsArray, tokenHash: string, deviceId: string) =>
+      h.store.sessions.filter((row) => row.tokenHash === tokenHash && row.deviceId === deviceId),
     restaurantTerminalSession: {
       findUnique: async ({ where }: { where: Record<string, unknown> }) =>
         findBy(h.store.sessions, where),
+      updateMany: async ({ where, data }: { where: Row; data: Row }) => {
+        const row = findBy(h.store.sessions, where);
+        if (row) Object.assign(row, data);
+        return { count: row ? 1 : 0 };
+      },
       update: async ({ where, data }: { where: { id: string }; data: Row }) => {
         const row = findBy(h.store.sessions, where);
         if (row) Object.assign(row, data);
@@ -138,6 +149,8 @@ function req(headers: Record<string, string> = {}): Request {
 }
 
 beforeEach(() => {
+  h.findStaff.mockReset().mockResolvedValue({ status: 'ACTIVE', primaryBranchId: 'branch_1' });
+  h.grants = [{ capability: 'pos:operate', effect: 'ALLOW' }];
   h.findDemoStaff.mockReset().mockResolvedValue([{ id: 'staff_1' }]);
   h.store.devices = [];
   h.store.sessions = [];
@@ -282,6 +295,110 @@ describe('withTerminalAuth', () => {
     );
     expect(res.status).toBe(200);
     expect(h.store.sessions[0].lastActivityAt).toBeInstanceOf(Date);
+  });
+
+  it.each(['deactivation', 'linked account deactivation', 'transfer', 'withdrawal'] as const)(
+    'locks a bound kitchen operator after %s without refreshing idle time',
+    async (change) => {
+      seedDevice({ kind: 'KDS' });
+      seedSession({ activeStaffProfileId: 'staff_1' });
+      h.grants = [{ capability: 'kitchen:operate', effect: 'ALLOW' }];
+      const inner = vi.fn(() => new Response('ok'));
+      const handler = withTerminalAuth(inner);
+      const headers = {
+        authorization: `Bearer ${deviceSecret}`,
+        'x-terminal-session': sessionToken,
+      };
+      expect((await handler(req(headers))).status).toBe(200);
+      const lastActivityAt = h.store.sessions[0].lastActivityAt;
+      if (change === 'withdrawal') h.grants = [];
+      else if (change === 'linked account deactivation') {
+        h.findStaff.mockResolvedValue({
+          status: 'ACTIVE',
+          primaryBranchId: 'branch_1',
+          userId: 'linked_staff',
+          user: { status: 'INACTIVE' },
+        });
+      } else
+        h.findStaff.mockResolvedValue(
+          change === 'deactivation'
+            ? { status: 'SUSPENDED', primaryBranchId: 'branch_1' }
+            : { status: 'ACTIVE', primaryBranchId: 'other' }
+        );
+      expect((await handler(req(headers))).status).toBe(403);
+      expect(h.store.sessions[0]).toMatchObject({ activeStaffProfileId: null, lastActivityAt });
+      expect(inner).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    ['staff_1', 'staff_1'],
+    ['new-operator', 'new-operator'],
+  ] as const)(
+    'preserves the current binding and idle timestamp after an operation refusal (%s)',
+    async (current, expected) => {
+      seedDevice();
+      seedSession({ activeStaffProfileId: current });
+      const heartbeat = h.store.sessions[0].lastActivityAt;
+      const refusal = new Error('Access denied');
+      const handler = withTerminalAuth(
+        () => {
+          throw refusal;
+        },
+        {
+          mapError: () => new Response(null, { status: 403 }),
+        }
+      );
+      expect(
+        (
+          await handler(
+            req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
+          )
+        ).status
+      ).toBe(403);
+      expect(h.store.sessions[0]).toMatchObject({
+        activeStaffProfileId: expected,
+        lastActivityAt: heartbeat,
+      });
+    }
+  );
+
+  it('locks a POS operator missing base access without running the operation or touching idle time', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    h.grants = [{ capability: 'payments:collect', effect: 'ALLOW' }];
+    const inner = vi.fn(() => new Response('ok'));
+    const before = h.store.sessions[0].lastActivityAt;
+    const response = await withTerminalAuth(inner)(
+      req({ authorization: `Bearer ${deviceSecret}`, 'x-terminal-session': sessionToken })
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining('pos:operate') });
+    expect(h.store.sessions[0]).toMatchObject({
+      activeStaffProfileId: null,
+      lastActivityAt: before,
+    });
+    expect(inner).not.toHaveBeenCalled();
+  });
+
+  it('checks a session-bearing station queue poll before reading tickets', async () => {
+    seedDevice({ kind: 'KDS', stationId: 'kitchen' });
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    const before = h.store.sessions[0].lastActivityAt;
+    const { GET } = await import('@/app/api/restaurant/kds/queue/route');
+    const response = await GET(
+      new Request('https://tenant.test/api/restaurant/kds/queue', {
+        headers: {
+          authorization: `Bearer ${deviceSecret}`,
+          'x-terminal-session': sessionToken,
+        },
+      })
+    );
+    expect(response.status).toBe(403);
+    expect(h.store.sessions[0]).toMatchObject({
+      activeStaffProfileId: null,
+      lastActivityAt: before,
+    });
   });
 
   it('runs request preflight before persistent device or session touches', async () => {

@@ -128,16 +128,15 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   if (sopCaptureName && !sopEvidence) return new Response('Not found', { status: 404 });
   // DEV-751: proof on a pharmacy SOP site is governed by pharmacy branch
   // assignment and SOP capability, not by restaurant branch membership.
-  const pharmacyDecision =
-    sopEvidence && session.user.role !== 'ADMIN'
-      ? await withTenantDb(organization.id, (db) =>
-          pharmacySopEvidenceReadDecision(db, {
-            organizationId: organization.id,
-            user: session.user,
-            evidence: sopEvidence,
-          })
-        )
-      : null;
+  const pharmacyDecision = sopEvidence
+    ? await withTenantDb(organization.id, (db) =>
+        pharmacySopEvidenceReadDecision(db, {
+          organizationId: organization.id,
+          user: session.user,
+          evidence: sopEvidence,
+        })
+      )
+    : null;
   if (pharmacyDecision === 'DENY') return new Response('Not found', { status: 404 });
   if (sopEvidence && session.user.role !== 'ADMIN' && pharmacyDecision === 'NOT_PHARMACY') {
     const branchAccess = await withTenantDb(organization.id, (db) =>
@@ -215,8 +214,8 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
       headers: {
         'Content-Type': contentType,
         'Content-Disposition': 'inline',
-        // Private so shared caches never hold an authenticated user's file.
-        'Cache-Control': 'private, max-age=3600',
+        // Require fresh authorization on every download, including in the same browser.
+        'Cache-Control': 'private, no-store',
       },
     });
   } catch (error) {

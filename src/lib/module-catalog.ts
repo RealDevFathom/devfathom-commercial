@@ -72,6 +72,7 @@ export const MODULE_CATALOG: readonly ModuleDefinition[] = [
 const MODULES_BY_KEY = new Map(MODULE_CATALOG.map((module) => [module.key, module]));
 
 export type EntitlementView = {
+  timeZone?: string | null;
   organizationId: string;
   /**
    * §2.3 — the organization's operating vertical, surfaced additively so
@@ -461,12 +462,14 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/inventory', 'pharmacy-inventory'],
   ['/pharmacy/accounts/balance-sheet', 'pharmacy-reports'],
   ['/pharmacy/accounts/general-journal', 'pharmacy-finance'],
+  ['/pharmacy/accounts/provider-refunds', 'pharmacy-finance'],
   ['/pharmacy/accounts/ap-aging', 'pharmacy-finance'],
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/settings/branches', 'pharmacy-core'],
   ['/pharmacy/settings/data-export', 'pharmacy-core'],
+  ['/pharmacy/settings/provider-refunds', 'pharmacy-core'],
   ['/pharmacy/settings/pharmacist-check', 'pharmacy-core'],
   ['/pharmacy/settings/one-pharmacist-per-shift', 'pharmacy-core'],
   ['/pharmacy/settings/pin', 'pharmacy-core'],

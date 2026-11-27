@@ -101,6 +101,7 @@ import {
   router,
   type TRPCContext,
 } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 
 /**
  * DEV-751 — pharmacy procedures on the shared SOP engine.
@@ -1712,6 +1713,7 @@ export const pharmacySopRouter = router({
   ),
 
   setRoleHolding: manageProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ ...BRANCH, userId: ID, roleKey: ROLE_KEY, held: z.boolean() }).strict())
     .mutation(({ ctx, input }) =>
       guarded(async () => {

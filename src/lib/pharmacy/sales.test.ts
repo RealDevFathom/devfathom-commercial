@@ -350,7 +350,7 @@ describe('POS sale voiding', () => {
             type: true,
             provider: true,
             amountMinor: true,
-            refunds: { select: { amountMinor: true } },
+            refunds: { select: { id: true, amountMinor: true } },
           },
         },
       ]);
@@ -1501,6 +1501,7 @@ describe('POS-06 linked returns', () => {
 
   it('posts accepted returns only to QUARANTINE', async () => {
     const created: Array<Record<string, unknown>> = [];
+    const holdEntry = vi.fn().mockResolvedValue({});
     const model = {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         created.push(data);
@@ -1538,6 +1539,17 @@ describe('POS-06 linked returns', () => {
       pharmacyStockMovement: model,
       pharmacySaleReturnLine: model,
       pharmacySaleEvent: { ...model, findFirst: vi.fn().mockResolvedValue(null) },
+      // DEV-1052: the hold's owner is recorded with the movement that held the units.
+      pharmacyStockBalance: { findFirst: vi.fn().mockResolvedValue({ onHandUnits: 2 }) },
+      pharmacyRecallQuarantineAction: {
+        aggregate: vi.fn().mockResolvedValue({ _sum: { quantityUnits: null } }),
+      },
+      pharmacyQuarantineHoldEntry: {
+        groupBy: vi
+          .fn()
+          .mockResolvedValue([{ authority: 'INVENTORY', _sum: { quantityUnits: 2 } }]),
+        create: holdEntry,
+      },
     };
     await returnSaleLine(db as never, scope, {
       saleLineId: 'line-a',
@@ -1553,6 +1565,19 @@ describe('POS-06 linked returns', () => {
       disposition: 'QUARANTINE',
       quantityUnits: 2,
       stockLocationId: 'quarantine',
+    });
+    // A returned pack set aside for inspection is an inventory hold, placed by the person
+    // who took the return; it is never recorded as a safety hold.
+    expect(holdEntry).toHaveBeenCalledExactlyOnceWith({
+      data: expect.objectContaining({
+        authority: 'INVENTORY',
+        origin: 'CUSTOMER_RETURN',
+        quantityUnits: 2,
+        inventoryLotId: 'lot-a',
+        stockLocationId: 'quarantine',
+        movementId: 'new-2',
+        actorId: scope.actorId,
+      }),
     });
   });
 });

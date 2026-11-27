@@ -1,3 +1,4 @@
+import { selectFieldControl } from '@/lib/testing/select-field';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -125,8 +126,11 @@ describe('a refused change after the procedure changed elsewhere', () => {
     h.outcomes.linkRecord = () => refusal(CHECKED, 'CONFLICT');
     render(<RunnerHarness />);
     fireEvent.change(
-      screen.getByLabelText(
-        'temperature log for Confirm the refrigerator temperature was recorded'
+      selectFieldControl(
+        screen.getByLabelText(
+          'temperature log for Confirm the refrigerator temperature was recorded',
+          { selector: ':not([data-select-field-native][aria-hidden="true"])' }
+        )
       ),
       { target: { value: 'temp-2' } }
     );

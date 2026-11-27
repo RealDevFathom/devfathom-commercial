@@ -254,13 +254,14 @@ export async function setJobRoleCapabilities(
   const toAdd = [...next].filter((capability) => !currentByCapability.has(capability));
   const toRemove = current.filter((row) => !next.has(row.capability)).map((row) => row.id);
 
-  if (toRemove.length > 0) {
-    await db.restaurantJobRoleCapability.deleteMany({ where: { id: { in: toRemove } } });
-  }
+  // Establish a broader replacement grant before removing its narrower predecessor.
   if (toAdd.length > 0) {
     await db.restaurantJobRoleCapability.createMany({
       data: toAdd.map((capability) => ({ jobRoleId, capability })),
     });
+  }
+  if (toRemove.length > 0) {
+    await db.restaurantJobRoleCapability.deleteMany({ where: { id: { in: toRemove } } });
   }
   return { added: toAdd.sort(), removed: toRemove.length };
 }

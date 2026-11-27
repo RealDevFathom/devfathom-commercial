@@ -1,4 +1,9 @@
 import type { OrganizationVertical } from '@/generated/prisma/enums';
+import {
+  PHARMACY_APPROVER_RIGHTS,
+  RESTAURANT_APPROVER_RIGHTS,
+  type ApprovalApproverRight,
+} from '@/lib/approval-approver-rights';
 
 /**
  * §2.3 — THE single server-owned vertical catalog.
@@ -893,6 +898,8 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 ];
 
 export const PHARMACY_CAPABILITIES: readonly string[] = [
+  'finance:read',
+  'finance:manage',
   'pharmacy:*',
   'pharmacy:dispense',
   'pharmacy:prescriptions',
@@ -921,6 +928,8 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
 
 /** Canonical actions checked by pharmacy workflows, including shared report gates. */
 export const PHARMACY_CHECKED_CAPABILITIES = [
+  'finance:read',
+  'finance:manage',
   'pharmacy:counter',
   'pharmacy:close',
   'pharmacy:manage',
@@ -973,6 +982,8 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     name: 'Owner / Operator',
     isSystem: true,
     capabilities: [
+      'finance:read',
+      'finance:manage',
       'reports:operational',
       'reports:financial',
       'pharmacy:orders',
@@ -1057,7 +1068,7 @@ const PHARMACY_BASE_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     // DEV-519: every pharmacy financial report lives inside the Reports command
     // centre, whose rail entry, page and procedures check `reports:operational`.
     // Granting only `reports:financial` left Finance with no reachable report.
-    capabilities: ['reports:operational', 'reports:financial'],
+    capabilities: ['reports:operational', 'reports:financial', 'finance:read', 'finance:manage'],
   },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
@@ -1982,3 +1993,15 @@ export function assertPackageCompatibleWithVertical(
     );
   }
 }
+
+/**
+ * DEV-961: the approver rights of the shared approval path that can be exercised in an
+ * organization of each vertical (see src/lib/approval-approver-rights.ts). A vertical with no
+ * entry has no PIN approvals, so nobody there is asked to set up an approval authenticator.
+ */
+export const APPROVAL_APPROVER_RIGHTS_BY_VERTICAL: Readonly<
+  Partial<Record<OrganizationVertical, readonly ApprovalApproverRight[]>>
+> = {
+  [PHARMACY]: PHARMACY_APPROVER_RIGHTS,
+  [RESTAURANT]: RESTAURANT_APPROVER_RIGHTS,
+};

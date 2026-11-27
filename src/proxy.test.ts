@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { proxy } from './proxy';
+import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server';
+import { config, proxy } from './proxy';
 
 const ORIGINAL_BASE_DOMAIN = process.env.PLATFORM_BASE_DOMAIN;
 
@@ -39,6 +40,20 @@ describe('platform host routing', () => {
     expect(firstPolicy).toMatch(/script-src 'self' 'nonce-[^']+'/);
     expect(firstPolicy).not.toContain("script-src 'self' 'unsafe-inline'");
     expect(secondPolicy).not.toBe(firstPolicy);
+  });
+
+  it('preserves the workspace evidence sandbox through the proxy', async () => {
+    for (const route of [
+      '/api/platform/workspace-requests/lead?document=1',
+      '/api/platform/workspace-%72equests/lead',
+    ]) {
+      const response = await proxy(adminRequest(route));
+      const policy = response.headers.get('content-security-policy');
+      expect(policy).toMatch(/script-src 'self' 'nonce-[^']+'/);
+      expect(policy).toMatch(/; sandbox$/);
+    }
+    const unrelated = await proxy(adminRequest('/api/platform/session'));
+    expect(unrelated.headers.get('content-security-policy')).not.toContain('sandbox');
   });
 
   it('never redirects framework assets away from their asset URL', async () => {
@@ -117,6 +132,27 @@ describe('platform host routing', () => {
     expect(meetingsWorkspace.headers.get('location')).toBe(
       'http://acme.localhost:3000/login?callbackUrl=%2Fmeetings'
     );
+  });
+});
+
+describe('DEV-961 the request method for the approval-authenticator gate', () => {
+  it('forwards the real method on every request, overwriting any value the client sent', async () => {
+    for (const method of ['GET', 'POST', 'PUT']) {
+      const response = await proxy(
+        new Request('http://acme.localhost:3000/pharmacy/inventory', {
+          method,
+          headers: {
+            host: 'acme.localhost:3000',
+            cookie: 'authjs.session-token=opaque-session-token',
+            // A client claiming a page render while it posts a form.
+            'x-devfathom-request-method': 'GET',
+            ...(method === 'GET' ? {} : { 'content-type': 'multipart/form-data; boundary=x' }),
+          },
+          ...(method === 'GET' ? {} : { body: '--x--' }),
+        })
+      );
+      expect(response.headers.get('x-middleware-request-x-devfathom-request-method')).toBe(method);
+    }
   });
 });
 
@@ -225,4 +261,30 @@ it('preserves query parameters in the signed-out login callback', async () => {
   const target = new URL(response.headers.get('location')!);
   expect(target.pathname).toBe('/login');
   expect(target.searchParams.get('callbackUrl')).toBe('/pharmacy/counter?lane=1&filter=a%2Bb');
+});
+
+it('lets only the exact supplier document upload route use the bounded multipart reader', () => {
+  const matches = (url: string) => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
+  expect(matches('/api/pharmacy/supplier-documents/upload')).toBe(false);
+  expect(matches('/api/pharmacy/supplier-documents/upload/other')).toBe(true);
+  expect(matches('/api/pharmacy/supplier-documents/upload-other')).toBe(true);
+});
+
+it('streams exact tRPC and portal upload routes without exempting their siblings', () => {
+  const matches = (url: string) => unstable_doesMiddlewareMatch({ config, nextConfig: {}, url });
+  for (const route of [
+    '/api/trpc/passwordReset.request',
+    '/api/trpc/trelloImport.importBoard,write?batch=1',
+    '/api/pharmacy/portal/prescription-upload',
+  ]) {
+    expect(matches(route), route).toBe(false);
+  }
+  for (const route of [
+    '/api/trpc-other/passwordReset.request',
+    '/api/trpc/passwordReset.request/nested',
+    '/api/pharmacy/portal/request',
+    '/api/pharmacy/portal/prescription-upload-other',
+  ]) {
+    expect(matches(route), route).toBe(true);
+  }
 });

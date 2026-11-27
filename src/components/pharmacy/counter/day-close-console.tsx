@@ -16,6 +16,8 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { CashCloseCheckPanel } from './cash-close-check-panel';
 import { ShiftHandoverPanel } from './shift-handover-panel';
+import { CashShiftReportView, shiftVarianceLabel } from './cash-shift-report-view';
+import { tenderTypeLabel } from '@/lib/pharmacy/finance-labels';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -375,18 +377,31 @@ function DayCloseForm({
   );
   const expected = report?.cashExpectedMinor ?? data.totals.cashExpectedMinor;
   const open = data.drawers.filter((d) => d.status === 'OPEN');
-  const valid = open.every((d) => cashMinor(counts[d.id] ?? '') !== null);
+  // DEV-958B: a drawer that runs cash shifts is counted shift by shift; the day closes it on its
+  // last shift's count, so it takes no count here. Every shift must be closed first.
+  const shiftCounts: Record<string, string> = Object.fromEntries(
+    data.drawers.flatMap((d) =>
+      'cashShifts' in d && typeof d.lastShiftCountMinor === 'number'
+        ? [[d.id, formatMinor(d.lastShiftCountMinor)]]
+        : []
+    )
+  );
+  const countsFor: Record<string, string> = { ...counts, ...shiftCounts };
+  const openShifts = (data.shifts ?? []).filter((shift) => shift.status === 'OPEN');
+  const valid =
+    openShifts.length === 0 && open.every((d) => cashMinor(countsFor[d.id] ?? '') !== null);
   const counted =
     report?.cashCountedMinor ??
     data.drawers.reduce(
       (sum, d) =>
-        sum + (d.status === 'OPEN' ? (cashMinor(counts[d.id] ?? '') ?? 0) : (d.countedMinor ?? 0)),
+        sum +
+        (d.status === 'OPEN' ? (cashMinor(countsFor[d.id] ?? '') ?? 0) : (d.countedMinor ?? 0)),
       0
     );
   const variance = counted - expected;
   const hasVariance = data.drawers.some(
     (d) =>
-      (d.status === 'OPEN' ? cashMinor(counts[d.id] ?? '') : d.countedMinor) !== d.expectedMinor
+      (d.status === 'OPEN' ? cashMinor(countsFor[d.id] ?? '') : d.countedMinor) !== d.expectedMinor
   );
   const busy = close.isPending || reopen.isPending || preview.isFetching;
   // The counted total runs live from whatever has been entered so far, so a
@@ -395,7 +410,7 @@ function DayCloseForm({
   // cash would read as a shortfall that is not there.
   const uncounted = data.drawers
     .map((d, i) => ({ d, n: i + 1 }))
-    .filter(({ d }) => d.status === 'OPEN' && cashMinor(counts[d.id] ?? '') === null)
+    .filter(({ d }) => d.status === 'OPEN' && cashMinor(countsFor[d.id] ?? '') === null)
     .map(({ n }) => n);
   const anyCounted =
     data.drawers.some((d) => d.status !== 'OPEN') || uncounted.length < open.length;
@@ -403,7 +418,17 @@ function DayCloseForm({
   const blockers = report
     ? []
     : [
-        uncounted.length
+        openShifts.length
+          ? `Close ${openShifts.length === 1 ? 'the open shift' : `the ${openShifts.length} open shifts`} first (${openShifts
+              .map(
+                (shift) =>
+                  `shift ${shift.sequence}, ${shift.cashier.name ?? 'a former team member'}`
+              )
+              .join(
+                '; '
+              )}). A cashier closes their own shift on the counter; a manager or owner can close anyone's there.`
+          : '',
+        uncounted.length && !openShifts.length
           ? `Enter the counted cash for drawer ${uncounted.join(', ')}.`
           : hasVariance && !note.trim()
             ? 'Add a variance note: a drawer count differs from expected cash.'
@@ -609,7 +634,7 @@ function DayCloseForm({
                 sourceHash: data.totals.sourceHash,
                 counts: open.map((d) => ({
                   drawerSessionId: d.id,
-                  countedCashMinor: cashMinor(counts[d.id] ?? '')!,
+                  countedCashMinor: cashMinor(countsFor[d.id] ?? '')!,
                 })),
                 varianceNote: note,
               });
@@ -670,7 +695,16 @@ function DayCloseForm({
                     </ul>
                   </div>
                 ) : null}
-                {d.status === 'OPEN' ? (
+                {'cashShifts' in d ? (
+                  <p className="text-sm">
+                    Runs cash shifts ·{' '}
+                    {typeof d.lastShiftCountMinor === 'number' && d.status === 'OPEN'
+                      ? `closes on its last shift's count: ${currency} ${formatMinor(d.lastShiftCountMinor)}`
+                      : d.status === 'OPEN'
+                        ? 'its shift is still open'
+                        : `counted: ${currency} ${formatMinor(d.countedMinor ?? 0)}`}
+                  </p>
+                ) : d.status === 'OPEN' ? (
                   <label className="grid gap-2">
                     Counted cash for drawer {i + 1} ({currency})
                     <Input
@@ -778,6 +812,81 @@ function DayCloseForm({
           </form>
         )}
       </SectionCard>
+      {/* DEV-958B: shift close, then day close. The day's shifts, and what they add up to. */}
+      {data.shifts?.length && data.shiftTotals ? (
+        <SectionCard title="Shifts on this day" titleLevel={2}>
+          <div className="space-y-4">
+            <p className="text-sm text-text-body">
+              {data.shiftTotals.openShifts
+                ? `${data.shiftTotals.openShifts} of ${data.shifts.length} shifts still open. The day closes once every shift is closed.`
+                : `All ${data.shifts.length} shifts closed. The day's payments and cash below add up from them.`}
+            </p>
+            <dl className="grid gap-x-6 text-sm sm:grid-cols-2" aria-label="Shift totals">
+              {data.shiftTotals.tenders.map((row) => (
+                <div
+                  key={row.type}
+                  className="flex justify-between gap-3 border-t border-border-subtle py-1.5"
+                >
+                  <dt className="text-text-body">{tenderTypeLabel(row.type)} taken</dt>
+                  <dd className="font-mono tabular-nums text-text-strong">
+                    {currency} {formatMinor(row.amountMinor)}
+                  </dd>
+                </div>
+              ))}
+              {data.shiftTotals.refunds.map((row) => (
+                <div
+                  key={`refund-${row.type}`}
+                  className="flex justify-between gap-3 border-t border-border-subtle py-1.5"
+                >
+                  <dt className="text-text-body">{tenderTypeLabel(row.type)} refunded</dt>
+                  <dd className="font-mono tabular-nums text-text-strong">
+                    {currency} {formatMinor(row.amountMinor)}
+                  </dd>
+                </div>
+              ))}
+              <div className="flex justify-between gap-3 border-t border-border-subtle py-1.5">
+                <dt className="text-text-body">
+                  Lines taken off bills ({data.shiftTotals.lineVoids.count})
+                </dt>
+                <dd className="font-mono tabular-nums text-text-strong">
+                  {currency} {formatMinor(data.shiftTotals.lineVoids.valueMinor)}
+                </dd>
+              </div>
+              {data.shiftTotals.openShifts === 0 ? (
+                <div className="flex justify-between gap-3 border-t border-border-subtle py-1.5">
+                  <dt className="font-semibold text-text-strong">Cash over or short, all shifts</dt>
+                  <dd className="font-mono tabular-nums text-text-strong">
+                    {shiftVarianceLabel(data.shiftTotals.cashVarianceMinor, currency)}
+                  </dd>
+                </div>
+              ) : null}
+            </dl>
+            {data.lateArrivals && data.lateArrivals.salesCount > 0 ? (
+              <p
+                role="note"
+                className="rounded-[var(--radius-xs)] border border-warning/30 bg-warning/10 p-3 text-sm text-text-body"
+              >
+                {data.lateArrivals.salesCount}{' '}
+                {data.lateArrivals.salesCount === 1 ? 'sale was' : 'sales were'} taken offline and
+                reached the server after {data.lateArrivals.salesCount === 1 ? 'its' : 'their'}{' '}
+                shift had closed ({currency} {formatMinor(data.lateArrivals.cashNetMinor)} in cash).
+                They count on this day, not in a closed shift, which never changes.
+              </p>
+            ) : null}
+            <div className="grid gap-3 lg:grid-cols-2">
+              {data.shifts.map((shift) => (
+                <CashShiftReportView
+                  key={shift.shiftId}
+                  report={shift}
+                  status={shift.status}
+                  currency={currency}
+                  timeZone={data.timezone}
+                />
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+      ) : null}
       {ownerView && (report || data.drawers.some((drawer) => drawer.status === 'CLOSED')) && (
         <ShiftHandoverPanel
           branchId={branchId}

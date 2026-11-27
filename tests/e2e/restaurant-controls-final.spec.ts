@@ -1,3 +1,4 @@
+import { chooseSelectField, selectFieldNative } from './fixtures/select-field';
 import { expect, test, type Page } from '@playwright/test';
 import { RESTAURANT_E2E_BRANCH_COUNT } from '../../scripts/restaurant-e2e-database';
 
@@ -30,9 +31,9 @@ test('Finance is readable by the owner and denied to an authenticated assigned-b
     .locator('[data-slot="section-card"]', {
       has: owner.getByRole('heading', { name: 'Filters' }),
     })
-    .getByLabel('Branch')
+    .getByRole('combobox', { name: 'Branch', exact: true })
     .filter({ visible: true });
-  await expect(ownerBranchFilter).toContainText(/Gulberg Café|DHA Café/);
+  await expect(await selectFieldNative(ownerBranchFilter)).toContainText(/Gulberg Café|DHA Café/);
   await assertNoRawDatabaseIds(owner);
 
   const operatorContext = await browser.newContext();
@@ -233,7 +234,10 @@ test('dashboard date and visibility preferences persist and reports render the s
     const reportFilters = page.locator('[data-slot="section-card"]', {
       has: page.getByRole('heading', { name: 'Report filters', exact: true, level: 2 }),
     });
-    await reportFilters.getByLabel('Branch').selectOption(fixture.branchId);
+    await chooseSelectField(
+      reportFilters.getByRole('combobox', { name: 'Branch', exact: true }),
+      fixture.branchId
+    );
     await reportFilters.getByLabel('From date').fill('2026-08-27');
     await reportFilters.getByLabel('To date').fill('2026-08-27');
     await reportFilters.getByRole('button', { name: 'Apply filters' }).click();
@@ -468,8 +472,11 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
     await kds.getByRole('button', { name: 'Enroll device' }).click();
     const enrol = kds.getByRole('dialog', { name: 'Enroll this browser' });
     await enrol.getByLabel('Device name').fill('WHA-1576 Day-close KDS');
-    await expect(enrol.getByLabel('Branch')).toBeEnabled();
-    await enrol.getByLabel('Branch').selectOption(DAY_CLOSE_BRANCH.branchId);
+    await expect(enrol.getByRole('combobox', { name: 'Branch', exact: true })).toBeEnabled();
+    await chooseSelectField(
+      enrol.getByRole('combobox', { name: 'Branch', exact: true }),
+      DAY_CLOSE_BRANCH.branchId
+    );
     await enrol.getByLabel('Device kind').selectOption('KDS');
     await expect(enrol.getByLabel('KDS station')).toBeEnabled();
     await enrol.getByLabel('KDS station').selectOption({ index: 1 });
@@ -653,10 +660,10 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
     const filters = finance.locator('[data-slot="section-card"]', {
       has: finance.getByRole('heading', { name: 'Filters' }),
     });
-    await filters
-      .getByLabel('Branch')
-      .filter({ visible: true })
-      .selectOption(DAY_CLOSE_BRANCH.branchId);
+    await chooseSelectField(
+      filters.getByRole('combobox', { name: 'Branch', exact: true }),
+      DAY_CLOSE_BRANCH.branchId
+    );
     await filters.getByLabel('Business date').fill(businessDate);
     const closeRow = finance
       .getByRole('region', { name: `Daily close chain table for ${businessDate}` })

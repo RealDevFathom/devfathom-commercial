@@ -1,0 +1,4 @@
+BEGIN;
+SET LOCAL lock_timeout = '5s';
+ALTER TYPE "PharmacySaleEventKind" ADD VALUE IF NOT EXISTS 'LINE_DISCOUNT';
+COMMIT;

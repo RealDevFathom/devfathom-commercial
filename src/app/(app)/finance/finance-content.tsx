@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { memo, useCallback, useMemo, useState } from 'react';
 import dynamic from 'next/dynamic';
 import {
@@ -21,6 +23,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { StatusPill } from '@/components/ui/status-pill';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/ui/page-header';
 import { Stat } from '@/components/ui/stat';
@@ -28,7 +31,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { financeCsvCell } from './finance-csv';
-import { format } from 'date-fns';
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { workspaceDateRange, workspaceToday, formatWorkspaceDate } from '@/lib/timezone';
 import { moneyListLabel, baseEquivalentLabel, moneyLabel } from '@/lib/finance/currency';
 import { InvoicesTab } from './invoices-tab';
 import { InvoiceManagePanel } from '@/components/finance/invoice-manage-panel';
@@ -119,6 +123,21 @@ export function FinanceContent() {
         )
       )}
 
+      {!!summary.data?.unsupported.length && (
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            <StatusPill status="Interval not supported" tone="warning" />
+            <p className="text-sm text-text-body">Excluded from expense projections</p>
+            <ul className="list-disc pl-5 text-sm text-foreground">
+              {summary.data.unsupported.map((charge) => (
+                <li key={charge.id}>
+                  {charge.name} ({charge.interval})
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       {/* Tabs */}
       <Tabs defaultValue="transactions" className="space-y-5">
         <TabsList>
@@ -208,6 +227,7 @@ function TransactionsTab({
 }) {
   const utils = trpc.useUtils();
   const [showAdd, setShowAdd] = useState(false);
+  const timeZone = useWorkspaceTimeZone();
   const [filter, setFilter] = useState<'ALL' | 'INCOME' | 'EXPENSE'>('ALL');
 
   const invalidateFinance = useCallback(() => {
@@ -233,7 +253,7 @@ function TransactionsTab({
       'Client',
     ];
     const rows = filtered.map((t) => [
-      format(new Date(t.date), 'yyyy-MM-dd'),
+      workspaceToday(timeZone, new Date(t.date)),
       t.type,
       Number(t.amount),
       t.currency,
@@ -246,10 +266,10 @@ function TransactionsTab({
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
     const a = document.createElement('a');
     a.href = url;
-    a.download = `transactions-${format(new Date(), 'yyyy-MM-dd')}.csv`;
+    a.download = `transactions-${workspaceToday(timeZone)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [filtered]);
+  }, [filtered, timeZone]);
 
   return (
     <div className="space-y-4">
@@ -329,6 +349,7 @@ const TransactionRow = memo(function TransactionRow({
   onInvalidate: () => void;
 }) {
   const [isEditing, setIsEditing] = useState(false);
+  const timeZone = useWorkspaceTimeZone();
   const [eDesc, setEDesc] = useState('');
   const [eAmount, setEAmount] = useState('');
   const [eDate, setEDate] = useState('');
@@ -377,7 +398,7 @@ const TransactionRow = memo(function TransactionRow({
         </div>
         {t.type === 'EXPENSE' && (
           <div className="mt-2">
-            <select
+            <StudioSelect
               value={eCategory}
               onChange={(e) => setECategory(e.target.value)}
               className="rounded-lg border border-border bg-background px-2 py-1 text-xs text-foreground focus:border-primary focus:outline-none"
@@ -388,7 +409,7 @@ const TransactionRow = memo(function TransactionRow({
                   {v}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
         )}
         <div className="flex justify-end gap-2 mt-2">
@@ -405,7 +426,10 @@ const TransactionRow = memo(function TransactionRow({
                   id: t.id,
                   description: eDesc.trim(),
                   amount: parseFloat(eAmount),
-                  date: new Date(eDate),
+                  date:
+                    eDate === workspaceToday(timeZone, new Date(t.date))
+                      ? new Date(t.date)
+                      : workspaceDateRange(eDate, eDate, timeZone).from,
                   category: t.type === 'EXPENSE' && eCategory ? (eCategory as 'SALARIES') : null,
                 });
               }
@@ -444,7 +468,7 @@ const TransactionRow = memo(function TransactionRow({
         </p>
       </div>
       <span className="text-xs text-muted-foreground shrink-0 hidden sm:block">
-        {format(new Date(t.date), 'MMM d, yyyy')}
+        {formatWorkspaceDate(t.date, timeZone)}
       </span>
       <span
         className={cn(
@@ -460,7 +484,7 @@ const TransactionRow = memo(function TransactionRow({
             onClick={() => {
               setEDesc(t.description);
               setEAmount(String(Number(t.amount)));
-              setEDate(format(new Date(t.date), 'yyyy-MM-dd'));
+              setEDate(workspaceToday(timeZone, new Date(t.date)));
               setECategory(t.category || '');
               setIsEditing(true);
             }}
@@ -489,6 +513,7 @@ const MAX_MONEY = 9_999_999_999.99;
    Add Transaction Form
    ============================================ */
 function AddTransactionForm({ onClose }: { onClose: () => void }) {
+  const timeZone = useWorkspaceTimeZone();
   const utils = trpc.useUtils();
   const { data: projects } = trpc.projects.getAll.useQuery();
   const { data: clients } = trpc.clients.getAll.useQuery();
@@ -507,7 +532,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
   const [category, setCategory] = useState('');
   const [projectId, setProjectId] = useState('');
   const [clientId, setClientId] = useState('');
-  const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const [date, setDate] = useState(workspaceToday(timeZone));
 
   // Mirrors the Decimal(12,2) ceiling enforced server-side so we flag oversized
   // amounts inline instead of letting the request fail at the DB layer.
@@ -523,7 +548,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
       category: type === 'EXPENSE' && category ? (category as 'SALARIES') : undefined,
       projectId: projectId || undefined,
       clientId: clientId || undefined,
-      date: new Date(date),
+      date: workspaceDateRange(date, date, timeZone).from,
     });
   };
 
@@ -604,7 +629,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
           {type === 'EXPENSE' && (
             <div>
               <label className="block text-xs font-medium text-foreground mb-1">Category</label>
-              <select
+              <StudioSelect
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -615,12 +640,12 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
                     {v}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </div>
           )}
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Project</label>
-            <select
+            <StudioSelect
               value={projectId}
               onChange={(e) => setProjectId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -631,11 +656,11 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
                   {p.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
           <div>
             <label className="block text-xs font-medium text-foreground mb-1">Client</label>
-            <select
+            <StudioSelect
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -646,7 +671,7 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
                   {c.name}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
           </div>
         </div>
 
@@ -687,17 +712,22 @@ function AddTransactionForm({ onClose }: { onClose: () => void }) {
    Recurring Expenses Tab
    ============================================ */
 function RecurringTab() {
+  const timeZone = useWorkspaceTimeZone();
   const utils = trpc.useUtils();
   // Query lives here so it only fires when the Recurring tab mounts.
   const { data, isLoading } = trpc.finance.getRecurringExpenses.useQuery();
   const [showAdd, setShowAdd] = useState(false);
 
   const deleteRecurring = trpc.finance.deleteRecurringExpense.useMutation({
-    onSuccess: () => utils.finance.getRecurringExpenses.invalidate(),
+    onSuccess: () => {
+      utils.finance.getRecurringExpenses.invalidate();
+      utils.finance.getFinancialSummary.invalidate();
+    },
   });
   const createRecurring = trpc.finance.createRecurringExpense.useMutation({
     onSuccess: () => {
       utils.finance.getRecurringExpenses.invalidate();
+      utils.finance.getFinancialSummary.invalidate();
       setShowAdd(false);
     },
   });
@@ -712,7 +742,9 @@ function RecurringTab() {
       setPostResult(
         r.posted > 0
           ? `Posted ${r.posted} transaction${r.posted === 1 ? '' : 's'} from due cycles.`
-          : 'Nothing due — all subscriptions are up to date.'
+          : r.unsupported.length
+            ? null
+            : 'Nothing due — all subscriptions are up to date.'
       );
     },
   });
@@ -732,7 +764,7 @@ function RecurringTab() {
       amount: parseFloat(amount),
       category: category as 'SUBSCRIPTIONS',
       interval,
-      nextDueDate: new Date(nextDueDate),
+      nextDueDate: workspaceDateRange(nextDueDate, nextDueDate, timeZone).from,
       vendorName: vendorName.trim() || undefined,
     });
   };
@@ -760,11 +792,30 @@ function RecurringTab() {
       </div>
 
       {postResult && (
-        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
+        <p
+          role="status"
+          className="rounded-lg border border-border-subtle bg-card px-3 py-2 text-xs text-success"
+        >
           {postResult}
         </p>
       )}
 
+      {!!postDue.data?.unsupported.length && (
+        <Card role="status">
+          <CardContent className="space-y-2 p-4 text-sm text-foreground">
+            <p>
+              {postDue.data.unsupported.length} charge
+              {postDue.data.unsupported.length === 1 ? '' : 's'} not posted: their billing interval
+              is not monthly, quarterly or yearly. Delete and add them again with one of those.
+            </p>
+            <ul className="list-disc pl-5">
+              {postDue.data.unsupported.map((charge) => (
+                <li key={charge.id}>{charge.name}</li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       {/* IMP-FIN-03: budget vs. actuals rollup for budgeted projects. */}
       {budgetQ.data && budgetQ.data.length > 0 && (
         <Card className="border-border/60">
@@ -846,7 +897,7 @@ function RecurringTab() {
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Category</label>
-                <select
+                <StudioSelect
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -856,11 +907,11 @@ function RecurringTab() {
                       {v}
                     </option>
                   ))}
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Interval</label>
-                <select
+                <StudioSelect
                   value={interval}
                   onChange={(e) => setInterval(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-2 py-2 text-sm text-foreground focus:border-primary focus:outline-none"
@@ -868,7 +919,7 @@ function RecurringTab() {
                   <option value="monthly">Monthly</option>
                   <option value="quarterly">Quarterly</option>
                   <option value="yearly">Yearly</option>
-                </select>
+                </StudioSelect>
               </div>
               <div>
                 <label className="block text-xs font-medium text-foreground mb-1">Next Due *</label>
@@ -929,7 +980,12 @@ function RecurringTab() {
                       <p className="text-sm font-medium text-foreground">{exp.name}</p>
                       <p className="text-xs text-muted-foreground">
                         {exp.vendorName ? `${exp.vendorName} · ` : ''}
-                        {exp.interval} &middot; {categoryLabels[exp.category] || exp.category}
+                        {exp.intervalLabel === 'Interval not supported' ? (
+                          <StatusPill status={exp.intervalLabel} tone="warning" />
+                        ) : (
+                          exp.intervalLabel
+                        )}{' '}
+                        &middot; {categoryLabels[exp.category] || exp.category}
                       </p>
                     </div>
                   </div>
@@ -939,7 +995,7 @@ function RecurringTab() {
                         ${Number(exp.amount).toLocaleString()}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        Next: {format(new Date(exp.nextDueDate), 'MMM d')}
+                        Next: {formatWorkspaceDate(exp.nextDueDate, timeZone)}
                       </p>
                     </div>
                     <button
@@ -1215,6 +1271,7 @@ function PaymentStat({
 }
 
 function PaymentLine({ p, onInvalidate }: { p: PaymentItem; onInvalidate: () => void }) {
+  const timeZone = useWorkspaceTimeZone();
   const deletePayment = trpc.finance.deletePayment.useMutation({ onSuccess: onInvalidate });
   return (
     <div className="group flex items-center gap-3 rounded-lg border border-border/60 bg-background px-3 py-2">
@@ -1231,7 +1288,7 @@ function PaymentLine({ p, onInvalidate }: { p: PaymentItem; onInvalidate: () => 
         {p.note && <p className="truncate text-xs text-muted-foreground">{p.note}</p>}
       </div>
       <span className="shrink-0 text-xs text-muted-foreground">
-        {format(new Date(p.paidAt), 'MMM d, yyyy')}
+        {formatWorkspaceDate(p.paidAt, timeZone)}
       </span>
       <button
         onClick={() => deletePayment.mutate({ id: p.id })}
@@ -1263,7 +1320,8 @@ function AddPaymentForm({
   const [amount, setAmount] = useState('');
   const [method, setMethod] = useState('');
   const [note, setNote] = useState('');
-  const [paidAt, setPaidAt] = useState(format(new Date(), 'yyyy-MM-dd'));
+  const timeZone = useWorkspaceTimeZone();
+  const [paidAt, setPaidAt] = useState(() => workspaceToday(timeZone));
 
   const addPayment = trpc.finance.addPayment.useMutation({
     onSuccess: () => {
@@ -1286,7 +1344,7 @@ function AddPaymentForm({
       amount: amountNum,
       method: method.trim() || undefined,
       note: note.trim() || undefined,
-      paidAt: paidAt ? new Date(paidAt) : undefined,
+      paidAt: paidAt ? workspaceDateRange(paidAt, paidAt, timeZone).from : undefined,
     });
   };
 

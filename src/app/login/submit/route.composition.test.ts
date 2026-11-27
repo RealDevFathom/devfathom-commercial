@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { oversizedRequest } from '../../../../tests/fixtures/bounded-request';
 const m = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), shared: vi.fn(), discard: vi.fn() }));
 vi.mock('@/lib/auth', () => ({ handlers: { GET: m.get, POST: m.post } }));
 vi.mock('@/app/api/login/route', () => ({ POST: m.shared }));
@@ -54,6 +55,41 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe('native login composition', () => {
+  it('cancels an oversized form before invoking either sign-in path', async () => {
+    const limit = 32 * 1024;
+    const input = oversizedRequest(limit, {
+      url: 'https://tenant.example.test/login/submit',
+      headers: request().headers,
+    });
+
+    const response = await POST(input.request);
+    expect(response.status).toBe(413);
+    await expect(response.text()).resolves.toBe('Request body is too large.');
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 16_384);
+    expect(m.get).not.toHaveBeenCalled();
+    expect(m.post).not.toHaveBeenCalled();
+    expect(m.shared).not.toHaveBeenCalled();
+  });
+
+  it('forwards credentials from a valid multipart form', async () => {
+    const headers = new Headers(request().headers);
+    headers.delete('content-type');
+    const body = new FormData();
+    body.set('email', 'reader@example.test');
+    body.set('password', 'fake-password');
+    body.set('callbackUrl', '/dashboard');
+
+    const response = await POST(
+      new Request('https://tenant.example.test/login/submit', { method: 'POST', headers, body })
+    );
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('/dashboard');
+    const forwarded = await (m.post.mock.calls[0][0] as Request).formData();
+    expect(forwarded.get('email')).toBe('reader@example.test');
+    expect(forwarded.get('password')).toBe('fake-password');
+  });
+
   it.each<Record<string, string>>([
     { origin: 'https://foreign.test' },
     { origin: '' },

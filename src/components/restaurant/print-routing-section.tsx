@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { Loader2, Printer } from 'lucide-react';
@@ -475,7 +477,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
           <>
             <label className="block text-xs font-medium text-foreground">
               Branch
-              <select
+              <StudioSelect
                 value={branchId}
                 onChange={(event) => changeBranch(event.target.value)}
                 disabled={!!action}
@@ -486,7 +488,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
                     {branch.name}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </label>
             {record?.error && (
               <p role="alert" className="text-sm text-destructive">
@@ -564,7 +566,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
                   <div className="grid gap-3 sm:grid-cols-2">
                     <label className="text-xs font-medium text-foreground">
                       Station
-                      <select
+                      <StudioSelect
                         aria-label={`${label} station`}
                         value={route.stationId ?? ''}
                         onChange={(event) =>
@@ -578,11 +580,11 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
                             {station.name}
                           </option>
                         ))}
-                      </select>
+                      </StudioSelect>
                     </label>
                     <label className="text-xs font-medium text-foreground">
                       Destination
-                      <select
+                      <StudioSelect
                         aria-label={`${label} destination`}
                         value={route.registeredPrinterId ?? ''}
                         onChange={(event) => {
@@ -611,7 +613,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
                               {printer.name} · {printer.bridge.name} · {printer.address}
                             </option>
                           ))}
-                      </select>
+                      </StudioSelect>
                     </label>
                     <label className="text-xs font-medium text-foreground">
                       Printer ID

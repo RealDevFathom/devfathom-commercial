@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+import { formatWorkspaceDate } from '@/lib/timezone';
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -21,6 +23,7 @@ type PortalRequest = {
 export type PortalHomeData = {
   customer: { displayName: string };
   branchName: string;
+  timeZone?: string | null;
   currency: string;
   loyaltyPoints: number;
   receipts: Array<{
@@ -58,11 +61,8 @@ function money(minor: number, currency: string) {
   return new Intl.NumberFormat('en-PK', { style: 'currency', currency }).format(minor / 100);
 }
 
-function day(value: string | null) {
-  if (!value) return '';
-  return new Intl.DateTimeFormat('en-PK', { dateStyle: 'medium', timeZone: 'Asia/Karachi' }).format(
-    new Date(value)
-  );
+function day(value: string | null, timeZone?: string | null) {
+  return value ? formatWorkspaceDate(value, timeZone) : '';
 }
 
 function majorToMinor(value: string): number | null {
@@ -71,13 +71,19 @@ function majorToMinor(value: string): number | null {
   return Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
 }
 
-function readFile(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(',')[1] ?? '');
-    reader.onerror = () => reject(new Error('The photo could not be read.'));
-    reader.readAsDataURL(file);
+async function uploadPrescription(photo: File, note: string) {
+  const form = new FormData();
+  form.set('file', photo);
+  if (note) form.set('note', note);
+  const response = await fetch('/api/pharmacy/portal/prescription-upload', {
+    method: 'POST',
+    body: form,
   });
+  if (response.headers.get('content-type')?.startsWith('text/plain') && !response.ok)
+    throw new Error(await response.text());
+  const result = (await response.json().catch(() => ({}))) as { ok?: boolean; message?: string };
+  if (!response.ok || !result.ok)
+    throw new Error(result.message ?? 'This request could not be completed.');
 }
 
 async function post(action: 'request' | 'cancel' | 'sign-out', body: unknown) {
@@ -175,12 +181,7 @@ export function PortalHome() {
       if (!['image/png', 'image/jpeg', 'image/webp'].includes(photo.type))
         throw new Error('Choose a PNG, JPEG or WebP photo.');
       if (photo.size > 5 * 1024 * 1024) throw new Error('The photo must be 5 MB or smaller.');
-      await post('request', {
-        kind: 'RX_ORDER',
-        contentType: photo.type,
-        dataBase64: await readFile(photo),
-        ...(rxNote.trim() ? { note: rxNote.trim() } : {}),
-      });
+      await uploadPrescription(photo, rxNote.trim());
       setPhoto(null);
       setRxNote('');
     }, 'Prescription sent. A pharmacist will check it before your order is prepared.');
@@ -300,7 +301,9 @@ export function PortalHome() {
               <li key={receipt.saleId} className="flex flex-wrap items-center gap-3 py-3">
                 <div className="min-w-0 flex-1">
                   <p className="font-mono text-sm text-text-strong">{receipt.receiptNumber}</p>
-                  <p className="text-xs text-text-muted">{day(receipt.completedAt)}</p>
+                  <p className="text-xs text-text-muted">
+                    {day(receipt.completedAt, home.timeZone)}
+                  </p>
                 </div>
                 <span className="font-mono text-sm tabular-nums text-text-strong">
                   {money(receipt.totalMinor, home.currency)}
@@ -367,7 +370,7 @@ export function PortalHome() {
                     >
                       Account
                     </label>
-                    <select
+                    <StudioSelect
                       id="khata-account"
                       value={paymentAccount || home.khataAccounts[0]?.id}
                       onChange={(event) => setPaymentAccount(event.target.value)}
@@ -378,7 +381,7 @@ export function PortalHome() {
                           {account.displayName}
                         </option>
                       ))}
-                    </select>
+                    </StudioSelect>
                   </div>
                 ) : null}
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -443,7 +446,7 @@ export function PortalHome() {
                       ? ` · ${money(request.amountMinor, home.currency)}`
                       : ''}
                   </p>
-                  <p className="text-xs text-text-muted">{day(request.createdAt)}</p>
+                  <p className="text-xs text-text-muted">{day(request.createdAt, home.timeZone)}</p>
                   {request.decisionNote ? (
                     <p className="text-xs text-text-muted">{request.decisionNote}</p>
                   ) : null}

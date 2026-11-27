@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
@@ -115,7 +117,9 @@ export function WorkspaceNotificationsSection() {
   return vertical === 'PHARMACY' ? null : <NotificationsSection />;
 }
 
-export function SettingsContent() {
+export function SettingsContent({
+  providerRefundSettings,
+}: { providerRefundSettings?: React.ReactNode } = {}) {
   const { data: session } = useSession();
   const isAdmin = session?.user?.role === 'ADMIN';
 
@@ -128,6 +132,7 @@ export function SettingsContent() {
       />
 
       <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-2">
+        {providerRefundSettings}
         {/* Profile */}
         <ProfileSection />
 
@@ -1642,7 +1647,7 @@ export function ApiTokensSection() {
                 >
                   Token acts as
                 </label>
-                <select
+                <StudioSelect
                   id="api-token-user"
                   value={boundUserId}
                   onChange={(e) => setBoundUserId(e.target.value)}
@@ -1657,7 +1662,7 @@ export function ApiTokensSection() {
                         {u.role === 'ADMIN' ? ' (admin)' : ''}
                       </option>
                     ))}
-                </select>
+                </StudioSelect>
               </div>
             </div>
             <p className="text-[11px] text-muted-foreground -mt-1">

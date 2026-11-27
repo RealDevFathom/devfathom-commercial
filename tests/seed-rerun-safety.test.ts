@@ -19,6 +19,8 @@ import { describeSeedFailure, isUniqueConstraintViolation } from '../prisma/seed
 
 type FakeTx = {
   $executeRawUnsafe: ReturnType<typeof vi.fn>;
+  platformSession: { updateMany: ReturnType<typeof vi.fn> };
+  platformSupportSession: { updateManyAndReturn: ReturnType<typeof vi.fn> };
   platformUser: {
     findUnique: ReturnType<typeof vi.fn>;
     upsert: ReturnType<typeof vi.fn>;
@@ -30,8 +32,13 @@ type PlatformAdminClient = Parameters<typeof provisionPlatformAdmin>[0];
 function fakeClient(existing: { id: string } | null) {
   const tx: FakeTx = {
     $executeRawUnsafe: vi.fn(async () => 1),
+    platformSession: { updateMany: vi.fn() },
+    platformSupportSession: { updateManyAndReturn: vi.fn(async () => []) },
     platformUser: {
-      findUnique: vi.fn(async () => existing),
+      findUnique: vi.fn(
+        async () =>
+          existing && { ...existing, role: 'SUPER_ADMIN', passwordHash: 'disposable-fixture' }
+      ),
       upsert: vi.fn(async () => ({ id: 'pu_1' })),
     },
   };

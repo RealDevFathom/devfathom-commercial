@@ -4,6 +4,7 @@ import { POST as checkSharedCredentials } from '@/app/api/login/route';
 import { safeCallbackUrl } from '@/lib/auth/callback-url';
 import { discardLoginIntent, LOGIN_INTENT_COOKIE } from '@/lib/auth/login-intent';
 import { publicRequestOrigin } from '@/lib/http-origin';
+import { readBoundedBody } from '@/lib/http/read-bounded-body';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
 import { LOGIN_ERROR_PARAM, type LoginErrorKey } from '../login-errors';
@@ -227,9 +228,13 @@ export async function POST(request: Request) {
     return new Response('Not allowed.', { status: 403 });
   }
 
+  const raw = await readBoundedBody(request, 32 * 1024).catch(() => undefined);
+  if (raw === null) return new Response('Request body is too large.', { status: 413 });
+  if (raw === undefined) return backToLogin('invalid', safeCallbackUrl(null));
+
   let form: FormData;
   try {
-    form = await request.formData();
+    form = await new Response(raw, { headers: request.headers }).formData();
   } catch {
     return backToLogin('invalid', safeCallbackUrl(null));
   }

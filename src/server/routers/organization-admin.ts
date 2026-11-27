@@ -13,14 +13,31 @@ import { readDeepStrategySettings } from '@/lib/ai/deep-strategy-settings';
 import { readAIProviderReadiness } from '@/lib/ai/provider';
 import { passwordSchema } from '@/lib/password-policy';
 import { adminPasswordResetData, passwordResetDenial } from '@/lib/auth/admin-password-reset';
-import { organizationRolePermissionsSchema } from '@/lib/organization-role';
+import { organizationRolePermissionsSchema, replaceRolePermissions } from '@/lib/organization-role';
 import { encryptSecret } from '@/lib/secret-crypto';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
+import { guardMemberEdit, isPharmacyContext, verifyMemberEditPin } from '@/server/pharmacy-access';
+import { changesPharmacyFinanceRules } from '@/lib/abac/pharmacy-sub-roles';
+import {
+  guardPharmacyAccessChanges,
+  isAccessOwner,
+  loadAccessParty,
+} from '@/lib/team/pharmacy-access-guard';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { readUploadRegistryReport } from '@/lib/uploads/registry-report';
+import { readPharmacyRoleAccess, setPharmacyRoleSubRole } from '@/lib/team/role-sub-role-edit';
 import { readPharmacyMemberAccess } from '@/lib/team/member-access';
+import {
+  applyPharmacyMemberRoleTemplate,
+  readPharmacyMemberTicking,
+  rethrowAccessChange,
+  setPharmacyMemberSubRole,
+} from '@/lib/team/member-sub-role-edit';
+
+import { organizationPharmacySettingsRouter } from './organization-pharmacy-settings';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -54,6 +71,23 @@ const SCIM_TOKEN_FIELDS = {
   revokedAt: true,
   createdAt: true,
 } as const;
+
+/** DEV-959A/B: sub-roles exist for pharmacies only until the other business types get theirs. */
+function assertPharmacySubRoles(ctx: { entitlements: { vertical?: string | null } }) {
+  if (ctx.entitlements.vertical !== 'PHARMACY') {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: 'Sub-roles are available for pharmacies only.',
+    });
+  }
+}
+
+function supportSession(ctx: {
+  support?: unknown;
+  session?: { user?: { isSupportSession?: boolean } } | null;
+}): boolean {
+  return Boolean(ctx.support || ctx.session?.user?.isSupportSession);
+}
 
 function occupiesSeat(status: string): boolean {
   return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
@@ -96,6 +130,7 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  pharmacySettings: organizationPharmacySettingsRouter,
   // Shares POST /api/assistant's availability check: the launcher is enabled only when
   // the company switch is on and the AI provider is configured.
   askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
@@ -191,18 +226,114 @@ export const organizationAdminRouter = router({
     });
   }),
 
+  roleAccess: adminProcedure
+    .input(z.strictObject({ roleId: z.string().trim().min(1).max(128) }))
+    .query(({ ctx, input }) => {
+      assertPharmacySubRoles(ctx);
+      return readPharmacyRoleAccess(ctx.db, {
+        ...input,
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        supportSession: supportSession(ctx),
+      });
+    }),
+
+  setRoleSubRole: adminProcedure
+    .meta(refuseSupportSession)
+    .input(
+      z.strictObject({
+        roleId: z.string().trim().min(1).max(128),
+        subRoleKey: z.string().trim().min(1).max(64),
+        ticked: z.boolean(),
+        pin: z.string().min(1).max(64).optional(),
+      })
+    )
+    .mutation(({ ctx, input }) => {
+      annotateAudit(ctx, {
+        skipInput: true,
+        targetType: 'OrganizationRole',
+        targetId: input.roleId,
+      });
+      assertPharmacySubRoles(ctx);
+      return setPharmacyRoleSubRole(ctx.db, {
+        ...input,
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        supportSession: supportSession(ctx),
+      });
+    }),
+
   // DEV-959A: read-only "What this person can do" for the team screen. Same
   // administrator gate as the member list it opens from; nothing is changed.
   memberAccess: adminProcedure
     .input(z.object({ userId: z.string().trim().min(1).max(128) }))
     .query(async ({ ctx, input }) => {
-      if (ctx.entitlements.vertical !== 'PHARMACY') {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Sub-roles are available for pharmacies only.',
-        });
-      }
-      return readPharmacyMemberAccess(ctx.db, organizationId(ctx), input.userId);
+      assertPharmacySubRoles(ctx);
+      const access = await readPharmacyMemberAccess(ctx.db, organizationId(ctx), input.userId);
+      // DEV-959B: what the viewer may change for this person; every write re-checks.
+      const ticking = await readPharmacyMemberTicking(ctx.db, {
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        targetId: input.userId,
+        supportSession: supportSession(ctx),
+      });
+      return { ...access, ticking };
+    }),
+
+  /**
+   * DEV-959B: tick or untick one sub-role for one pharmacy member. Stored as a personal
+   * exception on top of their role; see `member-sub-role-edit.ts` for every rule enforced.
+   */
+  setMemberSubRole: adminProcedure
+    .meta(refuseSupportSession)
+    .input(
+      z
+        .object({
+          userId: z.string().trim().min(1).max(128),
+          subRoleKey: z.string().trim().min(1).max(64),
+          ticked: z.boolean(),
+          pin: z.string().min(1).max(64).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      // The PIN never reaches the request audit row; the change writes its own.
+      annotateAudit(ctx, { skipInput: true, targetType: 'User', targetId: input.userId });
+      assertPharmacySubRoles(ctx);
+      return setPharmacyMemberSubRole(ctx.db, {
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        targetId: input.userId,
+        supportSession: supportSession(ctx),
+        subRoleKey: input.subRoleKey,
+        ticked: input.ticked,
+        pin: input.pin ?? null,
+      });
+    }),
+
+  /** DEV-959B: start a pharmacy member from a ready-made role, clearing their sub-role ticks. */
+  applyMemberRoleTemplate: adminProcedure
+    .meta(refuseSupportSession)
+    .input(
+      z
+        .object({
+          userId: z.string().trim().min(1).max(128),
+          roleKey: z.string().trim().min(1).max(64),
+          pin: z.string().min(1).max(64).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true, targetType: 'User', targetId: input.userId });
+      assertPharmacySubRoles(ctx);
+      return applyPharmacyMemberRoleTemplate(ctx.db, {
+        organizationId: organizationId(ctx),
+        actorId: ctx.session.user.id,
+        targetId: input.userId,
+        supportSession: supportSession(ctx),
+        roleKey: input.roleKey,
+        pin: input.pin ?? null,
+      });
     }),
 
   upsertDepartment: adminProcedure
@@ -442,6 +573,7 @@ export const organizationAdminRouter = router({
     }),
 
   updateEmail: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         provider: z.string().trim().min(2).max(80),
@@ -479,6 +611,7 @@ export const organizationAdminRouter = router({
     }),
 
   upsertRole: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string().optional(),
@@ -494,17 +627,61 @@ export const organizationAdminRouter = router({
         name: z.string().trim().min(2).max(150),
         description: z.string().trim().max(500).nullable(),
         permissions: organizationRolePermissionsSchema,
+        /** DEV-959B: the editor's PIN, when holders gain or lose a weighty sub-role (pharmacy). */
+        pin: z.string().min(1).max(64).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
-      const { id: roleId, permissions, ...values } = input;
+      const { id: roleId, permissions, pin, ...values } = input;
+      const pinVerified = await verifyMemberEditPin(ctx, id, pin, 'organizationAdmin.upsertRole');
       const role = await ctx.db.$transaction(async (tx) => {
+        // DEV-959B: in a pharmacy, everyone who holds the role passes the access rules.
+        if (isPharmacyContext(ctx) && roleId) {
+          // Listed only once the guard holds the organisation lock, so nobody can be moved
+          // into the role between listing its holders and saving it.
+          let holders: string[] = [];
+          try {
+            const { value } = await guardPharmacyAccessChanges(
+              tx as unknown as ScopedDb,
+              {
+                organizationId: id,
+                actor: {
+                  kind: 'member',
+                  id: ctx.session.user.id,
+                  supportSession: Boolean(ctx.support || ctx.session.user.isSupportSession),
+                },
+                targetIds: async () => {
+                  holders = (
+                    await tx.user.findMany({
+                      where: { organizationId: id, organizationRoleId: roleId },
+                      select: { id: true },
+                    })
+                  ).map((holder) => holder.id);
+                  return holders;
+                },
+                pinVerified,
+                mode: 'role',
+                action: 'organizationAdmin.upsertRole',
+                describe: (name) => `Changed the custom role ${values.name}, held by ${name}`,
+              },
+              async () => ({ targetIds: holders, value: await saveRole(tx) })
+            );
+            return value;
+          } catch (error) {
+            rethrowAccessChange(error);
+          }
+        }
+        return saveRole(tx);
+      });
+      async function saveRole(tx: Prisma.TransactionClient) {
         // Serialize role replacements for this tenant so concurrent edits cannot
         // interleave their delete/insert sequences.
         await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${id} FOR UPDATE`;
         const existing = roleId
-          ? await tx.organizationRole.findFirst({ where: { id: roleId, organizationId: id } })
+          ? await tx.organizationRole.findFirst({
+              where: { id: roleId, organizationId: id },
+            })
           : null;
         if (roleId && !existing) {
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Role not found.' });
@@ -512,23 +689,42 @@ export const organizationAdminRouter = router({
         if (existing?.isSystem) {
           throw new TRPCError({ code: 'FORBIDDEN', message: 'System roles cannot be modified.' });
         }
+        const existingPermissions = existing
+          ? await tx.organizationRolePermission.findMany({
+              where: { organizationId: id, organizationRoleId: existing.id },
+              select: { capability: true, effect: true },
+            })
+          : [];
+        if (isPharmacyContext(ctx)) {
+          if (changesPharmacyFinanceRules(existingPermissions, permissions)) {
+            const db = tx as unknown as ScopedDb;
+            const now = new Date();
+            const editor = await loadAccessParty(db, id, ctx.session.user.id, now);
+            if (
+              ctx.support ||
+              ctx.session.user.isSupportSession ||
+              !editor ||
+              !(await isAccessOwner(db, editor, now))
+            ) {
+              throw new TRPCError({
+                code: 'FORBIDDEN',
+                message: 'Only the workspace owner can change finance permissions.',
+              });
+            }
+            if (!pinVerified)
+              throw new TRPCError({
+                code: 'PRECONDITION_FAILED',
+                message:
+                  'Confirm this change with your authenticator code, or your PIN if your pharmacy uses PIN approvals.',
+              });
+          }
+        }
         const saved = roleId
           ? await tx.organizationRole.update({ where: { id: roleId }, data: values })
           : await tx.organizationRole.create({ data: { organizationId: id, ...values } });
-        await tx.organizationRolePermission.deleteMany({
-          where: { organizationRoleId: saved.id },
-        });
-        if (permissions.length) {
-          await tx.organizationRolePermission.createMany({
-            data: permissions.map((permission) => ({
-              organizationId: id,
-              organizationRoleId: saved.id,
-              ...permission,
-            })),
-          });
-        }
+        await replaceRolePermissions(tx, id, saved.id, existingPermissions, permissions);
         return saved;
-      });
+      }
       annotateAudit(ctx, {
         targetType: 'OrganizationRole',
         targetId: role.id,
@@ -540,6 +736,7 @@ export const organizationAdminRouter = router({
     }),
 
   removeRole: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -568,6 +765,7 @@ export const organizationAdminRouter = router({
     }),
 
   updateMember: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),
@@ -576,11 +774,15 @@ export const organizationAdminRouter = router({
         organizationRoleId: z.string().nullable(),
         title: z.string().trim().min(1).max(150),
         department: departmentKey,
+        /** DEV-959B: the editor's PIN, when the change touches a weighty sub-role (pharmacy). */
+        pin: z.string().min(1).max(64).optional(),
       })
     )
     // DEV-828: never hand back the whole User row (password verifier, TOTP seed).
     .output(z.object({ id: z.string(), email: z.string() }))
-    .mutation(async ({ ctx, input }) => {
+    .mutation(async ({ ctx, input: rawInput }) => {
+      // The PIN is redacted from the request audit and kept out of the metadata below.
+      const { pin, ...input } = rawInput;
       const id = organizationId(ctx);
       const before = await ctx.db.user.findFirst({
         where: { id: input.id, organizationId: id },
@@ -603,10 +805,31 @@ export const organizationAdminRouter = router({
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
-      const saved = await ctx.db.$transaction(async (tx) => {
+      const pinVerified = await verifyMemberEditPin(ctx, id, pin, 'organizationAdmin.updateMember');
+      const saved = await ctx.db.$transaction(async (transaction) =>
+        guardMemberEdit(
+          ctx,
+          transaction as unknown as ScopedDb,
+          {
+            organizationId: id,
+            targetId: input.id,
+            pinVerified,
+            action: 'organizationAdmin.updateMember',
+            describe: (name) => `Changed the role or status of ${name}`,
+          },
+          async () => {
+            const value = await updateMemberRow(transaction, before);
+            return { targetId: value.id, value };
+          }
+        )
+      );
+      async function updateMemberRow(
+        tx: Prisma.TransactionClient,
+        member: NonNullable<typeof before>
+      ) {
         const removesActiveAdmin =
-          before.role === 'ADMIN' &&
-          before.status === 'ACTIVE' &&
+          member.role === 'ADMIN' &&
+          member.status === 'ACTIVE' &&
           (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
 
         // Serialize every transition that can remove an active admin. Reading the
@@ -635,13 +858,13 @@ export const organizationAdminRouter = router({
             title: input.title,
             department: input.department,
             tokenVersion:
-              before.role !== input.role || before.status !== input.status
+              member.role !== input.role || member.status !== input.status
                 ? { increment: 1 }
                 : undefined,
           },
           select: { id: true, email: true },
         });
-      });
+      }
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: saved.id,
@@ -653,6 +876,7 @@ export const organizationAdminRouter = router({
     }),
 
   createMember: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         name: z.string().trim().min(1).max(150),
@@ -666,6 +890,8 @@ export const organizationAdminRouter = router({
         department: departmentKey,
         organizationRoleId: z.string().nullable().default(null),
         branchIds: z.array(z.string().trim().min(1).max(64)).max(32).default([]),
+        /** DEV-959B: the editor's PIN, when the new member gets a weighty sub-role (pharmacy). */
+        pin: z.string().min(1).max(64).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -692,7 +918,30 @@ export const organizationAdminRouter = router({
           message: 'A member with this email already exists in this workspace.',
         });
       const branchIds = [...new Set(input.branchIds)];
-      const created = await ctx.db.$transaction(async (tx) => {
+      const pinVerified = await verifyMemberEditPin(
+        ctx,
+        id,
+        input.pin,
+        'organizationAdmin.createMember'
+      );
+      const created = await ctx.db.$transaction(async (transaction) =>
+        guardMemberEdit(
+          ctx,
+          transaction as unknown as ScopedDb,
+          {
+            organizationId: id,
+            targetId: null,
+            pinVerified,
+            action: 'organizationAdmin.createMember',
+            describe: (name) => `Added ${name} with their role`,
+          },
+          async () => {
+            const value = await createMemberRow(transaction);
+            return { targetId: value.id, value };
+          }
+        )
+      );
+      async function createMemberRow(tx: Prisma.TransactionClient) {
         await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
         if (branchIds.length > 0) {
           const branches = await tx.pharmacyBranch.findMany({
@@ -744,7 +993,7 @@ export const organizationAdminRouter = router({
           });
         }
         return member;
-      });
+      }
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: created.id,
@@ -757,6 +1006,7 @@ export const organizationAdminRouter = router({
     }),
 
   resetMemberPassword: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
@@ -784,6 +1034,7 @@ export const organizationAdminRouter = router({
     }),
 
   addDomain: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({ host: hostname, kind: z.string().trim().min(2).max(30), isPrimary: z.boolean() })
     )
@@ -847,6 +1098,7 @@ export const organizationAdminRouter = router({
     }),
 
   createScimToken: adminProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         name: z.string().trim().min(2).max(150),
@@ -883,6 +1135,7 @@ export const organizationAdminRouter = router({
     }),
 
   revokeScimToken: adminProcedure
+    .meta(refuseSupportSession)
     .input(z.object({ id: z.string() }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);

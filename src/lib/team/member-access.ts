@@ -1,3 +1,4 @@
+import { isPharmacyFinanceAction } from '@/lib/abac/pharmacy-finance-actions';
 /**
  * DEV-959A — "What this person can do": a pharmacy member's sub-roles, read-only.
  *
@@ -67,7 +68,15 @@ export async function readPharmacyMemberAccess(
   const allowed = new Set<Action>();
   // Sequential: the tenant client may be one interactive transaction.
   for (const action of PHARMACY_SUB_ROLE_ACTIONS) {
-    if (await can(subject, action, undefined, { db, now, source: 'TRPC' })) allowed.add(action);
+    if (
+      await can(subject, action, undefined, {
+        db,
+        now,
+        source: 'TRPC',
+        ownerOnlyFallback: isPharmacyFinanceAction(action),
+      })
+    )
+      allowed.add(action);
   }
   const adminAccess = await can(subject, 'admin:access', undefined, { db, now, source: 'TRPC' });
   const adminRole = member.role === 'ADMIN';

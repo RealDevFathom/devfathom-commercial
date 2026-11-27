@@ -117,7 +117,11 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
     pharmacyDrawerSession: {
       findFirst: vi
         .fn()
-        .mockResolvedValue({ id: 'drawer-1', openedByActorId: 'actor-1', operatingCashierId: 'actor-1' }),
+        .mockResolvedValue({
+          id: 'drawer-1',
+          openedByActorId: 'actor-1',
+          operatingCashierId: 'actor-1',
+        }),
     },
     // F3: the business day is open.
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -186,7 +190,7 @@ for (const boundary of ['service', 'API'] as const) {
           },
           include: {
             lines: { include: { unidentifiedReturnHolds: true, returnLines: true } },
-            refunds: true,
+            refunds: { include: { originalTender: { select: { type: true } } } },
           },
         });
       };

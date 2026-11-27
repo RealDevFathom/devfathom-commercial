@@ -290,10 +290,12 @@ describe('the counter customer snapshot limits points history by branch (DEV-909
   });
 });
 
-describe('the customer snapshot and pack scan need the counter permission (DEV-965)', () => {
+describe('the customer snapshot, pack scan and upsell read need the counter permission (DEV-965, DEV-1056)', () => {
   const PERMISSION = { code: 'FORBIDDEN', message: 'You do not have permission for this action.' };
   const gated: Array<[string, Read, (caller: Caller, branchId: string) => Promise<unknown>]> =
-    procedures.filter(([name]) => name === 'customerSnapshot' || name === 'authenticatePack');
+    procedures.filter(([name]) =>
+      ['customerSnapshot', 'upsellSuggestions', 'authenticatePack'].includes(name)
+    );
   /** The member's own role rules, as the counter gate reads them. */
   const holding = (...capabilities: string[]) =>
     db.user.findUnique.mockResolvedValue({
@@ -305,8 +307,12 @@ describe('the customer snapshot and pack scan need the counter permission (DEV-9
       permissionOverrides: [],
     });
 
-  it('covers both procedures', () => {
-    expect(gated.map(([name]) => name)).toEqual(['customerSnapshot', 'authenticatePack']);
+  it('covers the three procedures', () => {
+    expect(gated.map(([name]) => name)).toEqual([
+      'customerSnapshot',
+      'upsellSuggestions',
+      'authenticatePack',
+    ]);
   });
 
   it.each(gated)(

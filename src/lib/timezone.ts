@@ -179,27 +179,46 @@ function zoneOffsetMs(instant: number, zone: string): number {
 }
 
 const MINUTE_INPUT = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::(\d{2}))?$/;
+const ISO_INSTANT = z.iso.datetime({ offset: true });
 
 /**
  * A `datetime-local` picker value (`2026-05-01T09:30`, no zone) read on the
- * workspace's wall clock, as an ISO instant. A value that already carries a
- * zone, or is not a picker value, passes through unchanged.
+ * workspace's wall clock, as an ISO instant. If it exactly matches the minute
+ * displayed for the original ISO instant, keep that instant verbatim. A new or
+ * changed ambiguous wall time resolves to the earlier instant. A value that
+ * already carries a zone, or is not a picker value, passes through unchanged.
  */
 export function workspaceInstantFromInput(
   raw: string,
-  timeZone: string | null | undefined
+  timeZone: string | null | undefined,
+  original?: string
 ): string {
   const match = MINUTE_INPUT.exec(raw);
   if (!match) return raw;
+  if (
+    original &&
+    ISO_INSTANT.safeParse(original).success &&
+    raw === workspaceMinuteInput(original, timeZone)
+  ) {
+    return original;
+  }
   const zone = workspaceTimezone(timeZone);
   const naive = Date.parse(`${match[1]}T${match[2]}:${match[3] ?? '00'}.000Z`);
   if (!Number.isFinite(naive)) return raw;
   let instant = naive - zoneOffsetMs(naive, zone);
   instant = naive - zoneOffsetMs(instant, zone);
+  // A fall-back may give this wall time a second, earlier instant at the
+  // pre-transition offset. Confirm the match so skipped times behave as before.
+  const earlier = naive - zoneOffsetMs(instant - 86_400_000, zone);
+  if (earlier < instant && earlier + zoneOffsetMs(earlier, zone) === naive) instant = earlier;
   return new Date(instant).toISOString().replace('.000Z', 'Z');
 }
 
-/** The `datetime-local` value for an instant on the workspace clock; empty when invalid. */
+/**
+ * The minute-precision `datetime-local` value on the workspace clock, or empty
+ * when invalid. Both occurrences of a repeated minute look the same, so pass
+ * the original instant separately to {@link workspaceInstantFromInput} on submit.
+ */
 export function workspaceMinuteInput(
   value: Date | string,
   timeZone: string | null | undefined
@@ -222,4 +241,12 @@ export function workspaceDateOffset(
 ): string {
   const today = Date.parse(`${workspaceToday(timeZone, now)}T00:00:00.000Z`);
   return new Date(today + days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Resolve a calendar month relative to the workspace's current month, including DST changes. */
+export function workspaceMonthRange(timeZone: string | null | undefined, at: Date, offset = 0) {
+  const [year, month] = workspaceToday(timeZone, at).split('-').map(Number);
+  const first = new Date(Date.UTC(year!, month! - 1 + offset, 1)).toISOString().slice(0, 10);
+  const last = new Date(Date.UTC(year!, month! + offset, 0)).toISOString().slice(0, 10);
+  return workspaceDateRange(first, last, timeZone);
 }

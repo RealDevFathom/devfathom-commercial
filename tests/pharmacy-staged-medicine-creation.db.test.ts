@@ -108,7 +108,8 @@ const soloTemplate = [
           await c.query("SELECT set_config('app.is_platform_admin','true',false)");
           for (const org of ['a', 'b', 'solo']) {
             await c.query(
-              `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now())`,
+              // DEV-961: these approvals use PINs, which apply while the authenticator for approvals is off.
+              `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode","createdAt","updatedAt", "requireApprovalAuthenticator") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED',now(),now(), false)`,
               [id(org)]
             );
             await c.query(
@@ -139,11 +140,16 @@ const soloTemplate = [
                   who === 'cashier' ? 'EMPLOYEE' : 'ADMIN',
                 ]
               );
-              if (who === 'reviewer')
+              if (who === 'reviewer') {
+                await c.query(
+                  `INSERT INTO pharmacy_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,$2,$3,$4,now())`,
+                  [id('assignment_' + org), id(org), id('branch_' + org), id(who + '_' + org)]
+                );
                 await c.query(
                   `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES ($1,$2,$3,'pharmacy:catalogue-review','ALLOW','fixture',now())`,
                   [id('review_' + org), id(org), id(who + '_' + org)]
                 );
+              }
             }
           }
           await c.query(
@@ -226,6 +232,11 @@ const soloTemplate = [
           // The editor names a branch, but holds no stock control there: no reorder branch.
           const request = await editor.createStagedMedicines({ batchId, branchId: id('branch_a') });
           assert.equal((request as { status: string }).status, 'PENDING');
+          // A pending request does not grant the cashier access to its proposed medicines.
+          await refusal(
+            cashier.proposedImport({ editId: (request as { id: string }).id }),
+            'FORBIDDEN'
+          );
           assert.equal(
             (request as unknown as { changes: { json: { reorderBranchId: string | null } } })
               .changes.json.reorderBranchId,
@@ -390,6 +401,8 @@ const soloTemplate = [
             purchasePriceMinor: 80_000,
             unitsPerPack: 100,
             outcome: 'CREATED',
+            notCreatedReason: null,
+            aliasesNotAdded: [],
             barcode: BARCODE,
             barcodeAttached: true,
             supplierName: null,
@@ -555,7 +568,7 @@ const soloTemplate = [
             )!;
             assert.equal(strengthLink.outcome, 'MATCHED');
             const presentation = await solodb.presentation.findFirstOrThrow({
-              where: { medicineId: strengthLink.medicineId },
+              where: { medicineId: strengthLink.medicineId! },
             });
             assert.equal(presentation.presentation, strengthRow.packLabel);
           }
@@ -652,7 +665,7 @@ const soloTemplate = [
           assert.deepEqual(pick('none'), [null, null, null, null]);
           const safety = await solodb.pharmacySafetyStock.findMany({
             where: {
-              medicineId: { in: [...templateLinks.values()].map((link) => link.medicineId) },
+              medicineId: { in: [...templateLinks.values()].map((link) => link.medicineId!) },
             },
             orderBy: { safetyStockUnits: 'desc' },
           });
@@ -670,7 +683,7 @@ const soloTemplate = [
             ]
           );
           // The owner sees the purchase price on the medicine's own detail, with its supplier.
-          const known = await solo.get({ id: templateLinks.get('T-1')!.medicineId });
+          const known = await solo.get({ id: templateLinks.get('T-1')!.medicineId! });
           assert.equal(known.purchasePriceVisible, true);
           assert.deepEqual(
             known.purchasePrice && [
@@ -681,7 +694,7 @@ const soloTemplate = [
             [8_000, 'solo DISTRIBUTORS', true]
           );
           assert.equal(
-            (await solo.get({ id: templateLinks.get('none')!.medicineId })).purchasePrice,
+            (await solo.get({ id: templateLinks.get('none')!.medicineId! })).purchasePrice,
             null
           );
         } finally {

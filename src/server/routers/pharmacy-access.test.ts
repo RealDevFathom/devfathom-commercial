@@ -94,6 +94,15 @@ describe('#979 pharmacy rail capability read', () => {
     }
   });
 
+  it('offers the catalogue to a member whose exact review grant is resolved by ABAC', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'pharmacy:catalogue-review'
+    );
+    expect(
+      (await caller({ id: 'pharmacist', role: 'EMPLOYEE' }).navigation()).capabilities
+    ).toEqual(['pharmacy:catalogue-review']);
+  });
+
   it('returns exactly what the ABAC engine grants, in catalogue order', async () => {
     mocks.can.mockImplementation(
       async (_subject: unknown, action: string) =>

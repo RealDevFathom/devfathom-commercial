@@ -34,6 +34,7 @@ const attempt = (patch: Partial<CardTerminalAttempt> = {}): CardTerminalAttempt 
   ...draft,
   status: 'APPROVED',
   providerRef: 'RRN-1',
+  approvedAmountMinor: null,
   approvalCode: null,
   cardBrand: null,
   cardLast4: null,
@@ -115,6 +116,7 @@ describe('DEV-743 durable attempt store', () => {
     expect(result).toMatchObject({ created: true, attempt: { id: 'attempt-1' } });
     expect(db.calls).toEqual([
       expect.stringContaining('FROM pharmacy_sales'),
+      expect.stringMatching(/FROM pharmacy_branches[\s\S]*FOR SHARE/),
       'SAVEPOINT card_terminal_preflight',
       'applyPharmacyTender',
       'ROLLBACK TO SAVEPOINT card_terminal_preflight',

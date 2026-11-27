@@ -2,6 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { hash } from 'bcryptjs';
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  applyOperatorAttemptCharge,
+  isOperatorAttemptCharge,
+  type FakeOperatorCredentialRow,
+} from '@/lib/test-support/operator-attempt-charge';
 
 type Row = Record<string, unknown>;
 type Route = { POST: (request: Request) => Promise<Response> };
@@ -74,6 +79,38 @@ const db = {
       return copy(row);
     },
   },
+  $queryRaw: async (
+    query: TemplateStringsArray,
+    tokenHash: string,
+    deviceId: string,
+    staff?: string,
+    branch?: string,
+    ...rest: unknown[]
+  ) => {
+    // DEV-1055: the atomic attempt charge on the durable credential row.
+    if (isOperatorAttemptCharge(query)) {
+      return applyOperatorAttemptCharge(
+        (id) => find(h.store.credentials, { id }) as FakeOperatorCredentialRow | null,
+        [tokenHash, deviceId, staff, branch, ...rest]
+      );
+    }
+    if (query.join('').includes('FOR SHARE OF c, p')) {
+      const credential = find(h.store.credentials, {
+        id: tokenHash,
+        credentialHash: deviceId,
+        staffProfileId: staff,
+        revokedAt: null,
+      });
+      return credential &&
+        find(h.store.staff, { id: staff, primaryBranchId: branch, status: 'ACTIVE' })
+        ? [{ id: credential.id }]
+        : [];
+    }
+    h.reads.sessionByHash += 1;
+    return h.store.sessions
+      .filter((row) => row.tokenHash === tokenHash && row.deviceId === deviceId)
+      .map(copy);
+  },
   restaurantTerminalSession: {
     create: async ({ data }: { data: Row }) => {
       const row = {
@@ -144,12 +181,26 @@ const db = {
         })
         .map((row) => ({ ...row }));
     },
+    findUnique: async ({ where }: { where: Record<string, unknown> }) =>
+      copy(find(h.store.credentials, where)),
     update: async ({ where, data }: { where: Record<string, unknown>; data: Row }) => {
       const row = find(h.store.credentials, where);
       if (!row) throw new Error('credential missing');
       Object.assign(row, data, { updatedAt: new Date() });
       return copy(row);
     },
+  },
+  restaurantOrder: {
+    findFirst: async ({
+      where,
+    }: {
+      where: { id: string; branchId: string; status: { in: string[] } };
+    }) =>
+      where.branchId === BRANCH &&
+      where.status.in.includes('OPEN') &&
+      ['order_25', 'order_audit_25'].includes(where.id)
+        ? { id: where.id }
+        : null,
   },
   restaurantCoAuthorization: {
     create: async ({ data }: { data: Row }) => {
@@ -314,7 +365,10 @@ function addOperator(
     directCapabilityGrants: [],
     user: {
       organizationRole: {
-        permissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+        permissions: ['pos:operate', ...capabilities].map((capability) => ({
+          capability,
+          effect: 'ALLOW',
+        })),
       },
       permissionOverrides: [],
     },
@@ -574,8 +628,8 @@ describe('operator attribution and secret containment', () => {
     try {
       const { device, secret } = await enroll('co-authorization');
       const { token, sessionId } = await establish(secret);
-      addOperator(ACTING, device.id);
-      addOperator(MANAGER, device.id);
+      addOperator(ACTING, device.id, ['orders:take']);
+      addOperator(MANAGER, device.id, ['coauth:approve']);
       expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
 
       const marker = PINS[MANAGER];
@@ -624,9 +678,9 @@ describe('operator attribution and secret containment', () => {
   it('writes acting-operator audit rows for every sensitive terminal mutation', async () => {
     const { device, secret } = await enroll('attribution');
     const { token } = await establish(secret);
-    addOperator(ACTING, device.id);
-    addOperator(INCOMING, device.id);
-    addOperator(MANAGER, device.id);
+    addOperator(ACTING, device.id, ['orders:take']);
+    addOperator(INCOMING, device.id, ['orders:take']);
+    addOperator(MANAGER, device.id, ['coauth:approve']);
 
     expect((await unlock(secret, token, ACTING, PINS[ACTING])).response.status).toBe(200);
     expect(

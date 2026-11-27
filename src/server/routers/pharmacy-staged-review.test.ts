@@ -70,6 +70,9 @@ function makeDb() {
       createMany: vi.fn().mockResolvedValue({}),
       groupBy: vi.fn().mockResolvedValue([]),
     },
+    pharmacyStagedMedicineLink: {
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $queryRaw: vi.fn().mockResolvedValue([]),
   };
 }
@@ -120,6 +123,22 @@ describe('staged review authorization and reads', () => {
     await expect(caller(options).stagedRows(scope)).rejects.toBeDefined();
     expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
     expect(db.pharmacyMigrationRow.findMany).not.toHaveBeenCalled();
+  });
+  it('requires catalogue edit for both upload steps even for an administrator', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: null,
+      permissionOverrides: [{ capability: 'pharmacy:catalogue-edit', effect: 'DENY' }],
+    });
+    const upload = {
+      branchId: scope.branchId,
+      fileName: 'products.csv',
+      content: Buffer.from('Name\nTest Tablet').toString('base64'),
+    };
+    await expect(caller().stagingUpload(upload)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().stageBatch({ ...upload, mapping: { product: 0 } })).rejects.toMatchObject(
+      { code: 'FORBIDDEN' }
+    );
+    expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
   });
   it('rejects branch substitution before reading source or batch', async () => {
     db.pharmacyBranch.findFirst.mockResolvedValue(null);
@@ -173,6 +192,45 @@ describe('staged review authorization and reads', () => {
             },
           },
         }),
+      })
+    );
+  });
+  it('DEV-1002: lists the rows a bulk creation could not create, each with its reason', async () => {
+    const reason = 'A value in this row is not accepted by the catalogue.';
+    db.pharmacyStagedMedicineLink.findMany
+      .mockResolvedValueOnce([{ sourceKey: 'key' }])
+      .mockResolvedValueOnce([{ sourceKey: 'key', notCreatedReason: reason }]);
+    const output = await caller().stagedRows({ ...scope, filter: 'not-created' });
+    expect(db.pharmacyStagedMedicineLink.findMany).toHaveBeenNthCalledWith(1, {
+      where: { organizationId: 'org_a', batchId: 'batch_a', outcome: 'NOT_CREATED' },
+      select: { sourceKey: true },
+    });
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ sourceKey: { in: ['key'] } }),
+      })
+    );
+    expect(output.rows[0]!.notCreatedReason).toBe(reason);
+    // Every other filter reports no reason for a row that was created or not yet run.
+    const all = await caller().stagedRows({ ...scope });
+    expect(all.rows[0]!.notCreatedReason).toBeNull();
+  });
+  it('DEV-1004: lists the created rows whose codes or barcodes were not added', async () => {
+    db.pharmacyStagedMedicineLink.findMany
+      .mockResolvedValueOnce([{ sourceKey: 'alias-key' }, { sourceKey: 'barcode-key' }])
+      .mockResolvedValueOnce([]);
+    await caller().stagedRows({ ...scope, filter: 'codes-not-added' });
+    expect(db.pharmacyStagedMedicineLink.findMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        organizationId: 'org_a',
+        batchId: 'batch_a',
+        OR: [{ aliasesNotAdded: { isEmpty: false } }, { barcodeAttached: false }],
+      },
+      select: { sourceKey: true },
+    });
+    expect(db.pharmacyMigrationRow.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ sourceKey: { in: ['alias-key', 'barcode-key'] } }),
       })
     );
   });

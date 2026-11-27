@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 import { useDeferredValue, useMemo, useState } from 'react';
 import {
   Activity,
@@ -39,7 +41,7 @@ import {
   auditOperationLabel,
   auditRoleLabel,
 } from '@/lib/audit-labels';
-import { formatWorkspaceDateTime } from '@/lib/timezone';
+import { formatWorkspaceDateTime, workspaceDateRange, workspaceToday } from '@/lib/timezone';
 import type { AppRouter } from '@/server/routers/_app';
 
 type AuditEntry = inferRouterOutputs<AppRouter>['audit']['list']['items'][number];
@@ -144,8 +146,12 @@ export function AuditContent({
       outcome: (filters.outcome || undefined) as never,
       actorId: filters.actorId || undefined,
       branchId: filters.branchId || undefined,
-      startDate: filters.startDate ? new Date(filters.startDate) : undefined,
-      endDate: filters.endDate ? new Date(`${filters.endDate}T23:59:59`) : undefined,
+      startDate: filters.startDate
+        ? workspaceDateRange(filters.startDate, filters.startDate, timeZone).from
+        : undefined,
+      endDate: filters.endDate
+        ? new Date(workspaceDateRange(filters.endDate, filters.endDate, timeZone).to.getTime() - 1)
+        : undefined,
       assistantOnly: filters.assistantOnly ? true : undefined,
       limit: 50,
     }),
@@ -159,6 +165,7 @@ export function AuditContent({
       filters.branchId,
       filters.startDate,
       filters.endDate,
+      timeZone,
       filters.assistantOnly,
     ]
   );
@@ -245,7 +252,7 @@ export function AuditContent({
                 );
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = `audit-log-${new Date().toISOString().slice(0, 10)}.csv`;
+                a.download = `audit-log-${workspaceToday(timeZone)}.csv`;
                 a.click();
                 URL.revokeObjectURL(url);
               }}
@@ -315,7 +322,7 @@ export function AuditContent({
           <div className="flex flex-wrap items-center gap-2">
             <Filter className="h-3.5 w-3.5 text-muted-foreground" />
 
-            <select
+            <StudioSelect
               value={filters.category}
               onChange={(e) => set('category', e.target.value)}
               className={selectClass()}
@@ -326,9 +333,9 @@ export function AuditContent({
                   {auditCategoryLabel(c)}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
 
-            <select
+            <StudioSelect
               value={filters.operation}
               onChange={(e) => set('operation', e.target.value)}
               className={selectClass()}
@@ -339,9 +346,9 @@ export function AuditContent({
                   {auditOperationLabel(o)}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
 
-            <select
+            <StudioSelect
               value={filters.source}
               onChange={(e) => set('source', e.target.value)}
               className={selectClass()}
@@ -352,9 +359,9 @@ export function AuditContent({
                   {s}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
 
-            <select
+            <StudioSelect
               value={filters.outcome}
               onChange={(e) => set('outcome', e.target.value)}
               className={selectClass()}
@@ -365,9 +372,9 @@ export function AuditContent({
                   {o}
                 </option>
               ))}
-            </select>
+            </StudioSelect>
 
-            <select
+            <StudioSelect
               value={filters.actorId}
               aria-label={pharmacy ? 'Person' : 'Actor'}
               onChange={(e) => set('actorId', e.target.value)}
@@ -382,10 +389,10 @@ export function AuditContent({
                   {a.name ?? a.id} ({a.count})
                 </option>
               ))}
-            </select>
+            </StudioSelect>
 
             {pharmacy || filters.branchId || (filterOpts?.branches.length ?? 0) > 0 ? (
-              <select
+              <StudioSelect
                 value={filters.branchId}
                 aria-label="Branch"
                 onChange={(e) => set('branchId', e.target.value)}
@@ -401,7 +408,7 @@ export function AuditContent({
                     {b.name} ({b.code})
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             ) : null}
 
             <div className="flex items-center gap-1.5">

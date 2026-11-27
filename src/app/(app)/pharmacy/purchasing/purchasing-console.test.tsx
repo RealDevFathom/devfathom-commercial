@@ -194,6 +194,7 @@ function callerStub(overrides: Record<string, unknown> = {}) {
     receivingExceptionQueue: vi.fn().mockResolvedValue([]),
     receiptDebitNotes: vi.fn().mockResolvedValue([]),
     purchaseReturns: vi.fn().mockResolvedValue([]),
+    legacySupplierDispatches: vi.fn().mockResolvedValue(null),
     returnableLots: vi.fn().mockResolvedValue([]),
     supplierCredits: vi.fn().mockResolvedValue([]),
     receivedAgainstOrder: vi.fn().mockResolvedValue({}),
@@ -459,10 +460,18 @@ describe('pickers (UX rules 1, 12, 16)', () => {
   it('offers a lapsed supplier as a disabled, explained option rather than hiding or allowing it', async () => {
     render(await OrdersPage({ searchParams: params() }));
 
-    const option = screen.getByRole('option', { name: /Lahore Wholesale — no valid licence/ });
+    const option = screen.getByRole('option', {
+      hidden: true,
+      name: /Lahore Wholesale — no valid licence/,
+    });
     expect((option as HTMLOptionElement).disabled).toBe(true);
     expect(
-      (screen.getByRole('option', { name: 'Karachi Distributors' }) as HTMLOptionElement).disabled
+      (
+        screen.getByRole('option', {
+          hidden: true,
+          name: 'Karachi Distributors',
+        }) as HTMLOptionElement
+      ).disabled
     ).toBe(false);
   });
 
@@ -470,12 +479,15 @@ describe('pickers (UX rules 1, 12, 16)', () => {
     render(await OrdersPage({ searchParams: params() }));
 
     expect(
-      screen.getAllByRole('option', { name: /Amoxicillin 500mg — STRIP \(1 STRIP = 10 units\)/ })
-        .length
+      screen.getAllByRole('option', {
+        hidden: true,
+        name: /Amoxicillin 500mg — STRIP \(1 STRIP = 10 units\)/,
+      }).length
     ).toBeGreaterThan(0);
     // The canonical multiplier travels inside the option value, so the server
     // resolves it without asking the operator for it.
     const option = screen.getAllByRole('option', {
+      hidden: true,
       name: /Amoxicillin 500mg — STRIP/,
     })[0] as HTMLOptionElement;
     expect(option.value).toBe('med-1|pack-1|10');
@@ -705,7 +717,7 @@ describe('goods-in bench (PUR-02/04/05)', () => {
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
 
     expect(screen.getByRole('heading', { name: 'No order is out with a supplier' })).toBeDefined();
-    expect(screen.queryByRole('option', { name: /PO-DRAFT/ })).toBeNull();
+    expect(screen.queryByRole('option', { hidden: true, name: /PO-DRAFT/ })).toBeNull();
   });
 });
 
@@ -1399,9 +1411,15 @@ describe('purchasing PIN controls', () => {
     );
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));
     const picker = within(screen.getByLabelText('Approved by'));
-    expect(picker.getByRole('option', { name: 'Bilal (bilal@example.test)' })).toBeDefined();
-    expect(picker.queryByRole('option', { name: 'Other branch (other@example.test)' })).toBeNull();
-    expect(picker.queryByRole('option', { name: 'Owner (owner@example.test)' })).toBeNull();
+    expect(
+      picker.getByRole('option', { hidden: true, name: 'Bilal (bilal@example.test)' })
+    ).toBeDefined();
+    expect(
+      picker.queryByRole('option', { hidden: true, name: 'Other branch (other@example.test)' })
+    ).toBeNull();
+    expect(
+      picker.queryByRole('option', { hidden: true, name: 'Owner (owner@example.test)' })
+    ).toBeNull();
   });
   it('offers a masked, labelled approval PIN without autocomplete', async () => {
     render(await ReceivingPage({ searchParams: params({ branch: 'branch-1' }) }));

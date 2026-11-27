@@ -1,5 +1,7 @@
 'use client';
 
+import { SelectField as StudioSelect } from '@/components/ui/select-field';
+
 /**
  * PLAT-02 — the branch regulatory profile form and its effective-dated history.
  *
@@ -25,6 +27,8 @@
  * version and closes the previous one, which is why the history is listed
  * beside the form rather than hidden behind it.
  */
+import { useWorkspaceTimeZone } from '@/components/entitlements-provider';
+import { pharmacyCalendarDay } from '@/lib/pharmacy/business-day';
 import { useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -53,14 +57,12 @@ type Regulatory = inferRouterOutputs<AppRouter>['pharmacyOnboarding']['regulator
 type Jurisdiction = Regulatory['jurisdictions'][number];
 type Version = Regulatory['versions'][number];
 
-const labelClass =
-  'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
+const labelClass = 'block font-mono text-xs font-semibold uppercase tracking-wide text-text-muted';
 const controlClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-body focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none';
 
-const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium' });
+const dayFormat = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeZone: 'UTC' });
 const day = (value: Date | string) => dayFormat.format(new Date(value));
-const isoDay = (value: Date | string) => new Date(value).toISOString().slice(0, 10);
 
 /** A labelled field that shows its own error, or its own hint when there is none. */
 function Field({
@@ -150,7 +152,7 @@ function BranchProvinceControl({
         htmlFor="branch-province"
         label="Province this branch operates in"
       >
-        <select
+        <StudioSelect
           aria-describedby={error ? 'branch-province-error' : undefined}
           aria-invalid={error ? true : undefined}
           className={controlClass}
@@ -172,7 +174,7 @@ function BranchProvinceControl({
               {name}
             </option>
           ))}
-        </select>
+        </StudioSelect>
       </Field>
       <Button
         disabled={!changing || setProvince.isPending}
@@ -187,6 +189,7 @@ function BranchProvinceControl({
 }
 
 export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory }) {
+  const timeZone = useWorkspaceTimeZone();
   const [data, setData] = useState<Regulatory>(initial);
   const [branchId, setBranchId] = useState<string>(initial.selectedBranchId ?? '');
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -367,7 +370,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
           hint="Only branches in this workspace appear here."
           label="Which branch is this profile for?"
         >
-          <select
+          <StudioSelect
             className={controlClass}
             id="branch-select"
             onChange={(event) => selectBranch(event.target.value)}
@@ -378,7 +381,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 {branch.name} — {branch.city}
               </option>
             ))}
-          </select>
+          </StudioSelect>
         </Field>
         {branch ? (
           <BranchProvinceControl
@@ -503,7 +506,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                 aria-describedby={errors.effectiveFrom ? 'effectiveFrom-error' : undefined}
                 aria-invalid={errors.effectiveFrom ? true : undefined}
                 className="mt-1 min-h-11"
-                defaultValue={isoDay(new Date())}
+                defaultValue={pharmacyCalendarDay(timeZone)}
                 id="effectiveFrom"
                 name="effectiveFrom"
                 required
@@ -522,7 +525,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               }
               label="Province"
             >
-              <select
+              <StudioSelect
                 aria-describedby={errors.provinceCode ? 'provinceCode-error' : undefined}
                 aria-invalid={errors.provinceCode ? true : undefined}
                 className={controlClass}
@@ -537,7 +540,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                       ? ' (rules provisional)'
                       : ''}
                 </option>
-              </select>
+              </StudioSelect>
             </Field>
             <Field
               error={errors.premisesAddressLine}
@@ -629,7 +632,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               }
               label="Licence category"
             >
-              <select
+              <StudioSelect
                 aria-describedby={errors.licenceCategory ? 'licenceCategory-error' : undefined}
                 aria-invalid={errors.licenceCategory ? true : undefined}
                 className={controlClass}
@@ -647,7 +650,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                     </option>
                   ))
                 )}
-              </select>
+              </StudioSelect>
             </Field>
             <Field error={errors.licenceNumber} htmlFor="licenceNumber" label="Licence number">
               <Input
@@ -833,7 +836,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
               <Input className="mt-1 min-h-11" id="strn" name="strn" />
             </Field>
             <Field error={errors.fiscalStatus} htmlFor="fiscalStatus" label="Fiscal status">
-              <select
+              <StudioSelect
                 aria-describedby={errors.fiscalStatus ? 'fiscalStatus-error' : undefined}
                 aria-invalid={errors.fiscalStatus ? true : undefined}
                 className={controlClass}
@@ -845,7 +848,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
                     {status.label}
                   </option>
                 ))}
-              </select>
+              </StudioSelect>
             </Field>
             <Field
               error={errors.retentionPrescriptionYears}

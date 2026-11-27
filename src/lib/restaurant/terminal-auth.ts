@@ -24,7 +24,7 @@ import {
   demoPersonaDeviceName,
   demoPersonaUserRole,
 } from '@/lib/demo/personas';
-import { publicRequestOrigin } from '@/lib/http-origin';
+import { trustedRequestOrigin } from '@/lib/http-origin';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
   isDeviceSecretFormat,
@@ -33,20 +33,24 @@ import {
   touchDeviceLastSeen,
 } from '@/lib/restaurant/devices';
 import {
+  LOCKOUT_DURATION_MS,
+  MAX_FAILED_ATTEMPTS,
   OPERATOR_CREDENTIAL_BCRYPT_COST,
   clearLockout,
   isLockedOut,
-  registerFailedAttempt,
   remainingLockoutMs,
   verifyOperatorCredential,
   type OperatorCredentialType,
 } from '@/lib/restaurant/operator-credentials';
+import { deviceBaseCapability, operatorHasCapability } from './operator-capability';
 import { verifyApprovalSecret } from '@/lib/approval-authenticator';
+import type { RestaurantApproverRight } from '@/lib/approval-approver-rights';
 import { resolveShiftEligibility, type ShiftDenialReason } from '@/lib/restaurant/shifts';
 import {
   evaluateTerminalSession,
   isTerminalSessionTokenFormat,
-  resolveSessionByToken,
+  hashTerminalSessionToken,
+  lockDeniedOperator,
   touchSession,
   type TerminalInvalidReason,
   type TerminalSessionState,
@@ -121,7 +125,7 @@ export const TERMINAL_DEVICE_COOKIE = 'devfathom-terminal';
  *
  * A handler that RETURNS a response still commits, deliberately. `authenticateOperator`
  * advances the durable failed-attempt counter and the route then answers 401/423; that
- * brute-force evidence, and the device/session check-in, must survive a refusal. Only a
+ * brute-force evidence and the device check-in must survive a refusal. Only a
  * THROW rolls the request back.
  */
 export type TerminalErrorMapper = (err: unknown) => Response | null;
@@ -141,7 +145,10 @@ function unauthorized(message: string): NextResponse {
 }
 
 function forbidden(message: string): NextResponse {
-  return NextResponse.json({ error: message }, { status: 403 });
+  return NextResponse.json(
+    { error: message },
+    { status: 403, headers: { 'X-Terminal-Access': 'denied' } }
+  );
 }
 
 function tooManyRequests(retryAfter: number): NextResponse {
@@ -182,7 +189,8 @@ function cookieOriginAllowed(request: Request): boolean {
   const origin = request.headers.get('origin');
   if (!origin) return false;
   try {
-    return new URL(origin).origin.toLowerCase() === publicRequestOrigin(request);
+    // DEV-957 phase 2: never trusts a client-supplied X-Forwarded-Host (http-origin.ts).
+    return new URL(origin).origin.toLowerCase() === trustedRequestOrigin(request);
   } catch {
     return false;
   }
@@ -461,9 +469,14 @@ export function withTerminalAuth<T extends unknown[]>(
       return await withTenantDb(auth.organizationId, async (db) => {
         const now = new Date();
         // C5: authoritative, FRESH reads inside one consistent transaction.
-        const [device, session] = await Promise.all([
+        const [device, [session]] = await Promise.all([
           db.restaurantRegisteredDevice.findUnique({ where: { id: auth.deviceId } }),
-          resolveSessionByToken(db, sessionToken),
+          // Serialize requests and access revocations on the same binding.
+          db.$queryRaw<RestaurantTerminalSession[]>`
+            SELECT * FROM restaurant_terminal_sessions
+            WHERE "tokenHash" = ${hashTerminalSessionToken(sessionToken)} AND "deviceId" = ${auth.deviceId}
+            FOR UPDATE
+          `,
         ]);
         if (!device) return forbidden('This device has been revoked.');
         if (device.kind !== 'POS' && device.kind !== 'KDS')
@@ -488,14 +501,31 @@ export function withTerminalAuth<T extends unknown[]>(
         }
 
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
-        if (entitlementRejection) return entitlementRejection;
+        if (entitlementRejection) {
+          return entitlementRejection;
+        }
 
-        await Promise.all([
-          touchDeviceLastSeen(db, device.id, now),
-          touchSession(db, session.id, now),
-        ]);
+        if (session.activeStaffProfileId !== null) {
+          const capability = deviceBaseCapability(device.kind);
+          if (
+            !(await operatorHasCapability(
+              db,
+              session.activeStaffProfileId,
+              capability,
+              now,
+              device.branchId,
+              true
+            ))
+          ) {
+            await lockDeniedOperator(db, session.id);
+            return forbidden(
+              `To use this terminal, the operator must be active, assigned to this branch, and have the "${capability}" capability.`
+            );
+          }
+        }
 
-        return withOwnerReauthenticationScope(
+        await touchDeviceLastSeen(db, device.id, now);
+        const response = await withOwnerReauthenticationScope(
           {
             actingStaffProfileId: session.activeStaffProfileId,
             deviceId: device.id,
@@ -515,11 +545,24 @@ export function withTerminalAuth<T extends unknown[]>(
               ...args
             )
         );
+        if (response.ok) await touchSession(db, session.id, new Date());
+        return response;
       });
     } catch (err) {
       return respondToEscapedError('Terminal session-auth error:', err, options.mapError);
     }
   };
+}
+
+/** Device-only KDS reads are also used by an established display. When it
+ * presents a session, authenticate that exact binding before serving the read. */
+export function withKdsReadAuth(
+  handler: (ctx: TerminalDeviceContext, request: Request) => Promise<Response>
+) {
+  const deviceRead = withDeviceAuth(handler);
+  const sessionRead = withTerminalAuth(handler);
+  return (request: Request) =>
+    request.headers.has(SESSION_HEADER) ? sessionRead(request) : deviceRead(request);
 }
 
 // --- Operator credential authentication (C4) -------------------------------
@@ -562,6 +605,42 @@ function getDummyHash(): Promise<string> {
 }
 
 /**
+ * DEV-1055: count one attempt against a credential, atomically. Returns false
+ * when the credential is locked (or no longer live), in which case the caller
+ * must not compare the secret. The arithmetic is `registerFailedAttempt`: the
+ * `MAX_FAILED_ATTEMPTS`-th charge locks the credential for `LOCKOUT_DURATION_MS`
+ * and resets the strikes; an expired lock is cleared by the next charge. Only
+ * the lockout columns are written, so the DEV-1015 trigger on the credential
+ * hash and revocation does not fire.
+ */
+async function chargeOperatorAttempt(
+  db: ScopedDb,
+  credentialId: string,
+  now: Date
+): Promise<boolean> {
+  // Timestamps are stored as UTC wall time without a zone; pass them the same way.
+  const nowUtc = now.toISOString();
+  const lockUntilUtc = new Date(now.getTime() + LOCKOUT_DURATION_MS).toISOString();
+  const rows = await db.$queryRaw<{ id: string }[]>`
+    UPDATE restaurant_operator_credentials
+       SET "lockedUntil" = CASE
+             WHEN "failedAttempts" + 1 >= ${MAX_FAILED_ATTEMPTS} THEN ${lockUntilUtc}::timestamp
+             ELSE NULL
+           END,
+           "failedAttempts" = CASE
+             WHEN "failedAttempts" + 1 >= ${MAX_FAILED_ATTEMPTS} THEN 0
+             ELSE "failedAttempts" + 1
+           END,
+           "updatedAt" = ${nowUtc}::timestamp
+     WHERE id = ${credentialId}
+       AND "revokedAt" IS NULL
+       AND ("lockedUntil" IS NULL OR "lockedUntil" <= ${nowUtc}::timestamp)
+    RETURNING id
+  `;
+  return rows.length === 1;
+}
+
+/**
  * C4 — verify an operator credential against the durable, per-row lockout
  * counters, all inside the caller's tenant transaction. The counters
  * (`failedAttempts`/`lockedUntil`) are the AUTHORITATIVE brute-force control
@@ -589,10 +668,16 @@ export async function authenticateOperator(
     type: OperatorCredentialType;
     secret: string;
     now: Date;
+    forTerminalBinding?: boolean;
     /** DEV-879: set when the credential approves an action rather than signing in. An
      * approver who enrolled an approval authenticator must then enter its current code
      * instead of their PIN (see `verifyApprovalSecret`). */
-    approval?: { action: string; requestedByStaffProfileId?: string | null };
+    approval?: {
+      action: string;
+      /** DEV-961: the approver right the route requires (see approval-approver-rights). */
+      approverRight: RestaurantApproverRight;
+      requestedByStaffProfileId?: string | null;
+    };
   }
 ): Promise<OperatorAuthResult> {
   const { staffProfileId, deviceId, branchId, type, secret, now, approval } = params;
@@ -641,35 +726,50 @@ export async function authenticateOperator(
     return { ok: false, reason: 'INVALID' };
   }
 
-  const state = { failedAttempts: credential.failedAttempts, lockedUntil: credential.lockedUntil };
-  if (isLockedOut(state, now)) {
-    return { ok: false, reason: 'LOCKED', retryAfterMs: remainingLockoutMs(state, now) };
-  }
-
-  const valid =
-    approval && type === 'PIN'
-      ? (await verifyApprovalSecret(db, {
-          organizationId: credential.organizationId,
-          approverUserId: profile.userId,
-          credentialHash: credential.credentialHash,
-          secret,
-          action: approval.action,
-          requestedByStaffProfileId: approval.requestedByStaffProfileId ?? null,
-          now,
-        })) !== null
-      : await verifyOperatorCredential(type, secret, credential.credentialHash);
-  if (!valid) {
-    const next = registerFailedAttempt(state, now);
-    await db.restaurantOperatorCredential.update({ where: { id: credential.id }, data: next });
+  // DEV-1055: charge the attempt BEFORE any compare, in one statement on the
+  // credential row. Reading the counter, comparing, then writing it back let
+  // guesses sent at the same moment all read the same count and all be compared,
+  // so the five-attempt lockout never engaged. This UPDATE takes the row lock, so
+  // concurrent attempts queue behind it and each re-evaluates the predicate
+  // against the committed row: the fifth charge sets the lock, and every attempt
+  // after it matches no row and is refused without a compare.
+  const charged = await chargeOperatorAttempt(db, credential.id, now);
+  if (!charged) {
+    // No row: the credential is locked, or was revoked since it was read.
+    const current = await db.restaurantOperatorCredential.findUnique({
+      where: { id: credential.id },
+      select: { failedAttempts: true, lockedUntil: true, revokedAt: true },
+    });
+    if (current && current.revokedAt === null && isLockedOut(current, now)) {
+      return { ok: false, reason: 'LOCKED', retryAfterMs: remainingLockoutMs(current, now) };
+    }
+    await verifyOperatorCredential(type, secret, await getDummyHash());
     return { ok: false, reason: 'INVALID' };
   }
 
-  if (credential.failedAttempts !== 0 || credential.lockedUntil !== null) {
-    await db.restaurantOperatorCredential.update({
-      where: { id: credential.id },
-      data: clearLockout(),
-    });
-  }
+  // DEV-961: every approval, by PIN or by badge, goes through the shared verifier, so a
+  // badge cannot approve for a web member who must use the app (a badge counts as a PIN).
+  const valid = approval
+    ? (await verifyApprovalSecret(db, {
+        organizationId: credential.organizationId,
+        approverUserId: profile.userId,
+        credentialHash: credential.credentialHash,
+        credentialType: type,
+        secret,
+        action: approval.action,
+        approverRight: approval.approverRight,
+        requestedByStaffProfileId: approval.requestedByStaffProfileId ?? null,
+        now,
+      })) !== null
+    : await verifyOperatorCredential(type, secret, credential.credentialHash);
+  // A wrong secret keeps the charge already made above.
+  if (!valid) return { ok: false, reason: 'INVALID' };
+
+  // A correct secret clears the strikes, including the charge for this attempt.
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
 
   // Completion wave: the shift gate runs AFTER the credential is proven, so a
   // roster lookup can never become an oracle for which staff ids or PINs exist,
@@ -687,5 +787,22 @@ export async function authenticateOperator(
     }
   }
 
+  if (params.forTerminalBinding) {
+    // A reset or deactivation may have committed during credential verification.
+    // Recheck the exact proof and profile under shared row locks through bind.
+    const verified = await db.$queryRaw<{ id: string }[]>`
+      SELECT c.id FROM restaurant_operator_credentials c
+      JOIN restaurant_staff_profiles p ON (p."organizationId", p.id) = (c."organizationId", c."staffProfileId")
+      WHERE c.id = ${credential.id} AND c."credentialHash" = ${credential.credentialHash}
+        AND c."revokedAt" IS NULL AND p.id = ${staffProfileId}
+        AND p.status = 'ACTIVE' AND p."primaryBranchId" = ${branchId}
+        AND (p."userId" IS NULL OR EXISTS (
+          SELECT 1 FROM users u WHERE (u."organizationId", u.id) = (p."organizationId", p."userId")
+            AND u.status = 'ACTIVE' FOR SHARE OF u
+        ))
+      FOR SHARE OF c, p
+    `;
+    if (!verified.length) return { ok: false, reason: 'INVALID' };
+  }
   return { ok: true, credentialId: credential.id, staffProfileId };
 }

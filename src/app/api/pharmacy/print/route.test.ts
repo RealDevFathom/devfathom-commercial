@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
+import { createTRPCContext } from '@/server/trpc';
+import { oversizedRequest } from '../../../../../tests/fixtures/bounded-request';
 
 const printJob = vi.hoisted(() => vi.fn());
 
@@ -29,6 +31,24 @@ beforeEach(() => {
 });
 
 describe('/api/pharmacy/print', () => {
+  it('stops reading at the print body cap before resolving a session', async () => {
+    const limit = 4 * 1024;
+    const input = oversizedRequest(limit, {
+      url: 'http://lan.local/api/pharmacy/print',
+      headers: { origin: 'http://lan.local', 'content-type': 'application/json' },
+      chunkSize: 1024,
+    });
+    vi.mocked(createTRPCContext).mockClear();
+
+    const response = await POST(input.request);
+    expect(response.status).toBe(413);
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(input.cancelled()).toBe(true);
+    expect(input.bytesRead()).toBe(limit + 1024);
+    expect(createTRPCContext).not.toHaveBeenCalled();
+    expect(printJob).not.toHaveBeenCalled();
+  });
+
   it('rejects GET without allocating a copy', async () => {
     const response = GET();
     expect(response.status).toBe(405);

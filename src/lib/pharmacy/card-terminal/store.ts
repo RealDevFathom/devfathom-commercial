@@ -5,11 +5,14 @@ import type { PharmacyCardTerminalAttemptStatus } from '@/generated/prisma/enums
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   applyPharmacyTender,
+  cashShiftRefusal,
+  lockPharmacyCashMode,
   requirePharmacyDayOpen,
   type PharmacyPaymentAdapter,
 } from '../settlement';
 import type { LedgerScope } from '../stock-ledger';
 import { redactForLog } from './cardholder-data';
+import { recordTerminalRefundRoot } from './provider-refunds';
 import { OPEN_ATTEMPT_STATUSES } from './open-attempts';
 
 export { OPEN_ATTEMPT_STATUSES } from './open-attempts';
@@ -50,6 +53,7 @@ export type CardTerminalAttemptPatch = {
   Pick<
     CardTerminalAttempt,
     | 'providerRef'
+    | 'approvedAmountMinor'
     | 'approvalCode'
     | 'cardBrand'
     | 'cardLast4'
@@ -338,6 +342,8 @@ export function prismaCardTerminalAttemptStore(
           select: { id: true },
         });
         if (open) throw new CardTerminalError('ATTEMPT_IN_PROGRESS');
+        // Outside the preflight savepoint so the mode stays fixed until the attempt commits.
+        await lockPharmacyCashMode(db, scope);
         await preflightTerminalCharge(db, scope, draft);
         // The preflight's day lock was taken inside its savepoint, and rolling the savepoint back
         // released it. Hold the day lock to commit, so a day close either sees this attempt or
@@ -352,7 +358,9 @@ export function prismaCardTerminalAttemptStore(
         } catch (error) {
           if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
             throw new CardTerminalError('IDEMPOTENCY_CONFLICT');
-          throw error;
+          // DEV-958B: the preflight's shift check was undone with its savepoint, so the database
+          // checks again as the attempt is written, under the day lock a shift close also takes.
+          throw cashShiftRefusal(error) ?? error;
         }
       }),
     get: (scope, attemptKey) =>
@@ -392,6 +400,15 @@ export function prismaCardTerminalAttemptStore(
         const next = await db.pharmacyCardTerminalAttempt.findFirst({
           where: { ...scoped(scope), id: current.id },
         });
+        if (next && current.status === 'MANUAL_REVIEW' && patch.resolvedById) {
+          await recordTerminalRefundRoot(db, scope, next, {
+            terminalConfirmed: current.providerRef !== null,
+            verifiedAmountMinor:
+              typeof detail?.verifiedAmountMinor === 'number'
+                ? detail.verifiedAmountMinor
+                : undefined,
+          });
+        }
         if (next) await audit(db, scope, next, current.status, detail);
         return next;
       }),

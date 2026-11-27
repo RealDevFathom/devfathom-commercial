@@ -1,11 +1,20 @@
 'use client';
 
+import { CounterMultiReturn } from './counter-multi-return';
+import { useCounterApprovalCopy } from './counter-approval-copy';
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { z } from '@/lib/zod-csp';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { Dialog, DialogDescription, DialogPortal } from '@/components/ui/dialog';
+import { Dialog as DialogPrimitive } from '@base-ui/react/dialog';
+import {
+  COUNTER_SHEET_BACKDROP,
+  CounterNoPermission,
+  CounterSheetHeader,
+  counterSheetClassName,
+} from './counter-sheet';
 import { trpc } from '@/lib/trpc';
 import { browserUuid } from '@/lib/browser-uuid';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
@@ -37,6 +46,28 @@ const returnInputSchema = z.object({
   idempotencyKey: z.string(),
 });
 const attemptSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('group'),
+    saleId: z.string(),
+    input: z.object({
+      branchId: z.string(),
+      requestId: z.string(),
+      reason: z.string(),
+      lines: z
+        .array(returnInputSchema.omit({ branchId: true, idempotencyKey: true, reason: true }))
+        .min(2)
+        .max(100),
+      refund: z
+        .object({
+          originalTenderId: z.string(),
+          deviceId: z.string(),
+          businessDate: z.string(),
+          amountMinor: z.number().int().positive(),
+          manualCashFallback: z.boolean(),
+        })
+        .optional(),
+    }),
+  }),
   z.object({
     kind: z.literal('return'),
     saleId: z.string(),
@@ -80,6 +111,7 @@ const PREPAID_REFUND_NOTE =
 const attemptLabel: Record<Attempt['kind'], string> = {
   return: 'return',
   returnRefund: 'return and refund',
+  group: 'multi-line return',
   refund: 'refund',
 };
 /** Transient witness credential. Never persisted with the saved attempt. */
@@ -128,6 +160,8 @@ type Props = {
   businessDate: () => Date;
   /** DEV-647: managers and owners only. The server enforces the same rule. */
   refundAuthorized?: boolean;
+  /** DEV-977 phase 3 (Counter v2 C6): closes the returns sheet from the no-permission card. */
+  onDismiss?: () => void;
 };
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
@@ -174,7 +208,7 @@ function ChoiceGroup<T extends string>({
   );
 }
 
-export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
+export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized' | 'onDismiss'>) {
   const [open, setOpen] = useState(false);
   // DEV-647 / DEV-621: returns and refunds stay with managers and owners.
   const access = trpc.pharmacySales.refundAccess.useQuery(undefined, { retry: false });
@@ -185,22 +219,42 @@ export function CounterReturnPanel(props: Omit<Props, 'refundAuthorized'>) {
       <Button variant="outline" className="h-11" onClick={() => setOpen(true)}>
         {title}
       </Button>
+      {/* DEV-977 phase 2B (Counter v2 B3): the returns sheet, a 760px dialog from 1024px and
+          a bottom sheet below. The form, its rules and its PIN approvals are unchanged. */}
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="pharmacy-workspace [&_[data-slot=dialog-close]]:min-h-11 [&_[data-slot=dialog-close]]:min-w-11 max-h-[85dvh] overflow-y-auto sm:max-w-2xl">
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>
-            {refundAuthorized
-              ? 'Scan or find the receipt, choose the returned line, then confirm the return and its refund together.'
-              : 'Find the original receipt. A manager or owner records returns and refunds with their PIN.'}
-          </DialogDescription>
-          {open && (
-            <ReturnForm
-              key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
-              {...props}
-              refundAuthorized={refundAuthorized}
+        <DialogPortal>
+          <DialogPrimitive.Backdrop className={`fixed inset-0 z-50 ${COUNTER_SHEET_BACKDROP}`} />
+          <DialogPrimitive.Popup
+            data-counter-sheet="returns"
+            className={counterSheetClassName(
+              'dialog',
+              // Portalled: the sheet carries the pharmacy scope (12px metadata floor) itself.
+              'pharmacy-workspace lg:w-[min(47.5rem,calc(100vw-4rem))] [&_[data-slot=button]]:rounded-[var(--radius-sm)]'
+            )}
+          >
+            <CounterSheetHeader
+              eyebrow="Returns and refunds"
+              title={title}
+              subtitle={
+                <DialogDescription render={<span />}>
+                  {refundAuthorized
+                    ? 'Scan or find the receipt, choose the returned line, then confirm the return and its refund together.'
+                    : 'Find the original receipt. A manager or owner records returns and refunds with their PIN.'}
+                </DialogDescription>
+              }
             />
-          )}
-        </DialogContent>
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4.5 text-sm">
+              {open && (
+                <ReturnForm
+                  key={`${props.organizationId}:${props.accountId}:${props.branchId}`}
+                  {...props}
+                  refundAuthorized={refundAuthorized}
+                  onDismiss={() => setOpen(false)}
+                />
+              )}
+            </div>
+          </DialogPrimitive.Popup>
+        </DialogPortal>
       </Dialog>
     </>
   );
@@ -222,7 +276,9 @@ export function ReturnForm({
   deviceId,
   businessDate,
   refundAuthorized = false,
+  onDismiss,
 }: Props) {
+  const approvalCopy = useCounterApprovalCopy();
   const storageKey = `pharmacy-return:${organizationId}:${accountId}:${branchId}`;
   // This form mounts only after opening the client-side dialog. Read recovery once,
   // before enabling any mutation; the parent key isolates account and branch changes.
@@ -269,6 +325,8 @@ export function ReturnForm({
   const [amount, setAmount] = useState('');
   const [manual, setManual] = useState(false);
   const [attempt, setAttempt] = useState<Attempt | null>(recovery.attempt);
+  const [groupMode, setGroupMode] = useState(false);
+  const [groupControlled, setGroupControlled] = useState(false);
   const [witnessStaffId, setWitnessStaffId] = useState('');
   const [witnessPin, setWitnessPin] = useState('');
   const [managerPin, setManagerPin] = useState('');
@@ -299,6 +357,7 @@ export function ReturnForm({
     { branchId, saleId },
     { enabled: ready && online && !!saleId, retry: false }
   );
+  const returnLines = trpc.pharmacySales.returnLines.useMutation();
   const returnLine = trpc.pharmacySales.returnLine.useMutation();
   const returnAndRefund = trpc.pharmacySales.returnAndRefund.useMutation();
   const refund = trpc.pharmacySales.refundTender.useMutation();
@@ -365,12 +424,22 @@ export function ReturnForm({
     !returnTender?.prepaid && (returnTender?.type === 'CARD' || returnTender?.type === 'WALLET');
   const tender = data?.tenders.find((row) => row.id === tenderId);
   // A saved return keeps its own line; a fresh one uses the selected line.
-  const witnessLineId = attempt && attempt.kind !== 'refund' ? attempt.input.saleLineId : lineId;
+  const witnessLineId =
+    attempt?.kind === 'return' || attempt?.kind === 'returnRefund'
+      ? attempt.input.saleLineId
+      : lineId;
   // DEV-911: no pharmacist witness is asked for while the owner has the check switched off.
   const pharmacistCheckOff =
     (data as { pharmacistCheckOff?: boolean } | undefined)?.pharmacistCheckOff === true;
   const witnessRequired =
-    !pharmacistCheckOff && !!data?.lines.find((row) => row.id === witnessLineId)?.controlled;
+    !pharmacistCheckOff &&
+    (attempt?.kind === 'group'
+      ? data?.lines.some(
+          (l) => l.controlled && attempt.input.lines.some((row) => row.saleLineId === l.id)
+        )
+      : groupMode
+        ? groupControlled
+        : !!data?.lines.find((row) => row.id === witnessLineId)?.controlled);
   const pharmacists = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
     enabled: ready && online && witnessRequired,
     retry: false,
@@ -418,6 +487,10 @@ export function ReturnForm({
   }
 
   function resetReturn() {
+    setGroupMode(false);
+    setGroupControlled(false);
+    setManagerPin('');
+    setWitnessPin('');
     setLineId('');
     setLotId('');
     setQuantity(null);
@@ -449,21 +522,31 @@ export function ReturnForm({
       if (next.kind !== 'refund') {
         // DEV-621: the manager PIN is sent with the request only, never saved with the attempt.
         const result =
-          next.kind === 'return'
-            ? await returnLine.mutateAsync({
+          next.kind === 'group'
+            ? await returnLines.mutateAsync({
                 ...next.input,
-                ...(controlledWitness ? { controlledWitness } : {}),
+                saleId: next.saleId,
                 managerPin: pin ?? '',
+                controlledWitness,
+                refund: next.input.refund
+                  ? { ...next.input.refund, businessDate: new Date(next.input.refund.businessDate) }
+                  : undefined,
               })
-            : await returnAndRefund.mutateAsync({
-                ...next.input,
-                refund: {
-                  ...next.input.refund,
-                  businessDate: new Date(next.input.refund.businessDate),
-                },
-                ...(controlledWitness ? { controlledWitness } : {}),
-                managerPin: pin ?? '',
-              });
+            : next.kind === 'return'
+              ? await returnLine.mutateAsync({
+                  ...next.input,
+                  ...(controlledWitness ? { controlledWitness } : {}),
+                  managerPin: pin ?? '',
+                })
+              : await returnAndRefund.mutateAsync({
+                  ...next.input,
+                  refund: {
+                    ...next.input.refund,
+                    businessDate: new Date(next.input.refund.businessDate),
+                  },
+                  ...(controlledWitness ? { controlledWitness } : {}),
+                  managerPin: pin ?? '',
+                });
         if (isBlockedResult(result)) {
           // The server refused before any stock change. A fresh attempt is definitely not
           // recorded; a retried attempt keeps its saved reference so an earlier ambiguous
@@ -511,11 +594,15 @@ export function ReturnForm({
       resetReturn();
       setAmount('');
       setMessage(
-        next.kind === 'return'
-          ? 'Return recorded. Enter your PIN again and choose an original tender to refund.'
-          : next.kind === 'returnRefund'
-            ? `Return recorded and refunded${refundedMinor === undefined ? '' : `: PKR ${formatMinor(refundedMinor)}`}. Loyalty tender refunds restore redeemed points. Reprint the receipt below.`
-            : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
+        next.kind === 'group'
+          ? refundedMinor === undefined
+            ? 'Selected returns recorded. No refund issued.'
+            : `Selected returns recorded and refunded: PKR ${formatMinor(refundedMinor)}.`
+          : next.kind === 'return'
+            ? 'Return recorded. Enter your PIN again and choose an original tender to refund.'
+            : next.kind === 'returnRefund'
+              ? `Return recorded and refunded${refundedMinor === undefined ? '' : `: PKR ${formatMinor(refundedMinor)}`}. Loyalty tender refunds restore redeemed points. Reprint the receipt below.`
+              : 'Refund recorded. Loyalty tender refunds restore redeemed points. Reprint the receipt below.'
       );
     } catch (cause) {
       const code = (cause as { data?: { code?: string } })?.data?.code;
@@ -582,10 +669,7 @@ export function ReturnForm({
       aria-label="Controlled medicine return witness"
       className="space-y-3 rounded-md border border-border-subtle p-3"
     >
-      <p className="text-sm text-text-muted">
-        Controlled medicine. A different pharmacist must witness this return with a fresh PIN. The
-        PIN is never saved on this device.
-      </p>
+      <p className="text-sm text-text-muted">{approvalCopy.witnessIntro}</p>
       <Label htmlFor="return-witness">Witnessing pharmacist</Label>
       <select
         id="return-witness"
@@ -624,7 +708,7 @@ export function ReturnForm({
           configure one.
         </p>
       ) : null}
-      <Label htmlFor="return-witness-pin">Witness PIN</Label>
+      <Label htmlFor="return-witness-pin">{approvalCopy.witnessLabel}</Label>
       <Input
         id="return-witness-pin"
         type="password"
@@ -641,7 +725,7 @@ export function ReturnForm({
 
   const managerPinField = (
     <div className="space-y-2">
-      <Label htmlFor="refund-manager-pin">Your manager or owner PIN</Label>
+      <Label htmlFor="refund-manager-pin">{approvalCopy.ownLabel}</Label>
       <Input
         id="refund-manager-pin"
         type="password"
@@ -655,8 +739,7 @@ export function ReturnForm({
         onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, ''))}
       />
       <p id="refund-manager-pin-hint" className="text-sm text-text-muted">
-        Required for every return and refund. If you set up an authenticator for approvals, enter
-        its 6-digit code instead. Neither is ever saved on this device.
+        {approvalCopy.ownHint}
       </p>
     </div>
   );
@@ -840,14 +923,81 @@ export function ReturnForm({
         </p>
       )}
       {data && !refundAuthorized && (
-        <p role="note" className="text-sm text-text-muted">
-          Returns and refunds need a manager or owner. Ask one to record this return and refund it
-          with their PIN.
-        </p>
+        // Counter v2 C6: what this needs and who can do it. The server refuses a return from a
+        // member without refund access whatever this card says.
+        <CounterNoPermission
+          heading="Ask a manager or owner to record this return"
+          who="Managers and the owner"
+          onDismiss={onDismiss}
+        >
+          <p role="note">
+            Returns and refunds need a manager or owner. Ask one to record this return and refund it
+            with their PIN.
+          </p>
+        </CounterNoPermission>
       )}
       {data && (
         <>
-          {refundAuthorized && (
+          {refundAuthorized && !attempt && (returnable.length >= 2 || groupMode) && (
+            <Button
+              type="button"
+              size="touch"
+              variant="outline"
+              disabled={locked || stale}
+              onClick={() => {
+                setGroupMode(!groupMode);
+                setGroupControlled(false);
+                setManagerPin('');
+                setWitnessPin('');
+              }}
+            >
+              {groupMode ? 'Return one line' : 'Return several lines'}
+            </Button>
+          )}
+          {refundAuthorized && groupMode && !attempt && (
+            <CounterMultiReturn
+              key={saleId}
+              branchId={branchId}
+              data={data}
+              disabled={locked || stale}
+              approvalReady={managerPinReady && witnessReady}
+              approval={
+                <>
+                  {witnessRequired && witnessFields}
+                  {managerPinField}
+                </>
+              }
+              onWitnessChange={(controlled) => {
+                setGroupControlled(controlled);
+                setWitnessPin('');
+                setManagerPin('');
+              }}
+              confirm={(lines, reason, refund) =>
+                void execute(
+                  {
+                    kind: 'group',
+                    saleId,
+                    input: {
+                      branchId,
+                      requestId: browserUuid(),
+                      reason,
+                      lines,
+                      refund: refund
+                        ? {
+                            ...refund,
+                            deviceId: deviceId(),
+                            businessDate: businessDate().toISOString(),
+                          }
+                        : undefined,
+                    },
+                  },
+                  witness,
+                  managerPin
+                )
+              }
+            />
+          )}
+          {refundAuthorized && !groupMode && (
             <form
               aria-label="Return and refund"
               noValidate

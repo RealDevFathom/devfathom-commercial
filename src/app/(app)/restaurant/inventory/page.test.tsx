@@ -195,9 +195,11 @@ describe('physical count workflow', () => {
     render(page);
     const createForm = screen.getByRole('button', { name: 'Create count' }).closest('form')!;
     const lineForm = screen.getByRole('button', { name: 'Add count line' }).closest('form')!;
-    expect(within(createForm).getByRole('option', { name: 'Main Kitchen' })).toBeDefined();
     expect(
-      within(lineForm).getByRole('option', { name: 'Basmati Rice (Super Kernel)' })
+      within(createForm).getByRole('option', { hidden: true, name: 'Main Kitchen' })
+    ).toBeDefined();
+    expect(
+      within(lineForm).getByRole('option', { hidden: true, name: 'Basmati Rice (Super Kernel)' })
     ).toBeDefined();
     expect(screen.queryByRole('textbox', { name: /location|stock item|count id/i })).toBeNull();
   });

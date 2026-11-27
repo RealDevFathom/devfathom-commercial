@@ -6,9 +6,24 @@
  *
  * Skipped unless TEST_DATABASE_URL names that role on a migrated disposable database.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+// DEV-957 phase 2 (review): offline cash selling is off and cannot be switched on in the
+// product. The preparation tests force it on; the test of the switch itself turns it off.
+const selling = vi.hoisted(() => ({ on: true }));
+vi.mock('@/lib/pharmacy/offline-cash-selling', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/pharmacy/offline-cash-selling')>();
+  return {
+    ...actual,
+    readOfflineCashSelling: vi.fn(async (...args: Parameters<typeof actual.readOfflineCashSelling>) =>
+      selling.on ? { enabled: true, available: true } : actual.readOfflineCashSelling(...args)
+    ),
+    counterSetAsidesInForce: vi.fn(async () => selling.on),
+  };
+});
+
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
@@ -481,6 +496,158 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     expect(device?.deviceSecretHash).toBeDefined();
   });
 
+  it('DEV-957 phase 2: the receipt-number gap report is for an assigned administrator of this tenant only', async () => {
+    expect(await refusal(act(cashierA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(await refusal(act(managerA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'branch_forbidden',
+    });
+    expect(await refusal(act(ownerB, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(Array.isArray(await act(ownerA, (api) => api.receiptNumberGaps({ branchId: ids.branchA })))).toBe(true);
+  });
+
+  it('DEV-957 phase 2 (review B1): offline cash selling is off, and nobody can switch it on', async () => {
+    // The product state: off, and not available (no test override).
+    selling.on = false;
+    try {
+    expect(await act(ownerA, (api) => api.offlineCashSelling({ branchId: ids.branchA }))).toEqual({
+      enabled: false,
+      available: false,
+      message: 'Offline cash selling becomes available when sending offline sales to the server is ready.',
+    });
+    // Refused for everyone, the organisation's administrator included; nothing is written.
+    expect(
+      await refusal(act(ownerA, (api) => api.setOfflineCashSelling({ branchId: ids.branchA, enabled: true })))
+    ).toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Offline cash selling becomes available when sending offline sales to the server is ready.',
+    });
+    for (const person of [cashierA, ownerB])
+      expect(
+        await refusal(act(person, (api) => api.setOfflineCashSelling({ branchId: ids.branchA, enabled: true })))
+      ).toMatchObject({ code: 'FORBIDDEN' });
+    expect(
+      await refusal(act(managerA, (api) => api.offlineCashSelling({ branchId: ids.branchA })))
+    ).toMatchObject({ code: 'FORBIDDEN', message: 'branch_forbidden' });
+    // Every price list a counter is signed says so.
+    expect(await act(ownerA, (api) => api.offlineCashSelling({ branchId: ids.branchA }))).toMatchObject({
+      enabled: false,
+    });
+    // Review round 2: and nothing is proposed to be set aside for a counter.
+    const counter = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Switch-off counter' })
+    );
+    expect(
+      await act(ownerA, (api) =>
+        api.preparationPlan({ branchId: ids.branchA, deviceId: counter.device.id })
+      )
+    ).toMatchObject({ lots: [], settingAside: false });
+    } finally {
+      selling.on = true;
+    }
+  });
+
+  it('DEV-957 phase 2 (review B2): a manager records what was done with an unsent sale a revoked counter kept, audited', async () => {
+    const counter = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Kept-sales counter' })
+    );
+    await act(ownerA, (api) => api.revoke({ branchId: ids.branchA, deviceId: counter.device.id }));
+    const input = {
+      branchId: ids.branchA,
+      deviceId: counter.device.id,
+      commandId: `kept_${suffix}`,
+      sequence: 1,
+      receiptNumber: 501,
+      amountMinor: 330,
+      soldAt: new Date().toISOString(),
+      sealHash: 'a'.repeat(64),
+      outcome: 'ENTERED_ONLINE' as const,
+      note: 'Entered as bill 4512',
+    };
+    // Not a cashier, not an unassigned manager, not another tenant.
+    expect(await refusal(act(cashierA, (api) => api.recordUnsentOfflineSale(input)))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(await refusal(act(managerA, (api) => api.recordUnsentOfflineSale(input)))).toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'branch_forbidden',
+    });
+    expect(await refusal(act(ownerB, (api) => api.recordUnsentOfflineSale(input)))).toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(
+      await refusal(act(ownerA, (api) => api.recordUnsentOfflineSale({ ...input, deviceId: 'no_such_counter' })))
+    ).toMatchObject({ code: 'NOT_FOUND' });
+    expect(await act(ownerA, (api) => api.recordUnsentOfflineSale(input))).toEqual({
+      recorded: true,
+      serverStatus: null,
+    });
+    const audits = await withTenantDb(ids.orgA, (tx) =>
+      tx.auditLog.findMany({
+        where: { action: 'pharmacyOffline.recordUnsentOfflineSale', targetId: counter.device.id },
+      })
+    );
+    expect(audits).toHaveLength(1);
+    // Review round 2: idempotent. A retry, and two attempts at once, still leave one row.
+    expect(await act(ownerA, (api) => api.recordUnsentOfflineSale(input))).toEqual({
+      recorded: true,
+      serverStatus: null,
+    });
+    await Promise.all([
+      act(ownerA, (api) => api.recordUnsentOfflineSale(input)),
+      act(ownerA, (api) => api.recordUnsentOfflineSale(input)),
+    ]);
+    expect(
+      await withTenantDb(ids.orgA, (tx) =>
+        tx.auditLog.count({
+          where: { action: 'pharmacyOffline.recordUnsentOfflineSale', targetId: counter.device.id },
+        })
+      )
+    ).toBe(1);
+    // Review round 3: a retry that says something else never silently keeps the first
+    // answer. It is refused, naming who recorded it and what, and nothing is written.
+    for (const changed of [
+      { ...input, outcome: 'MONEY_RETURNED' as const },
+      { ...input, note: 'Money given back at the door' },
+    ]) {
+      const refused = await refusal(act(ownerA, (api) => api.recordUnsentOfflineSale(changed)));
+      expect(refused.code).toBe('CONFLICT');
+      expect(refused.message).toMatch(
+        new RegExp(
+          `^Receipt 501 was already recorded by ${ids.ownerA} on .+ as "Entered as a sale online", with the note "Entered as bill 4512"\\. Nothing was changed\\.$`
+        )
+      );
+    }
+    expect(
+      await withTenantDb(ids.orgA, (tx) =>
+        tx.auditLog.count({
+          where: { action: 'pharmacyOffline.recordUnsentOfflineSale', targetId: counter.device.id },
+        })
+      )
+    ).toBe(1);
+    expect(audits[0]).toMatchObject({
+      actorId: ids.ownerA,
+      metadata: {
+        branchId: ids.branchA,
+        deviceId: counter.device.id,
+        commandId: input.commandId,
+        receiptNumber: 501,
+        amountMinor: 330,
+        outcome: 'ENTERED_ONLINE',
+        note: 'Entered as bill 4512',
+      },
+    });
+    // It books nothing.
+    const sales = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacySale.count({ where: { branchId: ids.branchA, receiptNumber: 501 } })
+    );
+    expect(sales).toBe(0);
+  });
+
   it('refuses a non-ADMIN with admin:access at a branch they are not assigned to (branch_forbidden)', async () => {
     const attempts: Array<(api: OfflineCaller) => Promise<unknown>> = [
       (api) => api.enroll({ branchId: ids.branchA, name: 'Unassigned manager' }),
@@ -781,5 +948,84 @@ describeIfDatabase('DEV-957 counter enrolment procedures (runtime role, real ABA
     });
     for (const lot of excluded) expect(byLot.has(lot.lotId)).toBe(false);
     expect(plan.lots.every((lot) => lot.stockLocationId === locationId)).toBe(true);
+  });
+});
+
+describeIfDatabase('DEV-957 phase 3 credential rotation', () => {
+  it('rotates a prepared counter with its own valid session and replaces the old credential', async () => {
+    const { device, secret } = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Local rotation fixture' })
+    );
+    const { reserveReceiptNumberBlock } = await import('@/lib/pharmacy/offline-receipt-leases');
+    await withTenantDb(ids.orgA, (db) =>
+      reserveReceiptNumberBlock(
+        db,
+        { organizationId: ids.orgA, branchId: ids.branchA, actorId: ownerA.id },
+        { deviceId: device.id, size: 1 }
+      )
+    );
+
+    const { session, organization, entitlements } = context(null, ownerA);
+    const actor = vi.spyOn(await import('@/lib/tenancy/tenant-actor'), 'resolveTenantActor');
+    const modules = vi.spyOn(await import('@/lib/entitlements'), 'resolveOrganizationEntitlements');
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', randomBytes(32).toString('base64'));
+    try {
+      actor.mockResolvedValueOnce({
+        session: session!,
+        organization: organization!,
+        support: null,
+      });
+      modules.mockResolvedValueOnce(entitlements);
+      const { pharmacyCounterRoute } = await import('./pharmacy-offline');
+      const established = await pharmacyCounterRoute('establish')(
+        new Request('https://tenant.test/api/pharmacy/counter/establish', {
+          method: 'POST',
+          headers: { authorization: `Bearer ${secret}` },
+          body: '{}',
+        })
+      );
+      expect(established.status).toBe(201);
+      const { sessionToken } = await established.json();
+      const rotated = await act(ownerA, (api) =>
+        api.rotate({ branchId: ids.branchA, deviceId: device.id, sessionToken })
+      );
+      expect(rotated.deviceId).toBe(device.id);
+      await withTenantDb(ids.orgA, async (db) => {
+        expect(await devices.resolvePharmacyCounterBySecret(db, secret)).toBeNull();
+        expect((await devices.resolvePharmacyCounterBySecret(db, rotated.secret))?.id).toBe(
+          device.id
+        );
+      });
+    } finally {
+      actor.mockRestore();
+      modules.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('keeps the current credential when a different computer tries to rotate a prepared counter', async () => {
+    const enrolled = await act(ownerA, (api) =>
+      api.enroll({ branchId: ids.branchA, name: 'Prepared counter' })
+    );
+    const { reserveReceiptNumberBlock } = await import('@/lib/pharmacy/offline-receipt-leases');
+    await withTenantDb(ids.orgA, (db) =>
+      reserveReceiptNumberBlock(
+        db,
+        {
+          organizationId: ids.orgA,
+          branchId: ids.branchA,
+          actorId: ids.ownerA,
+        },
+        { deviceId: enrolled.device.id, size: 5 }
+      )
+    );
+    await expect(
+      act(ownerA, (api) => api.rotate({ branchId: ids.branchA, deviceId: enrolled.device.id }))
+    ).rejects.toThrow(/rotate.*this counter/i);
+    await withTenantDb(ids.orgA, async (db) => {
+      expect((await devices.resolvePharmacyCounterBySecret(db, enrolled.secret))?.id).toBe(
+        enrolled.device.id
+      );
+    });
   });
 });

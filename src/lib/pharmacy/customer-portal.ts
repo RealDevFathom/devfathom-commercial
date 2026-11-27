@@ -353,7 +353,7 @@ export async function readPortalHome(db: ScopedDb, session: PortalSession) {
     }),
     db.organization.findUnique({
       where: { id: session.organizationId },
-      select: { currency: true },
+      select: { currency: true, timezone: true },
     }),
     db.pharmacyFamilyAccount.findMany({
       where: {
@@ -389,6 +389,7 @@ export async function readPortalHome(db: ScopedDb, session: PortalSession) {
   return {
     customer: { displayName: snapshot.customer.displayName },
     branchName: branch?.name ?? '',
+    timeZone: organization?.timezone,
     currency: organization?.currency ?? 'PKR',
     loyaltyPoints: snapshot.pointsBalance,
     receipts: snapshot.history,

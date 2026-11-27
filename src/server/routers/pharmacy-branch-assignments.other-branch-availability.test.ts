@@ -46,7 +46,11 @@ function liveActor(kind: Actor) {
   };
 }
 
-function fixture(kind: Actor, stored: boolean | null = false) {
+function fixture(
+  kind: Actor,
+  stored: boolean | null = false,
+  support: 'none' | 'support' | 'session-flag' = 'none'
+) {
   const db = {
     user: {
       findUnique: vi.fn(async () => ({
@@ -75,10 +79,14 @@ function fixture(kind: Actor, stored: boolean | null = false) {
         department: 'LEADERSHIP',
         status: 'ACTIVE',
         organizationId: 'org-a',
+        ...(support === 'session-flag' ? { isSupportSession: true } : {}),
       },
     },
     organization: { id: 'org-a', vertical: 'PHARMACY' },
-    support: null,
+    support:
+      support === 'support'
+        ? { supportSessionId: 'support_session_1', platformUserId: 'platform_operator_1' }
+        : null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} as Record<string, unknown> },
   };
@@ -145,6 +153,21 @@ describe('DEV-907 owner switch for other-branch availability', () => {
         message: 'Only the owner can change this setting.',
       });
       expect(f.db.organization.update).not.toHaveBeenCalled();
+    }
+  );
+
+  // DEV-1053: owner only means the owner's own session.
+  it.each(['support', 'session-flag'] as const)(
+    'refuses a support session acting as the owner before reading or writing (%s)',
+    async (kind) => {
+      const f = fixture('owner', false, kind);
+      await expect(f.caller.setOtherBranchAvailability({ enabled: true })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Only the owner can change this setting.',
+      });
+      expect(f.db.user.findFirst).not.toHaveBeenCalled();
+      expect(f.db.organization.update).not.toHaveBeenCalled();
+      expect(audit.annotateAudit).not.toHaveBeenCalled();
     }
   );
 });

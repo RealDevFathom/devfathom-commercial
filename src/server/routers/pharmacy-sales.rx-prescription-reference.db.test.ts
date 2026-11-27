@@ -80,10 +80,12 @@ let disconnect: (() => Promise<void>) | null = null;
 let rx: Medicine;
 let otc: Medicine;
 let controlled: Medicine;
-const patients = { ayesha: '', bilal: '' };
+const patients = { ayesha: '', bilal: '', controlled: '' };
+const savedAddress = '42 Synthetic Test Street';
 /** Prescription line ids. */
 const lines = {
   valid: '',
+  controlled: '',
   expired: '',
   bilal: '',
   otcForAyesha: '',
@@ -369,7 +371,7 @@ beforeAll(async () => {
     });
     rx = await medicineIn(tx, 'Amoxicillin 500mg', { rx: true }, 500);
     otc = await medicineIn(tx, 'Paracetamol 500mg', {}, 20);
-    controlled = await medicineIn(tx, 'Tramadol 50mg', { controlled: true });
+    controlled = await medicineIn(tx, 'Tramadol 50mg', { controlled: true }, 20);
     patients.ayesha = (
       await tx.pharmacyPatient.create({ data: { displayName: 'Ayesha Khan' } })
     ).id;
@@ -386,6 +388,31 @@ beforeAll(async () => {
     });
     const prescriber = await tx.pharmacyPrescriber.create({
       data: { name: 'Dr Sana Malik', registrationNumber: `PMDC-${suffix}` },
+    });
+    const patient = await tx.pharmacyPatient.create({
+      data: {
+        displayName: 'Synthetic controlled patient',
+        address: savedAddress,
+        cnic: '00000-0000000-0',
+      },
+    });
+    patients.controlled = patient.id;
+    await tx.patientConsent.create({
+      data: {
+        patientId: patient.id,
+        purpose: 'DISPENSING',
+        channel: 'IN_PERSON',
+        version: 1,
+        granted: true,
+        recordedByUserId: ids.pharmacist,
+      },
+    });
+    lines.controlled = await prescriptionLine(tx, ids.org, {
+      ...current,
+      patientId: patient.id,
+      prescriberId: prescriber.id,
+      medicine: controlled,
+      authorizedCanonicalUnits: 10,
     });
     const forAyesha = { patientId: patients.ayesha, prescriberId: prescriber.id };
     // One strip's worth with repeats to spare, so the second strip fails on quantity.
@@ -468,6 +495,76 @@ describeIfDatabase('prescription references on counter sale lines (#518)', () =>
       )
     );
     expect(scope).toEqual({ organization_id: ids.org, is_platform_admin: 'false' });
+  });
+
+  it('records the saved address and its audited read for the selected patient after independent approval', async () => {
+    const { generateTotpSecret } = await import('@/lib/totp');
+    const { encryptSecret } = await import('@/lib/secret-crypto');
+    const { hashOperatorCredential } = await import('@/lib/restaurant/operator-credentials');
+    const { fixtureTotp } = await import('../../../tests/e2e/fixtures/restaurant-platform-auth');
+    const secret = generateTotpSecret();
+    const staff = await withTenantDb(ids.org, async (db) => {
+      const staff = await db.restaurantStaffProfile.create({
+        data: { userId: ids.reviewer, displayName: 'Synthetic witness' },
+      });
+      await db.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: staff.id,
+          type: 'PIN',
+          credentialHash: await hashOperatorCredential('PIN', '4628'),
+        },
+      });
+      await db.approvalAuthenticator.create({
+        data: {
+          userId: ids.reviewer,
+          encryptedSecret: encryptSecret(secret),
+          enabledAt: new Date(),
+        },
+      });
+      return staff;
+    });
+    const saleId = await newSale(ids.pharmacist);
+    const result = await act(ids.pharmacist, (api) =>
+      api.addLine(
+        line(saleId, controlled, {
+          controlledAuthorization: {
+            patientId: patients.controlled,
+            patientAddress: { useAddressOnFile: true },
+            prescriptionLineId: lines.controlled,
+            staffProfileId: staff.id,
+            pin: fixtureTotp(secret),
+            emergency: false,
+            rxSerialWritten: true,
+          },
+        })
+      )
+    );
+    expect(result.line.id).toBeTruthy();
+    expect(JSON.stringify(result)).not.toContain(savedAddress);
+    await withTenantDb(ids.org, async (db) => {
+      const entry = await db.pharmacyControlledRegisterEntry.findFirstOrThrow({
+        where: { patientId: patients.controlled, prescriptionLineId: lines.controlled },
+      });
+      expect(entry).toMatchObject({
+        patientAddress: savedAddress,
+        witnessedByUserId: ids.reviewer,
+        recordedByUserId: ids.pharmacist,
+      });
+      const reads = await db.auditLog.findMany({
+        where: {
+          action: 'pharmacy.patient.controlledAddress.read',
+          targetId: patients.controlled,
+        },
+      });
+      expect(reads).toHaveLength(1);
+      expect(reads[0]).toMatchObject({
+        operation: 'READ',
+        actorId: ids.pharmacist,
+        targetType: 'PharmacyPatient',
+        metadata: { branchId: ids.branch, saleId, witnessedByUserId: ids.reviewer },
+      });
+      expect(JSON.stringify(reads)).not.toContain(savedAddress);
+    });
   });
 
   it('refuses an unknown reference', async () => {

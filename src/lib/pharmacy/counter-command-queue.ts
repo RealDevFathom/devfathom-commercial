@@ -66,6 +66,11 @@ export type CounterQueuedCommand = {
   serverRef: string | null;
   /** Set when the server refused this command outright. */
   rejection: string | null;
+  /**
+   * DEV-957 phase 2 (hardening 4): the hash of the seal this sale was signed with when it
+   * was taken (the seal itself travels in `payload.seal`). The next sale names it.
+   */
+  sealHash?: string;
 };
 
 /** One reserved block of receipt numbers as the counter carries it. */
@@ -96,7 +101,17 @@ export type CounterQueueSnapshot = {
   quotas: CounterQuota[];
   /** OFF-04 append-only local audit trail; events are never rewritten. */
   safetyLeaseEvents: import('./offline-safety-lease').SafetyLeaseEvent[];
+  /** DEV-957 phase 2 (hardening 4): the seal hash of the last sale taken here (the chain head). */
+  lastSealHash?: string | null;
+  /**
+   * DEV-957 phase 2: one copy of each signed price list a waiting sale was priced from,
+   * keyed by its payload hash. A queued sale keeps only the envelope and signature, so a
+   * sale never stores a whole price list of its own; the payload is put back when it is sent.
+   */
+  snapshotArchive?: ArchivedSnapshotPayload[];
 };
+
+export type ArchivedSnapshotPayload = { payloadHash: string; payload: unknown };
 
 export function createCounterQueue(deviceId: string): CounterQueueSnapshot {
   return {
@@ -111,9 +126,7 @@ export function createCounterQueue(deviceId: string): CounterQueueSnapshot {
 }
 
 export function unsettledCommands(snapshot: CounterQueueSnapshot): CounterQueuedCommand[] {
-  return snapshot.commands.filter(
-    (command) => command.status !== 'ACKNOWLEDGED' && command.status !== 'QUARANTINED'
-  );
+  return snapshot.commands.filter((command) => command.status !== 'ACKNOWLEDGED');
 }
 
 // ── Receipt-number leases (§8A invariant 16) ─────────────────────────────────
@@ -132,7 +145,7 @@ export function remainingReceiptNumbers(snapshot: CounterQueueSnapshot): number 
  */
 export function issueReceiptNumber(
   leases: readonly CounterLeaseCursor[]
-): { receiptNumber: number; leases: CounterLeaseCursor[] } | null {
+): { receiptNumber: number; leaseId: string; leases: CounterLeaseCursor[] } | null {
   let chosen: CounterLeaseCursor | null = null;
   for (const lease of leases) {
     if (lease.nextNumber > lease.blockEnd) continue;
@@ -142,6 +155,7 @@ export function issueReceiptNumber(
   const receiptNumber = chosen.nextNumber;
   return {
     receiptNumber,
+    leaseId: chosen.leaseId,
     leases: leases.map((lease) =>
       lease.leaseId === chosen.leaseId ? { ...lease, nextNumber: receiptNumber + 1 } : lease
     ),
@@ -163,6 +177,23 @@ export function quotaUnitsAvailable(
       candidate.stockLocationId === bucket.stockLocationId
   );
   return quota ? quota.quotaUnits - quota.consumedUnits : 0;
+}
+
+/** One draw per bucket: two lines of the same lot and location add up. */
+function mergeDraws(
+  buckets: ReadonlyArray<QuotaBucketRef & { units: number }>
+): Array<QuotaBucketRef & { units: number }> {
+  const merged = new Map<string, QuotaBucketRef & { units: number }>();
+  for (const bucket of buckets) {
+    const key = `${bucket.inventoryLotId}:${bucket.stockLocationId}`;
+    const prior = merged.get(key);
+    merged.set(key, {
+      inventoryLotId: bucket.inventoryLotId,
+      stockLocationId: bucket.stockLocationId,
+      units: (prior?.units ?? 0) + bucket.units,
+    });
+  }
+  return [...merged.values()];
 }
 
 function consumeQuota(
@@ -189,6 +220,12 @@ export type CounterCommandInput = {
   /** The bucket this command draws stock from, and how much. */
   bucket?: QuotaBucketRef | null;
   requestedUnits?: number;
+  /**
+   * DEV-957 phase 2: a bill with several lines draws from several buckets. Each one must
+   * hold enough of this counter's quota, and each is debited in the same returned
+   * snapshot (or none is). Takes the place of `bucket` and `requestedUnits`.
+   */
+  buckets?: ReadonlyArray<QuotaBucketRef & { units: number }>;
   requestedCreditMinor?: number;
   /** Defaults true for sale actions, keeping older callers fail closed. */
   medicineSale?: boolean;
@@ -210,7 +247,7 @@ export type CounterEnqueueResult =
   | { ok: true; snapshot: CounterQueueSnapshot; command: CounterQueuedCommand }
   | {
       ok: false;
-      reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL';
+      reason: OfflineDenialReason | 'DEVICE_MISMATCH' | 'DEVICE_REVOKED' | 'QUEUE_FULL' | 'SEAL_FAILED' | 'SELLING_OFF';
       message: string;
       decision: OfflineActionDecision | null;
     };
@@ -260,12 +297,27 @@ export function enqueueCounterCommand(
     };
   }
 
-  const requestedUnits = input.requestedUnits ?? 0;
+  // DEV-957 phase 2: several buckets are summed per bucket and the matrix judges the
+  // tightest one, so a bill is refused when ANY of its lots is short.
+  const draws = input.buckets ? mergeDraws(input.buckets) : null;
+  const tightest = draws
+    ? draws.reduce<{ bucket: QuotaBucketRef; units: number } | null>((worst, draw) => {
+        const slack = quotaUnitsAvailable(snapshot, draw) - draw.units;
+        if (!worst) return { bucket: draw, units: draw.units };
+        return slack < quotaUnitsAvailable(snapshot, worst.bucket) - worst.units
+          ? { bucket: draw, units: draw.units }
+          : worst;
+      }, null)
+    : null;
+  const requestedUnits = tightest ? tightest.units : (input.requestedUnits ?? 0);
   const decision = decideOfflineAction(input.action, {
     nowMs: matrix.nowMs,
     snapshots: matrix.snapshots,
     receiptNumbersRemaining: remainingReceiptNumbers(snapshot),
-    quotaUnitsAvailable: quotaUnitsAvailable(snapshot, input.bucket ?? null),
+    quotaUnitsAvailable: quotaUnitsAvailable(
+      snapshot,
+      tightest ? tightest.bucket : (input.bucket ?? null)
+    ),
     requestedUnits,
     requestedCreditMinor: input.requestedCreditMinor ?? 0,
     cachedCreditRemainingMinor: matrix.cachedCreditRemainingMinor,
@@ -280,8 +332,18 @@ export function enqueueCounterCommand(
     return { ok: false, reason: decision.reason, message: decision.message, decision };
   }
 
+  if (draws && draws.some((draw) => !Number.isSafeInteger(draw.units) || draw.units <= 0)) {
+    return {
+      ok: false,
+      reason: 'QUOTA_EXCEEDED',
+      message: 'Every line needs a whole number of units.',
+      decision,
+    };
+  }
+
   let leases = snapshot.leases;
   let receiptNumber: number | null = null;
+  let leaseId: string | null = null;
   if (decision.rule.requires.includes('RECEIPT_NUMBER')) {
     const issued = issueReceiptNumber(leases);
     // `decideOfflineAction` already refused an empty runway; this is the
@@ -295,13 +357,25 @@ export function enqueueCounterCommand(
       };
     }
     receiptNumber = issued.receiptNumber;
+    leaseId = issued.leaseId;
     leases = issued.leases;
   }
 
-  const quotas =
-    decision.rule.requires.includes('STOCK_QUOTA') && input.bucket && requestedUnits > 0
-      ? consumeQuota(snapshot.quotas, input.bucket, requestedUnits)
-      : snapshot.quotas;
+  const quotas = !decision.rule.requires.includes('STOCK_QUOTA')
+    ? snapshot.quotas
+    : draws
+      ? draws.reduce((held, draw) => consumeQuota(held, draw, draw.units), snapshot.quotas)
+      : input.bucket && requestedUnits > 0
+        ? consumeQuota(snapshot.quotas, input.bucket, requestedUnits)
+        : snapshot.quotas;
+
+  // DEV-957 phase 2: the leased receipt names the block its number was drawn from, so
+  // the server checks the number against exactly that lease at replay.
+  const leasedReceipt = input.payload.leasedReceipt;
+  const payload =
+    leaseId && leasedReceipt && typeof leasedReceipt === 'object' && !Array.isArray(leasedReceipt)
+      ? { ...input.payload, leasedReceipt: { ...leasedReceipt, leaseId } }
+      : input.payload;
 
   const commandId = newId();
   const command: CounterQueuedCommand = {
@@ -309,7 +383,7 @@ export function enqueueCounterCommand(
     idempotencyKey: commandId,
     sequence: snapshot.nextSequence,
     action: input.action,
-    payload: input.payload,
+    payload,
     clientOriginAt: input.clientOriginAt,
     receiptNumber,
     status: 'PENDING',
@@ -355,8 +429,10 @@ export function nextCounterReplay(
   }
   if (snapshot.replay === 'PAUSED_REAUTH') return { status: 'PAUSED', reason: 'REAUTH' };
 
-  const next = [...unsettledCommands(snapshot)].sort((a, b) => a.sequence - b.sequence)[0];
-  return next ? { status: 'READY', command: next } : { status: 'IDLE' };
+  const next = unsettledCommands(snapshot).sort((a, b) => a.sequence - b.sequence)[0];
+  return next && next.status !== 'QUARANTINED'
+    ? { status: 'READY', command: next }
+    : { status: 'IDLE' };
 }
 
 /** The replay request for one queued command. The key is the command id, always. */
@@ -386,8 +462,75 @@ export type CounterReplayRequest = {
   body: Record<string, unknown>;
 };
 
+// ── Signed price lists kept once (DEV-957 phase 2) ───────────────────────────
+
+type CarriedSnapshot = { envelope?: { payloadHash?: unknown }; payload?: unknown };
+
+function carried(value: unknown): CarriedSnapshot[] {
+  return Array.isArray(value) ? (value as CarriedSnapshot[]) : [];
+}
+
+/**
+ * Move the payloads of the price lists a queued sale carries into the shared archive,
+ * leaving the sale with each envelope and signature only. Payloads are keyed by the hash
+ * the signed envelope names, so one copy serves every sale priced from that list.
+ */
+export function archiveCommandSnapshots(
+  snapshot: CounterQueueSnapshot,
+  command: CounterQueuedCommand
+): { snapshot: CounterQueueSnapshot; command: CounterQueuedCommand } {
+  const archive = [...(snapshot.snapshotArchive ?? [])];
+  const snapshots = carried(command.payload.snapshots).map((row) => {
+    const hash = row.envelope?.payloadHash;
+    if (typeof hash !== 'string' || row.payload === undefined) return row;
+    if (!archive.some((entry) => entry.payloadHash === hash))
+      archive.push({ payloadHash: hash, payload: row.payload });
+    const reference: CarriedSnapshot = { ...row };
+    delete reference.payload;
+    return reference;
+  });
+  const compact = { ...command, payload: { ...command.payload, snapshots } };
+  return {
+    command: compact,
+    snapshot: {
+      ...snapshot,
+      snapshotArchive: archive,
+      commands: snapshot.commands.map((row) => (row.commandId === command.commandId ? compact : row)),
+    },
+  };
+}
+
+/** The carried price lists with their payloads put back from the archive. */
+function withArchivedPayloads(snapshot: CounterQueueSnapshot, value: unknown): unknown {
+  if (!Array.isArray(value)) return value;
+  return carried(value).map((row) => {
+    if (row.payload !== undefined) return row;
+    const hash = row.envelope?.payloadHash;
+    const kept = (snapshot.snapshotArchive ?? []).find((entry) => entry.payloadHash === hash);
+    if (!kept) throw new Error('A queued sale is missing the price list it was priced from.');
+    return { ...row, payload: kept.payload };
+  });
+}
+
+/**
+ * Drop archived price lists no sale the server has not acknowledged refers to any more
+ * (a sale it refused still needs its list, for a manager to settle it).
+ */
+export function pruneSnapshotArchive(snapshot: CounterQueueSnapshot): CounterQueueSnapshot {
+  if (!snapshot.snapshotArchive?.length) return snapshot;
+  const needed = new Set(
+    snapshot.commands.filter((command) => command.status !== 'ACKNOWLEDGED').flatMap((command) =>
+      carried(command.payload.snapshots).map((row) => row.envelope?.payloadHash)
+    )
+  );
+  const kept = snapshot.snapshotArchive.filter((entry) => needed.has(entry.payloadHash));
+  return kept.length === snapshot.snapshotArchive.length
+    ? snapshot
+    : { ...snapshot, snapshotArchive: kept };
+}
+
 export async function buildCounterReplayRequest(
-  _snapshot: CounterQueueSnapshot,
+  snapshot: CounterQueueSnapshot,
   command: CounterQueuedCommand,
   sign: CounterReplaySigner
 ): Promise<CounterReplayRequest> {
@@ -406,12 +549,14 @@ export async function buildCounterReplayRequest(
     idempotencyKey: command.idempotencyKey,
     action: command.action,
     leasedReceipt: finalReceipt,
-    snapshots: command.payload.snapshots,
+    snapshots: withArchivedPayloads(snapshot, command.payload.snapshots),
     lines: command.payload.lines,
     amountMinor: command.payload.amountMinor,
     ...(command.action === 'MANUAL_OTC_SALE'
       ? { manualCapture: command.payload.manualCapture }
       : { cashReceivedMinor: command.payload.cashReceivedMinor }),
+    // DEV-957 phase 2 (hardening 4): the seal signed when the sale was taken.
+    ...(command.payload.seal !== undefined ? { seal: command.payload.seal } : {}),
   };
   const signatures = await sign(body, finalReceipt);
   return {
