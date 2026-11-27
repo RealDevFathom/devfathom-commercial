@@ -46,3 +46,16 @@ it('shows progress while checking the link', () => {
   render(<SupplierPoActionForm token="synthetic" />);
   expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Loading purchase order');
 });
+
+it.each([
+  { data: { code: 'TOO_MANY_REQUESTS' } },
+  { meta: { response: new Response(null, { status: 429 }) } },
+])('shows retry guidance for a rate-limited page lookup', (error) => {
+  query.mockReturnValue({ error });
+  render(<SupplierPoActionForm token="synthetic" />);
+  expect(
+    screen.getByText('Too many tries. Wait a few minutes and open the link again.')
+  ).toBeVisible();
+  expect(screen.queryByText('This link is not valid')).not.toBeInTheDocument();
+  expect(screen.queryByRole('button')).not.toBeInTheDocument();
+});

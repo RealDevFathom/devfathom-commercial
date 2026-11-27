@@ -35,6 +35,19 @@ export function SupplierPoActionForm({ token }: { token: string }) {
         <PageHeader heading="Loading purchase order…" description="Checking your link." />
       </SectionCard>
     );
+  const response = order.error?.meta?.response;
+  if (
+    order.error?.data?.code === 'TOO_MANY_REQUESTS' ||
+    (response instanceof Response && response.status === 429)
+  )
+    return (
+      <SectionCard>
+        <PageHeader
+          heading="Supplier response"
+          description="Too many tries. Wait a few minutes and open the link again."
+        />
+      </SectionCard>
+    );
   if (order.error || !order.data || linkEnded)
     return (
       <SectionCard>
