@@ -220,14 +220,10 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
           purchaseOrderId: 'po_a',
           actorUserId: 'user_a',
         });
-      for (const operation of [issue, () => getSupplierActionPage(state.db, state.token)]) {
-        expect(
-          await operation().then(
-            () => 'allowed',
-            (error) => error.reason
-          )
-        ).toBe('INVALID_LINK');
-      }
+      await expect(issue()).rejects.toMatchObject({ reason: 'ORDER_NOT_OPEN' });
+      await expect(getSupplierActionPage(state.db, state.token)).rejects.toMatchObject({
+        reason: 'INVALID_LINK',
+      });
       expect(state.rawDb.pharmacySupplierActionLink.create).toHaveBeenCalledTimes(1);
     }
   );

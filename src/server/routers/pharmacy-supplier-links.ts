@@ -114,6 +114,12 @@ export const pharmacySupplierLinksRouter = router({
           actorUserId: ctx.session.user.id,
         });
       } catch (error) {
+        if (error instanceof SupplierLinkError && error.reason === 'ORDER_NOT_OPEN')
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message:
+              'Only approved, sent or receiving orders with items still to arrive can have a supplier link.',
+          });
         mapError(error);
       }
     }),

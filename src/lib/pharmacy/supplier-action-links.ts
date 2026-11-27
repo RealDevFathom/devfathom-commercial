@@ -16,6 +16,7 @@ export class SupplierLinkError extends Error {
   constructor(
     public readonly reason:
       | 'INVALID_LINK'
+      | 'ORDER_NOT_OPEN'
       | 'EXPIRY_NOT_FUTURE'
       | 'EXPIRY_TOO_LATE'
       | 'MISMATCH'
@@ -132,10 +133,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 async function assertOrderOpen(
   db: ScopedDb,
   organizationId: string,
-  order: { id: string; status: string }
+  order: { id: string; status: string },
+  reason: 'INVALID_LINK' | 'ORDER_NOT_OPEN'
 ) {
   if (order.status !== 'APPROVED' && order.status !== 'SENT' && order.status !== 'RECEIVING')
-    throw new SupplierLinkError('INVALID_LINK');
+    throw new SupplierLinkError(reason);
   // A fully received order still has RECEIVING status. Use the receiving bench's
   // posted quantities, including bonus units, and keep these figures private.
   const received = await receivedAgainstOrder(db, { organizationId }, order.id);
@@ -152,7 +154,7 @@ async function assertOrderOpen(
         line.orderedCanonicalUnits + line.bonusCanonicalUnits
     )
   )
-    throw new SupplierLinkError('INVALID_LINK');
+    throw new SupplierLinkError(reason);
 }
 
 export async function issueSupplierActionLink(
@@ -181,7 +183,7 @@ export async function issueSupplierActionLink(
     }),
   ]);
   if (!purchaseOrder) throw new SupplierLinkError('INVALID_LINK');
-  await assertOrderOpen(db, input.organizationId, purchaseOrder);
+  await assertOrderOpen(db, input.organizationId, purchaseOrder, 'ORDER_NOT_OPEN');
   if (!relationship || relationship.supplierId !== purchaseOrder.supplierId)
     throw new SupplierLinkError('MISMATCH');
   const id = randomUUID();
@@ -245,7 +247,7 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
     link.branchId !== link.purchaseOrder.branchId
   )
     throw new SupplierLinkError('INVALID_LINK');
-  await assertOrderOpen(db, link.organizationId, link.purchaseOrder);
+  await assertOrderOpen(db, link.organizationId, link.purchaseOrder, 'INVALID_LINK');
   return link;
 }
 

@@ -12,6 +12,7 @@ vi.mock('@/server/audit', () => ({
   isAuditExcludedPath: () => true,
   recordTrpcAudit: vi.fn(),
 }));
+import { SUPPLIER_LINK_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
 import { annotateAudit } from '@/server/audit';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 import type { TRPCContext } from '../trpc';
@@ -54,7 +55,11 @@ function fixture() {
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { db, caller: pharmacySupplierLinksRouter.createCaller(ctx) };
+  return {
+    db,
+    caller: pharmacySupplierLinksRouter.createCaller(ctx),
+    publicCaller: pharmacySupplierLinksRouter.createCaller({ ...ctx, session: null }),
+  };
 }
 let f: ReturnType<typeof fixture>;
 beforeEach(() => {
@@ -236,6 +241,38 @@ describe('supplier link expiry at issuance', () => {
     expect(outcome).toBe('BAD_REQUEST');
     expect(f.db.pharmacySupplierActionLink.create).not.toHaveBeenCalled();
   });
+});
+
+it('explains a closed order only to the issuing buyer', async () => {
+  vi.stubEnv('AUTH_SECRET', 'synthetic-closed-order-fixture');
+  try {
+    const order = { id: 'order', branchId: 'branch', supplierId: 'supplier', status: 'APPROVED' };
+    const relationship = { branchId: 'branch', supplierId: 'supplier' };
+    f.db.pharmacySupplierRelationship.findFirst.mockResolvedValue(relationship);
+    f.db.pharmacyPurchaseOrder.findFirst.mockResolvedValue(order);
+    const { token } = await actions.issue();
+
+    order.status = 'CANCELLED';
+    f.db.pharmacySupplierActionLink.findFirst.mockResolvedValue({
+      id: 'link',
+      organizationId: 'org',
+      branchId: 'branch',
+      relationship,
+      purchaseOrder: order,
+    });
+    await expect(f.publicCaller.get({ token })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: SUPPLIER_LINK_GENERIC_MESSAGE,
+    });
+    await expect(actions.issue()).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message:
+        'Only approved, sent or receiving orders with items still to arrive can have a supplier link.',
+    });
+    expect(f.db.pharmacySupplierActionLink.create).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });
 
 it('records manual evidence for the assigned branch', async () => {
