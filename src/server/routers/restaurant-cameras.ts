@@ -19,7 +19,8 @@ import {
   CoAuthorizationError,
   buildCoAuthorizationRecord,
 } from '@/lib/restaurant/co-authorization';
-import { authenticateOperatorCommitted } from '@/lib/restaurant/approver-authentication';
+import { withCommittedApproverCheck } from '@/lib/restaurant/approver-authentication';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
@@ -171,17 +172,22 @@ export const restaurantCamerasRouter = router({
         approverOrganizationId,
         input.approvingStaffProfileId,
         () =>
-          authenticateOperatorCommitted(approverOrganizationId, {
-            staffProfileId: input.approvingStaffProfileId,
-            type: input.approvingType,
-            secret: input.approvingSecret,
-            now: new Date(),
-            approval: {
-              action: 'restaurantCameras.revokeGateway',
-              approverRight: 'coauth:approve',
-              requestedByStaffProfileId: input.actingStaffProfileId,
-            },
-          })
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now: new Date(),
+                approval: {
+                  action: 'restaurantCameras.revokeGateway',
+                  approverRight: 'coauth:approve',
+                  requestedByStaffProfileId: input.actingStaffProfileId,
+                },
+              })
+          )
       );
       if (!auth.ok)
         throw new TRPCError({

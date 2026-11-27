@@ -8,7 +8,8 @@ import {
   recordOwnerPinReauthentication,
   withOwnerReauthenticationScope,
 } from './owner-reauthentication';
-import { authenticateOperatorCommitted } from './approver-authentication';
+import { withCommittedApproverCheck } from './approver-authentication';
+import { authenticateOperator } from './terminal-auth';
 
 /**
  * Back-office (L2, tRPC) maker-checker approval.
@@ -19,7 +20,7 @@ import { authenticateOperatorCommitted } from './approver-authentication';
  * must then hold `capability` at the target's branch.
  *
  * The credential check commits in its own tenant transaction
- * (`authenticateOperatorCommitted`), so a refused request never rolls back the
+ * (`withCommittedApproverCheck`), so a refused request never rolls back the
  * brute-force counter. A `FOR UPDATE` lock on the credential rows serializes
  * parallel guesses.
  *
@@ -87,17 +88,22 @@ export async function verifyBackOfficeApprover(
   // possession factor and can be used by whoever holds it.
   if (selfApproval && request.type !== 'PIN') return { ok: false };
 
-  const auth = await authenticateOperatorCommitted(request.organizationId, {
-    staffProfileId: approvingStaffProfileId,
-    type: request.type,
-    secret: request.secret,
-    now,
-    approval: {
-      action: `restaurant.backOfficeApproval.${request.capability}`,
-      approverRight: request.capability,
-      requestedByStaffProfileId: request.actingStaffProfileId,
-    },
-  });
+  const auth = await withCommittedApproverCheck(
+    request.organizationId,
+    { staffProfileId: approvingStaffProfileId, type: request.type },
+    (tx) =>
+      authenticateOperator(tx, {
+        staffProfileId: approvingStaffProfileId,
+        type: request.type,
+        secret: request.secret,
+        now,
+        approval: {
+          action: `restaurant.backOfficeApproval.${request.capability}`,
+          approverRight: request.capability,
+          requestedByStaffProfileId: request.actingStaffProfileId,
+        },
+      })
+  );
   if (!auth.ok || auth.staffProfileId !== approvingStaffProfileId) return { ok: false };
 
   if (

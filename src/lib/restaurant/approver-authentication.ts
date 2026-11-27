@@ -1,12 +1,6 @@
 import 'server-only';
 
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { authenticateOperator } from './terminal-auth';
-
-type ApproverCredentialCheck = Omit<
-  Parameters<typeof authenticateOperator>[1],
-  'deviceId' | 'branchId' | 'forTerminalBinding'
->;
+import { type ScopedDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * DEV-1055: verify a back-office approver's organization-wide PIN or badge in its
@@ -23,19 +17,21 @@ type ApproverCredentialCheck = Omit<
  * The `FOR UPDATE` lock on the approver's credential rows serializes parallel
  * guesses. The organization is the caller's trusted tenant, never request input.
  */
-export function authenticateOperatorCommitted(
+export function withCommittedApproverCheck<T>(
   organizationId: string,
-  check: ApproverCredentialCheck
-): ReturnType<typeof authenticateOperator> {
+  approver: { staffProfileId: string; type: 'PIN' | 'BADGE' },
+  /** Call `authenticateOperator(tx, …)` here, naming the approval and its approver right. */
+  authenticate: (tx: ScopedDb) => Promise<T>
+): Promise<T> {
   return withTenantDb(organizationId, async (tx) => {
     await tx.$queryRawUnsafe(
       `SELECT id FROM restaurant_operator_credentials
        WHERE "staffProfileId" = $1 AND type::text = $2
          AND "deviceId" IS NULL AND "revokedAt" IS NULL
        ORDER BY id FOR UPDATE`,
-      check.staffProfileId,
-      check.type
+      approver.staffProfileId,
+      approver.type
     );
-    return authenticateOperator(tx, check);
+    return authenticate(tx);
   });
 }

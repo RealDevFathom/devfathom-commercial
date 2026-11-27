@@ -9,7 +9,7 @@ import { LOCKOUT_DURATION_MS, MAX_FAILED_ATTEMPTS } from '@/lib/restaurant/opera
  *
  * Those requests answer a wrong credential with an error, and an error rolls the
  * request transaction back. The credential check itself commits in its own tenant
- * transaction (`authenticateOperatorCommitted`), so its strike lands on the one
+ * transaction (`withCommittedApproverCheck`), so its strike lands on the one
  * durable counter on the credential row that the terminal routes also use, and
  * that counter is the authoritative limit across every route. This budget is a
  * second, outer limit in the rate-limit store, which does not belong to the

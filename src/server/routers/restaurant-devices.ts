@@ -27,7 +27,8 @@ import {
   renamePrinterInventory,
   retirePrinterInventory,
 } from '@/lib/restaurant/printer-inventory';
-import { authenticateOperatorCommitted } from '@/lib/restaurant/approver-authentication';
+import { withCommittedApproverCheck } from '@/lib/restaurant/approver-authentication';
+import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import { authenticateApproverWithinBudget } from '@/lib/restaurant/approver-attempt-budget';
 import {
   CommercialLimitError,
@@ -562,17 +563,22 @@ export const restaurantDevicesRouter = router({
         approverOrganizationId,
         input.approvingStaffProfileId,
         () =>
-          authenticateOperatorCommitted(approverOrganizationId, {
-            staffProfileId: input.approvingStaffProfileId,
-            type: input.approvingType,
-            secret: input.approvingSecret,
-            now,
-            approval: {
-              action: 'restaurantDevices.revoke',
-              approverRight: coAuthorizationApprovalCapability,
-              requestedByStaffProfileId: actingStaffProfileId,
-            },
-          })
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now,
+                approval: {
+                  action: 'restaurantDevices.revoke',
+                  approverRight: coAuthorizationApprovalCapability,
+                  requestedByStaffProfileId: actingStaffProfileId,
+                },
+              })
+          )
       );
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
@@ -683,17 +689,22 @@ export const restaurantDevicesRouter = router({
         approverOrganizationId,
         input.approvingStaffProfileId,
         () =>
-          authenticateOperatorCommitted(approverOrganizationId, {
-            staffProfileId: input.approvingStaffProfileId,
-            type: input.approvingType,
-            secret: input.approvingSecret,
-            now: new Date(),
-            approval: {
-              action: 'restaurantDevices.rotate',
-              approverRight: coAuthorizationApprovalCapability,
-              requestedByStaffProfileId: actingStaffProfileId,
-            },
-          })
+          withCommittedApproverCheck(
+            approverOrganizationId,
+            { staffProfileId: input.approvingStaffProfileId, type: input.approvingType },
+            (tx) =>
+              authenticateOperator(tx, {
+                staffProfileId: input.approvingStaffProfileId,
+                type: input.approvingType,
+                secret: input.approvingSecret,
+                now: new Date(),
+                approval: {
+                  action: 'restaurantDevices.rotate',
+                  approverRight: coAuthorizationApprovalCapability,
+                  requestedByStaffProfileId: actingStaffProfileId,
+                },
+              })
+          )
       );
       if (!auth.ok) {
         if (auth.reason === 'LOCKED') {
