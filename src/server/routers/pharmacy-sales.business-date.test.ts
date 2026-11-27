@@ -105,6 +105,8 @@ function fixture(options: { recordedResult?: object } = {}) {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn(async ({ data }: { data: object }) => ({ id: 'drawer-1', ...data })),
     },
+    // DEV-1056: the drawer's device id names no registered counter computer.
+    pharmacyRegisteredDevice: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
       callback(db)

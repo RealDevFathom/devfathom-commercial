@@ -923,6 +923,34 @@ const SHIFT_CONFLICTS = new Set<string>([
   'SHIFT_NOT_OPEN',
 ]);
 
+/** What a counter is told when its registered computer may not open a drawer here. */
+export const COUNTER_COMPUTER_NOT_USABLE =
+  'This counter computer is not active at this branch. Ask a manager to register it again.';
+
+/**
+ * DEV-1056, interim: a drawer is not opened in the name of a REGISTERED counter computer
+ * that was revoked or that belongs to another branch of the business. `deviceId` comes from
+ * the client, so without this a revoked computer's id, or one enrolled at another branch,
+ * could still be given a drawer.
+ *
+ * An id that names no registered computer of this business is left alone: an unenrolled
+ * browser opens its drawer under its own `counter-<uuid>` id, exactly as before. Whether
+ * registration should be required is the owner's decision, not made here.
+ */
+async function refuseUnusableRegisteredCounter(
+  db: Pick<TRPCContext['db'], 'pharmacyRegisteredDevice'>,
+  scope: LedgerScope,
+  deviceId: string
+): Promise<void> {
+  const device = await db.pharmacyRegisteredDevice.findFirst({
+    where: { organizationId: scope.organizationId, id: deviceId },
+    select: { branchId: true, status: true },
+  });
+  if (!device) return;
+  if (device.status !== 'ACTIVE' || device.branchId !== scope.branchId)
+    throw new TRPCError({ code: 'FORBIDDEN', message: COUNTER_COMPUTER_NOT_USABLE });
+}
+
 function fail(error: unknown): never {
   if (error instanceof PrepaidPinError)
     throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
@@ -2203,9 +2231,10 @@ export const pharmacySalesRouter = router({
             ? await requireDrawerManagerAccess(ctx, input.branchId)
             : await requireCounterReceiptAccess(ctx, input.branchId, true);
         // DEV-630: a drawer opens on the branch's current business day only.
-        return await ctx.db.$transaction(async (tx) =>
-          openPharmacyDrawer(txDb(tx), scope, input, { requireCurrentBusinessDate: true })
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          await refuseUnusableRegisteredCounter(txDb(tx), scope, input.deviceId);
+          return openPharmacyDrawer(txDb(tx), scope, input, { requireCurrentBusinessDate: true });
+        });
       } catch (error) {
         fail(error);
       }
@@ -4785,12 +4814,16 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .query(async ({ ctx, input }) =>
-      findUpsellSuggestions(ctx.db, await assignedBranchScope(ctx, input.branchId), {
+    .query(async ({ ctx, input }) => {
+      // DEV-1056: a branch's stock and prices are a counter read, so this takes the receipt
+      // procedures' gate after the branch refusals, not branch membership alone.
+      await assignedBranchScope(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return findUpsellSuggestions(ctx.db, scope, {
         medicineIds: input.medicineIds,
         limit: input.limit,
-      })
-    ),
+      });
+    }),
   declineSubstitute: protectedProcedure
     .input(
       z
@@ -5252,10 +5285,18 @@ export const pharmacySalesRouter = router({
                   code.expiry)
           )
         );
-        await db.pharmacySaleLine.update({
-          where: { id: line.id },
-          data: { packCheckBlocked: !matched },
-        });
+        // DEV-1054: a failed check blocks every line of the medicine on this bill, as the
+        // trigger on the PACK_CHECK event does; a successful check clears only its own line.
+        if (matched)
+          await db.pharmacySaleLine.update({
+            where: { id: line.id },
+            data: { packCheckBlocked: false },
+          });
+        else
+          await db.pharmacySaleLine.updateMany({
+            where: { ...where, medicineId: line.medicineId },
+            data: { packCheckBlocked: true },
+          });
         await db.pharmacySaleEvent.create({
           data: {
             ...where,

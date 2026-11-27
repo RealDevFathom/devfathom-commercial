@@ -607,60 +607,6 @@ export const pharmacyPrescriptionsRouter = router({
       return { ...patient, ...maskedPatient(patient) };
     }),
 
-  // Recording a fill is a dispensing act: require the exact-grant-only
-  // pharmacy:dispense capability through central ABAC (DENY wins).
-  fill: capabilityProcedure('pharmacy:dispense')
-    .input(
-      z
-        .object({
-          id: z.string().min(1).max(200),
-          prescriptionLineId: z.string().min(1).max(200),
-          fillSequence: z.number().int().positive(),
-          quantityCanonicalUnits: z.number().int().positive(),
-          idempotencyKey: z.string().trim().min(1).max(200),
-          // DEV-962: the branch dispensing the fill. Only that branch may later record the
-          // fill's refill reminder; a fill recorded without one leaves that to an admin.
-          branchId: z.string().trim().min(1).max(128).optional(),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) => {
-      if (input.branchId) {
-        const organizationId = ctx.entitlements.organizationId;
-        const branch = await ctx.db.pharmacyBranch.findFirst({
-          where: { id: input.branchId, organizationId, active: true },
-          select: { id: true },
-        });
-        if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
-        annotateAuditBranch(ctx, branch.id);
-        if (
-          await counterBranchAssignmentDenial(ctx.db, ctx.session.user, organizationId, branch.id)
-        )
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-      }
-      const line = await ctx.db.prescriptionLine.findFirst({
-        where: {
-          id: input.prescriptionLineId,
-          organizationId: ctx.entitlements.organizationId,
-        },
-        select: { medicine: { select: { controlled: true } } },
-      });
-      if (!line) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
-      }
-      // Controlled dispensing must use the counter flow, which atomically allocates stock and
-      // records both the witnessed fill and controlled-drug register entry.
-      if (line.medicine.controlled) {
-        throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
-        });
-      }
-      return ctx.db.prescriptionFill.create({
-        data: { ...input, dispensedByUserId: ctx.session.user.id },
-      });
-    }),
-
   captureRefillReminder: capabilityProcedure('pharmacy:dispense')
     .input(
       z

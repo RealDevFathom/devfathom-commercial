@@ -29,7 +29,13 @@ const input = {
 };
 
 function fixture(
-  options: { openDrawer?: { id: string } | null; createError?: unknown; branch?: boolean } = {}
+  options: {
+    openDrawer?: { id: string } | null;
+    createError?: unknown;
+    branch?: boolean;
+    /** DEV-1056: the registered counter computer the device id names. */
+    registeredDevice?: { branchId: string; status: 'ACTIVE' | 'REVOKED' } | null;
+  } = {}
 ) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
@@ -64,6 +70,10 @@ function fixture(
         : vi
             .fn()
             .mockResolvedValue({ id: 'drawer-new', status: 'OPEN', deviceId: 'counter-device' }),
+    },
+    // DEV-1056: the registered counter computer the device id names, if any.
+    pharmacyRegisteredDevice: {
+      findFirst: vi.fn().mockResolvedValue(options.registeredDevice ?? null),
     },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown): Promise<unknown> =>
@@ -113,6 +123,54 @@ describe('pharmacySales.openDrawer', () => {
     const f = fixture();
     await expect(f.caller.openDrawer(input)).resolves.toMatchObject({ id: 'drawer-new' });
     expect(f.db.pharmacyDrawerSession.create).toHaveBeenCalledTimes(1);
+  });
+
+  // DEV-1056, interim: a registered counter computer opens a drawer only while it is active
+  // at this branch. An id that names no registered computer is not looked at any further.
+  const NOT_USABLE = {
+    code: 'FORBIDDEN',
+    message:
+      'This counter computer is not active at this branch. Ask a manager to register it again.',
+  };
+
+  it('looks the device id up among the organization’s registered counter computers', async () => {
+    const f = fixture();
+    await f.caller.openDrawer(input);
+    expect(f.db.pharmacyRegisteredDevice.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { organizationId: 'org-1', id: 'counter-device' },
+      select: { branchId: true, status: true },
+    });
+  });
+
+  it('opens a drawer for a registered counter computer active at this branch', async () => {
+    const f = fixture({ registeredDevice: { branchId: 'branch-1', status: 'ACTIVE' } });
+    await expect(f.caller.openDrawer(input)).resolves.toMatchObject({ id: 'drawer-new' });
+    expect(f.db.pharmacyDrawerSession.create).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['revoked', { branchId: 'branch-1', status: 'REVOKED' }],
+    ['registered at another branch', { branchId: 'branch-2', status: 'ACTIVE' }],
+    ['revoked at another branch', { branchId: 'branch-2', status: 'REVOKED' }],
+  ] as const)(
+    'refuses a registered counter computer that is %s, before any drawer read or write',
+    async (_, registeredDevice) => {
+      const f = fixture({ registeredDevice });
+      await expect(f.caller.openDrawer(input)).rejects.toMatchObject(NOT_USABLE);
+      expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+      expect(f.db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('opens a drawer for an unregistered browser id exactly as before', async () => {
+    const f = fixture({ registeredDevice: null });
+    const deviceId = 'counter-6f1c2a52-0d3e-4c58-9d0b-1a2b3c4d5e6f';
+    await expect(f.caller.openDrawer({ ...input, deviceId })).resolves.toMatchObject({
+      id: 'drawer-new',
+    });
+    expect(f.db.pharmacyDrawerSession.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ deviceId }) })
+    );
   });
 
   it('answers a second open on the same device with a typed CONFLICT, not a 500', async () => {

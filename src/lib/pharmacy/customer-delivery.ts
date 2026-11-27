@@ -165,7 +165,10 @@ export async function recordDeliveryCommand(
   } = {}
 ) {
   // DEV-821: a COD remit goes only into a till the actor runs, unless a manager or owner.
-  const drawerOperator = { kind: 'COUNTER', actorIsManager: options.actorIsManager === true } as const;
+  const drawerOperator = {
+    kind: 'COUNTER',
+    actorIsManager: options.actorIsManager === true,
+  } as const;
   deliveryCommandInput.parse(input);
   if (input.branchId !== scope.branchId) throw new PharmacyDeliveryError('ORDER_NOT_FOUND');
   const [restriction] = await db.$queryRaw<{ branchId: string | null }[]>(
@@ -369,6 +372,7 @@ export async function recordDeliveryCommand(
               units: allocation.canonicalUnits,
               reason: 'Physical delivery return pending inspection',
               idempotencyKeyPrefix: `delivery-quarantine:${order.id}:${allocation.id}`,
+              hold: 'DELIVERY_RETURN',
             });
           }
       } else throw new PharmacyDeliveryError('INVALID_STATE');
@@ -403,6 +407,7 @@ export async function recordDeliveryCommand(
           units: reservation.reservedUnits,
           reason: 'Physical delivery return pending inspection',
           idempotencyKeyPrefix: `delivery-quarantine:${order.id}:${reservation.id}`,
+          hold: 'DELIVERY_RETURN',
         });
     }
   }
