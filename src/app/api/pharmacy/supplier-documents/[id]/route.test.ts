@@ -3,6 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { GET } from './route';
 
 const m = vi.hoisted(() => ({
+  audit: vi.fn(),
   actor: vi.fn(),
   find: vi.fn(),
   scope: vi.fn(),
@@ -10,6 +11,7 @@ const m = vi.hoisted(() => ({
   branches: vi.fn(),
   bytes: vi.fn(),
 }));
+vi.mock('@/server/audit', () => ({ recordAudit: m.audit }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: m.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: m.scope }));
 vi.mock('@/lib/pharmacy/procurement-access', () => ({
@@ -40,6 +42,7 @@ beforeEach(() => {
     where.organizationId === 'tenant' &&
     where.submission.actionLink.purchaseOrder.branchId.in.includes('admitted')
       ? {
+          branchId: 'admitted',
           storageUri: `supplier-po-${linkId}-${sha256}`,
           submission: { actionLinkId: linkId },
           sha256,
@@ -63,6 +66,17 @@ it('reads an order-owned document within the procurement branch scope', async ()
     })
   );
   expect(await res.text()).toBe('%PDF-1.7');
+  expect(m.audit).toHaveBeenCalledWith(
+    expect.objectContaining({
+      actorId: 'member',
+      actorType: 'USER',
+      organizationId: 'tenant',
+      targetId: 'doc',
+      operation: 'READ',
+      metadata: { branchId: 'admitted', actionLinkId: linkId },
+    }),
+    db
+  );
 });
 it.each(['supplier', 'cashier', 'another branch', 'another business'] as const)(
   'refuses a document read for %s without accessing storage',
@@ -77,5 +91,6 @@ it.each(['supplier', 'cashier', 'another branch', 'another business'] as const)(
       });
     expect((await read()).status).toBe(kind === 'supplier' ? 401 : 404);
     expect(m.bytes).not.toHaveBeenCalled();
+    expect(m.audit).not.toHaveBeenCalled();
   }
 );

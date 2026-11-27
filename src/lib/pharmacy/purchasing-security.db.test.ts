@@ -933,6 +933,18 @@ async function newLink() {
           })
         );
         expect((await read()).status).toBe(404);
+        expect(
+          await inOrg((db) =>
+            db.auditLog.findMany({
+              where: {
+                organizationId: org,
+                targetId: document.id,
+                action: 'pharmacySupplierLinks.downloadDocument',
+              },
+              select: { actorId: true, operation: true },
+            })
+          )
+        ).toEqual([{ actorId: userId, operation: 'READ' }]);
       } finally {
         actor.mockRestore();
       }

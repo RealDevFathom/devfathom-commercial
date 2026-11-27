@@ -4,6 +4,8 @@ import { getUpload, StorageUnavailableError, StoredObjectMissingError } from '@/
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
+import { recordAudit } from '@/server/audit';
+
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
   try {
     const actor = await resolveTenantActor({ request });
@@ -29,6 +31,7 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
             },
           },
           select: {
+            branchId: true,
             storageUri: true,
             mimeType: true,
             sha256: true,
@@ -49,6 +52,38 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
     )
       return new Response(null, { status: 404 });
     const bytes = await getUpload(organizationId, document.storageUri);
+    await withTenantDb(
+      organizationId,
+      async (db) => {
+        await recordAudit(
+          {
+            organizationId,
+            actorType: 'USER',
+            actorId: userId,
+            source: 'REST_API',
+            operation: 'READ',
+            category: 'pharmacy',
+            action: 'pharmacySupplierLinks.downloadDocument',
+            targetType: 'PharmacySupplierDocument',
+            targetId: id,
+            outcome: 'SUCCESS',
+            metadata: {
+              branchId: document.branchId,
+              actionLinkId: linkId,
+              ...(actor.session.user.isSupportSession
+                ? {
+                    supportSessionId: actor.session.user.supportSessionId,
+                    platformUserId: actor.session.user.platformUserId,
+                    actingAsTenantUserId: userId,
+                  }
+                : {}),
+            },
+          },
+          db
+        );
+      },
+      { userId }
+    );
     return new Response(new Uint8Array(bytes), {
       headers: {
         'Cache-Control': 'private, no-store',
