@@ -166,9 +166,7 @@ describe('supplier links deny by default (PR J)', () => {
     for (const name of STAFF) {
       expect(procedures[name]!._def.meta?.capabilities, name).toEqual(['pharmacy:procurement']);
     }
-    expect(Object.keys(procedures).sort()).toEqual(
-      [...STAFF, 'get', 'submit', 'uploadDocument'].sort()
-    );
+    expect(Object.keys(procedures).sort()).toEqual([...STAFF, 'get', 'submit'].sort());
   });
 
   it.each(STAFF.flatMap((name) => ['cashier', 'pharmacist'].map((who) => [name, who] as const)))(

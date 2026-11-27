@@ -23,6 +23,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/card';
+import { StatusPill } from '@/components/ui/status-pill';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PageHeader } from '@/components/ui/page-header';
 import { Stat } from '@/components/ui/stat';
@@ -122,6 +123,21 @@ export function FinanceContent() {
         )
       )}
 
+      {!!summary.data?.unsupported.length && (
+        <Card>
+          <CardContent className="space-y-2 p-4">
+            <StatusPill status="Interval not supported" tone="warning" />
+            <p className="text-sm text-text-body">Excluded from expense projections</p>
+            <ul className="list-disc pl-5 text-sm text-foreground">
+              {summary.data.unsupported.map((charge) => (
+                <li key={charge.id}>
+                  {charge.name} ({charge.interval})
+                </li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       {/* Tabs */}
       <Tabs defaultValue="transactions" className="space-y-5">
         <TabsList>
@@ -703,11 +719,15 @@ function RecurringTab() {
   const [showAdd, setShowAdd] = useState(false);
 
   const deleteRecurring = trpc.finance.deleteRecurringExpense.useMutation({
-    onSuccess: () => utils.finance.getRecurringExpenses.invalidate(),
+    onSuccess: () => {
+      utils.finance.getRecurringExpenses.invalidate();
+      utils.finance.getFinancialSummary.invalidate();
+    },
   });
   const createRecurring = trpc.finance.createRecurringExpense.useMutation({
     onSuccess: () => {
       utils.finance.getRecurringExpenses.invalidate();
+      utils.finance.getFinancialSummary.invalidate();
       setShowAdd(false);
     },
   });
@@ -722,7 +742,9 @@ function RecurringTab() {
       setPostResult(
         r.posted > 0
           ? `Posted ${r.posted} transaction${r.posted === 1 ? '' : 's'} from due cycles.`
-          : 'Nothing due — all subscriptions are up to date.'
+          : r.unsupported.length
+            ? null
+            : 'Nothing due — all subscriptions are up to date.'
       );
     },
   });
@@ -770,11 +792,30 @@ function RecurringTab() {
       </div>
 
       {postResult && (
-        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-600 dark:text-emerald-400">
+        <p
+          role="status"
+          className="rounded-lg border border-border-subtle bg-card px-3 py-2 text-xs text-success"
+        >
           {postResult}
         </p>
       )}
 
+      {!!postDue.data?.unsupported.length && (
+        <Card role="status">
+          <CardContent className="space-y-2 p-4 text-sm text-foreground">
+            <p>
+              {postDue.data.unsupported.length} charge
+              {postDue.data.unsupported.length === 1 ? '' : 's'} not posted: their billing interval
+              is not monthly, quarterly or yearly. Delete and add them again with one of those.
+            </p>
+            <ul className="list-disc pl-5">
+              {postDue.data.unsupported.map((charge) => (
+                <li key={charge.id}>{charge.name}</li>
+              ))}
+            </ul>
+          </CardContent>
+        </Card>
+      )}
       {/* IMP-FIN-03: budget vs. actuals rollup for budgeted projects. */}
       {budgetQ.data && budgetQ.data.length > 0 && (
         <Card className="border-border/60">
@@ -939,7 +980,12 @@ function RecurringTab() {
                       <p className="text-sm font-medium text-foreground">{exp.name}</p>
                       <p className="text-xs text-muted-foreground">
                         {exp.vendorName ? `${exp.vendorName} · ` : ''}
-                        {exp.interval} &middot; {categoryLabels[exp.category] || exp.category}
+                        {exp.intervalLabel === 'Interval not supported' ? (
+                          <StatusPill status={exp.intervalLabel} tone="warning" />
+                        ) : (
+                          exp.intervalLabel
+                        )}{' '}
+                        &middot; {categoryLabels[exp.category] || exp.category}
                       </p>
                     </div>
                   </div>

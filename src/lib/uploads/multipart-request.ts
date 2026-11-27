@@ -16,7 +16,8 @@ const UPLOAD_BODY_DEADLINE_MS = 270_000;
 type ReadUploadForm = (
   userId: string,
   organizationId: string,
-  errorFormat?: 'json' | 'text'
+  errorFormat?: 'json' | 'text',
+  maxFileBytes?: number
 ) => Promise<FormData | Response | null>;
 
 class UploadRefused extends Error {
@@ -61,10 +62,12 @@ export function uploadPost(
     async function readUploadForm(
       userId: string,
       organizationId: string,
-      errorFormat: 'json' | 'text' = 'json'
+      errorFormat: 'json' | 'text' = 'json',
+      maxFileBytes = MAX_ATTACHMENT_BYTES
     ) {
+      const maxMultipartBytes = Math.min(MAX_MULTIPART_BYTES, maxFileBytes + 64 * 1024);
       const declared = Number(routed.headers.get('content-length'));
-      if (declared > MAX_MULTIPART_BYTES) return null;
+      if (declared > maxMultipartBytes) return null;
       const chunks: Uint8Array[] = [];
       const deadline = new AbortController();
       let timer: ReturnType<typeof setTimeout> | undefined;
@@ -73,7 +76,7 @@ export function uploadPost(
         timer = setTimeout(() => deadline.abort(), UPLOAD_BODY_DEADLINE_MS);
         const complete = await consumeBoundedBody(
           routed,
-          MAX_MULTIPART_BYTES,
+          maxMultipartBytes,
           (chunk, total) => {
             if (total > LARGE_UPLOAD_BYTES && !release) {
               return reserve(userId, organizationId).then(() => {

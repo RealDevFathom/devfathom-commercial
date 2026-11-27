@@ -6,7 +6,7 @@ const REQUEST_ID_HEADER = 'x-devfathom-request-id';
 // component or server action. Always overwritten here, so a client cannot supply it.
 const REQUEST_METHOD_HEADER = 'x-devfathom-request-method';
 
-/** Shared by the proxy and the three multipart endpoints outside its body clone. */
+/** Shared by the proxy and API endpoints outside its body clone. */
 export function proxyRequestHeaders(request: Request) {
   const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
   const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';

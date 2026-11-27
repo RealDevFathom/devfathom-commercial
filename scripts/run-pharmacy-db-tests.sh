@@ -200,7 +200,7 @@ admin_files=(
   src/lib/pharmacy/whatsapp/message-log.db.test.ts
 )
 isolated_files=("$receipt_file" "$returns_file")
-mapfile -t files < <(git ls-files '*.db.test.ts' | grep -i pharmacy | grep -vxF -f <(printf '%s\n' "${admin_files[@]}" "${isolated_files[@]}") | sort)
+mapfile -t files < <(git ls-files '*.db.test.ts' | grep -iE 'pharmacy|^src/lib/finance/recurring-expense\.db\.test\.ts$' | grep -vxF -f <(printf '%s\n' "${admin_files[@]}" "${isolated_files[@]}") | sort)
 
 # Cross-module approval security suites also use the shared restricted database.
 files+=(tests/shared-approval-pin-migration.db.test.ts src/server/routers/identity-change-paths.db.test.ts)

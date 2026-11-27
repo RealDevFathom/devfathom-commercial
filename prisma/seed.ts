@@ -1089,6 +1089,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         category: 'HOSTING',
         interval: 'monthly',
         nextDueDate: new Date('2026-05-05'),
+        billingDay: 5,
         vendorName: 'Amazon Web Services',
       },
       {
@@ -1098,6 +1099,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         category: 'HOSTING',
         interval: 'monthly',
         nextDueDate: new Date('2026-05-01'),
+        billingDay: 1,
         vendorName: 'Vercel',
       },
       {
@@ -1107,6 +1109,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         category: 'SOFTWARE',
         interval: 'monthly',
         nextDueDate: new Date('2026-05-15'),
+        billingDay: 15,
         vendorName: 'Figma',
       },
       {
@@ -1116,6 +1119,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         category: 'SOFTWARE',
         interval: 'monthly',
         nextDueDate: new Date('2026-05-10'),
+        billingDay: 10,
         vendorName: 'GitHub',
       },
       {
@@ -1125,6 +1129,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         category: 'SOFTWARE',
         interval: 'monthly',
         nextDueDate: new Date('2026-05-01'),
+        billingDay: 1,
         vendorName: 'Google',
       },
       {
@@ -1134,6 +1139,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
         category: 'SOFTWARE',
         interval: 'monthly',
         nextDueDate: new Date('2026-05-01'),
+        billingDay: 1,
         vendorName: 'Slack',
       },
     ],
