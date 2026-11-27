@@ -42,6 +42,7 @@ function fakeDb() {
   const db = {
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(db)),
     $queryRaw: vi.fn(async () => []),
+    $executeRaw: vi.fn(async () => 1),
     pharmacyBranch: {
       findFirst: vi.fn(async () => ({
         name: 'Buyer branch',
@@ -259,6 +260,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     expect(Object.keys(state.db)).toEqual([
       '$transaction',
       '$queryRaw',
+      '$executeRaw',
       'pharmacyBranch',
       'pharmacyGoodsReceiptLine',
       'pharmacyPurchaseOrderLine',
@@ -470,6 +472,10 @@ it('claims a scanned document as purchase order evidence using a local-store-com
     declaredMimeType: 'application/pdf',
     content: Buffer.from('%PDF-1.7'),
   });
+  expect(s.rawDb.$executeRaw).toHaveBeenCalledWith(
+    expect.arrayContaining([expect.stringContaining('pg_advisory_xact_lock')]),
+    'supplier-document-cap:po_a'
+  );
   expect(doc.ownerType).toBe('PHARMACY_PURCHASE_ORDER');
   expect(doc.storageUri).toMatch(/^supplier-po-[a-f0-9-]+$/);
 });
