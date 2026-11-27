@@ -15,7 +15,7 @@
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { workspaceToday } from '@/lib/timezone';
+import { pharmacyCalendarDay } from './business-day';
 import { assignedClinicalBranchIds, isClinicalOwner } from './clinical-branch-access';
 import { maskedPatient } from './patient-prescriptions';
 import { prescriptionIsCurrent } from './prescription-calendar';
@@ -228,7 +228,7 @@ export async function readCounterPatientPanel(
           authorizedCanonicalUnits: line.authorizedCanonicalUnits,
           filledCanonicalUnits,
           fills: line.fills.map((fill) => ({
-            date: workspaceToday(organization?.timezone, fill.dispensedAt),
+            date: pharmacyCalendarDay(organization?.timezone, fill.dispensedAt),
             quantity: fill.quantityCanonicalUnits,
             label: !fill.branchId
               ? 'Dispensing branch not recorded'
