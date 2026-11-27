@@ -74,6 +74,10 @@ export function SupplierPoActionForm({ token }: { token: string }) {
         heading={`Purchase order ${order.data.reference}`}
         description="Confirm the order or suggest a change. The pharmacy reviews your response before changing the order."
       />
+      <p className="text-sm text-text-body">
+        Buying branch: {order.data.buyerBranch.name}
+        {order.data.buyerBranch.phone && ` · ${order.data.buyerBranch.phone}`}
+      </p>
       <SectionCard title="Order lines">
         {order.data.lines.length === 0 && (
           <p className="text-sm text-text-muted">

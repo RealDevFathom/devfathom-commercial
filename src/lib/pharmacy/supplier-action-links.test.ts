@@ -42,6 +42,20 @@ function fakeDb() {
   const db = {
     $transaction: vi.fn(async (fn: (tx: unknown) => unknown): Promise<unknown> => fn(db)),
     $queryRaw: vi.fn(async () => []),
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => ({
+        name: 'Buyer branch',
+        regulatoryProfiles: [
+          {
+            premises: {
+              phone: ' 555-0100 ',
+              addressLine: 'private address',
+              staffName: 'private name',
+            },
+          },
+        ],
+      })),
+    },
     pharmacyGoodsReceiptLine: {
       findMany: vi.fn(
         async (): Promise<
@@ -156,7 +170,12 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     state.purchaseOrder.supplierId = 'supplier_a';
     const live = await issued();
     const page = await getSupplierActionPage(live.db, live.token);
-    expect(Object.keys(page).sort()).toEqual(['expectedDeliveryAt', 'lines', 'reference']);
+    expect(Object.keys(page).sort()).toEqual([
+      'buyerBranch',
+      'expectedDeliveryAt',
+      'lines',
+      'reference',
+    ]);
     for (const line of page.lines) {
       expect(Object.keys(line).sort()).toEqual(['id', 'lineNumber', 'medicine', 'orderedPacks']);
       expect(Object.keys(line.medicine)).toEqual(['productName']);
@@ -169,6 +188,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
       orderedPacks: true,
     });
     expect(page).toEqual({
+      buyerBranch: { name: 'Buyer branch', phone: '555-0100' },
       reference: 'PO-1',
       expectedDeliveryAt: null,
       lines: live.purchaseOrder.lines,
@@ -239,6 +259,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     expect(Object.keys(state.db)).toEqual([
       '$transaction',
       '$queryRaw',
+      'pharmacyBranch',
       'pharmacyGoodsReceiptLine',
       'pharmacyPurchaseOrderLine',
       'pharmacySupplierRelationship',

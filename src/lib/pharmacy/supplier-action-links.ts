@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { Prisma } from '@/generated/prisma/client';
+import { regulatoryProfileInForceWhere } from './regulatory-start';
 import { receivedAgainstOrder } from './purchasing-console';
 import { recordAudit } from '@/server/audit';
 import { putUpload } from '@/lib/storage';
@@ -264,6 +265,27 @@ export async function assertSupplierDocumentPermission(db: ScopedDb, token: stri
 
 export async function getSupplierActionPage(db: ScopedDb, token: string) {
   const link = await usableLink(db, token);
+  const branch = await db.pharmacyBranch.findFirst({
+    where: { organizationId: link.organizationId, id: link.branchId },
+    select: {
+      name: true,
+      regulatoryProfiles: {
+        where: regulatoryProfileInForceWhere(new Date()),
+        orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+        take: 1,
+        select: { premises: true },
+      },
+    },
+  });
+  if (!branch) throw new SupplierLinkError('INVALID_LINK');
+  const premises = branch.regulatoryProfiles[0]?.premises;
+  const phone =
+    premises &&
+    typeof premises === 'object' &&
+    !Array.isArray(premises) &&
+    typeof premises.phone === 'string'
+      ? premises.phone.trim() || null
+      : null;
   await recordAudit(
     {
       organizationId: link.organizationId,
@@ -279,6 +301,7 @@ export async function getSupplierActionPage(db: ScopedDb, token: string) {
     db
   );
   return {
+    buyerBranch: { name: branch.name, phone },
     reference: link.purchaseOrder.reference,
     expectedDeliveryAt: link.purchaseOrder.expectedDeliveryAt,
     lines: link.purchaseOrder.lines,

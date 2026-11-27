@@ -19,19 +19,23 @@ it('names each ordered item and shows its quantity to the supplier', () => {
   query.mockReturnValue({
     data: {
       reference: 'PO-1',
+      buyerBranch: { name: 'Buyer branch', phone: '555-0100' },
       lines: [
         { id: 'line', lineNumber: 1, medicine: { productName: 'Test medicine' }, orderedPacks: 4 },
       ],
     },
   });
   render(<SupplierPoActionForm token="synthetic" />);
+  expect(screen.getByText(/Buyer branch.*555-0100/)).toBeVisible();
   expect(screen.getByText(/Test medicine/)).toBeInTheDocument();
   expect(screen.getByRole('spinbutton')).toHaveValue(4);
   expect(screen.getByRole('button', { name: 'Confirm order' })).toBeEnabled();
 });
 
 it('explains an empty order and keeps delivery and substitution actions disabled until filled', () => {
-  query.mockReturnValue({ data: { reference: 'PO-empty', lines: [] } });
+  query.mockReturnValue({
+    data: { buyerBranch: { name: 'Buyer branch', phone: null }, reference: 'PO-empty', lines: [] },
+  });
   render(<SupplierPoActionForm token="synthetic" />);
   expect(screen.getByText(/there are no items on this order/i)).toBeVisible();
   expect(screen.getByRole('button', { name: 'Send delivery date' })).toBeDisabled();
