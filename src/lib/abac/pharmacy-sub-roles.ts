@@ -246,8 +246,8 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
       },
       {
         id: 'record-fills-noncontrolled-prescriptions',
-        text: 'Record fills of non-controlled prescriptions and log refill reminders',
-        sites: { 'src/server/routers/pharmacy-prescriptions.ts': 2 },
+        text: 'Log refill reminders for prescription fills',
+        sites: { 'src/server/routers/pharmacy-prescriptions.ts': 1 },
       },
       {
         id: 'search-counter-patients-open',

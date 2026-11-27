@@ -7,6 +7,12 @@ import { appUrl, templates } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 import { lockProjectMembership } from '@/lib/projects/membership-lock';
 import {
+  TaskRuleError,
+  assertAssigneesAreProjectMembers,
+  assertReplyTargetInTask,
+  eligibleColumnDefaultAssigneeIds,
+} from '@/lib/projects/task-rules';
+import {
   assertProjectAccess,
   assertBoardAccess,
   assertColumnAccess,
@@ -25,6 +31,18 @@ function formatDue(date: Date): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+/** Run a shared task rule, answering a broken one as the BAD_REQUEST it always was. */
+async function taskRule(check: () => Promise<void>): Promise<void> {
+  try {
+    await check();
+  } catch (error) {
+    if (error instanceof TaskRuleError) {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+    }
+    throw error;
+  }
 }
 
 // Build the deep link to a task on its board.
@@ -597,22 +615,16 @@ export const projectsRouter = router({
       // setColumnDefaultAssignees already enforces this, but createTask/
       // updateTaskAssignees did not, so an arbitrary or non-member id could be
       // assigned (and emailed) or trigger a raw FK 500.
+      const col = await ctx.db.column.findUnique({
+        where: { id: input.columnId },
+        select: { board: { select: { projectId: true } } },
+      });
+      if (!col) throw new TRPCError({ code: 'NOT_FOUND' });
+      const projectId = col.board.projectId;
       if (input.assigneeIds.length > 0) {
-        const col = await ctx.db.column.findUnique({
-          where: { id: input.columnId },
-          select: { board: { select: { projectId: true } } },
-        });
         const uniqueAssignees = [...new Set(input.assigneeIds)];
         await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
-        const memberCount = await ctx.db.projectMember.count({
-          where: { projectId: col!.board.projectId, userId: { in: uniqueAssignees } },
-        });
-        if (memberCount !== uniqueAssignees.length) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'All assignees must be members of the project.',
-          });
-        }
+        await taskRule(() => assertAssigneesAreProjectMembers(ctx.db, projectId, uniqueAssignees));
       }
 
       const maxOrder = await ctx.db.task.aggregate({
@@ -620,14 +632,14 @@ export const projectsRouter = router({
         where: { columnId: input.columnId },
       });
 
-      // Fetch column's default assignees so we can auto-add them to the new task.
-      const columnDefaults = await ctx.db.columnDefaultAssignee.findMany({
-        where: { columnId: input.columnId },
-        select: { userId: true },
-      });
-      const mergedAssignees = [
-        ...new Set([...input.assigneeIds, ...columnDefaults.map((d) => d.userId)]),
-      ];
+      // Auto-add the column's default assignees to the new task. DEV-1055: only
+      // those who may still work on the project, the same filter moveTask applies.
+      const columnDefaults = await eligibleColumnDefaultAssigneeIds(
+        ctx.db,
+        input.columnId,
+        projectId
+      );
+      const mergedAssignees = [...new Set([...input.assigneeIds, ...columnDefaults])];
 
       const task = await ctx.db.task.create({
         data: {
@@ -829,21 +841,14 @@ export const projectsRouter = router({
           }
 
           // Auto-assign the target column's default assignees (additive).
-          const defaults = await tx.columnDefaultAssignee.findMany({
-            where: {
-              columnId: input.targetColumnId,
-              user: {
-                OR: [
-                  { role: 'ADMIN' },
-                  { projectMembers: { some: { projectId: targetColumn.board.projectId } } },
-                ],
-              },
-            },
-            select: { userId: true },
-          });
+          const defaults = await eligibleColumnDefaultAssigneeIds(
+            tx,
+            input.targetColumnId,
+            targetColumn.board.projectId
+          );
           if (defaults.length > 0) {
             await tx.taskAssignee.createMany({
-              data: defaults.map((d) => ({ taskId: input.taskId, userId: d.userId })),
+              data: defaults.map((userId) => ({ taskId: input.taskId, userId })),
               skipDuplicates: true, // already-assigned users become a no-op
             });
           }
@@ -971,23 +976,14 @@ export const projectsRouter = router({
         }
 
         // Auto-assign the target column's default owners (additive), mirroring moveTask.
-        const defaults = await tx.columnDefaultAssignee.findMany({
-          where: {
-            columnId: input.targetColumnId,
-            user: {
-              OR: [
-                { role: 'ADMIN' },
-                { projectMembers: { some: { projectId: targetColumn.board.projectId } } },
-              ],
-            },
-          },
-          select: { userId: true },
-        });
+        const defaults = await eligibleColumnDefaultAssigneeIds(
+          tx,
+          input.targetColumnId,
+          targetColumn.board.projectId
+        );
         if (defaults.length > 0) {
           await tx.taskAssignee.createMany({
-            data: input.taskIds.flatMap((taskId) =>
-              defaults.map((d) => ({ taskId, userId: d.userId }))
-            ),
+            data: input.taskIds.flatMap((taskId) => defaults.map((userId) => ({ taskId, userId }))),
             skipDuplicates: true,
           });
         }
@@ -1384,18 +1380,7 @@ export const projectsRouter = router({
       await assertTaskAccess(ctx, input.taskId);
       // PROJ-06: a reply's parent must belong to the SAME task, else a parentId
       // from another task threads an orphaned reply across tasks.
-      if (input.parentId) {
-        const parent = await ctx.db.taskComment.findUnique({
-          where: { id: input.parentId },
-          select: { taskId: true },
-        });
-        if (!parent || parent.taskId !== input.taskId) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Reply target does not belong to this task.',
-          });
-        }
-      }
+      await taskRule(() => assertReplyTargetInTask(ctx.db, input.taskId, input.parentId));
       return ctx.db.taskComment.create({
         data: {
           content: input.content,
@@ -1584,15 +1569,9 @@ export const projectsRouter = router({
           where: { id: input.taskId },
           select: { column: { select: { board: { select: { projectId: true } } } } },
         });
-        const memberCount = await ctx.db.projectMember.count({
-          where: { projectId: t!.column.board.projectId, userId: { in: uniqueAssignees } },
-        });
-        if (memberCount !== uniqueAssignees.length) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'All assignees must be members of the project.',
-          });
-        }
+        await taskRule(() =>
+          assertAssigneesAreProjectMembers(ctx.db, t!.column.board.projectId, uniqueAssignees)
+        );
       }
 
       // Capture who was already assigned so we only email the *newly* added.

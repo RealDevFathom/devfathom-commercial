@@ -4,6 +4,7 @@ import { withApiAuth } from '@/lib/api-auth';
 import { canAccessProject } from '@/lib/authz';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { eligibleColumnDefaultAssigneeIds } from '@/lib/projects/task-rules';
 
 // GET /api/v1/tasks?columnId=&assigneeId=&priority=
 export const GET = withApiAuth('tasks:read', async (ctx, request) => {
@@ -79,7 +80,6 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     where: { id: input.columnId },
     include: {
       board: { select: { project: { select: { id: true, name: true } } } },
-      defaultAssignees: { select: { userId: true } },
     },
   });
   if (!column) return NextResponse.json({ error: 'Column not found' }, { status: 404 });
@@ -127,10 +127,15 @@ export const POST = withApiAuth('tasks:write', async (ctx, request) => {
     where: { columnId: input.columnId },
   });
 
-  // Merge explicit assignees with the column's default owners (deduped)
-  const mergedAssignees = [
-    ...new Set([...uniqueAssigneeIds, ...column.defaultAssignees.map((d) => d.userId)]),
-  ];
+  // Merge explicit assignees with the column's default owners (deduped).
+  // DEV-1055: only defaults who may still work on the project (administrators or
+  // current members), the same shared filter the router and the assistant apply.
+  const columnDefaults = await eligibleColumnDefaultAssigneeIds(
+    ctx.db,
+    column.id,
+    column.board.project.id
+  );
+  const mergedAssignees = [...new Set([...uniqueAssigneeIds, ...columnDefaults])];
 
   const task = await ctx.db.task.create({
     data: {

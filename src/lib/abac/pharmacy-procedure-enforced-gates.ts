@@ -311,7 +311,6 @@ export const PHARMACY_PROCEDURE_ENFORCED_GATES: Readonly<Record<string, readonly
   'pharmacyPrescriptions.draftCartFromSource': ['signed-in'],
   'pharmacyPrescriptions.exportPatient': ['pharmacy:prescriptions'],
   'pharmacyPrescriptions.extractSource': ['signed-in'],
-  'pharmacyPrescriptions.fill': ['pharmacy:dispense'],
   'pharmacyPrescriptions.readPatient': ['pharmacy:prescriptions'],
   'pharmacyPrescriptions.readSource': ['signed-in'],
   'pharmacyPrescriptions.recordConsent': ['pharmacy:prescriptions'],

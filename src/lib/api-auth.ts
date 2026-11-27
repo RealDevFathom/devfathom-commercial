@@ -179,10 +179,16 @@ export function canIncludeAdminResource(
 
 /**
  * Wrap a route handler with authentication and scope checking.
+ *
+ * `anyScope` is for a route that exposes no tenant data (the API reference): any
+ * valid token may call it, so the scope check is skipped and `requiredScope` only
+ * labels the audit rows. The per-IP and per-token limits, authentication and the
+ * audit trail are exactly those of every other route.
  */
 export function withApiAuth<T extends unknown[]>(
   requiredScope: string,
-  handler: (ctx: ApiContext, request: Request, ...args: T) => Promise<Response> | Response
+  handler: (ctx: ApiContext, request: Request, ...args: T) => Promise<Response> | Response,
+  options: { anyScope?: boolean } = {}
 ) {
   return async (request: Request, ...args: T): Promise<Response> => {
     const start = Date.now();
@@ -234,7 +240,7 @@ export function withApiAuth<T extends unknown[]>(
         return res;
       }
 
-      if (!hasScope(auth, requiredScope)) {
+      if (!options.anyScope && !hasScope(auth, requiredScope)) {
         const res = NextResponse.json(
           { error: `Insufficient permissions. Required scope: ${requiredScope}` },
           { status: 403 }

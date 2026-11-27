@@ -92,27 +92,71 @@ const BUSINESS_DATE = z
   .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected a "YYYY-MM-DD" business date.');
 const ID = z.string().min(1);
 
-/** The attribution + idempotency envelope every mutating command carries (C6/C7).
- * The console supplies the acting operator, the registered terminal and a
- * device-scoped idempotency key; a replay of the same (deviceId, key) creates
- * nothing. The maker-checker commands (`voidItem`, `cancel`) ignore the supplied
- * `staffProfileId` and attribute the action to the session staff profile. */
-const ACTOR = z.object({
-  staffProfileId: ID,
+/** The idempotency envelope every mutating command carries (C6/C7). DEV-1055: who
+ * acted is never taken from the request. The acting staff member is the caller's
+ * own session staff profile at the order's branch, so the legacy `staffProfileId`
+ * is accepted for older clients and never used. The session has no terminal of its
+ * own, so `deviceId` only names which registered terminal the back office is
+ * acting for; the server accepts it only when it is an ACTIVE, unrevoked device of
+ * the order's own branch (see `resolveSessionActor`). A replay of the same
+ * (deviceId, key) creates nothing. */
+const SESSION_ACTOR = z.object({
+  staffProfileId: ID.optional(),
   deviceId: ID,
   idempotencyKey: ID,
 });
 
-/** Maker-checker envelope: the acting staff comes from the session, so the
- * legacy `staffProfileId` is optional (accepted for older clients, never used). */
-const APPROVED_ACTOR = ACTOR.extend({ staffProfileId: ID.optional() });
+/**
+ * DEV-1055: build the command actor from the signed-in session. The caller must be
+ * in scope for the branch (primary branch, explicit assignment, or the org-wide
+ * `restaurant:configure`), acts as their own ACTIVE staff profile for that branch,
+ * and may only name a terminal that is registered, ACTIVE and unrevoked at that
+ * same branch. Nothing in the request can attribute the action to another person,
+ * another branch's terminal or a revoked one.
+ */
+async function resolveSessionActor(
+  ctx: TRPCContext,
+  branchId: string,
+  actor: z.infer<typeof SESSION_ACTOR>
+): Promise<CommandActor> {
+  await requireRestaurantBranchScope(ctx, branchId);
+  const staffProfileId = await requireSessionStaffProfileId(ctx, { branchId });
+  const deviceId = await requireBranchDevice(ctx, branchId, actor.deviceId);
+  return { staffProfileId, deviceId, idempotencyKey: actor.idempotencyKey };
+}
 
-function toActor(actor: z.infer<typeof ACTOR>): CommandActor {
-  return {
-    staffProfileId: actor.staffProfileId,
-    deviceId: actor.deviceId,
-    idempotencyKey: actor.idempotencyKey,
-  };
+/** The named terminal must be a registered, ACTIVE, unrevoked device of this branch. */
+async function requireBranchDevice(
+  ctx: TRPCContext,
+  branchId: string,
+  deviceId: string
+): Promise<string> {
+  const device = await ctx.db.restaurantRegisteredDevice.findFirst({
+    where: { id: deviceId, branchId, status: 'ACTIVE', revokedAt: null },
+    select: { id: true },
+  });
+  if (!device) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'That terminal is not an active device at this branch.',
+    });
+  }
+  return device.id;
+}
+
+/** `resolveSessionActor` for a command on an existing order: the branch is the
+ * order's own, read server-side inside the tenant. */
+async function resolveOrderSessionActor(
+  ctx: TRPCContext,
+  orderId: string,
+  actor: z.infer<typeof SESSION_ACTOR>
+): Promise<CommandActor> {
+  const order = await ctx.db.restaurantOrder.findUnique({
+    where: { id: orderId },
+    select: { branchId: true },
+  });
+  if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Order not found.' });
+  return resolveSessionActor(ctx, order.branchId, actor);
 }
 
 /** The approving staff member's own credential, re-verified on the server. */
@@ -127,7 +171,7 @@ type ApproverInput = {
   orderId: string;
   approvingStaffProfileId?: string | null;
   approvingCredential?: z.infer<typeof APPROVING_CREDENTIAL> | null;
-  actor: z.infer<typeof APPROVED_ACTOR>;
+  actor: z.infer<typeof SESSION_ACTOR>;
 };
 
 /**
@@ -163,7 +207,11 @@ async function withApprovedOrderCommand<T>(
   });
   const actor: CommandActor = {
     staffProfileId: actingStaffProfileId,
-    deviceId: input.actor.deviceId,
+    // A missing order is reported by the command; an existing one only accepts a
+    // terminal of its own branch (DEV-1055).
+    deviceId: order
+      ? await requireBranchDevice(ctx, order.branchId, input.actor.deviceId)
+      : input.actor.deviceId,
     idempotencyKey: input.actor.idempotencyKey,
   };
   const approvingStaffProfileId = input.approvingStaffProfileId?.trim() || null;
@@ -311,7 +359,7 @@ export const restaurantOrdersRouter = router({
           coverCount: z.number().int().min(0).nullish(),
           sectionId: ID.nullish(),
           serverStaffProfileId: ID.nullish(),
-          actor: ACTOR,
+          actor: SESSION_ACTOR,
         })
         .strict()
     )
@@ -321,6 +369,7 @@ export const restaurantOrdersRouter = router({
       await assertInOrganization(ctx.db.restaurantBranch, organizationId, [input.branchId], {
         active: true,
       });
+      const actor = await resolveSessionActor(ctx, input.branchId, input.actor);
       const result = await run(() =>
         openOrder(ctx.db, {
           organizationId: ctx.entitlements.organizationId,
@@ -332,7 +381,7 @@ export const restaurantOrdersRouter = router({
           coverCount: input.coverCount ?? null,
           sectionId: input.sectionId ?? null,
           serverStaffProfileId: input.serverStaffProfileId ?? null,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -354,11 +403,12 @@ export const restaurantOrdersRouter = router({
           course: z.number().int().min(1).optional(),
           seatNumber: z.number().int().min(1).nullish(),
           modifierOptionIds: z.array(ID).optional(),
-          actor: ACTOR,
+          actor: SESSION_ACTOR,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         addItem(ctx.db, {
           orderId: input.orderId,
@@ -367,7 +417,7 @@ export const restaurantOrdersRouter = router({
           course: input.course,
           seatNumber: input.seatNumber ?? null,
           modifierOptionIds: input.modifierOptionIds,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -389,11 +439,12 @@ export const restaurantOrdersRouter = router({
           course: z.number().int().min(1).optional(),
           seatNumber: z.number().int().min(1).nullish(),
           modifierOptionIds: z.array(ID).optional(),
-          actor: ACTOR,
+          actor: SESSION_ACTOR,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         adjustItem(ctx.db, {
           orderId: input.orderId,
@@ -402,7 +453,7 @@ export const restaurantOrdersRouter = router({
           course: input.course,
           seatNumber: input.seatNumber ?? null,
           modifierOptionIds: input.modifierOptionIds,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -416,15 +467,18 @@ export const restaurantOrdersRouter = router({
 
   removeItem: manageProcedure
     .input(
-      z.object({ orderId: ID, itemId: ID, reason: z.string().nullish(), actor: ACTOR }).strict()
+      z
+        .object({ orderId: ID, itemId: ID, reason: z.string().nullish(), actor: SESSION_ACTOR })
+        .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         removeItem(ctx.db, {
           orderId: input.orderId,
           itemId: input.itemId,
           reason: input.reason ?? null,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -437,11 +491,10 @@ export const restaurantOrdersRouter = router({
     }),
 
   send: manageProcedure
-    .input(z.object({ orderId: ID, actor: ACTOR }).strict())
+    .input(z.object({ orderId: ID, actor: SESSION_ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
-      const result = await run(() =>
-        sendOrder(ctx.db, { orderId: input.orderId, actor: toActor(input.actor) })
-      );
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
+      const result = await run(() => sendOrder(ctx.db, { orderId: input.orderId, actor }));
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
@@ -452,13 +505,16 @@ export const restaurantOrdersRouter = router({
     }),
 
   fireCourse: manageProcedure
-    .input(z.object({ orderId: ID, course: z.number().int().min(1), actor: ACTOR }).strict())
+    .input(
+      z.object({ orderId: ID, course: z.number().int().min(1), actor: SESSION_ACTOR }).strict()
+    )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         fireCourse(ctx.db, {
           orderId: input.orderId,
           course: input.course,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -471,13 +527,16 @@ export const restaurantOrdersRouter = router({
     }),
 
   holdCourse: manageProcedure
-    .input(z.object({ orderId: ID, course: z.number().int().min(1), actor: ACTOR }).strict())
+    .input(
+      z.object({ orderId: ID, course: z.number().int().min(1), actor: SESSION_ACTOR }).strict()
+    )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         holdCourse(ctx.db, {
           orderId: input.orderId,
           course: input.course,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -496,17 +555,18 @@ export const restaurantOrdersRouter = router({
           orderId: ID,
           itemId: ID,
           toStatus: z.enum(['FIRING', 'PREPARED', 'SERVED']),
-          actor: ACTOR,
+          actor: SESSION_ACTOR,
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         advanceItem(ctx.db, {
           orderId: input.orderId,
           itemId: input.itemId,
           toStatus: input.toStatus,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -519,14 +579,19 @@ export const restaurantOrdersRouter = router({
     }),
 
   requestRemake: manageProcedure
-    .input(z.object({ orderId: ID, itemId: ID, reason: z.string().min(1), actor: ACTOR }).strict())
+    .input(
+      z
+        .object({ orderId: ID, itemId: ID, reason: z.string().min(1), actor: SESSION_ACTOR })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         requestRemake(ctx.db, {
           orderId: input.orderId,
           itemId: input.itemId,
           reason: input.reason,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -552,7 +617,7 @@ export const restaurantOrdersRouter = router({
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
           approvingCredential: APPROVING_CREDENTIAL.nullish(),
-          actor: APPROVED_ACTOR,
+          actor: SESSION_ACTOR,
         })
         .strict()
     )
@@ -589,7 +654,7 @@ export const restaurantOrdersRouter = router({
           wastageDisposition: DISPOSITION.optional(),
           approvingStaffProfileId: ID.nullish(),
           approvingCredential: APPROVING_CREDENTIAL.nullish(),
-          actor: APPROVED_ACTOR,
+          actor: SESSION_ACTOR,
         })
         .strict()
     )
@@ -617,11 +682,10 @@ export const restaurantOrdersRouter = router({
     }),
 
   close: manageProcedure
-    .input(z.object({ orderId: ID, actor: ACTOR }).strict())
+    .input(z.object({ orderId: ID, actor: SESSION_ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
-      const result = await run(() =>
-        closeOrder(ctx.db, { orderId: input.orderId, actor: toActor(input.actor) })
-      );
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
+      const result = await run(() => closeOrder(ctx.db, { orderId: input.orderId, actor }));
       annotateAudit(ctx, {
         targetType: 'RestaurantOrder',
         targetId: input.orderId,
@@ -632,14 +696,15 @@ export const restaurantOrdersRouter = router({
     }),
 
   moveTable: manageProcedure
-    .input(z.object({ orderId: ID, fromTableId: ID, toTableId: ID, actor: ACTOR }).strict())
+    .input(z.object({ orderId: ID, fromTableId: ID, toTableId: ID, actor: SESSION_ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         moveTable(ctx.db, {
           orderId: input.orderId,
           fromTableId: input.fromTableId,
           toTableId: input.toTableId,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -656,13 +721,14 @@ export const restaurantOrdersRouter = router({
     }),
 
   mergeTables: manageProcedure
-    .input(z.object({ orderId: ID, tableIds: z.array(ID).min(1), actor: ACTOR }).strict())
+    .input(z.object({ orderId: ID, tableIds: z.array(ID).min(1), actor: SESSION_ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         mergeTables(ctx.db, {
           orderId: input.orderId,
           tableIds: input.tableIds,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {
@@ -675,13 +741,14 @@ export const restaurantOrdersRouter = router({
     }),
 
   unlinkTable: manageProcedure
-    .input(z.object({ orderId: ID, tableId: ID, actor: ACTOR }).strict())
+    .input(z.object({ orderId: ID, tableId: ID, actor: SESSION_ACTOR }).strict())
     .mutation(async ({ ctx, input }) => {
+      const actor = await resolveOrderSessionActor(ctx, input.orderId, input.actor);
       const result = await run(() =>
         unlinkTable(ctx.db, {
           orderId: input.orderId,
           tableId: input.tableId,
-          actor: toActor(input.actor),
+          actor,
         })
       );
       annotateAudit(ctx, {

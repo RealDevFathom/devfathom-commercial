@@ -443,27 +443,25 @@ describe('prescription capture and private delivery', () => {
     }
   );
 
-  it('refuses to record a prescription fill without an exact dispense grant', async () => {
-    mocks.can.mockResolvedValue(false);
+  it('DEV-1056: has no fill route, so a fill is only recorded by the counter sale', async () => {
+    // The route wrote a prescription fill with no sale and no stock movement.
+    expect(Object.keys(pharmacyPrescriptionsRouter._def.procedures)).not.toContain('fill');
     const ctx = context();
     const create = vi.fn();
     (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
+    const call = (caller(ctx) as unknown as Record<string, (input: unknown) => Promise<unknown>>)
+      .fill;
     await expect(
-      caller(ctx).fill({
-        id: 'fill-a',
-        prescriptionLineId: 'line-a',
-        fillSequence: 1,
-        quantityCanonicalUnits: 1,
-        idempotencyKey: 'fill-key-a',
-      })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      (async () =>
+        call({
+          id: 'fill-a',
+          prescriptionLineId: 'line-a',
+          fillSequence: 1,
+          quantityCanonicalUnits: 1,
+          idempotencyKey: 'fill-key-a',
+        }))()
+    ).rejects.toBeDefined();
     expect(create).not.toHaveBeenCalled();
-    expect(mocks.can).toHaveBeenCalledWith(
-      expect.anything(),
-      'pharmacy:dispense',
-      undefined,
-      expect.objectContaining({ source: 'TRPC' })
-    );
   });
 
   it.each([
@@ -634,79 +632,6 @@ describe('prescription capture and private delivery', () => {
       if (!owner) expect(JSON.stringify(result)).not.toContain('South');
     }
   );
-
-  it('refuses controlled fills so they cannot bypass witnessed counter dispensing', async () => {
-    const ctx = context();
-    const create = vi.fn();
-    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
-    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: true } });
-
-    await expect(
-      caller(ctx).fill({
-        id: 'fill-controlled',
-        prescriptionLineId: 'line-controlled',
-        fillSequence: 1,
-        quantityCanonicalUnits: 1,
-        idempotencyKey: 'fill-key-controlled',
-      })
-    ).rejects.toMatchObject({
-      code: 'BAD_REQUEST',
-      message: 'Controlled medicines must be dispensed through the witnessed counter flow.',
-    });
-    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
-      where: { id: 'line-controlled', organizationId: 'org-a' },
-      select: { medicine: { select: { controlled: true } } },
-    });
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it('does not disclose or fill a missing or cross-tenant prescription line', async () => {
-    const ctx = context();
-    const create = vi.fn();
-    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
-    mocks.prescriptionLine.mockResolvedValue(null);
-
-    await expect(
-      caller(ctx).fill({
-        id: 'fill-foreign',
-        prescriptionLineId: 'line-foreign',
-        fillSequence: 1,
-        quantityCanonicalUnits: 1,
-        idempotencyKey: 'fill-key-foreign',
-      })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'Prescription line not found.' });
-    expect(mocks.prescriptionLine).toHaveBeenCalledWith({
-      where: { id: 'line-foreign', organizationId: 'org-a' },
-      select: { medicine: { select: { controlled: true } } },
-    });
-    expect(create).not.toHaveBeenCalled();
-  });
-
-  it('continues to record non-controlled prescription fills', async () => {
-    const ctx = context();
-    const create = vi.fn(async ({ data }) => data);
-    (ctx.db as unknown as Record<string, unknown>).prescriptionFill = { create };
-
-    await expect(
-      caller(ctx).fill({
-        id: 'fill-ordinary',
-        prescriptionLineId: 'line-ordinary',
-        fillSequence: 1,
-        quantityCanonicalUnits: 2,
-        idempotencyKey: 'fill-key-ordinary',
-      })
-    ).resolves.toMatchObject({ id: 'fill-ordinary', dispensedByUserId: 'user-a' });
-    expect(create).toHaveBeenCalledWith({
-      data: {
-        id: 'fill-ordinary',
-        prescriptionLineId: 'line-ordinary',
-        fillSequence: 1,
-        quantityCanonicalUnits: 2,
-        idempotencyKey: 'fill-key-ordinary',
-        dispensedByUserId: 'user-a',
-      },
-    });
-  });
 
   it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
@@ -1669,98 +1594,5 @@ describe('DEV-938 refill reminder branch assignment', () => {
       capturedByUserId: 'owner-a',
     });
     expect(reminderCreate).toHaveBeenCalledOnce();
-  });
-});
-
-describe('DEV-962 a fill records the branch that dispensed it', () => {
-  const branchFind = vi.fn();
-  const assignmentFind = vi.fn();
-  const fillCreate = vi.fn();
-  const fillInput = {
-    id: 'fill-branch',
-    prescriptionLineId: 'line-ordinary',
-    fillSequence: 1,
-    quantityCanonicalUnits: 2,
-    idempotencyKey: 'fill-key-branch',
-  };
-
-  function fillContext(role: 'ADMIN' | 'EMPLOYEE' = 'EMPLOYEE') {
-    const ctx = context('pharmacist-a');
-    ctx.session!.user.role = role;
-    ctx.db = {
-      ...ctx.db,
-      pharmacyBranch: { findFirst: branchFind },
-      pharmacyClinicalBranchAssignment: {
-        findFirst: vi.fn().mockResolvedValue(null),
-        findMany: vi.fn().mockResolvedValue([]),
-      },
-      pharmacyBranchAssignment: { findFirst: assignmentFind },
-      prescriptionFill: { create: fillCreate },
-    } as unknown as typeof ctx.db;
-    return ctx;
-  }
-
-  beforeEach(() => {
-    vi.resetAllMocks();
-    mocks.can.mockResolvedValue(true);
-    mocks.hasModule.mockReturnValue(true);
-    mocks.prescriptionLine.mockResolvedValue({ medicine: { controlled: false } });
-    branchFind.mockImplementation(async ({ where }) =>
-      where.id === 'branch-a' && where.organizationId === 'org-a' && where.active !== false
-        ? { id: 'branch-a' }
-        : null
-    );
-    assignmentFind.mockResolvedValue(null);
-    fillCreate.mockImplementation(async ({ data }) => data);
-  });
-
-  it('stores the dispensing branch of a pharmacist assigned to it', async () => {
-    assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
-    await expect(
-      caller(fillContext()).fill({ ...fillInput, branchId: 'branch-a' })
-    ).resolves.toMatchObject({ branchId: 'branch-a', dispensedByUserId: 'pharmacist-a' });
-    expect(fillCreate).toHaveBeenCalledExactlyOnceWith({
-      data: { ...fillInput, branchId: 'branch-a', dispensedByUserId: 'pharmacist-a' },
-    });
-  });
-
-  it('refuses a branch the pharmacist is not assigned to, and a branch not found', async () => {
-    await expect(
-      caller(fillContext()).fill({ ...fillInput, branchId: 'branch-a' })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-    await expect(
-      caller(fillContext()).fill({ ...fillInput, branchId: 'branch-of-org-b' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND', message: 'BRANCH_NOT_FOUND' });
-    expect(fillCreate).not.toHaveBeenCalled();
-  });
-
-  it('records fills only at an administrator’s admitted branch and permits the System Owner at any tenant branch', async () => {
-    const ctx = fillContext('ADMIN');
-    const api = caller(ctx);
-    await expect(api.fill({ ...fillInput, branchId: 'branch-a' })).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-      message: 'Branch is outside your scope.',
-    });
-    expect(fillCreate).not.toHaveBeenCalled();
-    assignmentFind.mockResolvedValue({ branchId: 'branch-a' });
-    await expect(api.fill({ ...fillInput, branchId: 'branch-a' })).resolves.toMatchObject({
-      branchId: 'branch-a',
-    });
-    assignmentFind.mockResolvedValue(null);
-    vi.mocked(ctx.db.user.findUnique).mockResolvedValue({
-      role: 'ADMIN',
-      status: 'ACTIVE',
-      organizationRole: { key: 'owner', isSystem: true, permissions: [] },
-      permissionOverrides: [],
-    } as never);
-    branchFind.mockResolvedValue({ id: 'branch-b' });
-    await expect(
-      api.fill({
-        ...fillInput,
-        id: 'owner-fill',
-        idempotencyKey: 'owner-key',
-        branchId: 'branch-b',
-      })
-    ).resolves.toMatchObject({ branchId: 'branch-b' });
   });
 });

@@ -33,10 +33,11 @@ import {
   touchDeviceLastSeen,
 } from '@/lib/restaurant/devices';
 import {
+  LOCKOUT_DURATION_MS,
+  MAX_FAILED_ATTEMPTS,
   OPERATOR_CREDENTIAL_BCRYPT_COST,
   clearLockout,
   isLockedOut,
-  registerFailedAttempt,
   remainingLockoutMs,
   verifyOperatorCredential,
   type OperatorCredentialType,
@@ -604,6 +605,42 @@ function getDummyHash(): Promise<string> {
 }
 
 /**
+ * DEV-1055: count one attempt against a credential, atomically. Returns false
+ * when the credential is locked (or no longer live), in which case the caller
+ * must not compare the secret. The arithmetic is `registerFailedAttempt`: the
+ * `MAX_FAILED_ATTEMPTS`-th charge locks the credential for `LOCKOUT_DURATION_MS`
+ * and resets the strikes; an expired lock is cleared by the next charge. Only
+ * the lockout columns are written, so the DEV-1015 trigger on the credential
+ * hash and revocation does not fire.
+ */
+async function chargeOperatorAttempt(
+  db: ScopedDb,
+  credentialId: string,
+  now: Date
+): Promise<boolean> {
+  // Timestamps are stored as UTC wall time without a zone; pass them the same way.
+  const nowUtc = now.toISOString();
+  const lockUntilUtc = new Date(now.getTime() + LOCKOUT_DURATION_MS).toISOString();
+  const rows = await db.$queryRaw<{ id: string }[]>`
+    UPDATE restaurant_operator_credentials
+       SET "lockedUntil" = CASE
+             WHEN "failedAttempts" + 1 >= ${MAX_FAILED_ATTEMPTS} THEN ${lockUntilUtc}::timestamp
+             ELSE NULL
+           END,
+           "failedAttempts" = CASE
+             WHEN "failedAttempts" + 1 >= ${MAX_FAILED_ATTEMPTS} THEN 0
+             ELSE "failedAttempts" + 1
+           END,
+           "updatedAt" = ${nowUtc}::timestamp
+     WHERE id = ${credentialId}
+       AND "revokedAt" IS NULL
+       AND ("lockedUntil" IS NULL OR "lockedUntil" <= ${nowUtc}::timestamp)
+    RETURNING id
+  `;
+  return rows.length === 1;
+}
+
+/**
  * C4 — verify an operator credential against the durable, per-row lockout
  * counters, all inside the caller's tenant transaction. The counters
  * (`failedAttempts`/`lockedUntil`) are the AUTHORITATIVE brute-force control
@@ -689,9 +726,25 @@ export async function authenticateOperator(
     return { ok: false, reason: 'INVALID' };
   }
 
-  const state = { failedAttempts: credential.failedAttempts, lockedUntil: credential.lockedUntil };
-  if (isLockedOut(state, now)) {
-    return { ok: false, reason: 'LOCKED', retryAfterMs: remainingLockoutMs(state, now) };
+  // DEV-1055: charge the attempt BEFORE any compare, in one statement on the
+  // credential row. Reading the counter, comparing, then writing it back let
+  // guesses sent at the same moment all read the same count and all be compared,
+  // so the five-attempt lockout never engaged. This UPDATE takes the row lock, so
+  // concurrent attempts queue behind it and each re-evaluates the predicate
+  // against the committed row: the fifth charge sets the lock, and every attempt
+  // after it matches no row and is refused without a compare.
+  const charged = await chargeOperatorAttempt(db, credential.id, now);
+  if (!charged) {
+    // No row: the credential is locked, or was revoked since it was read.
+    const current = await db.restaurantOperatorCredential.findUnique({
+      where: { id: credential.id },
+      select: { failedAttempts: true, lockedUntil: true, revokedAt: true },
+    });
+    if (current && current.revokedAt === null && isLockedOut(current, now)) {
+      return { ok: false, reason: 'LOCKED', retryAfterMs: remainingLockoutMs(current, now) };
+    }
+    await verifyOperatorCredential(type, secret, await getDummyHash());
+    return { ok: false, reason: 'INVALID' };
   }
 
   // DEV-961: every approval, by PIN or by badge, goes through the shared verifier, so a
@@ -709,18 +762,14 @@ export async function authenticateOperator(
         now,
       })) !== null
     : await verifyOperatorCredential(type, secret, credential.credentialHash);
-  if (!valid) {
-    const next = registerFailedAttempt(state, now);
-    await db.restaurantOperatorCredential.update({ where: { id: credential.id }, data: next });
-    return { ok: false, reason: 'INVALID' };
-  }
+  // A wrong secret keeps the charge already made above.
+  if (!valid) return { ok: false, reason: 'INVALID' };
 
-  if (credential.failedAttempts !== 0 || credential.lockedUntil !== null) {
-    await db.restaurantOperatorCredential.update({
-      where: { id: credential.id },
-      data: clearLockout(),
-    });
-  }
+  // A correct secret clears the strikes, including the charge for this attempt.
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
 
   // Completion wave: the shift gate runs AFTER the credential is proven, so a
   // roster lookup can never become an oracle for which staff ids or PINs exist,

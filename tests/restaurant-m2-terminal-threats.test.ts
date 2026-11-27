@@ -2,6 +2,11 @@ import { randomBytes } from 'node:crypto';
 import { hash } from 'bcryptjs';
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  applyOperatorAttemptCharge,
+  isOperatorAttemptCharge,
+  type FakeOperatorCredentialRow,
+} from '@/lib/test-support/operator-attempt-charge';
 
 type Row = Record<string, unknown>;
 type Route = { POST: (request: Request) => Promise<Response> };
@@ -79,8 +84,16 @@ const db = {
     tokenHash: string,
     deviceId: string,
     staff?: string,
-    branch?: string
+    branch?: string,
+    ...rest: unknown[]
   ) => {
+    // DEV-1055: the atomic attempt charge on the durable credential row.
+    if (isOperatorAttemptCharge(query)) {
+      return applyOperatorAttemptCharge(
+        (id) => find(h.store.credentials, { id }) as FakeOperatorCredentialRow | null,
+        [tokenHash, deviceId, staff, branch, ...rest]
+      );
+    }
     if (query.join('').includes('FOR SHARE OF c, p')) {
       const credential = find(h.store.credentials, {
         id: tokenHash,
@@ -168,6 +181,8 @@ const db = {
         })
         .map((row) => ({ ...row }));
     },
+    findUnique: async ({ where }: { where: Record<string, unknown> }) =>
+      copy(find(h.store.credentials, where)),
     update: async ({ where, data }: { where: Record<string, unknown>; data: Row }) => {
       const row = find(h.store.credentials, where);
       if (!row) throw new Error('credential missing');

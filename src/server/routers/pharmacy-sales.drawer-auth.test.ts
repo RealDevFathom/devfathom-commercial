@@ -108,6 +108,8 @@ function fixture(
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => (options.assigned ?? []).map((branchId) => ({ branchId }))),
     },
+    // DEV-1056: the drawer's device id names no registered counter computer.
+    pharmacyRegisteredDevice: { findFirst: vi.fn(async () => null) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };

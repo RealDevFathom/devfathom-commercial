@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { router, protectedProcedure, hrProcedure, capabilityProcedure } from '../trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { can, subjectFromSession } from '@/lib/abac';
 import { annotateAudit } from '../audit';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -158,6 +159,7 @@ export const resignationsRouter = router({
   // your own, HR may not review an admin's) is enforced via the ABAC engine. Does
   // NOT deactivate the account — offboarding happens separately on the last day.
   review: hrProcedure
+    .meta(refuseSupportSession)
     .input(
       z.object({
         id: z.string(),

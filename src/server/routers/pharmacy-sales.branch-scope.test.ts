@@ -172,6 +172,7 @@ let db: {
   pharmacyBranchAssignment: { findMany: ReturnType<typeof vi.fn> };
   pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
+  pharmacyRegisteredDevice: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
   pharmacyTender: { findFirst: ReturnType<typeof vi.fn> };
   organization: { findUnique: ReturnType<typeof vi.fn> };
@@ -209,6 +210,8 @@ beforeEach(() => {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn().mockResolvedValue({ id: 'drawer-new', status: 'OPEN' }),
     },
+    // DEV-1056: the drawer's device id names no registered counter computer.
+    pharmacyRegisteredDevice: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue(null) },
     organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },

@@ -6,7 +6,7 @@ import { expect, it } from 'vitest';
 const ownerUrl = process.env.PHARMACY_DB_TEST_OWNER_URL;
 const runtimeUrl = process.env.PHARMACY_DB_TEST_RUNTIME_URL;
 const migration =
-  'prisma/migrations/20261127040000_pharmacy_clinical_branch_assignments/migration.sql';
+  'prisma/migrations/20261126010150_pharmacy_clinical_branch_assignments/migration.sql';
 
 it.skipIf(!ownerUrl || !runtimeUrl)(
   'snapshots only missing clinical admissions once, including legacy administrators',

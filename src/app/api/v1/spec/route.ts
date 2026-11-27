@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server';
-import { authenticateApiRequest, auditedApiError } from '@/lib/api-auth';
+import { withApiAuth } from '@/lib/api-auth';
 import { publicRequestOrigin } from '@/lib/http-origin';
-import { recordRestAudit } from '@/server/audit';
 
 /**
  * GET /api/v1/spec
@@ -13,51 +12,27 @@ import { recordRestAudit } from '@/server/audit';
  *
  * Hand the URL of this endpoint + a token to your AI agent and it has
  * everything it needs to operate the hub on behalf of the bound user.
+ *
+ * DEV-1055: served through the shared `withApiAuth` wrapper, so it has the same
+ * per-IP limit before authentication (an invalid token costs a bcrypt compare),
+ * the same per-token limit after it, and the same audit trail as every other
+ * `/api/v1` route. Any valid token works: the scope check alone is skipped, and
+ * the calls an agent then makes are still scope-checked individually.
  */
-export async function GET(request: Request) {
-  // Any valid token works — we don't enforce a scope here. The actual
-  // endpoint calls the agent makes will still be scope-checked individually.
-  // REST-02: this route bypasses withApiAuth, so record the audit manually —
-  // reads of the full API map (and 401 attempts) must leave an audit trail.
-  const start = Date.now();
-  let auth;
-  try {
-    auth = await authenticateApiRequest(request);
-  } catch (err) {
-    return auditedApiError(request, 'spec:read', start, null, err);
-  }
-  if (auth instanceof NextResponse) {
-    recordRestAudit({
-      request,
-      ctx: null,
-      scope: 'spec:read',
-      status: auth.status,
-      durationMs: Date.now() - start,
-    });
-    return auth;
-  }
-
-  const baseUrl = publicRequestOrigin(request);
-  const md = buildSpec(baseUrl);
-
-  recordRestAudit({
-    request,
-    ctx: auth,
-    scope: 'spec:read',
-    status: 200,
-    durationMs: Date.now() - start,
-  });
-
-  return new NextResponse(md, {
-    status: 200,
-    headers: {
-      'Content-Type': 'text/markdown; charset=utf-8',
-      // Don't cache — markdown is generated per-request and includes the
-      // exact base URL of the host serving it
-      'Cache-Control': 'private, no-store',
-    },
-  });
-}
+export const GET = withApiAuth(
+  'spec:read',
+  (_ctx, request) =>
+    new NextResponse(buildSpec(publicRequestOrigin(request)), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/markdown; charset=utf-8',
+        // Don't cache — markdown is generated per-request and includes the
+        // exact base URL of the host serving it
+        'Cache-Control': 'private, no-store',
+      },
+    }),
+  { anyScope: true }
+);
 
 function buildSpec(baseUrl: string): string {
   return `# DevFathom API — Full Reference

@@ -3,6 +3,7 @@ import 'server-only';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 import { adminProcedure, router, type TRPCContext } from '@/server/trpc';
+import { refuseSupportSession } from '@/lib/tenancy/support-session-rule';
 import { hasModule } from '@/lib/entitlements';
 import { annotateAudit } from '@/server/audit';
 import { requireDrawerManagerAccess } from '@/server/routers/pharmacy-sales';
@@ -172,29 +173,32 @@ export const pharmacyPrepaidRouter = router({
     });
     return version;
   }),
-  setPin: adminProcedure.input(prepaidPinInput).mutation(async ({ ctx, input }) => {
-    const scope = await scopeFor(ctx);
-    try {
-      const result = await ctx.db.$transaction((tx) =>
-        setPrepaidPin(tx as ScopedDb, scope, {
-          customerId: input.customerId,
-          pin: input.customerPin,
-        })
-      );
-      annotateAudit(ctx, {
-        category: 'PHARMACY',
-        operation: 'UPDATE',
-        action: 'pharmacy.prepaid.pinSet',
-        targetType: 'PharmacyCustomer',
-        targetId: input.customerId,
-      });
-      return result;
-    } catch (error) {
-      if (error instanceof PrepaidError)
-        throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
-      throw error;
-    }
-  }),
+  setPin: adminProcedure
+    .meta(refuseSupportSession)
+    .input(prepaidPinInput)
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx);
+      try {
+        const result = await ctx.db.$transaction((tx) =>
+          setPrepaidPin(tx as ScopedDb, scope, {
+            customerId: input.customerId,
+            pin: input.customerPin,
+          })
+        );
+        annotateAudit(ctx, {
+          category: 'PHARMACY',
+          operation: 'UPDATE',
+          action: 'pharmacy.prepaid.pinSet',
+          targetType: 'PharmacyCustomer',
+          targetId: input.customerId,
+        });
+        return result;
+      } catch (error) {
+        if (error instanceof PrepaidError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
+    }),
   move: adminProcedure.input(prepaidMovementInput).mutation(async ({ ctx, input }) => {
     const owner = await scopeFor(ctx);
     const scope = await requireDrawerManagerAccess(ctx, input.branchId);
