@@ -70,6 +70,7 @@ import {
   type ResolvedSerializedPack,
 } from './serialized-pack-sale';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
+import { recordQuarantineHold } from './quarantine-holds';
 import { postSaleReturnEntry, postUnidentifiedSaleReturnEntry } from './finance-postings';
 import { releaseVoidedSaleRedemptions } from './loyalty-void-release';
 import { anyCardTerminalTender } from './card-terminal/open-attempts';
@@ -2356,6 +2357,17 @@ export async function returnSaleLine(
         idempotencyKey: `${input.idempotencyKey}:${allocation.id}`,
       },
     });
+    // DEV-1052: a return set aside for inspection is an inventory hold, placed by this person.
+    if (disposition === 'QUARANTINE')
+      await recordQuarantineHold(db, scope, {
+        inventoryLotId: allocation.inventoryLotId,
+        stockLocationId,
+        units,
+        authority: 'INVENTORY',
+        origin: 'CUSTOMER_RETURN',
+        movementId: movement.id,
+        reason: input.reason,
+      });
     const returnedLine = await db.pharmacySaleReturnLine.create({
       data: {
         organizationId: scope.organizationId,

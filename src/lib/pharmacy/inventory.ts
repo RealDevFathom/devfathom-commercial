@@ -39,7 +39,9 @@ export class PharmacyInventoryError extends Error {
       | 'UNSALEABLE_DESTINATION'
       | 'IDEMPOTENCY_CONFLICT'
       /** DEV-957: the units are set aside for an offline counter; `userMessage` names it. */
-      | 'HELD_FOR_COUNTER',
+      | 'HELD_FOR_COUNTER'
+      /** DEV-1052: the caller may not release these quarantined units; `userMessage` says why. */
+      | 'QUARANTINE_RELEASE_REFUSED',
     /** A plain sentence for the person, when the reason alone does not say enough. */
     readonly userMessage?: string
   ) {
