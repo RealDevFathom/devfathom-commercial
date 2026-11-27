@@ -501,6 +501,11 @@ const DEFINITIONS: readonly PharmacySubRoleDefinition[] = [
     actions: ['pharmacy:manage'],
     allows: [
       {
+        id: 'read-branch-licence-evidence',
+        text: 'Read the licence evidence file for a branch they are assigned to',
+        sites: { 'src/lib/uploads/registry.ts': 1 },
+      },
+      {
         id: 'run-cash-drawers-branches',
         text: "Run the cash drawers at their branches: open a till with a float, pay cash in or out, close a drawer with a count and hand a till to another cashier; adjust loyalty points with their authenticator code (or PIN, if the owner turned the authenticator off) within the owner's limit, enrol customers and issue or revoke loyalty cards",
         sites: {
