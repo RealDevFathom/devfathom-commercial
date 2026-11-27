@@ -253,6 +253,10 @@ it('DEV-825: locks every returned balance, sorted, before the void and the quara
   const lockedAt = db.$queryRaw.mock.invocationCallOrder[index]!;
   expect(lockedAt).toBeLessThan(vi.mocked(changeSaleStatus).mock.invocationCallOrder[0]!);
   expect(lockedAt).toBeLessThan(vi.mocked(quarantinePart).mock.invocationCallOrder[0]!);
+  // DEV-1052: every unit of a physical return is held as a delivery return.
+  expect(vi.mocked(quarantinePart).mock.calls).toHaveLength(2);
+  for (const call of vi.mocked(quarantinePart).mock.calls)
+    expect(call[2]).toEqual(expect.objectContaining({ hold: 'DELIVERY_RETURN' }));
 });
 
 it('DEV-825: locks every reserved balance once, sorted, before quarantining an unsold order', async () => {
@@ -280,6 +284,10 @@ it('DEV-825: locks every reserved balance once, sorted, before quarantining an u
     'lot-b',
   ]);
   expect(quarantinePart).toHaveBeenCalledTimes(2);
+  // DEV-1052: every unit of a physical return is held as a delivery return.
+  expect(vi.mocked(quarantinePart).mock.calls).toHaveLength(2);
+  for (const call of vi.mocked(quarantinePart).mock.calls)
+    expect(call[2]).toEqual(expect.objectContaining({ hold: 'DELIVERY_RETURN' }));
   expect(db.$queryRaw.mock.invocationCallOrder[index]!).toBeLessThan(
     vi.mocked(quarantinePart).mock.invocationCallOrder[0]!
   );

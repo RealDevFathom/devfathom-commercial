@@ -62,6 +62,15 @@ function fixture() {
       findFirst: vi.fn().mockResolvedValue({ id: 'movement' }),
     },
     pharmacySaleReturnLine: { create: vi.fn().mockResolvedValue({}) },
+    // DEV-1052: a return set aside in quarantine records its inventory hold.
+    pharmacyStockBalance: { findFirst: vi.fn().mockResolvedValue({ onHandUnits: 1 }) },
+    pharmacyRecallQuarantineAction: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { quantityUnits: null } }),
+    },
+    pharmacyQuarantineHoldEntry: {
+      groupBy: vi.fn().mockResolvedValue([{ authority: 'INVENTORY', _sum: { quantityUnits: 1 } }]),
+      create: vi.fn().mockResolvedValue({}),
+    },
     pharmacyUnidentifiedReturnHold: { create: vi.fn().mockResolvedValue({ id: 'hold' }) },
     pharmacyReturnVerificationTask: { create: vi.fn().mockResolvedValue({ id: 'task' }) },
   };
