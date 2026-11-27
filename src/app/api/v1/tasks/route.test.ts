@@ -8,9 +8,9 @@ const mocks = vi.hoisted(() => ({
         id: 'column-1',
         boardId: 'board-a',
         board: { project: { id: 'project-1', name: 'Project' } },
-        defaultAssignees: [],
       })),
     },
+    columnDefaultAssignee: { findMany: vi.fn(async (): Promise<{ userId: string }[]> => []) },
     projectMember: { count: vi.fn(async () => 0) },
     label: { count: vi.fn(async () => 0) },
     task: {
@@ -59,6 +59,54 @@ describe('POST /api/v1/tasks assignees', () => {
       },
     });
     expect(mocks.db.task.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/v1/tasks column default assignees', () => {
+  it('adds only the column defaults who may still work on the project', async () => {
+    mocks.db.projectMember.count.mockResolvedValueOnce(1);
+    mocks.db.task.create.mockResolvedValue({ id: 'task-1', title: 'Task', labels: [] });
+    // The database applies the eligibility filter; a removed member is not returned.
+    mocks.db.columnDefaultAssignee.findMany.mockResolvedValueOnce([
+      { userId: 'current-member' },
+      { userId: 'explicit-member' },
+    ]);
+
+    const response = await POST(
+      new Request('https://example.test/api/v1/tasks', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title: 'Task',
+          columnId: 'column-1',
+          assigneeIds: ['explicit-member'],
+        }),
+      })
+    );
+
+    expect(response.status).toBe(201);
+    // The defaults are read through the shared eligibility filter, never as the
+    // column's unfiltered default list.
+    expect(mocks.db.column.findUnique).toHaveBeenCalledWith({
+      where: { id: 'column-1' },
+      include: { board: { select: { project: { select: { id: true, name: true } } } } },
+    });
+    expect(mocks.db.columnDefaultAssignee.findMany).toHaveBeenCalledWith({
+      where: {
+        columnId: 'column-1',
+        user: {
+          OR: [{ role: 'ADMIN' }, { projectMembers: { some: { projectId: 'project-1' } } }],
+        },
+      },
+      select: { userId: true },
+    });
+    expect(mocks.db.task.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          assignees: { create: [{ userId: 'explicit-member' }, { userId: 'current-member' }] },
+        }),
+      })
+    );
   });
 });
 
