@@ -79,6 +79,7 @@ export default async function PharmacyFinancePage({
     ledgerFrom?: string;
     ledgerTo?: string;
     ledgerAt?: string;
+    ledgerInstant?: string;
     ledgerBy?: string;
     profitBy?: string;
     journalPage?: string;
@@ -341,7 +342,14 @@ export default async function PharmacyFinancePage({
         />
       </Suspense>
       <Suspense
-        key={[branch.id, ledgerFrom, ledgerTo, query.ledgerAt, query.ledgerBy].join(':')}
+        key={[
+          branch.id,
+          ledgerFrom,
+          ledgerTo,
+          query.ledgerAt,
+          query.ledgerInstant,
+          query.ledgerBy,
+        ].join(':')}
         fallback={<LedgerReportsLoading />}
       >
         <LedgerReportsSection
@@ -350,6 +358,7 @@ export default async function PharmacyFinancePage({
           from={ledgerFrom}
           to={ledgerTo}
           at={query.ledgerAt}
+          valuationInstant={query.ledgerInstant}
           by={query.ledgerBy}
           marginFrom={query.marginFrom}
           marginTo={query.marginTo}

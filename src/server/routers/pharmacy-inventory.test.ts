@@ -1708,6 +1708,11 @@ const ASSIGNMENT_GATED: ReadonlyArray<{
     invoke: () => caller().nearExpiryBoard({ branchId: 'branch_a' }),
   },
   {
+    name: 'stockValuation',
+    capability: 'pharmacy:inventory',
+    invoke: () => caller().stockValuation({ branchId: 'branch_a' }),
+  },
+  {
     name: 'onHand',
     capability: 'pharmacy:inventory',
     invoke: () => caller().onHand({ branchId: 'branch_a', medicineId: 'medicine_1' }),
@@ -2156,6 +2161,7 @@ const READ_REFUSAL = {
 
 const READS = new Set([
   'nearExpiryBoard',
+  'stockValuation',
   'onHand',
   'temperatureZoneStatuses',
   'expiryBoardLots',
@@ -2584,7 +2590,7 @@ describe('DEV-660 — every branch-scoped procedure is classified', () => {
 
     expect(new Set(classified).size).toBe(classified.length);
     expect(branchScoped).toEqual(classified);
-    expect(ASSIGNMENT_GATED).toHaveLength(44);
+    expect(ASSIGNMENT_GATED).toHaveLength(45);
   });
 });
 
@@ -3706,5 +3712,26 @@ describe('DEV-965 — recall trace, near-expiry value at risk and the stock dige
       await caller().stockSignalDigest({ branchId: 'branch_a', ownerUserId: 'user_b' });
       expect(db.pharmacyStockSignal.findMany).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe('DEV-1044 stock valuation', () => {
+  it('returns just product counts for a staff member without financial permissions', async () => {
+    sessionRole = 'EMPLOYEE';
+    grant([]);
+    const read = vi.fn().mockResolvedValue([{ productCount: BigInt(4) }]);
+    Object.assign(db, { $queryRaw: read });
+
+    const result = await caller().stockValuation({ branchId: 'branch_a', allBranches: true });
+    expect(result).toEqual({
+      productCount: 4,
+      businessTotal: false,
+      canSeeBusinessTotal: false,
+      money: null,
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    const query = read.mock.calls[0]![0] as Prisma.Sql;
+    expect(query.values).toContain('branch_a');
+    expect(query.sql).not.toMatch(/unitCostMinor|printedMrpMinor|finance_journal/);
   });
 });

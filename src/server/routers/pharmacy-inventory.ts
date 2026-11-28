@@ -102,6 +102,11 @@ import {
   roleDashboard,
   snoozeSignal,
 } from '@/lib/pharmacy/stock-signals-operations';
+import { canAccessPharmacyFinance } from '@/lib/pharmacy/finance-access';
+import {
+  countInventoryProducts,
+  currentInventoryValuation,
+} from '@/lib/pharmacy/inventory-valuation';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   SOLO_OWNER_POLICY,
@@ -133,6 +138,7 @@ import {
 } from '@/lib/pharmacy/cold-chain-sensors';
 
 import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
 import { maskPhone } from '@/lib/pharmacy/patient-prescriptions';
 import { afterTenantTransaction } from '@/lib/side-effects/scope';
 
@@ -2175,6 +2181,78 @@ export const pharmacyInventoryRouter = router({
         ...bucket,
         valueAtRiskMinor: costVisible ? bucket.valueAtRiskMinor : null,
       }));
+    }),
+
+  /**
+   * The scope of the quantity view is also the scope of the monetary view. An
+   * unprivileged reader never runs a pricing/ledger query or receives a money field.
+   */
+  stockValuation: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          allBranches: z.boolean().optional(),
+          missingPage: z.number().int().min(1).max(1_000_000).optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-inventory')) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Pharmacy inventory access is required.',
+        });
+      }
+      const scope = await admittedScopeFor(ctx, input.branchId);
+      const canSeeBusinessTotal = await isActiveTenantAdmin(
+        ctx,
+        scope.organizationId,
+        scope.actorId
+      );
+      const businessTotal = canSeeBusinessTotal && input.allBranches === true;
+      const branchIds = businessTotal
+        ? [...(await admittedInventoryBranchIds(ctx))]
+        : [scope.branchId];
+      // Apply the same audited admission to every branch included in a business total.
+      await Promise.all(
+        branchIds.filter((id) => id !== scope.branchId).map((id) => admittedScopeFor(ctx, id))
+      );
+      const valuationScope = { organizationId: scope.organizationId, branchIds };
+      const at = new Date();
+      const user = ctx.session!.user;
+      const options = { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta?.ip ?? null } as const;
+      const reports = await can(subjectFromSession(user), 'reports:financial', undefined, options);
+      const finance =
+        !reports || user.role === 'ADMIN' ? await canAccessPharmacyFinance(user, options) : false;
+      if (!reports && !finance) {
+        const productCount = await countInventoryProducts(ctx.db, valuationScope, at);
+        return { productCount, businessTotal, canSeeBusinessTotal, money: null };
+      }
+
+      const { productCount, ...money } = await currentInventoryValuation(
+        ctx.db,
+        valuationScope,
+        at,
+        {
+          currencySetting:
+            ctx.organization?.id === scope.organizationId ? ctx.organization.currency : null,
+          missingPage: input.missingPage ?? 1,
+        }
+      );
+      const canOpenFinanceReport =
+        canSeeBusinessTotal &&
+        finance &&
+        reports &&
+        hasModule(ctx.entitlements, 'pharmacy-finance') &&
+        hasModule(ctx.entitlements, 'pharmacy-reports') &&
+        (await can(subjectFromSession(user), 'reports:operational', undefined, options));
+      return {
+        productCount,
+        businessTotal,
+        canSeeBusinessTotal,
+        money: { ...money, asOf: at.toISOString(), canOpenFinanceReport },
+      };
     }),
 
   onHand: auditedProtectedProcedure

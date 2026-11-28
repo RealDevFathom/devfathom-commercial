@@ -540,3 +540,16 @@ it('explains view-only finance and disables posting', async () => {
   expect(postingButton).toBeDefined();
   expect(postingButton!.props).toMatchObject({ disabled: true });
 });
+
+it('DEV-1044 opens Finance valuation at the exact instant sent from Inventory', async () => {
+  const instant = '2026-09-12T07:08:09.123Z';
+  const page = await PharmacyFinancePage({
+    searchParams: Promise.resolve({ branch: 'branch_2', ledgerInstant: instant }),
+  });
+  const view = await LedgerReportsSection(sectionProps(page, LedgerReportsSection));
+  expect(renderToStaticMarkup(view)).toContain('id="stock-valuation"');
+  expect(mocks.perpetualValuation).toHaveBeenCalledExactlyOnceWith({
+    branchId: 'branch_2',
+    at: instant,
+  });
+});

@@ -10,11 +10,11 @@ export default function PharmacyInventoryError({ reset }: { reset: () => void })
       <PageHeader
         eyebrow="Pharmacy operations"
         heading="Inventory"
-        description="Lots, counts, transfers, recalls, and stock actions."
+        description="Check stock and expiry dates by branch."
       />
       <SectionCard title="Inventory could not load">
         <p className="text-sm text-text-muted">
-          No stock was changed. Check your connection and try loading the board again.
+          No stock was changed. Check your connection and try again.
         </p>
         <Button className="mt-4" onClick={reset} variant="secondary">
           Try again
